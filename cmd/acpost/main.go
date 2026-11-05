@@ -135,7 +135,7 @@ func hintOf(err error) string {
 	}
 	switch {
 	case errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES):
-		return "the node is there, but this process may not connect to its socket (a sandbox, or file permissions): " +
+		return "this process may not connect to the node's socket (a sandbox, or file permissions); the node itself may be fine: " +
 			"run acpost outside the sandbox (allow the command), or reach the node over TCP with --node http://127.0.0.1:PORT --token …"
 	case errors.Is(err, client.ErrUnavailable):
 		return "no node answers there: `acpost serve` starts one, or check --node / ACPOST_NODE"
@@ -468,7 +468,7 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 	if len(pending) > 0 {
 		ids := strings.Join(pending, " ")
 		return &exitErr{code: exitTimeout, name: "timeout", err: fmt.Errorf("timed out waiting for %s; it keeps going", ids),
-			hint: "`acpost wait " + ids + "` continues waiting; `acpost cancel <id>` stops it"}
+			hint: "`acpost wait " + ids + "` continues waiting; `acpost cancel " + pending[0] + "` stops it"}
 	}
 	return nil
 }
