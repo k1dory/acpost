@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13">
+  <title>acpost architecture</title>
+  <style>
+    .bg { fill: #ffffff; }
+    .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.2; }
+    .node { fill: #eef4ff; stroke: #0969da; stroke-width: 1.6; }
+    .hub { fill: #fff8e6; stroke: #9a6700; stroke-width: 1.6; }
+    .inner { fill: #ffffff; stroke: #8c959f; stroke-width: 1; }
+    .t { fill: #1f2328; }
+    .m { fill: #57606a; font-size: 11.5px; }
+    .h { fill: #1f2328; font-weight: 600; font-size: 14px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; fill: #1f2328; }
+    .ln { stroke: #57606a; stroke-width: 1.4; fill: none; }
+    .acp { stroke: #0969da; stroke-width: 1.6; fill: none; }
+    .net { stroke: #9a6700; stroke-width: 1.6; fill: none; stroke-dasharray: 6 4; }
+    .ah { fill: #57606a; }
+    .ahb { fill: #0969da; }
+    .ahy { fill: #9a6700; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .box { fill: #161b22; stroke: #8b949e; }
+      .node { fill: #0c1d33; stroke: #4493f8; }
+      .hub { fill: #2a2110; stroke: #d29922; }
+      .inner { fill: #0d1117; stroke: #6e7681; }
+      .t, .h, .mono { fill: #e6edf3; }
+      .m { fill: #9198a1; }
+      .ln { stroke: #9198a1; }
+      .acp { stroke: #4493f8; }
+      .net { stroke: #d29922; }
+      .ah { fill: #9198a1; }
+      .ahb { fill: #4493f8; }
+      .ahy { fill: #d29922; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahb"/></marker>
+    <marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahy"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="960" height="560"/>
+
+  <!-- senders -->
+  <rect class="box" x="24" y="40" width="240" height="92" rx="8"/>
+  <text class="h" x="38" y="64">Shell / an agent's tool</text>
+  <text class="mono" x="38" y="88">acpost send --to reviewer</text>
+  <text class="mono" x="38" y="106">acpost wait msg_…</text>
+  <text class="m" x="38" y="124">exit codes, --json</text>
+
+  <rect class="box" x="24" y="160" width="240" height="92" rx="8"/>
+  <text class="h" x="38" y="184">Backend / bot</text>
+  <text class="mono" x="38" y="208">POST /v1/messages</text>
+  <text class="mono" x="38" y="226">POST /v1/agents/x/claim</text>
+  <text class="m" x="38" y="244">token, TLS</text>
+
+  <!-- node -->
+  <rect class="node" x="290" y="24" width="360" height="300" rx="10"/>
+  <text class="h" x="306" y="48">node — acpost serve</text>
+  <text class="m" x="306" y="66">one process, one binary; started on first use</text>
+
+  <rect class="inner" x="306" y="80" width="328" height="44" rx="6"/>
+  <text class="t" x="318" y="99">HTTP API</text>
+  <text class="m" x="318" y="116">unix socket (0600) · TCP + TLS + tokens</text>
+
+  <rect class="inner" x="306" y="136" width="160" height="92" rx="6"/>
+  <text class="t" x="318" y="156">mailboxes</text>
+  <text class="m" x="318" y="174">queued → running →</text>
+  <text class="m" x="318" y="190">done | failed |</text>
+  <text class="m" x="318" y="206">cancelled | expired</text>
+
+  <rect class="inner" x="474" y="136" width="160" height="92" rx="6"/>
+  <text class="t" x="486" y="156">store</text>
+  <text class="m" x="486" y="174">SQLite file, one writer</text>
+  <text class="m" x="486" y="190">WAL, retention, vacuum</text>
+  <text class="m" x="486" y="206">paged reads</text>
+
+  <rect class="inner" x="474" y="240" width="160" height="70" rx="6"/>
+  <text class="t" x="486" y="260">driver: acp</text>
+  <text class="m" x="486" y="278">ACP client per agent</text>
+  <text class="m" x="486" y="294">session per task/thread</text>
+
+  <rect class="inner" x="306" y="240" width="160" height="70" rx="6"/>
+  <text class="t" x="318" y="260">driver: inbox</text>
+  <text class="m" x="318" y="278">stored until claimed,</text>
+  <text class="m" x="318" y="294">lease + reply</text>
+
+  <!-- agents -->
+  <rect class="box" x="716" y="40" width="220" height="64" rx="8"/>
+  <text class="h" x="730" y="64">codex-acp</text>
+  <text class="m" x="730" y="84">agent:reviewer</text>
+  <rect class="box" x="716" y="120" width="220" height="64" rx="8"/>
+  <text class="h" x="730" y="144">claude-agent-acp</text>
+  <text class="m" x="730" y="164">agent:claude</text>
+  <rect class="box" x="716" y="200" width="220" height="64" rx="8"/>
+  <text class="h" x="730" y="224">opencode acp · hermes acp</text>
+  <text class="m" x="730" y="244">any ACP agent</text>
+  <text class="m" x="716" y="312">env: ACPOST_NODE, ACPOST_TOKEN</text>
+  <text class="m" x="716" y="328">→ an agent can send in turn</text>
+
+  <!-- sender arrows -->
+  <path class="ln" d="M264,86 C284,86 286,102 304,102" marker-end="url(#a)"/>
+  <path class="ln" d="M264,206 C290,206 286,112 304,108" marker-end="url(#a)"/>
+
+  <!-- ACP arrows -->
+  <path class="acp" d="M634,262 C680,262 670,72 714,72" marker-end="url(#ab)"/>
+  <path class="acp" d="M634,272 C684,272 672,152 714,152" marker-end="url(#ab)"/>
+  <path class="acp" d="M634,282 C688,282 676,232 714,232" marker-end="url(#ab)"/>
+  <text class="m" x="716" y="290">ACP · JSON-RPC 2.0 · stdio</text>
+
+  <!-- hub -->
+  <rect class="hub" x="290" y="400" width="360" height="130" rx="10"/>
+  <text class="h" x="306" y="424">hub — acpost serve (other config)</text>
+  <text class="m" x="306" y="444">a node without local agents</text>
+  <text class="m" x="306" y="462">registry: agent → node that announced it</text>
+  <text class="m" x="306" y="480">messages for remote agents wait as inboxes;</text>
+  <text class="m" x="306" y="496">each node claims its own over HTTPS</text>
+  <text class="m" x="306" y="514">store: SQLite, Postgres planned</text>
+
+  <rect class="box" x="716" y="420" width="220" height="44" rx="8"/>
+  <text class="t" x="730" y="447">node on another machine</text>
+  <rect class="box" x="716" y="476" width="220" height="44" rx="8"/>
+  <text class="t" x="730" y="503">node behind NAT</text>
+
+  <path class="net" d="M552,324 L552,398" marker-end="url(#ay)"/>
+  <text class="m" x="562" y="356">--join https://hub:7420</text>
+  <text class="m" x="562" y="372">announce, forward, claim</text>
+  <path class="net" d="M714,442 L652,442" marker-end="url(#ay)"/>
+  <path class="net" d="M714,498 L652,498" marker-end="url(#ay)"/>
+  <text class="m" x="24" y="420">Nodes always connect out to the hub,</text>
+  <text class="m" x="24" y="436">so no inbound port is needed on a node.</text>
+  <text class="m" x="24" y="460">Dashed: acpost's HTTP API over TLS.</text>
+  <text class="m" x="24" y="476">Blue: ACP over the agent's stdin/stdout.</text>
+</svg>

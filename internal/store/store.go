@@ -1,0 +1,954 @@
+// Package store keeps messages, their events and agents' ACP sessions in one SQLite file.
+//
+// One process owns a store (a lock file says so). Writes go through a single connection, so
+// concurrent writers wait their turn in the process instead of failing with SQLITE_BUSY; reads have
+// their own connections and, in WAL mode, never wait for a write. Bodies live in their own table,
+// so listing messages reads small rows whatever the bodies weigh.
+package store
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+var (
+	ErrNotFound  = errors.New("not found")
+	ErrLeaseLost = errors.New("lease lost: the message is no longer held by this claim")
+	ErrFinal     = errors.New("the message is already final")
+	ErrLocked    = errors.New("the store is in use by another node")
+	ErrStoreFull = errors.New("the store is full (limits.max_store)")
+)
+
+// State of a message.
+type State string
+
+const (
+	Queued    State = "queued"
+	Running   State = "running"
+	Done      State = "done"
+	Failed    State = "failed"
+	Cancelled State = "cancelled"
+	Expired   State = "expired"
+)
+
+// Final says whether nothing more will happen to a message in this state.
+func (s State) Final() bool { return s == Done || s == Failed || s == Cancelled || s == Expired }
+
+// Valid says whether s is a state.
+func (s State) Valid() bool { return s == Queued || s == Running || s.Final() }
+
+// Message is a message as stored. Lists leave Body and Reply empty (BodySize and ReplySize say how
+// big they are).
+type Message struct {
+	ID         string            `json:"id"`
+	From       string            `json:"from"`
+	To         string            `json:"to"`
+	Task       string            `json:"task,omitempty"`
+	Thread     string            `json:"thread"`
+	Parent     string            `json:"parent,omitempty"`
+	Depth      int               `json:"depth"`
+	State      State             `json:"state"`
+	Attempts   int               `json:"attempts"`
+	Meta       map[string]string `json:"meta,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	Reply      string            `json:"reply,omitempty"`
+	Error      string            `json:"error,omitempty"`
+	BodySize   int               `json:"body_size"`
+	ReplySize  int               `json:"reply_size"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+	ExpiresAt  time.Time         `json:"expires_at,omitzero"`
+	FinishedAt time.Time         `json:"finished_at,omitzero"`
+	Origin     string            `json:"origin,omitempty"` // the hub a message came from, or went to
+	IdemKey    string            `json:"-"`
+	LeaseID    string            `json:"lease,omitempty"`
+	LeaseUntil time.Time         `json:"lease_until,omitzero"`
+}
+
+// Event is something that happened while a message was handled: a tool call, a permission
+// decision, a notice.
+type Event struct {
+	Seq  int64     `json:"seq"`
+	Time time.Time `json:"time"`
+	Kind string    `json:"kind"`
+	Data string    `json:"data"`
+}
+
+// Filter selects messages for List. Empty fields do not filter.
+type Filter struct {
+	To, From, Task, Thread string
+	State                  State
+	// Party, when set, keeps messages sent by or to one of these addresses.
+	Party []string
+	After string // the cursor: the id of the last message of the previous page
+	Limit int
+}
+
+// MaxPage is the most messages one List returns.
+const MaxPage = 500
+
+const truncMark = "…[truncated]"
+
+// Options are the store's limits. Zero values take the defaults.
+type Options struct {
+	MaxStore            int64 // bytes of live data above which Insert refuses; 0: no limit
+	JournalSizeLimit    int64 // the WAL is truncated to this after a checkpoint (default 64 MiB)
+	MaxEventsPerMessage int   // default 1000
+	MaxEventData        int   // bytes of one event's data (default 16 KiB)
+}
+
+// Store is an open store.
+type Store struct {
+	path   string // "" for memory
+	w, r   *sql.DB
+	lock   *os.File
+	opt    Options
+	closed atomic.Bool
+
+	maintainMu sync.Mutex
+	// written counts bytes written since the WAL was last checked (see afterWrite).
+	written atomic.Int64
+}
+
+var memSeq atomic.Int64
+
+// Open opens the store a DSN names: sqlite:///path/to/file.db or memory: (a private, in-memory
+// store for tests). The file and its directory are created private to the user.
+func Open(dsn string, opt Options) (*Store, error) {
+	if opt.JournalSizeLimit == 0 {
+		opt.JournalSizeLimit = 64 << 20
+	}
+	if opt.MaxEventsPerMessage == 0 {
+		opt.MaxEventsPerMessage = 1000
+	}
+	if opt.MaxEventData == 0 {
+		opt.MaxEventData = 16 << 10
+	}
+	s := &Store{opt: opt}
+	pragmas := []string{"busy_timeout(10000)", "foreign_keys(0)", fmt.Sprintf("journal_size_limit(%d)", opt.JournalSizeLimit)}
+	switch {
+	case dsn == "memory:":
+		name := fmt.Sprintf("file:acpost-mem-%d?mode=memory&cache=shared", memSeq.Add(1))
+		db, err := sql.Open("sqlite", name+pragmaQuery(pragmas, "&"))
+		if err != nil {
+			return nil, err
+		}
+		// One connection: an in-memory database has no WAL, and readers would contend for its locks.
+		db.SetMaxOpenConns(1)
+		s.w, s.r = db, db
+	case strings.HasPrefix(dsn, "sqlite://"):
+		path := strings.TrimPrefix(dsn, "sqlite://")
+		if path == "" {
+			return nil, fmt.Errorf("store %q: no path", dsn)
+		}
+		if err := s.openFile(path, pragmas); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("store %q: sqlite:///path or memory:", dsn)
+	}
+	if err := s.migrate(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func pragmaQuery(pragmas []string, sep string) string {
+	var b strings.Builder
+	for _, p := range pragmas {
+		b.WriteString(sep + "_pragma=" + url.QueryEscape(p))
+		sep = "&"
+	}
+	return b.String()
+}
+
+func (s *Store) openFile(path string, pragmas []string) error {
+	dir := filepath.Dir(path)
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("%s: %w", path, ErrLocked)
+		}
+		return err
+	}
+	s.lock, s.path = lock, path
+	// SQLite gives the WAL and shared-memory files the database file's mode: create it private.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	base := "file:" + path + "?_txlock=immediate"
+	// auto_vacuum must be set before the first table exists; on an existing file it is a no-op.
+	w, err := sql.Open("sqlite", base+pragmaQuery(append([]string{"auto_vacuum(incremental)", "journal_mode(wal)", "synchronous(normal)"}, pragmas...), "&"))
+	if err != nil {
+		return err
+	}
+	w.SetMaxOpenConns(1)
+	w.SetMaxIdleConns(1)
+	w.SetConnMaxLifetime(0)
+	s.w = w
+	// Make sure the file is in WAL mode before readers open it.
+	if err := w.Ping(); err != nil {
+		return err
+	}
+	r, err := sql.Open("sqlite", "file:"+path+"?_txlock=deferred"+pragmaQuery(append([]string{"query_only(1)"}, pragmas...), "&"))
+	if err != nil {
+		return err
+	}
+	r.SetMaxOpenConns(8)
+	r.SetMaxIdleConns(8)
+	s.r = r
+	return nil
+}
+
+const schema = `
+CREATE TABLE IF NOT EXISTS messages (
+	seq         INTEGER PRIMARY KEY,
+	id          TEXT NOT NULL UNIQUE,
+	sender      TEXT NOT NULL,
+	recipient   TEXT NOT NULL,
+	task        TEXT NOT NULL DEFAULT '',
+	thread      TEXT NOT NULL,
+	parent      TEXT NOT NULL DEFAULT '',
+	depth       INTEGER NOT NULL DEFAULT 0,
+	state       TEXT NOT NULL,
+	attempts    INTEGER NOT NULL DEFAULT 0,
+	meta        TEXT NOT NULL DEFAULT '',
+	error       TEXT NOT NULL DEFAULT '',
+	body_size   INTEGER NOT NULL,
+	reply_size  INTEGER NOT NULL DEFAULT 0,
+	created_at  INTEGER NOT NULL,
+	updated_at  INTEGER NOT NULL,
+	expires_at  INTEGER NOT NULL DEFAULT 0,
+	finished_at INTEGER NOT NULL DEFAULT 0,
+	origin      TEXT NOT NULL DEFAULT '',
+	idem_key    TEXT,
+	lease_id    TEXT NOT NULL DEFAULT '',
+	lease_until INTEGER NOT NULL DEFAULT 0,
+	events      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS messages_queue    ON messages (recipient, state, id);
+CREATE INDEX IF NOT EXISTS messages_to       ON messages (recipient, id);
+CREATE INDEX IF NOT EXISTS messages_from     ON messages (sender, id);
+CREATE INDEX IF NOT EXISTS messages_task     ON messages (task, id) WHERE task <> '';
+CREATE INDEX IF NOT EXISTS messages_thread   ON messages (thread, id);
+CREATE INDEX IF NOT EXISTS messages_state    ON messages (state, finished_at);
+CREATE INDEX IF NOT EXISTS messages_lease    ON messages (lease_until) WHERE state = 'running';
+CREATE INDEX IF NOT EXISTS messages_origin   ON messages (origin, state) WHERE origin <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS messages_idem ON messages (sender, idem_key) WHERE idem_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS contents (
+	seq   INTEGER PRIMARY KEY,
+	body  TEXT NOT NULL,
+	reply TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS events (
+	msg  INTEGER NOT NULL,
+	seq  INTEGER NOT NULL,
+	ts   INTEGER NOT NULL,
+	kind TEXT NOT NULL,
+	data TEXT NOT NULL,
+	PRIMARY KEY (msg, seq)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sessions (
+	agent      TEXT NOT NULL,
+	key        TEXT NOT NULL,
+	session_id TEXT NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (agent, key)
+) WITHOUT ROWID;
+`
+
+func (s *Store) migrate() error {
+	_, err := s.w.Exec(schema)
+	return err
+}
+
+// Path is the database file ("" for a memory store).
+func (s *Store) Path() string { return s.path }
+
+// Close closes the store and releases its lock. Closing twice is harmless.
+func (s *Store) Close() error {
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	var err error
+	if s.r != nil && s.r != s.w {
+		err = s.r.Close()
+	}
+	if s.w != nil {
+		if s.path != "" {
+			// Leave a small file behind: fold the WAL into the database.
+			_, _ = s.w.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+		}
+		err = errors.Join(err, s.w.Close())
+	}
+	if s.lock != nil {
+		err = errors.Join(err, s.lock.Close())
+	}
+	return err
+}
+
+func ms(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
+func fromMS(v int64) time.Time {
+	if v == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(v).UTC()
+}
+
+func newLease() string {
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// tx runs fn in a write transaction (BEGIN IMMEDIATE: the write lock is taken up front).
+func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	t, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(t); err != nil {
+		_ = t.Rollback()
+		return err
+	}
+	if err := t.Commit(); err != nil {
+		return err
+	}
+	s.afterWrite(ctx, 4096)
+	return nil
+}
+
+// afterWrite keeps the WAL bounded. SQLite's own checkpoints after a commit are passive: while
+// readers keep reading they cannot reset the WAL, and it grows. So once about a quarter of
+// journal_size_limit has been written, the WAL's size is checked, and above the limit a
+// TRUNCATE checkpoint waits (busy_timeout) for the readers of old snapshots and resets it.
+func (s *Store) afterWrite(ctx context.Context, n int64) {
+	if s.path == "" || s.written.Add(n) < s.opt.JournalSizeLimit/4 {
+		return
+	}
+	s.written.Store(0)
+	st, err := os.Stat(s.path + "-wal")
+	if err != nil || st.Size() <= s.opt.JournalSizeLimit {
+		return
+	}
+	var busy, logPages, done int
+	_ = s.w.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done)
+}
+
+// liveBytes is how much of the file holds data (pages in use).
+func liveBytes(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (int64, error) {
+	var pages, free, size int64
+	if err := q.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {
+		return 0, err
+	}
+	if err := q.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&free); err != nil {
+		return 0, err
+	}
+	if err := q.QueryRowContext(ctx, "PRAGMA page_size").Scan(&size); err != nil {
+		return 0, err
+	}
+	return (pages - free) * size, nil
+}
+
+// Insert stores a new message (state queued). A message with the IdemKey of an earlier message of
+// the same sender is not stored again: the earlier one is returned with created false. The
+// message's ID, From, To and Body are required; Thread defaults to the ID.
+func (s *Store) Insert(ctx context.Context, m *Message) (Message, bool, error) {
+	if m.ID == "" || m.From == "" || m.To == "" {
+		return Message{}, false, errors.New("store: insert needs id, from and to")
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	out := *m
+	out.State, out.Attempts, out.CreatedAt, out.UpdatedAt = Queued, 0, now, now
+	if out.Thread == "" {
+		out.Thread = out.ID
+	}
+	out.BodySize, out.Reply, out.ReplySize, out.LeaseID = len(out.Body), "", 0, ""
+	var meta string
+	if len(out.Meta) > 0 {
+		b, _ := json.Marshal(out.Meta)
+		meta = string(b)
+	}
+	var idem any
+	if out.IdemKey != "" {
+		idem = out.IdemKey
+	}
+	var existing string
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		if idem != nil {
+			err := t.QueryRowContext(ctx, "SELECT id FROM messages WHERE sender = ? AND idem_key = ?", out.From, idem).Scan(&existing)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		if s.opt.MaxStore > 0 {
+			live, err := liveBytes(ctx, t)
+			if err != nil {
+				return err
+			}
+			if live+int64(len(out.Body)) > s.opt.MaxStore {
+				return ErrStoreFull
+			}
+		}
+		res, err := t.ExecContext(ctx, `INSERT INTO messages
+			(id, sender, recipient, task, thread, parent, depth, state, meta, body_size, created_at, updated_at, expires_at, origin, idem_key)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			out.ID, out.From, out.To, out.Task, out.Thread, out.Parent, out.Depth, out.State, meta, out.BodySize,
+			ms(now), ms(now), ms(out.ExpiresAt), out.Origin, idem)
+		if err != nil {
+			return err
+		}
+		seq, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		_, err = t.ExecContext(ctx, "INSERT INTO contents (seq, body) VALUES (?, ?)", seq, out.Body)
+		return err
+	})
+	if err != nil {
+		return Message{}, false, err
+	}
+	s.afterWrite(ctx, int64(len(out.Body)))
+	if existing != "" {
+		prev, err := s.Get(ctx, existing)
+		return prev, false, err
+	}
+	return out, true, nil
+}
+
+const cols = `m.id, m.sender, m.recipient, m.task, m.thread, m.parent, m.depth, m.state, m.attempts, m.meta, m.error,
+	m.body_size, m.reply_size, m.created_at, m.updated_at, m.expires_at, m.finished_at, m.origin, m.lease_id, m.lease_until`
+
+type scanner interface{ Scan(...any) error }
+
+func scanMessage(sc scanner, extra ...any) (Message, error) {
+	var m Message
+	var meta string
+	var created, updated, expires, finished, leaseUntil int64
+	dest := append([]any{&m.ID, &m.From, &m.To, &m.Task, &m.Thread, &m.Parent, &m.Depth, &m.State, &m.Attempts, &meta, &m.Error,
+		&m.BodySize, &m.ReplySize, &created, &updated, &expires, &finished, &m.Origin, &m.LeaseID, &leaseUntil}, extra...)
+	if err := sc.Scan(dest...); err != nil {
+		return m, err
+	}
+	if meta != "" {
+		_ = json.Unmarshal([]byte(meta), &m.Meta)
+	}
+	m.CreatedAt, m.UpdatedAt, m.ExpiresAt, m.FinishedAt, m.LeaseUntil =
+		fromMS(created), fromMS(updated), fromMS(expires), fromMS(finished), fromMS(leaseUntil)
+	return m, nil
+}
+
+// Get returns a message with its body and reply.
+func (s *Store) Get(ctx context.Context, id string) (Message, error) {
+	return s.get(ctx, s.r, id)
+}
+
+func (s *Store) get(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, id string) (Message, error) {
+	var body, reply string
+	m, err := scanMessage(q.QueryRowContext(ctx, "SELECT "+cols+", c.body, c.reply FROM messages m JOIN contents c ON c.seq = m.seq WHERE m.id = ?", id), &body, &reply)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Message{}, ErrNotFound
+	}
+	m.Body, m.Reply = body, reply
+	return m, err
+}
+
+// List returns a page of messages, oldest first, without bodies; next is the cursor of the
+// following page ("" on the last).
+func (s *Store) List(ctx context.Context, f Filter) ([]Message, string, error) {
+	if f.Limit <= 0 || f.Limit > MaxPage {
+		f.Limit = MaxPage
+	}
+	var where []string
+	var args []any
+	add := func(cond string, v any) { where = append(where, cond); args = append(args, v) }
+	if f.To != "" {
+		add("m.recipient = ?", f.To)
+	}
+	if f.From != "" {
+		add("m.sender = ?", f.From)
+	}
+	if f.Task != "" {
+		add("m.task = ?", f.Task)
+	}
+	if f.Thread != "" {
+		add("m.thread = ?", f.Thread)
+	}
+	if f.State != "" {
+		add("m.state = ?", f.State)
+	}
+	if f.After != "" {
+		add("m.id > ?", f.After)
+	}
+	if len(f.Party) > 0 {
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(f.Party)), ",")
+		where = append(where, "(m.sender IN ("+ph+") OR m.recipient IN ("+ph+"))")
+		for range 2 {
+			for _, p := range f.Party {
+				args = append(args, p)
+			}
+		}
+	}
+	q := "SELECT " + cols + " FROM messages m"
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY m.id LIMIT ?"
+	args = append(args, f.Limit+1)
+	rows, err := s.r.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	out := make([]Message, 0, min(f.Limit, 64))
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		m.LeaseID = ""
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(out) > f.Limit {
+		out = out[:f.Limit]
+		next = out[len(out)-1].ID
+	}
+	return out, next, nil
+}
+
+// Claim takes the oldest queued message for recipient: it becomes running under a new lease that
+// lasts lease. ok is false when there is none.
+func (s *Store) Claim(ctx context.Context, recipient string, lease time.Duration) (Message, bool, error) {
+	return s.ClaimAny(ctx, []string{recipient}, lease)
+}
+
+// ClaimAny is Claim for the oldest queued message for any of the recipients.
+func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Duration) (Message, bool, error) {
+	if len(recipients) == 0 {
+		return Message{}, false, nil
+	}
+	now := time.Now()
+	var m Message
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(recipients)), ",")
+	args := make([]any, 0, len(recipients)+1)
+	for _, r := range recipients {
+		args = append(args, r)
+	}
+	args = append(args, ms(now))
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		var id string
+		err := t.QueryRowContext(ctx, `SELECT id FROM messages INDEXED BY messages_queue
+			WHERE recipient IN (`+ph+`) AND state = 'queued' AND (expires_at = 0 OR expires_at > ?) ORDER BY id LIMIT 1`,
+			args...).Scan(&id)
+		if err != nil {
+			return err
+		}
+		lid := newLease()
+		if _, err := t.ExecContext(ctx, `UPDATE messages SET state = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ?, updated_at = ?
+			WHERE id = ?`, lid, ms(now.Add(lease)), ms(now), id); err != nil {
+			return err
+		}
+		m, err = s.get(ctx, t, id)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return Message{}, false, nil
+	}
+	if err != nil {
+		return Message{}, false, err
+	}
+	return m, true, nil
+}
+
+// Settle copies the outcome of a message handled elsewhere (a hub) onto its local copy: state,
+// reply, error and attempts. A local copy already final is left alone.
+func (s *Store) Settle(ctx context.Context, id string, state State, reply, errText string, attempts int) error {
+	now := ms(time.Now())
+	finished := int64(0)
+	if state.Final() {
+		finished = now
+	}
+	return s.tx(ctx, func(t *sql.Tx) error {
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, reply_size = ?, attempts = ?, updated_at = ?, finished_at = ?
+			WHERE id = ? AND state IN ('queued', 'running')`, state, errText, len(reply), attempts, now, finished, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil
+		}
+		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
+		return err
+	})
+}
+
+// SetOrigin changes where a message came from (a joined node records the hub's latest lease).
+func (s *Store) SetOrigin(ctx context.Context, id, origin string) error {
+	_, err := s.w.ExecContext(ctx, "UPDATE messages SET origin = ? WHERE id = ?", origin, id)
+	return err
+}
+
+// Unsettled lists the messages whose origin starts with prefix and that are not final, with their
+// origins (a node resumes following them after a restart).
+func (s *Store) Unsettled(ctx context.Context, prefix string) ([][2]string, error) {
+	rows, err := s.r.QueryContext(ctx, `SELECT id, origin FROM messages WHERE origin <> '' AND substr(origin, 1, ?) = ?
+		AND state IN ('queued', 'running') ORDER BY id`, len(prefix), prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][2]string
+	for rows.Next() {
+		var id, origin string
+		if err := rows.Scan(&id, &origin); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{id, origin})
+	}
+	return out, rows.Err()
+}
+
+// Complete ends a running message held under lease: state is final, reply and errText are what
+// came of it.
+func (s *Store) Complete(ctx context.Context, id, lease string, state State, reply, errText string) error {
+	if !state.Final() {
+		return fmt.Errorf("store: complete with state %s", state)
+	}
+	now := ms(time.Now())
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, reply_size = ?, lease_id = '', lease_until = 0,
+			updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''`,
+			state, errText, len(reply), now, now, id, lease)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrLeaseLost
+		}
+		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
+		return err
+	})
+	if err == nil {
+		s.afterWrite(ctx, int64(len(reply)))
+	}
+	return err
+}
+
+// Release gives a running message back: queued again for another attempt, or failed with reason
+// when it has had maxAttempts.
+func (s *Store) Release(ctx context.Context, id, lease, reason string, maxAttempts int) (State, error) {
+	now := ms(time.Now())
+	var state State
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		var attempts int
+		err := t.QueryRowContext(ctx, "SELECT attempts FROM messages WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''", id, lease).Scan(&attempts)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrLeaseLost
+		}
+		if err != nil {
+			return err
+		}
+		if attempts >= maxAttempts {
+			state = Failed
+			_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = ?, lease_id = '', lease_until = 0, updated_at = ?, finished_at = ?
+				WHERE id = ?`, fmt.Sprintf("%s (after %d attempts)", reason, attempts), now, now, id)
+			return err
+		}
+		state = Queued
+		_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = ?, lease_id = '', lease_until = 0, updated_at = ? WHERE id = ?`,
+			reason, now, id)
+		return err
+	})
+	return state, err
+}
+
+// Extend makes a lease last d from now.
+func (s *Store) Extend(ctx context.Context, id, lease string, d time.Duration) error {
+	res, err := s.w.ExecContext(ctx, "UPDATE messages SET lease_until = ? WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''",
+		ms(time.Now().Add(d)), id, lease)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// ReapLeases puts running messages whose lease ran out before now back in the queue, or fails
+// those that have had maxAttempts. It returns how many it changed.
+func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) (int, error) {
+	t := ms(now)
+	var n int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'lease lost after ' || attempts || ' attempts',
+			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_until < ? AND attempts >= ?`, t, t, t, maxAttempts)
+		if err != nil {
+			return err
+		}
+		a, _ := res.RowsAffected()
+		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', lease_id = '', lease_until = 0, updated_at = ?
+			WHERE state = 'running' AND lease_until < ?`, t, t)
+		if err != nil {
+			return err
+		}
+		b, _ := res.RowsAffected()
+		n = a + b
+		return nil
+	})
+	return int(n), err
+}
+
+// RequeueRunning puts every running message for these recipients back in the queue: a node does
+// this at start for the agents it runs itself, whose turns ended with the previous process.
+func (s *Store) RequeueRunning(ctx context.Context, recipients []string) (int, error) {
+	if len(recipients) == 0 {
+		return 0, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(recipients)), ",")
+	args := []any{ms(time.Now())}
+	for _, r := range recipients {
+		args = append(args, r)
+	}
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'interrupted: the node restarted', lease_id = '', lease_until = 0,
+		updated_at = ? WHERE state = 'running' AND recipient IN (`+ph+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// Expire ends queued messages whose time ran out before now.
+func (s *Store) Expire(ctx context.Context, now time.Time) (int, error) {
+	t := ms(now)
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', updated_at = ?, finished_at = ?
+		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ?`, t, t, t)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// Cancel ends a message that is not final yet.
+func (s *Store) Cancel(ctx context.Context, id string) (Message, error) {
+	now := ms(time.Now())
+	var m Message
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'cancelled', lease_id = '', lease_until = 0, updated_at = ?, finished_at = ?
+			WHERE id = ? AND state IN ('queued', 'running')`, now, now, id)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		m, err = s.get(ctx, t, id)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrFinal
+		}
+		return nil
+	})
+	return m, err
+}
+
+// Counts says how many messages for recipient are queued and running.
+func (s *Store) Counts(ctx context.Context, recipient string) (queued, running int, err error) {
+	err = s.r.QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'queued'),
+		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'running')`, recipient).Scan(&queued, &running)
+	return
+}
+
+// AddEvent records an event of a message. Past MaxEventsPerMessage events are dropped (the last
+// one kept says so); data longer than MaxEventData is cut.
+func (s *Store) AddEvent(ctx context.Context, id, kind, data string) error {
+	if len(data) > s.opt.MaxEventData {
+		data = data[:s.opt.MaxEventData] + truncMark
+	}
+	return s.tx(ctx, func(t *sql.Tx) error {
+		var seq int64
+		var n int
+		err := t.QueryRowContext(ctx, "SELECT seq, events FROM messages WHERE id = ?", id).Scan(&seq, &n)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil || n >= s.opt.MaxEventsPerMessage {
+			return err
+		}
+		if n == s.opt.MaxEventsPerMessage-1 {
+			kind, data = "truncated", "later events were not kept (limits.max_events_per_message)"
+		}
+		if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(time.Now()), kind, data); err != nil {
+			return err
+		}
+		_, err = t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
+		return err
+	})
+}
+
+// Events returns up to limit events of a message after the event numbered after.
+func (s *Store) Events(ctx context.Context, id string, after int64, limit int) ([]Event, error) {
+	if limit <= 0 || limit > MaxPage {
+		limit = MaxPage
+	}
+	rows, err := s.r.QueryContext(ctx, `SELECT e.seq, e.ts, e.kind, e.data FROM events e JOIN messages m ON m.seq = e.msg
+		WHERE m.id = ? AND e.seq > ? ORDER BY e.seq LIMIT ?`, id, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var ts int64
+		if err := rows.Scan(&e.Seq, &ts, &e.Kind, &e.Data); err != nil {
+			return nil, err
+		}
+		e.Time = fromMS(ts)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// Session is the ACP session id an agent keeps for a key ("" for none).
+func (s *Store) Session(ctx context.Context, agent, key string) (string, error) {
+	var id string
+	err := s.r.QueryRowContext(ctx, "SELECT session_id FROM sessions WHERE agent = ? AND key = ?", agent, key).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// PutSession records the ACP session an agent keeps for a key.
+func (s *Store) PutSession(ctx context.Context, agent, key, sessionID string) error {
+	_, err := s.w.ExecContext(ctx, `INSERT INTO sessions (agent, key, session_id, updated_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (agent, key) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at`,
+		agent, key, sessionID, ms(time.Now()))
+	return err
+}
+
+const gcBatch = 500
+
+// GC deletes final messages that finished before before (with their bodies and events) and
+// sessions unused since then. It works in small batches, so writers are not held up for long.
+func (s *Store) GC(ctx context.Context, before time.Time) (int, error) {
+	t := ms(before)
+	total := 0
+	for {
+		var n int64
+		err := s.tx(ctx, func(tx *sql.Tx) error {
+			sel := `SELECT seq FROM messages INDEXED BY messages_state WHERE state IN ('done','failed','cancelled','expired') AND finished_at < ? LIMIT ?`
+			if _, err := tx.ExecContext(ctx, "DELETE FROM events WHERE msg IN ("+sel+")", t, gcBatch); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM contents WHERE seq IN ("+sel+")", t, gcBatch); err != nil {
+				return err
+			}
+			res, err := tx.ExecContext(ctx, "DELETE FROM messages WHERE seq IN ("+sel+")", t, gcBatch)
+			if err != nil {
+				return err
+			}
+			n, _ = res.RowsAffected()
+			return nil
+		})
+		if err != nil {
+			return total, err
+		}
+		total += int(n)
+		if n < gcBatch {
+			break
+		}
+	}
+	_, err := s.w.ExecContext(ctx, "DELETE FROM sessions WHERE updated_at < ?", t)
+	return total, err
+}
+
+// Maintain gives free pages back to the file system and folds the WAL into the database,
+// truncating it. A node runs it periodically; it is cheap when there is nothing to do.
+func (s *Store) Maintain(ctx context.Context) error {
+	if s.path == "" {
+		return nil
+	}
+	s.maintainMu.Lock()
+	defer s.maintainMu.Unlock()
+	var free int64
+	if err := s.w.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&free); err != nil {
+		return err
+	}
+	// In steps, so a large free list does not hold the write lock for long.
+	for free > 0 {
+		step := min(free, 2048)
+		if _, err := s.w.ExecContext(ctx, fmt.Sprintf("PRAGMA incremental_vacuum(%d)", step)); err != nil {
+			return err
+		}
+		free -= step
+	}
+	var busy, logPages, done int
+	if err := s.w.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done); err != nil {
+		return err
+	}
+	return nil
+}
+
+// IntegrityCheck runs SQLite's integrity check.
+func (s *Store) IntegrityCheck(ctx context.Context) error {
+	var res string
+	if err := s.w.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&res); err != nil {
+		return err
+	}
+	if res != "ok" {
+		return fmt.Errorf("integrity check: %s", res)
+	}
+	return nil
+}
+
+// Live is how many bytes of the store hold data.
+func (s *Store) Live(ctx context.Context) (int64, error) { return liveBytes(ctx, s.r) }
