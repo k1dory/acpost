@@ -34,8 +34,27 @@ type acpAgent struct {
 	cfg   *config.Agent
 	slots []*acpSlot
 
-	keyMu sync.Mutex
-	keys  map[string]*keyLock
+	keyMu  sync.Mutex
+	keys   map[string]*keyLock
+	owners map[string]int // session key → the slot whose process last ran it (concurrency > 1)
+}
+
+func (a *acpAgent) ownerOf(key string) int {
+	a.keyMu.Lock()
+	defer a.keyMu.Unlock()
+	if o, ok := a.owners[key]; ok {
+		return o
+	}
+	return -1
+}
+
+func (a *acpAgent) setOwner(key string, slot int) {
+	a.keyMu.Lock()
+	defer a.keyMu.Unlock()
+	if len(a.owners) > 10000 {
+		clear(a.owners) // a cache: losing it only costs a session/load
+	}
+	a.owners[key] = slot
 }
 
 type keyLock struct {
@@ -65,7 +84,7 @@ type acpProc struct {
 }
 
 func newACPAgent(n *Node, name string, cfg *config.Agent) *acpAgent {
-	a := &acpAgent{n: n, name: name, addr: "agent:" + name, cfg: cfg, keys: map[string]*keyLock{}}
+	a := &acpAgent{n: n, name: name, addr: "agent:" + name, cfg: cfg, keys: map[string]*keyLock{}, owners: map[string]int{}}
 	for i := range cfg.Concurrency {
 		a.slots = append(a.slots, &acpSlot{a: a, idx: i, token: n.issueAgentToken(name)})
 	}
@@ -193,7 +212,9 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	if p := s.proc; p != nil {
 		select {
 		case <-p.done:
+			// The leader is gone; what it started may not be.
 			s.proc = nil
+			killGroupNow(p)
 		default:
 			return p, nil
 		}
@@ -303,6 +324,16 @@ func (s *acpSlot) stopProc() {
 	killGroup(p)
 }
 
+// killGroupNow kills an agent's process group at once (SIGKILL: also a stopped or stuck one).
+func killGroupNow(p *acpProc) {
+	if p.cmd.Process == nil {
+		return
+	}
+	_ = p.stdin.Close()
+	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+	<-p.done
+}
+
 // killGroup stops what is left of an agent's process group: SIGTERM, then SIGKILL.
 func killGroup(p *acpProc) {
 	if p.cmd.Process == nil {
@@ -327,7 +358,13 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 	a, n := s.a, s.a.n
 	if key != "" {
 		if sid, ok := p.sessions[key]; ok {
-			return sid, nil
+			if a.ownerOf(key) == s.idx {
+				// Retention measures from the last use.
+				_ = n.st.PutSession(ctx, a.addr, key, string(sid))
+				return sid, nil
+			}
+			// Another slot's process advanced this session since: load it again here.
+			delete(p.sessions, key)
 		}
 	}
 	cwd := s.cwd()
@@ -369,6 +406,7 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 	}
 	if key != "" {
 		p.sessions[key] = sid
+		a.setOwner(key, s.idx)
 		if err := n.st.PutSession(ctx, a.addr, key, string(sid)); err != nil {
 			n.log.Warn("store session", "agent", a.name, "err", err)
 		}
@@ -402,9 +440,14 @@ func (s *acpSlot) handle(m store.Message) {
 	n.setCurrent(s.token, m.ID)
 	defer n.setCurrent(s.token, "")
 
+	// The claim may have waited for the session key's lock longer than its lease: if it was reaped
+	// (and maybe taken again) meanwhile, it is not ours to run.
+	if err := n.st.Extend(n.ctx, m.ID, m.LeaseID, a.cfg.Lease.D()); err != nil {
+		return
+	}
 	ctx, cancel := context.WithCancel(n.ctx)
 	defer cancel()
-	var cancelled atomic.Bool
+	var cancelled, lost atomic.Bool
 	// Watch for a cancel and keep the lease alive while the turn runs.
 	watchDone := make(chan struct{})
 	go func() {
@@ -425,7 +468,12 @@ func (s *acpSlot) handle(m store.Message) {
 				return
 			}
 			if time.Now().After(next) {
-				_ = n.st.Extend(ctx, m.ID, m.LeaseID, lease)
+				if err := n.st.Extend(ctx, m.ID, m.LeaseID, lease); errors.Is(err, store.ErrLeaseLost) {
+					// Reaped (the node stalled past the lease): another attempt owns the message now.
+					lost.Store(true)
+					cancel()
+					return
+				}
 				next = time.Now().Add(lease / 3)
 			}
 		}
@@ -433,9 +481,7 @@ func (s *acpSlot) handle(m store.Message) {
 	defer func() { cancel(); <-watchDone }()
 
 	complete := func(state store.State, reply, errText string) {
-		if max := int(n.cfg.Limits.MaxReply); len(reply) > max {
-			reply = reply[:max-len(truncatedMark)] + truncatedMark
-		}
+		reply = capReply(reply, int(n.cfg.Limits.MaxReply))
 		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, state, reply, errText); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("complete", "id", m.ID, "err", err)
 		}
@@ -475,15 +521,41 @@ func (s *acpSlot) handle(m store.Message) {
 	}
 	turn := p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply))
 	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
+	// The SDK writes a request before it watches the context: an agent that stopped reading its
+	// stdin holds Prompt in that write. If Prompt has not returned shortly after the turn ended,
+	// the process is killed, which ends the write.
+	promptDone := make(chan struct{})
+	var stuck atomic.Bool
+	stopWatch := context.AfterFunc(turnCtx, func() {
+		select {
+		case <-promptDone:
+		case <-time.After(300 * time.Millisecond):
+			stuck.Store(true)
+			s.mu.Lock()
+			if s.proc == p {
+				s.proc = nil
+			}
+			s.mu.Unlock()
+			killGroupNow(p)
+		}
+	})
 	resp, err := p.conn.Prompt(turnCtx, acp.PromptRequest{SessionId: sid, Prompt: []acp.ContentBlock{acp.TextBlock(s.prompt(m))}})
+	close(promptDone)
+	stopWatch()
 	timedOut := errors.Is(turnCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 	turnCancel()
 	p.cl.end(sid)
 	reply := turn.reply(a.cfg.Reply)
 
 	if err != nil || timedOut {
-		if n.ctx.Err() != nil {
-			return // the node is stopping: the message stays running and is requeued at the next start
+		if n.ctx.Err() != nil || lost.Load() {
+			return // the node is stopping (the message is requeued at the next start), or the lease is gone
+		}
+		if stuck.Load() {
+			if timedOut {
+				complete(store.Failed, reply, fmt.Sprintf("turn timeout after %s (turn_timeout); the agent stopped reading and was killed", a.cfg.TurnTimeout.D()))
+			}
+			return
 		}
 		// Tell the agent the turn is over.
 		cctx, done := context.WithTimeout(context.Background(), 2*time.Second)

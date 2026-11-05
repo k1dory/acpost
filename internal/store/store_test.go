@@ -15,7 +15,7 @@ import (
 
 func openTest(t testing.TB, opt Options) *Store {
 	t.Helper()
-	s, err := Open("sqlite://"+filepath.Join(t.TempDir(), "store.db"), opt)
+	s, err := Open("sqlite://"+filepath.Join(t.TempDir(), "s", "store.db"), opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestRequeueRunning(t *testing.T) {
 	mustInsert(t, s, msg("agent:keep", "x"))
 	s.Claim(ctx, "agent:r", time.Hour)
 	k, _, _ := s.Claim(ctx, "agent:keep", time.Hour)
-	if n, err := s.RequeueRunning(ctx, []string{"agent:r"}); err != nil || n != 1 {
+	if n, err := s.RequeueRunning(ctx, []string{"agent:r"}, 3); err != nil || n != 1 {
 		t.Fatal(n, err)
 	}
 	if _, ok, _ := s.Claim(ctx, "agent:r", time.Hour); !ok {
@@ -346,7 +346,7 @@ func TestMemoryStore(t *testing.T) {
 }
 
 func TestSecondOpenIsRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "store.db")
+	path := filepath.Join(t.TempDir(), "s", "store.db")
 	s, err := Open("sqlite://"+path, Options{})
 	if err != nil {
 		t.Fatal(err)

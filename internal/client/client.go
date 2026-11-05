@@ -130,11 +130,13 @@ func New(nodeURL, token, caFile string) (*Client, error) {
 func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, out any, header http.Header) (int, error) {
 	var body io.Reader
 	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false) // < > & as they are: a body's size on the wire stays close to its own
+		if err := enc.Encode(in); err != nil {
 			return 0, err
 		}
-		body = bytes.NewReader(b)
+		body = &buf
 	}
 	u := c.base + path
 	if len(q) > 0 {
@@ -223,7 +225,20 @@ func (c *Client) WaitFinal(ctx context.Context, id string, timeout time.Duration
 		if step < 0 {
 			step = 0
 		}
-		m, err := c.Wait(ctx, id, step)
+		// The request itself is bounded: a node that stalls cannot hold the caller past its timeout.
+		rctx, done := context.WithTimeout(ctx, step+5*time.Second)
+		if !deadline.IsZero() {
+			done()
+			rctx, done = context.WithDeadline(ctx, deadline.Add(50*time.Millisecond))
+		}
+		m, err := c.Wait(rctx, id, step)
+		done()
+		if err != nil && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			if !deadline.IsZero() && !time.Now().Before(deadline) {
+				return m, &Error{Code: "timeout", Message: "timed out waiting for " + id + "; the message keeps going"}
+			}
+			continue // a stalled long poll: ask again
+		}
 		if err != nil || m.State.Final() || (!deadline.IsZero() && !time.Now().Before(deadline)) {
 			return m, err
 		}

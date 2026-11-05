@@ -275,7 +275,7 @@ func TestACPPreamble(t *testing.T) {
 func TestACPRestartRequeues(t *testing.T) {
 	dir := t.TempDir()
 	cfg := fmt.Sprintf(`
-store: sqlite://%s/store.db
+store: sqlite://%s/s/store.db
 agents:
   fake: {driver: acp, command: [%q], env: {ACPOST_FAKE_AGENT: "1"}, preamble: false}
 `, dir, os.Args[0])

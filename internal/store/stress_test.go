@@ -465,7 +465,7 @@ func TestCrashMidWriteLeavesConsistentStore(t *testing.T) {
 			}
 		}
 	}
-	path := filepath.Join(t.TempDir(), "store.db")
+	path := filepath.Join(t.TempDir(), "s", "store.db")
 	for round := range 3 {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestCrashMidWriteLeavesConsistentStore$")
 		cmd.Env = append(os.Environ(), "ACPOST_CRASH_CHILD="+path)

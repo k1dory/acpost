@@ -185,6 +185,9 @@ func (s *Store) openFile(path string, pragmas []string) error {
 			return err
 		}
 	}
+	if err := PrivateDir(dir); err != nil {
+		return err
+	}
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
@@ -203,6 +206,12 @@ func (s *Store) openFile(path string, pragmas []string) error {
 		return err
 	}
 	f.Close()
+	// An existing file keeps its mode: make it, and SQLite's side files, private.
+	for _, p := range []string{path, path + "-wal", path + "-shm", path + ".lock"} {
+		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	base := "file:" + path + "?_txlock=immediate"
 	// auto_vacuum must be set before the first table exists; on an existing file it is a no-op.
 	w, err := sql.Open("sqlite", base+pragmaQuery(append([]string{"auto_vacuum(incremental)", "journal_mode(wal)", "synchronous(normal)"}, pragmas...), "&"))
@@ -224,6 +233,18 @@ func (s *Store) openFile(path string, pragmas []string) error {
 	r.SetMaxOpenConns(8)
 	r.SetMaxIdleConns(8)
 	s.r = r
+	return nil
+}
+
+// PrivateDir refuses a directory other users can open: the store and the socket live in it.
+func PrivateDir(dir string) error {
+	st, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%s is open to other users (mode %o): use a private directory (chmod 700)", dir, st.Mode().Perm())
+	}
 	return nil
 }
 
@@ -389,6 +410,16 @@ func liveBytes(ctx context.Context, q interface {
 // the same sender is not stored again: the earlier one is returned with created false. The
 // message's ID, From, To and Body are required; Thread defaults to the ID.
 func (s *Store) Insert(ctx context.Context, m *Message) (Message, bool, error) {
+	return s.InsertLimited(ctx, m, 0)
+}
+
+// ErrQueueFull is returned by InsertLimited when the recipient has maxQueued messages queued.
+var ErrQueueFull = errors.New("queue full")
+
+// InsertLimited is Insert that refuses (ErrQueueFull) when the recipient already has maxQueued
+// messages queued (0: no limit). The idempotency key is looked up first, so a repeat of a message
+// that filled the queue still returns it.
+func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (Message, bool, error) {
 	if m.ID == "" || m.From == "" || m.To == "" {
 		return Message{}, false, errors.New("store: insert needs id, from and to")
 	}
@@ -417,6 +448,15 @@ func (s *Store) Insert(ctx context.Context, m *Message) (Message, bool, error) {
 			}
 			if !errors.Is(err, sql.ErrNoRows) {
 				return err
+			}
+		}
+		if maxQueued > 0 {
+			var q int
+			if err := t.QueryRowContext(ctx, `SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ? AND state = 'queued'`, out.To).Scan(&q); err != nil {
+				return err
+			}
+			if q >= maxQueued {
+				return ErrQueueFull
 			}
 		}
 		if s.opt.MaxStore > 0 {
@@ -635,8 +675,16 @@ func (s *Store) SetOrigin(ctx context.Context, id, origin string) error {
 // Unsettled lists the messages whose origin starts with prefix and that are not final, with their
 // origins (a node resumes following them after a restart).
 func (s *Store) Unsettled(ctx context.Context, prefix string) ([][2]string, error) {
+	return s.UnsettledPage(ctx, prefix, "", MaxPage)
+}
+
+// UnsettledPage is a page of Unsettled after the id after.
+func (s *Store) UnsettledPage(ctx context.Context, prefix, after string, limit int) ([][2]string, error) {
+	if limit <= 0 || limit > MaxPage {
+		limit = MaxPage
+	}
 	rows, err := s.r.QueryContext(ctx, `SELECT id, origin FROM messages WHERE origin <> '' AND substr(origin, 1, ?) = ?
-		AND state IN ('queued', 'running') ORDER BY id`, len(prefix), prefix)
+		AND state IN ('queued', 'running') AND id > ? ORDER BY id LIMIT ?`, len(prefix), prefix, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -726,13 +774,13 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 	var n int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'lease lost after ' || attempts || ' attempts',
-			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_until < ? AND attempts >= ?`, t, t, t, maxAttempts)
+			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND attempts >= ?`, t, t, t, maxAttempts)
 		if err != nil {
 			return err
 		}
 		a, _ := res.RowsAffected()
 		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', lease_id = '', lease_until = 0, updated_at = ?
-			WHERE state = 'running' AND lease_until < ?`, t, t)
+			WHERE state = 'running' AND lease_id <> '' AND lease_until < ?`, t, t)
 		if err != nil {
 			return err
 		}
@@ -745,29 +793,47 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 
 // RequeueRunning puts every running message for these recipients back in the queue: a node does
 // this at start for the agents it runs itself, whose turns ended with the previous process.
-func (s *Store) RequeueRunning(ctx context.Context, recipients []string) (int, error) {
+func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAttempts int) (int, error) {
 	if len(recipients) == 0 {
 		return 0, nil
 	}
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(recipients)), ",")
-	args := []any{ms(time.Now())}
-	for _, r := range recipients {
-		args = append(args, r)
-	}
-	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'interrupted: the node restarted', lease_id = '', lease_until = 0,
-		updated_at = ? WHERE state = 'running' AND recipient IN (`+ph+`)`, args...)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	now := ms(time.Now())
+	var total int64
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		// The last allowed attempt was the one interrupted: the message fails, as a lost lease would.
+		args := []any{now, now}
+		for _, r := range recipients {
+			args = append(args, r)
+		}
+		args = append(args, maxAttempts)
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'interrupted by a node restart after ' || attempts || ' attempts',
+			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND attempts >= ?`, args...)
+		if err != nil {
+			return err
+		}
+		a, _ := res.RowsAffected()
+		args = []any{now}
+		for _, r := range recipients {
+			args = append(args, r)
+		}
+		res, err = t.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'interrupted: the node restarted', lease_id = '', lease_until = 0,
+			updated_at = ? WHERE state = 'running' AND recipient IN (`+ph+`)`, args...)
+		if err != nil {
+			return err
+		}
+		b, _ := res.RowsAffected()
+		total = a + b
+		return nil
+	})
+	return int(total), err
 }
 
 // Expire ends queued messages whose time ran out before now.
 func (s *Store) Expire(ctx context.Context, now time.Time) (int, error) {
 	t := ms(now)
 	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', updated_at = ?, finished_at = ?
-		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ?`, t, t, t)
+		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ? AND origin <> 'remote'`, t, t, t)
 	if err != nil {
 		return 0, err
 	}

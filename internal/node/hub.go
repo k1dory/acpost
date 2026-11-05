@@ -11,6 +11,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -128,7 +129,12 @@ func (n *Node) NodeClaim(ctx context.Context, p Principal, node string, wait, le
 		}
 		return store.Message{}, false, nil
 	}
-	return n.claim(ctx, recipients, wait, lease)
+	m, ok, err := n.claim(ctx, recipients, wait, lease)
+	if ok {
+		// A sender of this node crosses to another one: its address names this node.
+		m.From = n.qualify(m.From)
+	}
+	return m, ok, err
 }
 
 // qualify makes a local sender address global: user:lev → user:lev@laptop.
@@ -181,35 +187,106 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 		return store.Message{}, false, err
 	}
 	n.notify()
-	n.goLoop(func() { n.follow(sent.ID) })
+	n.startFollow(sent.ID)
 	return hideLease(got), created, nil
+}
+
+// maxFollowers bounds the long polls a node keeps on its hub for messages it forwarded; the rest
+// are checked by followSweep.
+const maxFollowers = 64
+
+func (n *Node) startFollow(id string) {
+	n.followMu.Lock()
+	if n.following[id] || len(n.following) >= maxFollowers {
+		n.followMu.Unlock()
+		return
+	}
+	n.following[id] = true
+	n.followMu.Unlock()
+	n.goLoop(func() {
+		defer func() {
+			n.followMu.Lock()
+			delete(n.following, id)
+			n.followMu.Unlock()
+		}()
+		n.follow(id)
+	})
+}
+
+func (n *Node) wakeFollow() {
+	select {
+	case n.followWake <- struct{}{}:
+	default:
+	}
+}
+
+// followSweep checks, page by page, every forwarded message that is not final and has no long poll
+// of its own, so a restart or a burst of forwards needs neither memory nor goroutines per message.
+func (n *Node) followSweep() {
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		case <-n.followWake:
+		}
+		after := ""
+		for n.ctx.Err() == nil {
+			page, err := n.st.UnsettledPage(n.ctx, originRemote, after, store.MaxPage)
+			if err != nil || len(page) == 0 {
+				break
+			}
+			for _, it := range page {
+				id := it[0]
+				n.followMu.Lock()
+				busy := n.following[id]
+				n.followMu.Unlock()
+				if busy {
+					continue
+				}
+				ctx, done := context.WithTimeout(n.ctx, 10*time.Second)
+				m, err := n.hub.Get(ctx, id)
+				done()
+				n.settleFrom(id, m, err)
+			}
+			after = page[len(page)-1][0]
+		}
+	}
+}
+
+// settleFrom copies what the hub said of a forwarded message onto the local copy; it reports
+// whether the message is settled for good.
+func (n *Node) settleFrom(id string, m store.Message, err error) bool {
+	if err != nil {
+		var ce *client.Error
+		if errors.As(err, &ce) && ce.Code == "not_found" {
+			_ = n.st.Settle(n.ctx, id, store.Failed, "", "the hub no longer has this message", 0)
+			n.notify()
+			return true
+		}
+		return false
+	}
+	if m.State == store.Running || m.State.Final() {
+		if err := n.st.Settle(n.ctx, id, m.State, m.Reply, m.Error, m.Attempts); err == nil {
+			n.notify()
+		}
+	}
+	return m.State.Final()
 }
 
 // follow copies the hub's outcome of a forwarded message onto its local copy.
 func (n *Node) follow(id string) {
 	for n.ctx.Err() == nil {
 		m, err := n.hub.Wait(n.ctx, id, client.MaxWait)
+		if n.settleFrom(id, m, err) {
+			return
+		}
 		if err != nil {
-			var ce *client.Error
-			if errors.As(err, &ce) && ce.Code == "not_found" {
-				_ = n.st.Settle(n.ctx, id, store.Failed, "", "the hub no longer has this message", 0)
-				n.notify()
-				return
-			}
 			select {
 			case <-n.ctx.Done():
 				return
 			case <-time.After(2 * time.Second):
 			}
-			continue
-		}
-		if m.State == store.Running || m.State.Final() {
-			if err := n.st.Settle(n.ctx, id, m.State, m.Reply, m.Error, m.Attempts); err == nil {
-				n.notify()
-			}
-		}
-		if m.State.Final() {
-			return
 		}
 	}
 }
@@ -232,29 +309,32 @@ func (n *Node) announced() []string {
 func (n *Node) startJoin() {
 	n.goLoop(func() {
 		for {
+			next := announceEvery
 			if err := n.hub.Announce(n.ctx, n.Name(), n.announced()); err != nil && n.ctx.Err() == nil {
 				n.log.Warn("announce to hub", "err", err)
+				next = 2 * time.Second // the hub may be starting: try again soon
 			}
 			select {
 			case <-n.ctx.Done():
 				return
-			case <-time.After(announceEvery):
+			case <-time.After(next):
 			}
 		}
 	})
 	n.goLoop(n.hubClaimLoop)
-	// Pick up where the last process left off.
-	if list, err := n.st.Unsettled(n.ctx, originRemote); err == nil {
-		for _, it := range list {
-			id := it[0]
-			n.goLoop(func() { n.follow(id) })
+	// Forwarded messages: the sweep picks up those the last process followed.
+	n.goLoop(n.followSweep)
+	// Delivered messages: few (local queue limits bound them), each relayed under its hub lease.
+	for after := ""; ; {
+		page, err := n.st.UnsettledPage(n.ctx, originHub, after, store.MaxPage)
+		if err != nil || len(page) == 0 {
+			break
 		}
-	}
-	if list, err := n.st.Unsettled(n.ctx, originHub); err == nil {
-		for _, it := range list {
+		for _, it := range page {
 			id, lease := it[0], strings.TrimPrefix(it[1], originHub)
 			n.goLoop(func() { n.relay(id, lease) })
 		}
+		after = page[len(page)-1][0]
 	}
 }
 
@@ -294,11 +374,30 @@ func (n *Node) deliver(m store.Message) {
 		refuse("agent:" + to.Name + " does not take messages from " + m.From + " (allow_from)")
 		return
 	}
+	// This node's limits hold for what comes through the hub too.
+	lim := n.cfg.Limits
+	switch {
+	case len(m.Body) > int(lim.MaxBody):
+		refuse(fmt.Sprintf("node %s: the body is over limits.max_body (%d)", n.Name(), lim.MaxBody))
+		return
+	case metaSize(m.Meta) > int(lim.MaxMeta):
+		refuse(fmt.Sprintf("node %s: meta is over limits.max_meta (%d)", n.Name(), lim.MaxMeta))
+		return
+	case m.Depth > lim.MaxDepth:
+		refuse(fmt.Sprintf("node %s: the chain is over limits.max_depth (%d)", n.Name(), lim.MaxDepth))
+		return
+	}
 	local := &store.Message{ID: m.ID, From: m.From, To: "agent:" + to.Name, Task: m.Task, Thread: m.Thread, Parent: m.Parent,
 		Depth: m.Depth, Meta: m.Meta, Body: m.Body, ExpiresAt: m.ExpiresAt, Origin: originHub + m.LeaseID}
-	if _, _, err := n.st.Insert(ctx, local); err != nil {
-		if _, gerr := n.st.Get(ctx, m.ID); gerr != nil {
-			refuse("node " + n.Name() + ": " + err.Error())
+	if _, _, err := n.st.InsertLimited(ctx, local, lim.MaxQueuedPerAgent); err != nil {
+		if errors.Is(err, store.ErrQueueFull) {
+			refuse(fmt.Sprintf("node %s: %s has a full queue (limits.max_queued_per_agent)", n.Name(), local.To))
+			return
+		}
+		prev, gerr := n.st.Get(ctx, m.ID)
+		// Only an earlier delivery of this same message is adopted, never a local message with the id.
+		if gerr != nil || !strings.HasPrefix(prev.Origin, originHub) || prev.To != local.To || prev.From != local.From {
+			refuse("node " + n.Name() + ": message id " + m.ID + " is already in use here")
 			return
 		}
 		// Delivered again (the hub's lease ran out before): keep the copy, follow it under the new lease.

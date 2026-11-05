@@ -80,6 +80,10 @@ type Node struct {
 	hub    *client.Client // the hub this node joined
 	remote *registry      // on a hub: the agents nodes announced
 
+	followMu   sync.Mutex
+	following  map[string]bool // forwarded messages with a long poll of their own
+	followWake chan struct{}
+
 	closed atomic.Bool
 }
 
@@ -99,7 +103,8 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	n := &Node{cfg: cfg, st: st, log: log, changed: make(chan struct{}), agentTk: map[string]*agentToken{},
-		acp: map[string]*acpAgent{}, wake: make(chan struct{}, 1), remote: newRegistry()}
+		acp: map[string]*acpAgent{}, wake: make(chan struct{}, 1), remote: newRegistry(),
+		following: map[string]bool{}, followWake: make(chan struct{}, 1)}
 	n.maintainEvery.Store(int64(30 * time.Second))
 	n.login = "user"
 	if u, err := user.Current(); err == nil && config.ValidName(u.Username) {
@@ -128,7 +133,7 @@ func (n *Node) Start(ctx context.Context) error {
 	for name := range n.acp {
 		mine = append(mine, "agent:"+name)
 	}
-	if k, err := n.st.RequeueRunning(ctx, mine); err != nil {
+	if k, err := n.st.RequeueRunning(ctx, mine, n.cfg.Limits.MaxAttempts); err != nil {
 		return err
 	} else if k > 0 {
 		n.log.Info("requeued turns interrupted by the last stop", "messages", k)
@@ -284,12 +289,8 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	if len(r.Body) > int(lim.MaxBody) {
 		return store.Message{}, false, errf("refused", "the body is %d bytes, over limits.max_body (%d)", len(r.Body), lim.MaxBody)
 	}
-	metaSize := 0
-	for k, v := range r.Meta {
-		metaSize += len(k) + len(v)
-	}
-	if metaSize > int(lim.MaxMeta) {
-		return store.Message{}, false, errf("refused", "meta is %d bytes, over limits.max_meta (%d)", metaSize, lim.MaxMeta)
+	if ms := metaSize(r.Meta); ms > int(lim.MaxMeta) {
+		return store.Message{}, false, errf("refused", "meta is %d bytes, over limits.max_meta (%d)", ms, lim.MaxMeta)
 	}
 
 	m := &store.Message{ID: store.NewID(), From: p.Address(), Body: r.Body, Task: r.Task, Thread: r.Thread, Meta: r.Meta, IdemKey: r.IdemKey}
@@ -358,12 +359,10 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	default:
 		return store.Message{}, false, errf("not_found", "no agent %s here", to)
 	}
-	if q, _, err := n.st.Counts(ctx, m.To); err != nil {
-		return store.Message{}, false, err
-	} else if q >= lim.MaxQueuedPerAgent {
-		return store.Message{}, false, errf("refused", "%s has %d messages queued (limits.max_queued_per_agent)", m.To, q)
+	got, created, err := n.st.InsertLimited(ctx, m, lim.MaxQueuedPerAgent)
+	if errors.Is(err, store.ErrQueueFull) {
+		return got, false, errf("refused", "%s has %d messages queued (limits.max_queued_per_agent)", m.To, lim.MaxQueuedPerAgent)
 	}
-	got, created, err := n.st.Insert(ctx, m)
 	if errors.Is(err, store.ErrStoreFull) {
 		return got, false, errf("refused", "%v", err)
 	}
@@ -374,6 +373,25 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 		n.notify()
 	}
 	return hideLease(got), created, nil
+}
+
+func metaSize(meta map[string]string) int {
+	n := 0
+	for k, v := range meta {
+		n += len(k) + len(v)
+	}
+	return n
+}
+
+// capReply cuts a reply to max bytes, marking the cut when there is room for the mark.
+func capReply(reply string, max int) string {
+	if len(reply) <= max {
+		return reply
+	}
+	if max <= len(truncatedMark) {
+		return reply[:max]
+	}
+	return reply[:max-len(truncatedMark)] + truncatedMark
 }
 
 func hideLease(m store.Message) store.Message {
@@ -474,7 +492,12 @@ func (n *Node) Cancel(ctx context.Context, p Principal, id string) (store.Messag
 		return m, errf("refused", "only the sender may cancel %s", id)
 	}
 	if m.Origin == originRemote {
-		if _, err := n.hub.Cancel(ctx, id); err != nil && !isFinalErr(err) {
+		// The hub owns the outcome: if it already has one, that is what the local copy gets (follow).
+		if _, err := n.hub.Cancel(ctx, id); err != nil {
+			if isFinalErr(err) {
+				n.wakeFollow()
+				return m, errf("conflict", "%s already ended on the hub", id)
+			}
 			return m, hubErr(err)
 		}
 	}
@@ -544,9 +567,7 @@ func (n *Node) Reply(ctx context.Context, p Principal, id, lease, body, errText 
 	if errText != "" {
 		state = store.Failed
 	}
-	if len(body) > int(n.cfg.Limits.MaxReply) {
-		body = body[:int(n.cfg.Limits.MaxReply)-len(truncatedMark)] + truncatedMark
-	}
+	body = capReply(body, int(n.cfg.Limits.MaxReply))
 	if err := n.st.Complete(ctx, id, lease, state, body, errText); err != nil {
 		if errors.Is(err, store.ErrLeaseLost) {
 			return errf("conflict", "%v", err)

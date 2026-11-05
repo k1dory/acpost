@@ -53,10 +53,15 @@ type globals struct {
 }
 
 func (g *globals) configPath() string {
-	if g.config != "" {
-		return g.config
+	p := g.config
+	if p == "" {
+		p = config.DefaultPath()
 	}
-	return config.DefaultPath()
+	// Absolute: a node started in the background runs from another directory.
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 func main() {
@@ -213,7 +218,11 @@ func localURL(cfg *config.Config) string {
 			return l
 		}
 	}
-	return "http://" + strings.TrimPrefix(cfg.Node.Listen[0], "tcp://")
+	scheme := "http://"
+	if cfg.Node.TLS != nil {
+		scheme = "https://"
+	}
+	return scheme + strings.TrimPrefix(cfg.Node.Listen[0], "tcp://")
 }
 
 // autostart runs `acpost serve` in the background, detached, and waits for it to answer.

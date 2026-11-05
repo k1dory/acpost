@@ -70,7 +70,9 @@ func serve(cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	maxReq := max(int64(cfg.Limits.MaxBody), int64(cfg.Limits.MaxReply)) + 1<<20
+	// JSON may spell one byte of text in six (\u0000): a request carrying a body or reply at its
+	// limit fits; the limits themselves are checked on the decoded text.
+	maxReq := 6*max(int64(cfg.Limits.MaxBody), int64(cfg.Limits.MaxReply)) + 1<<20
 	var servers []*http.Server
 	var cleanup []string
 	errc := make(chan error, len(cfg.Node.Listen))

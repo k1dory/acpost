@@ -78,7 +78,9 @@ local work there is nothing to set up but the agents. `SIGTERM` stops it cleanly
 
 **Hub.** A node other nodes join (`acpost serve --join https://hub:7420`). A joined node announces
 its agents; a message to an agent the node does not have goes to the hub, and the hub hands it to
-the node that announced that agent. Nodes connect out to the hub, so a node behind NAT works.
+the node that announced that agent. Nodes connect out to the hub, so a node behind NAT works. The
+sending node keeps a local copy that follows the hub's outcome, so `wait`, `show` and `list` work
+alike for local and remote messages.
 
 ## Install
 
@@ -269,6 +271,8 @@ store). That is all the "database" there is: nothing to install or start.
 - **Growth is bounded.** Final messages are deleted after `retention` in small batches; freed pages
   are returned to the file system (`auto_vacuum=incremental`); the WAL is checkpointed and truncated
   (`journal_size_limit`). Above `max_store` new sends are refused rather than filling the disk.
+- **Limits are checked on the text**, not on its JSON: a body at `max_body` is accepted however
+  much JSON escaping inflates it.
 - **Reads are bounded.** Lists are pages of at most 500 messages and never carry bodies; events come
   in pages; a body or reply is never bigger than its limit. Memory does not grow with the number of
   messages stored.
@@ -277,7 +281,9 @@ The tests check each of these claims: `go test ./internal/store -run 'Concurrent
 
 ## Security
 
-- The Unix socket and the store live in a directory only the user can open (`0700`).
+- The Unix socket and the store live in a directory only the user can open (`0700`). A node
+  refuses to start on a store whose directory other users can open, and makes the store's files
+  `0600`.
 - TCP refuses to start on a non-loopback address without TLS. Every TCP request needs a token; a
   token can send only where `send_to` allows and act only as the agents in `act_as`.
 - An `acp` agent runs as the node's user, in its `cwd`, with the node's environment (its API keys,
@@ -286,7 +292,12 @@ The tests check each of these claims: `go test ./internal/store -run 'Concurrent
   own sandbox allows: give such an agent to senders you trust (`allow_from`).
 - A message from another node is a prompt for your agent: joining a hub means trusting everyone who
   can send through it. The hub only routes to the agents each node announces, and a node announces
-  only agents whose `allow_from` admits remote senders.
+  only agents whose `allow_from` admits remote senders (`*`, or a pattern with `@`). Senders from
+  other nodes always carry their node (`user:lev@laptop`), so `allow_from: [user:lev]` admits only
+  the local `lev`. A node applies its own limits (`max_body`, `max_meta`, `max_depth`,
+  `max_queued_per_agent`) to what the hub delivers and fails what does not fit.
+- On a hub, a joined node's token is named after the node and carries `node: true`; the node may
+  then send only as its own addresses (`…@<node>`) and take only messages for agents it announced.
 - Bodies are stored in clear text in the store. Do not send secrets.
 
 ## How ACP is used
