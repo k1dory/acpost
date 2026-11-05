@@ -84,7 +84,11 @@ func writeErr(w http.ResponseWriter, err error) {
 		}
 	}
 	code, ok := statusOf[e.Code]
-	if !ok {
+	switch {
+	case ok:
+	case strings.HasPrefix(e.Code, "agent_") || strings.HasPrefix(e.Code, "session_"):
+		code = http.StatusBadGateway // the node is fine; the agent behind it is not
+	default:
 		code = http.StatusInternalServerError
 	}
 	writeStatus(w, code, e)

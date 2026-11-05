@@ -295,35 +295,14 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 		return store.Message{}, false, errf("refused", "meta is %d bytes, over limits.max_meta (%d)", ms, lim.MaxMeta)
 	}
 
-	sessionCwd := ""
-	if r.Session == "latest" {
-		// The agent's newest session, resolved now: the message records which one it went to.
-		if a := n.agentCfg(to.Name); a == nil || a.Driver != "acp" || (to.Node != "" && to.Node != n.Name()) {
-			return store.Message{}, false, errh("invalid", "name the session id (`acpost sessions --agent <name>` on its node)",
-				"--session latest needs an acp agent of this node, not %s", to)
+	// A repeat (same sender, same key) returns the first message before anything is resolved again.
+	if r.IdemKey != "" && p.Kind != "node" {
+		if prev, err := n.st.ByIdem(ctx, p.Address(), r.IdemKey); err == nil {
+			return hideLease(prev), false, nil
 		}
-		list, _, err := n.Sessions(ctx, p, to.Name, "", "")
-		if err != nil {
-			return store.Message{}, false, err
-		}
-		if len(list) == 0 {
-			return store.Message{}, false, errh("not_found", "send without --session to start a conversation", "agent:%s has no sessions", to.Name)
-		}
-		r.Session, sessionCwd = list[0].ID, list[0].Cwd
 	}
-	if r.Session != "" {
-		if len(r.Session) > 256 || strings.ContainsFunc(r.Session, func(c rune) bool { return c < ' ' || c == 0x7f }) {
-			return store.Message{}, false, errf("invalid", "session: up to 256 printable characters")
-		}
-		meta := make(map[string]string, len(r.Meta)+1)
-		for k, v := range r.Meta {
-			meta[k] = v
-		}
-		meta[metaSession] = r.Session
-		if sessionCwd != "" {
-			meta[metaSessionCwd] = sessionCwd
-		}
-		r.Meta = meta
+	if err := n.resolveSession(ctx, p, to, &r); err != nil {
+		return store.Message{}, false, err
 	}
 	m := &store.Message{ID: store.NewID(), From: p.Address(), Body: r.Body, Task: r.Task, Thread: r.Thread, Meta: r.Meta, IdemKey: r.IdemKey}
 	if r.TTL > 0 {
@@ -372,9 +351,10 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 
 	// Where does it go?
 	local := (to.Node == "" || to.Node == n.Name()) && n.agentCfg(to.Name) != nil
-	if local && p.Kind == "agent" && p.Name == to.Name && n.agentCfg(to.Name).Concurrency < 2 {
-		return store.Message{}, false, errh("refused", "send to another agent, or give this one concurrency: 2 or more in the node's config",
-			"agent:%s cannot message itself: its only slot is running the turn you are sending from, so the message would wait forever", to.Name)
+	if local && p.Kind == "agent" && p.Name == to.Name {
+		if err := n.checkSelfSend(ctx, m, to.Name, n.agentCfg(to.Name)); err != nil {
+			return store.Message{}, false, err
+		}
 	}
 	switch {
 	case local:
@@ -506,7 +486,11 @@ func (n *Node) List(ctx context.Context, p Principal, f store.Filter) ([]store.M
 	if f.State != "" && !f.State.Valid() {
 		return nil, "", errf("invalid", "state %q", f.State)
 	}
-	return n.st.List(ctx, f)
+	list, next, err := n.st.List(ctx, f)
+	for i := range list {
+		list[i] = withHint(list[i])
+	}
+	return list, next, err
 }
 
 // Events returns a page of what happened while a message was handled.

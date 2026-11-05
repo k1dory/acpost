@@ -530,6 +530,19 @@ func scanMessage(sc scanner, extra ...any) (Message, error) {
 	return m, nil
 }
 
+// ByIdem returns the message a sender sent with an idempotency key.
+func (s *Store) ByIdem(ctx context.Context, sender, key string) (Message, error) {
+	var id string
+	err := s.r.QueryRowContext(ctx, "SELECT id FROM messages WHERE sender = ? AND idem_key = ?", sender, key).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Message{}, ErrNotFound
+	}
+	if err != nil {
+		return Message{}, err
+	}
+	return s.Get(ctx, id)
+}
+
 // Get returns a message with its body and reply.
 func (s *Store) Get(ctx context.Context, id string) (Message, error) {
 	return s.get(ctx, s.r, id)

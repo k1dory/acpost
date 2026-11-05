@@ -38,7 +38,7 @@ type acpAgent struct {
 
 	keyMu  sync.Mutex
 	keys   map[string]*keyLock
-	owners map[string]int // session key → the slot whose process last ran it (concurrency > 1)
+	owners map[string]int // ACP session id → the slot whose process last ran it (concurrency > 1)
 }
 
 func (a *acpAgent) ownerOf(key string) int {
@@ -149,6 +149,21 @@ const (
 	metaSession    = "acp_session"
 	metaSessionCwd = "acp_session_cwd"
 )
+
+// lockID is what serializes a message's turns: the ACP session it runs in when that is known (a
+// task's session and the same session named by id are one), else its session key.
+func (s *acpSlot) lockID(m store.Message) string {
+	key := sessionKey(s.a.cfg.Session, m)
+	if id, ok := strings.CutPrefix(key, "session:"); ok {
+		return "sid:" + id
+	}
+	if key != "" {
+		if sid, _ := s.a.n.st.Session(s.a.n.ctx, s.a.addr, key); sid != "" {
+			return "sid:" + sid
+		}
+	}
+	return key
+}
 
 func sessionKey(mode string, m store.Message) string {
 	if id := m.Meta[metaSession]; id != "" {
@@ -374,7 +389,7 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 	a, n := s.a, s.a.n
 	if key != "" {
 		if sid, ok := p.sessions[key]; ok {
-			if a.ownerOf(key) == s.idx {
+			if a.ownerOf(string(sid)) == s.idx {
 				// Retention measures from the last use.
 				_ = n.st.PutSession(ctx, a.addr, key, string(sid))
 				return sid, nil
@@ -395,7 +410,7 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 			return "", explainACP(procErr(p, err), "session "+id, true)
 		}
 		p.sessions[key] = sid
-		a.setOwner(key, s.idx)
+		a.setOwner(string(sid), s.idx)
 		return sid, nil
 	}
 	var sid acp.SessionId
@@ -436,7 +451,7 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 	}
 	if key != "" {
 		p.sessions[key] = sid
-		a.setOwner(key, s.idx)
+		a.setOwner(string(sid), s.idx)
 		if err := n.st.PutSession(ctx, a.addr, key, string(sid)); err != nil {
 			n.log.Warn("store session", "agent", a.name, "err", err)
 		}
@@ -506,7 +521,7 @@ func (s *acpSlot) prompt(m store.Message) string {
 // handle runs one message as one turn.
 func (s *acpSlot) handle(m store.Message) {
 	a, n := s.a, s.a.n
-	unlock := a.lockKey(sessionKey(a.cfg.Session, m))
+	unlock := a.lockKey(s.lockID(m))
 	defer unlock()
 	n.setCurrent(s.token, m.ID)
 	defer n.setCurrent(s.token, "")
@@ -863,17 +878,14 @@ func (n *Node) Sessions(ctx context.Context, p Principal, agent, cwd, cursor str
 	if cfg.Driver != "acp" {
 		return nil, "", errh("unsupported", "only acp agents have sessions", "agent:%s is an %s mailbox: it has no ACP sessions", agent, cfg.Driver)
 	}
-	switch {
-	case p.local():
-	case p.Kind == "client" && matchAny(p.Token.SendTo, "agent:"+agent):
-	default:
-		return nil, "", errf("refused", "%s may not see the sessions of agent:%s", p.Address(), agent)
+	if err := canUseSessions(p, agent, cfg); err != nil {
+		return nil, "", err
 	}
 	slot := n.acp[agent].slots[0]
 	proc, err := slot.ensureProc(ctx)
 	if err != nil {
 		f := explainStart(err)
-		return nil, "", errh("unavailable", HintFor(f.Code), "%s", f.Message)
+		return nil, "", errh(f.Code, HintFor(f.Code), "%s", f.Message)
 	}
 	if proc.init.AgentCapabilities.SessionCapabilities.List == nil {
 		return nil, "", errh("unsupported", HintFor("unsupported"), "agent:%s does not list its sessions (ACP session/list)", agent)
@@ -888,7 +900,7 @@ func (n *Node) Sessions(ctx context.Context, p Principal, agent, cwd, cursor str
 	resp, err := proc.conn.ListSessions(ctx, req)
 	if err != nil {
 		f := explainACP(err, "list sessions", false)
-		return nil, "", errh("unavailable", HintFor(f.Code), "%s", f.Message)
+		return nil, "", errh(f.Code, HintFor(f.Code), "%s", f.Message)
 	}
 	out := make([]client.SessionInfo, 0, len(resp.Sessions))
 	for _, si := range resp.Sessions {

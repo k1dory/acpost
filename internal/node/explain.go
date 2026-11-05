@@ -77,7 +77,7 @@ func explainACP(err error, op string, session bool) Failure {
 		return failf("agent_auth", "%s: the agent needs to be logged in", op)
 	case re.Code == acp.NewMethodNotFound("").Code:
 		return failf("unsupported", "%s: the agent does not offer it", op)
-	case session:
+	case session && (re.Code == acp.NewInvalidParams(nil).Code || strings.Contains(text, "not found") || strings.Contains(text, "unknown") || strings.Contains(text, "no such")):
 		return failf("session_not_found", "%s: the agent has no such session (%s)", op, agentWords(re.Message))
 	}
 	return failf("agent_error", "%s: %s", op, agentWords(re.Message))

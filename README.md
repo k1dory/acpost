@@ -332,6 +332,9 @@ The tests check each of these claims: `go test ./internal/store -run 'Concurrent
   `max_queued_per_agent`) to what the hub delivers and fails what does not fit.
 - On a hub, a joined node's token is named after the node and carries `node: true`; the node may
   then send only as its own addresses (`…@<node>`) and take only messages for agents it announced.
+- An agent's sessions are its conversations with whoever started them: only the node's own user and
+  agents (within `allow_from`) may list them or send into one (`--session`); token clients may not.
+  Meta keys starting with `acp_` are acpost's own and refused from senders.
 - Bodies are stored in clear text in the store. Do not send secrets.
 
 ## How ACP is used

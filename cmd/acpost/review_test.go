@@ -60,3 +60,18 @@ func TestBodyLimitAppliesBeforeJSONEscaping(t *testing.T) {
 		t.Fatalf("valid 400000-byte body refused: exit=%d stderr=%s", r.code, r.err)
 	}
 }
+
+func TestSessionsAgentFailureIsNotMissingNode(t *testing.T) {
+	e := newEnv(t, `
+agents:
+  broken: {driver: acp, command: [/acpost-no-such-agent]}
+`)
+	e.serve()
+	e.ok("", "status")
+
+	r := e.run("", "sessions", "--agent", "broken", "--json")
+	if r.code != exitError {
+		t.Fatalf("agent failure: exit=%d, want %d; stderr=%s",
+			r.code, exitError, r.err)
+	}
+}
