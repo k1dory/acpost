@@ -47,8 +47,10 @@ func (p Principal) local() bool { return p.Kind == "user" || p.Kind == "agent" }
 type SendRequest struct {
 	To, Body, Task, Thread string
 	Meta                   map[string]string
-	TTL                    time.Duration
-	IdemKey                string
+	// Session continues an existing ACP session of the agent (one opened in an editor, say).
+	Session string
+	TTL     time.Duration
+	IdemKey string
 	// Honoured only from a node principal (a node forwarding its own message to its hub).
 	ID, From, Parent string
 	Depth            int
@@ -293,6 +295,17 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 		return store.Message{}, false, errf("refused", "meta is %d bytes, over limits.max_meta (%d)", ms, lim.MaxMeta)
 	}
 
+	if r.Session != "" {
+		if len(r.Session) > 256 || strings.ContainsFunc(r.Session, func(c rune) bool { return c < ' ' || c == 0x7f }) {
+			return store.Message{}, false, errf("invalid", "session: up to 256 printable characters")
+		}
+		meta := make(map[string]string, len(r.Meta)+1)
+		for k, v := range r.Meta {
+			meta[k] = v
+		}
+		meta[metaSession] = r.Session
+		r.Meta = meta
+	}
 	m := &store.Message{ID: store.NewID(), From: p.Address(), Body: r.Body, Task: r.Task, Thread: r.Thread, Meta: r.Meta, IdemKey: r.IdemKey}
 	if r.TTL > 0 {
 		m.ExpiresAt = time.Now().Add(r.TTL)

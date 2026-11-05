@@ -142,7 +142,13 @@ func (a *acpAgent) lockKey(key string) func() {
 	}
 }
 
+// metaSession is the meta key of a message that continues an existing ACP session (send --session).
+const metaSession = "acp_session"
+
 func sessionKey(mode string, m store.Message) string {
+	if id := m.Meta[metaSession]; id != "" {
+		return "session:" + id
+	}
 	switch mode {
 	case "message":
 		return ""
@@ -368,6 +374,17 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 		}
 	}
 	cwd := s.cwd()
+	if id, ok := strings.CutPrefix(key, "session:"); ok {
+		// A session named by the sender: continue exactly it, or fail. Its mode and model are the
+		// session's own, not the agent's configuration.
+		sid, err := s.continueSession(ctx, p, acp.SessionId(id), cwd)
+		if err != nil {
+			return "", fmt.Errorf("session %s: the agent cannot continue it: %w", id, procErr(p, err))
+		}
+		p.sessions[key] = sid
+		a.setOwner(key, s.idx)
+		return sid, nil
+	}
 	var sid acp.SessionId
 	var st acpx.SessionState
 	if key != "" {
@@ -412,6 +429,35 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 		}
 	}
 	return sid, nil
+}
+
+// continueSession resumes a session (session/resume) or loads it (session/load), whichever the
+// agent offers.
+func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.SessionId, cwd string) (acp.SessionId, error) {
+	caps := p.init.AgentCapabilities
+	var errs []error
+	if caps.SessionCapabilities.Resume != nil {
+		_, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
+		if err == nil {
+			return id, nil
+		}
+		errs = append(errs, err)
+	}
+	if caps.LoadSession {
+		_, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
+		if err == nil {
+			return id, nil
+		}
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		return "", errors.New("it offers neither session/resume nor session/load")
+	}
+	// resume and load usually fail for the same reason: say it once.
+	if len(errs) == 2 && errs[0].Error() == errs[1].Error() {
+		return "", errs[0]
+	}
+	return "", errors.Join(errs...)
 }
 
 func (s *acpSlot) prompt(m store.Message) string {

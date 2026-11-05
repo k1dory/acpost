@@ -299,7 +299,7 @@ func readBody(cmd *cobra.Command, body, file string) (string, bool, error) {
 }
 
 func sendCmd(g *globals) *cobra.Command {
-	var to, body, bodyFile, task, thread, idem string
+	var to, body, bodyFile, task, thread, idem, session string
 	var meta []string
 	var ttl, timeout time.Duration
 	var wait bool
@@ -320,7 +320,7 @@ func sendCmd(g *globals) *cobra.Command {
 			if !ok {
 				return usageErr(errors.New("no body: --body, --body-file or stdin"))
 			}
-			req := client.SendRequest{To: to, Body: text, Task: task, Thread: thread}
+			req := client.SendRequest{To: to, Body: text, Task: task, Thread: thread, Session: session}
 			for _, kv := range meta {
 				k, v, found := strings.Cut(kv, "=")
 				if !found || k == "" {
@@ -360,6 +360,7 @@ func sendCmd(g *globals) *cobra.Command {
 	f.StringVar(&bodyFile, "body-file", "", "read the message from a file (- for stdin)")
 	f.StringVar(&task, "task", "", "task label; messages of one task share the agent's session")
 	f.StringVar(&thread, "thread", "", "thread id")
+	f.StringVar(&session, "session", "", "continue this existing ACP session of the agent (an editor's, say)")
 	f.StringArrayVar(&meta, "meta", nil, "metadata k=v (repeatable)")
 	f.DurationVar(&ttl, "ttl", 0, "expire if no agent took it within this long")
 	f.StringVar(&idem, "idempotency-key", "", "a repeat with the same key returns the first message")

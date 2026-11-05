@@ -23,12 +23,14 @@ import (
 
 // SendRequest is the body of POST /v1/messages.
 type SendRequest struct {
-	To     string            `json:"to"`
-	Body   string            `json:"body"`
-	Task   string            `json:"task,omitempty"`
-	Thread string            `json:"thread,omitempty"`
-	Meta   map[string]string `json:"meta,omitempty"`
-	TTL    string            `json:"ttl,omitempty"`
+	To     string `json:"to"`
+	Body   string `json:"body"`
+	Task   string `json:"task,omitempty"`
+	Thread string `json:"thread,omitempty"`
+	// Session continues an existing ACP session of the agent.
+	Session string            `json:"session,omitempty"`
+	Meta    map[string]string `json:"meta,omitempty"`
+	TTL     string            `json:"ttl,omitempty"`
 	// Set only by a node forwarding its own message to a hub.
 	ID     string `json:"id,omitempty"`
 	From   string `json:"from,omitempty"`

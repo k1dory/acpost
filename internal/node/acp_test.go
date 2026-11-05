@@ -261,6 +261,33 @@ func TestACPAgentEnvironment(t *testing.T) {
 	}
 }
 
+// A message can continue an existing ACP session of the agent (one started elsewhere, say in an
+// editor): the node loads it and prompts it there.
+func TestACPExistingSession(t *testing.T) {
+	state := t.TempDir()
+	if err := os.WriteFile(state+"/external-session", []byte("5"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+    preamble: false
+`, os.Args[0], state))
+	if w := ask(t, n, SendRequest{Body: "count", Session: "external-session"}); w.State != store.Done || w.Reply != "6" {
+		t.Fatalf("not continued in the existing session: %s %q %q", w.State, w.Reply, w.Error)
+	}
+	if w := ask(t, n, SendRequest{Body: "count", Session: "external-session"}); w.Reply != "7" {
+		t.Fatalf("second message: %q", w.Reply)
+	}
+	// A session the agent does not have is an error, not a silent new session.
+	if w := ask(t, n, SendRequest{Body: "count", Session: "no-such-session"}); w.State != store.Failed || !strings.Contains(w.Error, "no-such-session") {
+		t.Fatalf("unknown session: %s %q", w.State, w.Error)
+	}
+}
+
 func TestACPPreamble(t *testing.T) {
 	n := acpNode(t, "")
 	w := ask(t, n, SendRequest{Body: "please\nprompt", Task: "TASK-9"})

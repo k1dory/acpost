@@ -128,7 +128,7 @@ bounded (`limits.max_depth`).
 ## Commands
 
 ```
-acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--task T] [--thread ID]
+acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--task T] [--thread ID] [--session ACP-ID]
                [--meta k=v]... [--ttl DUR] [--idempotency-key K] [--wait [--timeout DUR]]
 acpost wait    ID... [--timeout DUR]
 acpost show    ID [--events]
@@ -142,6 +142,12 @@ acpost status
 ```
 
 `acpost message send …` is the same as `acpost send …` (and so on for the other message commands).
+
+`--session` puts the message into an existing ACP session of the agent instead of one acpost
+manages: a Codex conversation open in an editor, say (its id is the thread id of
+`~/.codex/sessions/…/rollout-…-<id>.jsonl`). The node resumes or loads it; if the agent cannot,
+the message fails. The editor shows the new turn after it reloads the conversation; do not write
+to the same session from both at once.
 
 **Global flags** (and their variables): `--node URL` (`ACPOST_NODE`; `unix:///path` or
 `http(s)://host:port`, default the local socket), `--token T` (`ACPOST_TOKEN`), `--json`

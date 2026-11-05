@@ -137,7 +137,7 @@ func (s *server) send(w http.ResponseWriter, r *http.Request, p node.Principal) 
 		writeErr(w, err)
 		return
 	}
-	sr := node.SendRequest{To: req.To, Body: req.Body, Task: req.Task, Thread: req.Thread, Meta: req.Meta,
+	sr := node.SendRequest{To: req.To, Body: req.Body, Task: req.Task, Thread: req.Thread, Meta: req.Meta, Session: req.Session,
 		IdemKey: r.Header.Get("Idempotency-Key")}
 	if req.TTL != "" {
 		d, err := time.ParseDuration(req.TTL)
