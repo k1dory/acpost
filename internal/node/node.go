@@ -372,6 +372,10 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 
 	// Where does it go?
 	local := (to.Node == "" || to.Node == n.Name()) && n.agentCfg(to.Name) != nil
+	if local && p.Kind == "agent" && p.Name == to.Name && n.agentCfg(to.Name).Concurrency < 2 {
+		return store.Message{}, false, errh("refused", "send to another agent, or give this one concurrency: 2 or more in the node's config",
+			"agent:%s cannot message itself: its only slot is running the turn you are sending from, so the message would wait forever", to.Name)
+	}
 	switch {
 	case local:
 		m.To = "agent:" + to.Name

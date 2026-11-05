@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/k1dory/acpost/internal/client"
 )
 
 var binDir string
@@ -518,5 +520,44 @@ func TestErrorsExplainThemselves(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(r.err), &eb); err != nil || eb.Error.Code != "not_found" || !strings.Contains(eb.Error.Hint, "acpost agents") {
 		t.Fatalf("json error: %v %q", err, r.err)
+	}
+}
+
+// Found by Codex testing acpost as an agent (DUO-1).
+func TestAgentFeedbackDUO1(t *testing.T) {
+	e := newEnv(t, inbox)
+	e.serve()
+	// A timed-out send --wait names the message and how to continue.
+	r := e.run("", "send", "--to", "bot", "--body", "x", "--wait", "--timeout", "200ms")
+	if r.code != 4 || !strings.Contains(r.err, "msg_") || !strings.Contains(r.err, "acpost wait msg_") {
+		t.Fatalf("timeout: exit %d\n%s", r.code, r.err)
+	}
+	// --json holds whatever the order of the flags, and from the environment.
+	for _, args := range [][]string{{"status", "--bogus", "--json"}, {"status", "--bogus"}} {
+		cmd := exec.Command(filepath.Join(binDir, "acpost"), args...)
+		cmd.Env = append(cleanEnv(), append(e.vars, "ACPOST_JSON=1")...)
+		out, _ := cmd.CombinedOutput()
+		var eb struct{ Error struct{ Code string } }
+		if json.Unmarshal(out, &eb) != nil || eb.Error.Code != "invalid" {
+			t.Fatalf("%v: not JSON: %s", args, out)
+		}
+	}
+	// status says what an agent needs to know in one call: the node, who you are, the agents.
+	if out := e.ok("", "status"); !strings.Contains(out, "agent:bot") {
+		t.Fatalf("status lacks agents:\n%s", out)
+	}
+	var st map[string]any
+	if err := json.Unmarshal([]byte(e.ok("", "status", "--json")), &st); err != nil || st["agents"] == nil {
+		t.Fatalf("status --json: %v %v", err, st)
+	}
+}
+
+func TestSocketPermissionHint(t *testing.T) {
+	err := fmt.Errorf("%w: unix:///x: %w", client.ErrUnavailable, syscall.EPERM)
+	if h := hintOf(err); !strings.Contains(h, "sandbox") {
+		t.Fatalf("EPERM hint: %q", h)
+	}
+	if h := hintOf(fmt.Errorf("%w: unix:///x: %w", client.ErrUnavailable, syscall.ENOENT)); !strings.Contains(h, "acpost serve") {
+		t.Fatalf("ENOENT hint: %q", h)
 	}
 }

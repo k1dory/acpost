@@ -335,3 +335,19 @@ func TestAgentsListing(t *testing.T) {
 		t.Fatalf("%+v", agents)
 	}
 }
+
+// An agent that waits for itself never gets an answer: its only slot is running the turn it sends from.
+func TestAgentCannotWaitForItself(t *testing.T) {
+	n := newNode(t, inboxCfg+"  solo: {driver: acp, command: [x]}\n  multi: {driver: acp, command: [x], concurrency: 2}\n")
+	tok := n.issueAgentToken("solo")
+	p, _ := n.PrincipalForToken(tok)
+	_, _, err := n.Send(ctx, p, SendRequest{To: "solo", Body: "x"})
+	if code(err) != "refused" || !strings.Contains(hintOf(err), "concurrency") {
+		t.Fatalf("self-send with one slot: %v / %q", err, hintOf(err))
+	}
+	tok2 := n.issueAgentToken("multi")
+	p2, _ := n.PrincipalForToken(tok2)
+	if _, _, err := n.Send(ctx, p2, SendRequest{To: "multi", Body: "x"}); err != nil {
+		t.Fatalf("self-send with spare slots: %v", err)
+	}
+}

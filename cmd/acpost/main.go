@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -68,7 +69,9 @@ func (g *globals) configPath() string {
 
 func main() {
 	g := &globals{}
-	root := rootCmd(g)
+	root := rootCmd(g) // registering the flags sets their defaults
+	// Known before flags are parsed: an error in parsing them is reported in JSON too.
+	g.json = os.Getenv("ACPOST_JSON") == "1" || slices.Contains(os.Args[1:], "--json") || slices.Contains(os.Args[1:], "--json=true")
 	err := root.ExecuteContext(context.Background())
 	if err == nil {
 		return
@@ -131,6 +134,9 @@ func hintOf(err error) string {
 		return ce.Hint
 	}
 	switch {
+	case errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES):
+		return "the node is there, but this process may not connect to its socket (a sandbox, or file permissions): " +
+			"run acpost outside the sandbox (allow the command), or reach the node over TCP with --node http://127.0.0.1:PORT --token …"
 	case errors.Is(err, client.ErrUnavailable):
 		return "no node answers there: `acpost serve` starts one, or check --node / ACPOST_NODE"
 	case exitCode(err) == exitUsage:
@@ -406,9 +412,8 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 	if timeout > 0 {
 		deadline = time.Now().Add(timeout)
 	}
-	var failed []string
+	var failed, pending []string
 	var last store.Message
-	timedOut := false
 	for i, id := range ids {
 		left := time.Duration(0)
 		if !deadline.IsZero() {
@@ -435,7 +440,7 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 		}
 		switch {
 		case !m.State.Final():
-			timedOut = true
+			pending = append(pending, m.ID)
 		case m.State != store.Done:
 			why := m.Error
 			if why == "" {
@@ -460,8 +465,10 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 		}
 		return e
 	}
-	if timedOut {
-		return &exitErr{code: exitTimeout, err: errors.New("timed out waiting; the message keeps going"), hint: "`acpost wait <id>` picks it up again later"}
+	if len(pending) > 0 {
+		ids := strings.Join(pending, " ")
+		return &exitErr{code: exitTimeout, name: "timeout", err: fmt.Errorf("timed out waiting for %s; it keeps going", ids),
+			hint: "`acpost wait " + ids + "` continues waiting; `acpost cancel <id>` stops it"}
 	}
 	return nil
 }
@@ -732,18 +739,22 @@ func agentsCmd(g *globals) *cobra.Command {
 				printJSON(list)
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "AGENT\tDRIVER\tQUEUED\tRUNNING\tPROCESS")
-			for _, a := range list {
-				proc := ""
-				if a.Process {
-					proc = "up"
-				}
-				fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", a.Address, a.Driver, a.Queued, a.Running, proc)
-			}
-			return w.Flush()
+			return printAgents(list)
 		},
 	}
+}
+
+func printAgents(list []client.AgentInfo) error {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "AGENT\tDRIVER\tQUEUED\tRUNNING\tPROCESS")
+	for _, a := range list {
+		proc := ""
+		if a.Process {
+			proc = "up"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", a.Address, a.Driver, a.Queued, a.Running, proc)
+	}
+	return w.Flush()
 }
 
 func sessionsCmd(g *globals) *cobra.Command {
@@ -822,16 +833,24 @@ func statusCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if g.json {
-				printJSON(s)
-			} else {
-				fmt.Printf("ok: node %s, acpost %s, you are %s", s.Node, s.Version, s.You)
-				if s.Hub != "" {
-					fmt.Printf(", joined %s", s.Hub)
-				}
-				fmt.Println()
+			// One call tells an agent all it needs to start: the node, who it is, whom it can write to.
+			agents, err := c.Agents(cmd.Context())
+			if err != nil {
+				return err
 			}
-			return nil
+			if g.json {
+				printJSON(struct {
+					client.Status
+					Agents []client.AgentInfo `json:"agents"`
+				}{s, agents})
+				return nil
+			}
+			fmt.Printf("ok: node %s, acpost %s, you are %s", s.Node, s.Version, s.You)
+			if s.Hub != "" {
+				fmt.Printf(", joined %s", s.Hub)
+			}
+			fmt.Println()
+			return printAgents(agents)
 		},
 	}
 }

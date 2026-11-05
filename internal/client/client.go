@@ -190,7 +190,7 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
 		}
-		return 0, fmt.Errorf("%w: %s: %v", ErrUnavailable, c.URL, err)
+		return 0, fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
