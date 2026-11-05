@@ -816,18 +816,11 @@ func statusCmd(g *globals) *cobra.Command {
 		Short: "Check the node is up",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			url := g.node
-			if url == "" {
-				cfg, err := config.Load(g.configPath())
-				if err != nil {
-					return usageErr(err)
-				}
-				url = localURL(cfg)
-			}
-			// status reports; it does not start a node.
-			c, err := client.New(url, g.token, "")
+			// Like every command, status starts the local node when there is none: it is the first
+			// call an agent makes, and it should not tell a story the next command contradicts.
+			c, err := g.connect(cmd.Context())
 			if err != nil {
-				return usageErr(err)
+				return err
 			}
 			s, err := c.Status(cmd.Context())
 			if err != nil {
