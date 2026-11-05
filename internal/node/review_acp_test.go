@@ -196,7 +196,7 @@ agents:
 			t.Fatal(ok, err)
 		}
 		if attempt < 3 {
-			if _, err := n.st.Release(ctx, c.ID, c.LeaseID, "interrupted", 3); err != nil {
+			if _, err := n.st.Release(ctx, c.ID, c.LeaseID, "agent_crashed", "interrupted", 3); err != nil {
 				t.Fatal(err)
 			}
 		}

@@ -43,6 +43,8 @@ type ReplyRequest struct {
 	Lease string `json:"lease"`
 	Body  string `json:"body,omitempty"`
 	Error string `json:"error,omitempty"`
+	// ErrorCode is the failure's code (README, "Errors"); a joined node passes on its agent's.
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 // Page is a page of a list.
@@ -60,6 +62,31 @@ type AgentInfo struct {
 	Queued  int    `json:"queued"`
 	Running int    `json:"running"`
 	Process bool   `json:"process,omitempty"` // an acp agent's process is up
+}
+
+// SessionInfo is one of an ACP agent's sessions.
+type SessionInfo struct {
+	ID        string `json:"id"`
+	Title     string `json:"title,omitempty"`
+	Cwd       string `json:"cwd"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// Sessions lists an acp agent's sessions, newest first; next continues the list.
+func (c *Client) Sessions(ctx context.Context, agent, cwd, cursor string) ([]SessionInfo, string, error) {
+	var out struct {
+		Items []SessionInfo `json:"items"`
+		Next  string        `json:"next,omitempty"`
+	}
+	q := url.Values{}
+	if cwd != "" {
+		q.Set("cwd", cwd)
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	_, err := c.do(ctx, "GET", "/v1/agents/"+url.PathEscape(agent)+"/sessions", q, nil, &out, nil)
+	return out.Items, out.Next, err
 }
 
 // Status is GET /v1/health.
@@ -81,6 +108,7 @@ type Error struct {
 	Status  int    `json:"-"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"`
 }
 
 func (e *Error) Error() string { return e.Message }

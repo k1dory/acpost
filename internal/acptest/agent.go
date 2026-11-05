@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,7 +48,7 @@ func Run() {
 func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
 		ProtocolVersion:   acp.ProtocolVersionNumber,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: true},
+		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}}},
 		AgentInfo:         &acp.Implementation{Name: "fake-agent", Version: "1"},
 	}, nil
 }
@@ -66,6 +67,12 @@ func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (ac
 }
 
 func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
+	// What codex-acp answers for a conversation another client has open.
+	if strings.HasPrefix(string(p.SessionId), "busy-") {
+		return acp.LoadSessionResponse{}, &acp.RequestError{Code: -32600,
+			Message: "Invalid request: This Codex session is in use by another Codex client (the Codex app, the CLI or an IDE extension). Close the session there or quit that client, then try again.",
+			Data:    map[string]any{"reason": "thread_active_writer", "threadId": string(p.SessionId)}}
+	}
 	// A loaded session keeps its prompt count across processes through an env-named file.
 	if dir := os.Getenv("FAKE_STATE"); dir != "" {
 		if b, err := os.ReadFile(dir + "/" + string(p.SessionId)); err == nil {
@@ -185,8 +192,21 @@ func (a *fakeAgent) CloseSession(ctx context.Context, p acp.CloseSessionRequest)
 	return acp.CloseSessionResponse{}, nil
 }
 
+// ListSessions lists the sessions kept in FAKE_STATE, newest first by file time.
 func (a *fakeAgent) ListSessions(ctx context.Context, p acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
-	return acp.ListSessionsResponse{}, nil
+	var out acp.ListSessionsResponse
+	dir := os.Getenv("FAKE_STATE")
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out.Sessions = append(out.Sessions, acp.SessionInfo{SessionId: acp.SessionId(e.Name()), Cwd: "/fake",
+			Title: acp.Ptr("session " + e.Name()), UpdatedAt: acp.Ptr(info.ModTime().UTC().Format(time.RFC3339Nano))})
+	}
+	sort.Slice(out.Sessions, func(i, j int) bool { return *out.Sessions[i].UpdatedAt > *out.Sessions[j].UpdatedAt })
+	return out, nil
 }
 
 func (a *fakeAgent) ResumeSession(ctx context.Context, p acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {

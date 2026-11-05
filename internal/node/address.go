@@ -62,8 +62,23 @@ func matchAny(patterns []string, addr string) bool {
 
 // Error is a failure with a code the API and the command line map to a status and an exit code.
 type Error struct {
-	Code    string `json:"code"` // invalid, not_found, refused, conflict, timeout, unavailable
+	Code    string `json:"code"` // invalid, not_found, refused, conflict, timeout, unavailable, unsupported
 	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"` // what to do next
+}
+
+// errh is errf with a hint.
+func errh(code, hint, format string, args ...any) error {
+	return &Error{Code: code, Message: fmt.Sprintf(format, args...), Hint: hint}
+}
+
+// hintOf is the hint of err ("" for none).
+func hintOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Hint
+	}
+	return ""
 }
 
 func (e *Error) Error() string { return e.Message }

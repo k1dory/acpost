@@ -25,14 +25,14 @@ func TestRemoteOutcomeSurvivesLocalMaintenance(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				if err := s.Settle(ctx, got.ID, Running, "", "", 3); err != nil {
+				if err := s.Settle(ctx, got.ID, Running, "", "", "", 3); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := s.ReapLeases(ctx, time.Now(), 3); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := s.Settle(ctx, got.ID, Done, "answer", "", 3); err != nil {
+			if err := s.Settle(ctx, got.ID, Done, "answer", "", "", 3); err != nil {
 				t.Fatal(err)
 			}
 			got, err := s.Get(ctx, got.ID)

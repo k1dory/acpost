@@ -141,17 +141,17 @@ func TestClaimCompleteLifecycle(t *testing.T) {
 	if err != nil || !ok || c.ID != a.ID || c.State != Running || c.Attempts != 1 || c.LeaseID == "" {
 		t.Fatalf("first claim %+v %v %v", c, ok, err)
 	}
-	if err := s.Complete(ctx, c.ID, "wrong-lease", Done, "r", ""); !errors.Is(err, ErrLeaseLost) {
+	if err := s.Complete(ctx, c.ID, "wrong-lease", Done, "r", "", ""); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("wrong lease: %v", err)
 	}
-	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "the answer", ""); err != nil {
+	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "the answer", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Get(ctx, a.ID)
 	if got.State != Done || got.Reply != "the answer" || got.LeaseID != "" {
 		t.Fatalf("after complete %+v", got)
 	}
-	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "again", ""); !errors.Is(err, ErrLeaseLost) {
+	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "again", "", ""); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("second complete: %v", err)
 	}
 	c2, ok, _ := s.Claim(ctx, "agent:r", time.Minute)

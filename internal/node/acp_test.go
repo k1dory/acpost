@@ -323,3 +323,81 @@ agents:
 		t.Fatalf("%s %q attempts=%d", w.State, w.Reply, w.Attempts)
 	}
 }
+
+func sessionsNode(t testing.TB) (*Node, string) {
+	t.Helper()
+	state := t.TempDir()
+	for i, id := range []string{"older", "newer"} {
+		path := state + "/" + id
+		if err := os.WriteFile(path, []byte(fmt.Sprint(10*(i+1))), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mt := time.Now().Add(time.Duration(i-2) * time.Hour)
+		os.Chtimes(path, mt, mt)
+	}
+	return newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+    preamble: false
+  box: {driver: inbox}
+`, os.Args[0], state)), state
+}
+
+func TestACPSessionsList(t *testing.T) {
+	n, _ := sessionsNode(t)
+	list, next, err := n.Sessions(ctx, me, "fake", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[0].ID != "newer" || list[1].ID != "older" || list[0].Title == "" || list[0].Cwd != "/fake" || next != "" {
+		t.Fatalf("sessions %+v next=%q", list, next)
+	}
+	if _, _, err := n.Sessions(ctx, me, "box", "", ""); code(err) != "unsupported" || hintOf(err) == "" {
+		t.Fatalf("sessions of an inbox agent: %v", err)
+	}
+	if _, _, err := n.Sessions(ctx, me, "ghost", "", ""); code(err) != "not_found" || !strings.Contains(hintOf(err), "acpost agents") {
+		t.Fatalf("sessions of an unknown agent: %v / %q", err, hintOf(err))
+	}
+}
+
+func TestACPSessionLatest(t *testing.T) {
+	n, _ := sessionsNode(t)
+	w := ask(t, n, SendRequest{Body: "count", Session: "latest"})
+	if w.State != store.Done || w.Reply != "21" || w.Meta["acp_session"] != "newer" {
+		t.Fatalf("latest: %s %q meta=%v %q", w.State, w.Reply, w.Meta, w.Error)
+	}
+}
+
+// What an agent gets back when the session is open elsewhere: a code, a sentence and what to do,
+// not the agent's JSON-RPC error.
+func TestACPSessionBusyExplained(t *testing.T) {
+	n, _ := sessionsNode(t)
+	w := ask(t, n, SendRequest{Body: "count", Session: "busy-1"})
+	if w.State != store.Failed || w.ErrorCode != "session_busy" || w.Hint == "" {
+		t.Fatalf("%s code=%q hint=%q", w.State, w.ErrorCode, w.Hint)
+	}
+	for _, raw := range []string{"-32600", "{", "thread_active_writer", "Invalid request"} {
+		if strings.Contains(w.Error, raw) {
+			t.Fatalf("raw agent error leaks into the explanation: %q", w.Error)
+		}
+	}
+	if w2 := ask(t, n, SendRequest{Body: "count", Session: "nope"}); w2.ErrorCode != "session_not_found" || !strings.Contains(w2.Hint, "acpost sessions") {
+		t.Fatalf("unknown session: code=%q hint=%q err=%q", w2.ErrorCode, w2.Hint, w2.Error)
+	}
+}
+
+func TestACPFailureCodes(t *testing.T) {
+	n := acpNode(t, "preamble: false\nturn_timeout: 300ms")
+	for body, want := range map[string]string{"crash": "agent_crashed", "sleep 5000": "turn_timeout", "refuse": "agent_stopped"} {
+		if w := ask(t, n, SendRequest{Body: body}); w.ErrorCode != want || w.Hint == "" {
+			t.Fatalf("%s: code=%q hint=%q error=%q", body, w.ErrorCode, w.Hint, w.Error)
+		}
+	}
+	bad := newNode(t, "agents:\n  broken: {driver: acp, command: [/nonexistent/agent]}\nlimits: {max_attempts: 1}\n")
+	if w := ask(t, bad, SendRequest{To: "broken", Body: "x"}); w.ErrorCode != "agent_start" || w.Hint == "" {
+		t.Fatalf("missing command: code=%q hint=%q error=%q", w.ErrorCode, w.Hint, w.Error)
+	}
+}

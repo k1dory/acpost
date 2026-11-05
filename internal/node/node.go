@@ -295,6 +295,22 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 		return store.Message{}, false, errf("refused", "meta is %d bytes, over limits.max_meta (%d)", ms, lim.MaxMeta)
 	}
 
+	sessionCwd := ""
+	if r.Session == "latest" {
+		// The agent's newest session, resolved now: the message records which one it went to.
+		if a := n.agentCfg(to.Name); a == nil || a.Driver != "acp" || (to.Node != "" && to.Node != n.Name()) {
+			return store.Message{}, false, errh("invalid", "name the session id (`acpost sessions --agent <name>` on its node)",
+				"--session latest needs an acp agent of this node, not %s", to)
+		}
+		list, _, err := n.Sessions(ctx, p, to.Name, "", "")
+		if err != nil {
+			return store.Message{}, false, err
+		}
+		if len(list) == 0 {
+			return store.Message{}, false, errh("not_found", "send without --session to start a conversation", "agent:%s has no sessions", to.Name)
+		}
+		r.Session, sessionCwd = list[0].ID, list[0].Cwd
+	}
 	if r.Session != "" {
 		if len(r.Session) > 256 || strings.ContainsFunc(r.Session, func(c rune) bool { return c < ' ' || c == 0x7f }) {
 			return store.Message{}, false, errf("invalid", "session: up to 256 printable characters")
@@ -304,6 +320,9 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 			meta[k] = v
 		}
 		meta[metaSession] = r.Session
+		if sessionCwd != "" {
+			meta[metaSessionCwd] = sessionCwd
+		}
 		r.Meta = meta
 	}
 	m := &store.Message{ID: store.NewID(), From: p.Address(), Body: r.Body, Task: r.Task, Thread: r.Thread, Meta: r.Meta, IdemKey: r.IdemKey}
@@ -370,7 +389,7 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	case n.hub != nil && p.Kind != "node":
 		return n.forward(ctx, m, to)
 	default:
-		return store.Message{}, false, errf("not_found", "no agent %s here", to)
+		return store.Message{}, false, errh("not_found", "`acpost agents` lists the agents this node knows", "no agent %s here", to)
 	}
 	got, created, err := n.st.InsertLimited(ctx, m, lim.MaxQueuedPerAgent)
 	if errors.Is(err, store.ErrQueueFull) {
@@ -407,9 +426,10 @@ func capReply(reply string, max int) string {
 	return reply[:max-len(truncatedMark)] + truncatedMark
 }
 
+// hideLease is a message as others see it: no lease (only its claimer has it), and the hint of its error.
 func hideLease(m store.Message) store.Message {
 	m.LeaseID, m.LeaseUntil = "", time.Time{}
-	return m
+	return withHint(m)
 }
 
 // canSee says whether p may read m.
@@ -529,7 +549,7 @@ func (n *Node) Cancel(ctx context.Context, p Principal, id string) (store.Messag
 func (n *Node) Claim(ctx context.Context, p Principal, agent string, wait, lease time.Duration) (store.Message, bool, error) {
 	a := n.agentCfg(agent)
 	if a == nil {
-		return store.Message{}, false, errf("not_found", "no agent %s", agent)
+		return store.Message{}, false, errh("not_found", "`acpost agents` lists the agents this node knows", "no agent %s", agent)
 	}
 	if a.Driver != "inbox" {
 		return store.Message{}, false, errf("invalid", "agent:%s is served by its %s driver, not taken by hand", agent, a.Driver)
@@ -569,6 +589,11 @@ func (n *Node) claim(ctx context.Context, recipients []string, wait, lease time.
 
 // Reply answers a message taken under lease: body is the reply, or errText says why there is none.
 func (n *Node) Reply(ctx context.Context, p Principal, id, lease, body, errText string) error {
+	return n.ReplyCoded(ctx, p, id, lease, body, "", errText)
+}
+
+// ReplyCoded is Reply with the failure's code (a joined node passes on its agent's; "" is "failed").
+func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, errCode, errText string) error {
 	m, err := n.st.Get(ctx, id)
 	if err != nil {
 		return errf("not_found", "no message %s", id)
@@ -579,9 +604,14 @@ func (n *Node) Reply(ctx context.Context, p Principal, id, lease, body, errText 
 	state := store.Done
 	if errText != "" {
 		state = store.Failed
+		if _, known := hints[errCode]; !known {
+			errCode = "failed"
+		}
+	} else {
+		errCode = ""
 	}
 	body = capReply(body, int(n.cfg.Limits.MaxReply))
-	if err := n.st.Complete(ctx, id, lease, state, body, errText); err != nil {
+	if err := n.st.Complete(ctx, id, lease, state, body, errCode, errText); err != nil {
 		if errors.Is(err, store.ErrLeaseLost) {
 			return errf("conflict", "%v", err)
 		}

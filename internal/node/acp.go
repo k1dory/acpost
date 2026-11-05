@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/k1dory/acpx"
 
+	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/store"
 )
@@ -143,7 +145,10 @@ func (a *acpAgent) lockKey(key string) func() {
 }
 
 // metaSession is the meta key of a message that continues an existing ACP session (send --session).
-const metaSession = "acp_session"
+const (
+	metaSession    = "acp_session"
+	metaSessionCwd = "acp_session_cwd"
+)
 
 func sessionKey(mode string, m store.Message) string {
 	if id := m.Meta[metaSession]; id != "" {
@@ -361,6 +366,11 @@ func killGroup(p *acpProc) {
 // session returns the ACP session for a key: one this process has, one stored (resumed or
 // loaded), or a new one.
 func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.SessionId, error) {
+	return s.sessionIn(ctx, p, key, "")
+}
+
+// sessionIn is session with the working directory of a session the sender named (when known).
+func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd string) (acp.SessionId, error) {
 	a, n := s.a, s.a.n
 	if key != "" {
 		if sid, ok := p.sessions[key]; ok {
@@ -375,11 +385,14 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 	}
 	cwd := s.cwd()
 	if id, ok := strings.CutPrefix(key, "session:"); ok {
+		if sessionCwd != "" {
+			cwd = sessionCwd
+		}
 		// A session named by the sender: continue exactly it, or fail. Its mode and model are the
 		// session's own, not the agent's configuration.
 		sid, err := s.continueSession(ctx, p, acp.SessionId(id), cwd)
 		if err != nil {
-			return "", fmt.Errorf("session %s: the agent cannot continue it: %w", id, procErr(p, err))
+			return "", explainACP(procErr(p, err), "session "+id, true)
 		}
 		p.sessions[key] = sid
 		a.setOwner(key, s.idx)
@@ -429,6 +442,18 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 		}
 	}
 	return sid, nil
+}
+
+// explainStart says why an agent process did not start.
+func explainStart(err error) Failure {
+	var re *acp.RequestError
+	if errors.As(err, &re) || strings.Contains(err.Error(), "authenticate") {
+		f := explainACP(err, "start the agent", false)
+		if f.Code == "agent_auth" {
+			return f
+		}
+	}
+	return failf("agent_start", "the agent did not start: %v", err)
 }
 
 // continueSession resumes a session (session/resume) or loads it (session/load), whichever the
@@ -526,15 +551,15 @@ func (s *acpSlot) handle(m store.Message) {
 	}()
 	defer func() { cancel(); <-watchDone }()
 
-	complete := func(state store.State, reply, errText string) {
+	complete := func(state store.State, reply string, f Failure) {
 		reply = capReply(reply, int(n.cfg.Limits.MaxReply))
-		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, state, reply, errText); err != nil && !errors.Is(err, store.ErrLeaseLost) {
+		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, state, reply, f.Code, f.Message); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("complete", "id", m.ID, "err", err)
 		}
 		n.notify()
 	}
-	release := func(reason string) {
-		if _, err := n.st.Release(n.ctx, m.ID, m.LeaseID, reason, n.cfg.Limits.MaxAttempts); err != nil && !errors.Is(err, store.ErrLeaseLost) {
+	release := func(f Failure) {
+		if _, err := n.st.Release(n.ctx, m.ID, m.LeaseID, f.Code, f.Message, n.cfg.Limits.MaxAttempts); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("release", "id", m.ID, "err", err)
 		}
 		n.notify()
@@ -546,12 +571,12 @@ func (s *acpSlot) handle(m store.Message) {
 			return
 		}
 		n.log.Warn("agent did not start", "agent", a.name, "err", err)
-		release("the agent did not start: " + err.Error())
+		release(explainStart(err))
 		time.Sleep(time.Second) // do not spin on a broken command
 		return
 	}
 	key := sessionKey(a.cfg.Session, m)
-	sid, err := s.session(ctx, p, key)
+	sid, err := s.sessionIn(ctx, p, key, m.Meta[metaSessionCwd])
 	if err != nil {
 		if n.ctx.Err() != nil || cancelled.Load() {
 			return
@@ -559,9 +584,9 @@ func (s *acpSlot) handle(m store.Message) {
 		select {
 		case <-p.done:
 			s.dropProc(p)
-			release(fmt.Sprintf("the agent exited (%v)", p.exitErr))
+			release(failf("agent_crashed", "the agent exited (%v)", p.exitErr))
 		default:
-			complete(store.Failed, "", err.Error())
+			complete(store.Failed, "", explainACP(err, "open the session", strings.HasPrefix(key, "session:")))
 		}
 		return
 	}
@@ -599,7 +624,7 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		if stuck.Load() {
 			if timedOut {
-				complete(store.Failed, reply, fmt.Sprintf("turn timeout after %s (turn_timeout); the agent stopped reading and was killed", a.cfg.TurnTimeout.D()))
+				complete(store.Failed, reply, failf("turn_timeout", "the turn ran past %s (turn_timeout); the agent stopped reading and was killed", a.cfg.TurnTimeout.D()))
 			}
 			return
 		}
@@ -611,7 +636,7 @@ func (s *acpSlot) handle(m store.Message) {
 		case <-p.done:
 			s.dropProc(p)
 			if !cancelled.Load() {
-				release(fmt.Sprintf("the agent exited mid-turn (%v)", p.exitErr))
+				release(failf("agent_crashed", "the agent exited mid-turn (%v)", p.exitErr))
 			}
 			return
 		default:
@@ -619,27 +644,27 @@ func (s *acpSlot) handle(m store.Message) {
 		switch {
 		case cancelled.Load():
 		case timedOut:
-			complete(store.Failed, reply, fmt.Sprintf("turn timeout after %s (turn_timeout)", a.cfg.TurnTimeout.D()))
+			complete(store.Failed, reply, failf("turn_timeout", "the turn ran past %s (turn_timeout)", a.cfg.TurnTimeout.D()))
 		default:
 			if pe := procErr(p, err); pe != err {
 				s.dropProc(p)
-				release(pe.Error())
+				release(failf("agent_crashed", "%v", pe))
 				return
 			}
-			complete(store.Failed, reply, "acp: "+err.Error())
+			complete(store.Failed, reply, explainACP(err, "the turn", false))
 		}
 		s.closeIfOneOff(p, key, sid)
 		return
 	}
 	switch resp.StopReason {
 	case acp.StopReasonEndTurn:
-		complete(store.Done, reply, "")
+		complete(store.Done, reply, Failure{})
 	case acp.StopReasonCancelled:
 		if !cancelled.Load() {
-			complete(store.Failed, reply, "the agent cancelled the turn")
+			complete(store.Failed, reply, failf("agent_stopped", "the agent cancelled the turn"))
 		}
 	default:
-		complete(store.Failed, reply, "the turn stopped: "+string(resp.StopReason))
+		complete(store.Failed, reply, failf("agent_stopped", "the agent stopped the turn: %s", resp.StopReason))
 	}
 	s.closeIfOneOff(p, key, sid)
 }
@@ -827,4 +852,69 @@ func (c *acpClient) ReleaseTerminal(context.Context, acp.ReleaseTerminalRequest)
 
 func (c *acpClient) WaitForTerminalExit(context.Context, acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
 	return acp.WaitForTerminalExitResponse{}, errNotOffered
+}
+
+// Sessions lists an acp agent's sessions (ACP session/list), newest first.
+func (n *Node) Sessions(ctx context.Context, p Principal, agent, cwd, cursor string) ([]client.SessionInfo, string, error) {
+	cfg := n.agentCfg(agent)
+	if cfg == nil {
+		return nil, "", errh("not_found", "`acpost agents` lists the agents this node knows", "no agent %s here", agent)
+	}
+	if cfg.Driver != "acp" {
+		return nil, "", errh("unsupported", "only acp agents have sessions", "agent:%s is an %s mailbox: it has no ACP sessions", agent, cfg.Driver)
+	}
+	switch {
+	case p.local():
+	case p.Kind == "client" && matchAny(p.Token.SendTo, "agent:"+agent):
+	default:
+		return nil, "", errf("refused", "%s may not see the sessions of agent:%s", p.Address(), agent)
+	}
+	slot := n.acp[agent].slots[0]
+	proc, err := slot.ensureProc(ctx)
+	if err != nil {
+		f := explainStart(err)
+		return nil, "", errh("unavailable", HintFor(f.Code), "%s", f.Message)
+	}
+	if proc.init.AgentCapabilities.SessionCapabilities.List == nil {
+		return nil, "", errh("unsupported", HintFor("unsupported"), "agent:%s does not list its sessions (ACP session/list)", agent)
+	}
+	req := acp.ListSessionsRequest{}
+	if cwd != "" {
+		req.Cwd = &cwd
+	}
+	if cursor != "" {
+		req.Cursor = &cursor
+	}
+	resp, err := proc.conn.ListSessions(ctx, req)
+	if err != nil {
+		f := explainACP(err, "list sessions", false)
+		return nil, "", errh("unavailable", HintFor(f.Code), "%s", f.Message)
+	}
+	out := make([]client.SessionInfo, 0, len(resp.Sessions))
+	for _, si := range resp.Sessions {
+		info := client.SessionInfo{ID: string(si.SessionId), Cwd: si.Cwd}
+		if si.Title != nil {
+			info.Title = *si.Title
+		}
+		if si.UpdatedAt != nil {
+			info.UpdatedAt = *si.UpdatedAt
+		}
+		out = append(out, info)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return newer(out[i].UpdatedAt, out[j].UpdatedAt) })
+	next := ""
+	if resp.NextCursor != nil {
+		next = *resp.NextCursor
+	}
+	return out, next, nil
+}
+
+// newer compares two RFC 3339 times (an unparsable one is oldest).
+func newer(a, b string) bool {
+	ta, ea := time.Parse(time.RFC3339Nano, a)
+	tb, eb := time.Parse(time.RFC3339Nano, b)
+	if ea != nil || eb != nil {
+		return ea == nil
+	}
+	return ta.After(tb)
 }

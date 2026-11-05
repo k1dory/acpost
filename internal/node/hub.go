@@ -260,14 +260,14 @@ func (n *Node) settleFrom(id string, m store.Message, err error) bool {
 	if err != nil {
 		var ce *client.Error
 		if errors.As(err, &ce) && ce.Code == "not_found" {
-			_ = n.st.Settle(n.ctx, id, store.Failed, "", "the hub no longer has this message", 0)
+			_ = n.st.Settle(n.ctx, id, store.Failed, "", "agent_error", "the hub no longer has this message", 0)
 			n.notify()
 			return true
 		}
 		return false
 	}
 	if m.State == store.Running || m.State.Final() {
-		if err := n.st.Settle(n.ctx, id, m.State, m.Reply, m.Error, m.Attempts); err == nil {
+		if err := n.st.Settle(n.ctx, id, m.State, m.Reply, m.ErrorCode, m.Error, m.Attempts); err == nil {
 			n.notify()
 		}
 	}
@@ -418,7 +418,7 @@ func (n *Node) relay(id, lease string) {
 		if m.State.Final() {
 			r := client.ReplyRequest{Lease: lease, Body: m.Reply}
 			if m.State != store.Done {
-				r.Error = m.Error
+				r.Error, r.ErrorCode = m.Error, m.ErrorCode
 				if r.Error == "" {
 					r.Error = string(m.State)
 				}

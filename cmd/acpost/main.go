@@ -39,12 +39,14 @@ const (
 type exitErr struct {
 	code int
 	err  error
+	name string // error code for --json ("" : from the exit code)
+	hint string
 }
 
 func (e *exitErr) Error() string { return e.err.Error() }
 func (e *exitErr) Unwrap() error { return e.err }
 
-func usageErr(err error) error { return &exitErr{exitUsage, err} }
+func usageErr(err error) error { return &exitErr{code: exitUsage, err: err} }
 
 type globals struct {
 	node, token, config string
@@ -72,12 +74,19 @@ func main() {
 		return
 	}
 	code := exitCode(err)
+	hint := hintOf(err)
 	if g.json {
 		e := map[string]any{"code": codeName(err), "message": err.Error()}
+		if hint != "" {
+			e["hint"] = hint
+		}
 		b, _ := json.Marshal(map[string]any{"error": e})
 		fmt.Fprintln(os.Stderr, string(b))
 	} else {
 		fmt.Fprintln(os.Stderr, "acpost:", err)
+		if hint != "" {
+			fmt.Fprintln(os.Stderr, "  hint:", hint)
+		}
 	}
 	os.Exit(code)
 }
@@ -112,7 +121,29 @@ func exitCode(err error) int {
 	return exitError
 }
 
+func hintOf(err error) string {
+	var ee *exitErr
+	if errors.As(err, &ee) && ee.hint != "" {
+		return ee.hint
+	}
+	var ce *client.Error
+	if errors.As(err, &ce) {
+		return ce.Hint
+	}
+	switch {
+	case errors.Is(err, client.ErrUnavailable):
+		return "no node answers there: `acpost serve` starts one, or check --node / ACPOST_NODE"
+	case exitCode(err) == exitUsage:
+		return "`acpost <command> --help` shows the flags"
+	}
+	return ""
+}
+
 func codeName(err error) string {
+	var ee *exitErr
+	if errors.As(err, &ee) && ee.name != "" {
+		return ee.name
+	}
 	var ce *client.Error
 	if errors.As(err, &ce) {
 		return ce.Code
@@ -179,7 +210,7 @@ func rootCmd(g *globals) *cobra.Command {
 	root.AddCommand(msgCmds()...)
 	message := &cobra.Command{Use: "message", Short: "The message commands again (acpost message send … = acpost send …)"}
 	message.AddCommand(msgCmds()...)
-	root.AddCommand(message, agentsCmd(g), statusCmd(g), serveCmd(g))
+	root.AddCommand(message, agentsCmd(g), sessionsCmd(g), statusCmd(g), serveCmd(g))
 	return root
 }
 
@@ -245,7 +276,7 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Dir = "/"
 	if err := cmd.Start(); err != nil {
-		return &exitErr{exitNoNode, fmt.Errorf("start the local node: %w", err)}
+		return &exitErr{code: exitNoNode, err: fmt.Errorf("start the local node: %w", err)}
 	}
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
@@ -265,11 +296,11 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 			if _, err := c.Status(ctx); err == nil {
 				return nil
 			}
-			return &exitErr{exitNoNode, fmt.Errorf("the local node did not start: see %s", filepath.Join(dir, "acpost.log"))}
+			return &exitErr{code: exitNoNode, err: fmt.Errorf("the local node did not start"), hint: "its log is " + filepath.Join(dir, "acpost.log")}
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	return &exitErr{exitNoNode, fmt.Errorf("the local node did not answer within 15s: see %s", filepath.Join(dir, "acpost.log"))}
+	return &exitErr{code: exitNoNode, err: fmt.Errorf("the local node did not answer within 15s"), hint: "its log is " + filepath.Join(dir, "acpost.log")}
 }
 
 func printJSON(v any) {
@@ -376,6 +407,7 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 		deadline = time.Now().Add(timeout)
 	}
 	var failed []string
+	var last store.Message
 	timedOut := false
 	for i, id := range ids {
 		left := time.Duration(0)
@@ -409,14 +441,27 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 			if why == "" {
 				why = string(m.State)
 			}
-			failed = append(failed, fmt.Sprintf("%s: %s: %s", m.ID, m.State, why))
+			code := m.ErrorCode
+			if code == "" {
+				code = string(m.State)
+			}
+			failed = append(failed, fmt.Sprintf("%s %s [%s]: %s", m.ID, m.State, code, why))
+			last = m
 		}
 	}
 	if len(failed) > 0 {
-		return &exitErr{exitFailed, errors.New(strings.Join(failed, "; "))}
+		// One failure: its code and hint; several: each line has its code.
+		e := &exitErr{code: exitFailed, err: errors.New(strings.Join(failed, "\n")), name: "failed"}
+		if len(failed) == 1 {
+			e.name, e.hint = last.ErrorCode, last.Hint
+			if e.name == "" {
+				e.name = string(last.State)
+			}
+		}
+		return e
 	}
 	if timedOut {
-		return &exitErr{exitTimeout, errors.New("timed out waiting; the message keeps going")}
+		return &exitErr{code: exitTimeout, err: errors.New("timed out waiting; the message keeps going"), hint: "`acpost wait <id>` picks it up again later"}
 	}
 	return nil
 }
@@ -622,7 +667,7 @@ func recvCmd(g *globals) *cobra.Command {
 					return nil
 				}
 				if !time.Now().Before(deadline) {
-					return &exitErr{exitTimeout, errors.New("no message")}
+					return &exitErr{code: exitTimeout, err: errors.New("no message"), hint: "nothing is queued for this agent; --wait 30s waits for one"}
 				}
 			}
 		},
@@ -699,6 +744,59 @@ func agentsCmd(g *globals) *cobra.Command {
 			return w.Flush()
 		},
 	}
+}
+
+func sessionsCmd(g *globals) *cobra.Command {
+	var agent, cwd, cursor string
+	cmd := &cobra.Command{
+		Use:   "sessions --agent NAME",
+		Short: "List an ACP agent's sessions, newest first (for send --session)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if agent == "" {
+				return usageErr(errors.New("--agent is required"))
+			}
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			list, next, err := c.Sessions(cmd.Context(), strings.TrimPrefix(agent, "agent:"), cwd, cursor)
+			if err != nil {
+				return err
+			}
+			if g.json {
+				for _, si := range list {
+					printJSON(si)
+				}
+				if next != "" {
+					printJSON(map[string]string{"next": next})
+				}
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tUPDATED\tCWD\tTITLE")
+			for _, si := range list {
+				updated := si.UpdatedAt
+				if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {
+					updated = t.Local().Format(time.DateTime)
+				}
+				title := si.Title
+				if len(title) > 60 {
+					title = title[:60] + "…"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", si.ID, updated, si.Cwd, title)
+			}
+			w.Flush()
+			if next != "" {
+				fmt.Fprintf(os.Stderr, "more: --cursor %s\n", next)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&agent, "agent", "", "the agent")
+	cmd.Flags().StringVar(&cwd, "cwd", "", "only sessions of this working directory")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "continue a long list")
+	return cmd
 }
 
 func statusCmd(g *globals) *cobra.Command {

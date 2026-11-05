@@ -114,7 +114,7 @@ func TestConcurrentWritersReadersClaimers(t *testing.T) {
 				if prev, dup := claimed.LoadOrStore(m.ID, c); dup {
 					fail(fmt.Errorf("%s claimed by %v and %d", m.ID, prev, c))
 				}
-				if err := s.Complete(ctx, m.ID, m.LeaseID, Done, "ok", ""); err != nil {
+				if err := s.Complete(ctx, m.ID, m.LeaseID, Done, "ok", "", ""); err != nil {
 					fail(err)
 				}
 				completed.Add(1)
@@ -229,7 +229,7 @@ func fillDone(t testing.TB, s *Store, n, size int) {
 			if !ok {
 				break
 			}
-			if err := s.Complete(ctx, c.ID, c.LeaseID, Done, body, ""); err != nil {
+			if err := s.Complete(ctx, c.ID, c.LeaseID, Done, body, "", ""); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -460,7 +460,7 @@ func TestCrashMidWriteLeavesConsistentStore(t *testing.T) {
 			s.Insert(ctx, m)
 			if i%50 == 0 {
 				if c, ok, _ := s.Claim(ctx, "agent:r", time.Hour); ok {
-					s.Complete(ctx, c.ID, c.LeaseID, Done, body, "")
+					s.Complete(ctx, c.ID, c.LeaseID, Done, body, "", "")
 				}
 			}
 		}

@@ -137,6 +137,7 @@ acpost cancel  ID
 acpost recv    --as NAME [--wait DUR] [--lease DUR]
 acpost reply   ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON)
 acpost agents
+acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
 acpost status
 ```
@@ -144,10 +145,10 @@ acpost status
 `acpost message send …` is the same as `acpost send …` (and so on for the other message commands).
 
 `--session` puts the message into an existing ACP session of the agent instead of one acpost
-manages: a Codex conversation open in an editor, say (its id is the thread id of
-`~/.codex/sessions/…/rollout-…-<id>.jsonl`). The node resumes or loads it; if the agent cannot,
-the message fails. The editor shows the new turn after it reloads the conversation; do not write
-to the same session from both at once.
+manages: a Codex conversation started in an editor, say. `acpost sessions --agent codex` lists the
+agent's sessions, newest first (ACP `session/list`); `--session latest` takes the newest. The node
+resumes or loads the session; if the agent cannot (Codex lets one client write a conversation at a
+time), the message fails with `session_busy` and says what to do.
 
 **Global flags** (and their variables): `--node URL` (`ACPOST_NODE`; `unix:///path` or
 `http(s)://host:port`, default the local socket), `--token T` (`ACPOST_TOKEN`), `--json`
@@ -163,6 +164,32 @@ to the same session from both at once.
 - `--json` turns every command's output into JSON: the message record, or `{"error":{…}}` on stderr.
 - `send` reads the body from stdin when neither `--body` nor `--body-file` is given and stdin is not
   a terminal.
+
+**Errors** say what happened and what to do next, the same way for a person and for an agent:
+
+```
+$ acpost send --to codex --session latest --body "…" --wait
+acpost: msg_01JC… failed [session_busy]: the session is open in another client of the agent
+  hint: close it there, or send without --session to start a new conversation
+```
+
+With `--json` the same is `{"error":{"code":"session_busy","message":"…","hint":"…"}}` on stderr,
+and a failed message carries `error_code`, `error` and `hint`. Codes are stable; the agent's own
+text, when it adds something, is in `error` after the explanation.
+
+| `error_code` | Meaning |
+|---|---|
+| `session_busy` | the session is open in another client of the agent |
+| `session_not_found` | the agent has no such session (`acpost sessions`) |
+| `agent_auth` | the agent needs a login or an API key |
+| `agent_start` | the agent's command did not start or initialize |
+| `agent_crashed` | the agent exited mid-turn (retried up to `max_attempts`) |
+| `turn_timeout` | the turn ran past `turn_timeout` |
+| `agent_stopped` | the agent ended the turn itself (refusal, token limit) |
+| `unsupported` | the agent does not offer what was asked (e.g. `session/list`) |
+| `lease_lost` | an inbox consumer or a node lost its claim too often |
+| `node_restart` | the node restarted during the last allowed attempt |
+| `agent_error` | anything else the agent reported |
 
 **Exit codes.**
 
@@ -245,12 +272,12 @@ Paths starting with `~` are expanded. Durations are Go durations (`90s`, `30m`, 
 ## HTTP API
 
 The command line is a client of this API; a backend uses it the same way. JSON in and out; errors
-are `{"error":{"code":"not_found","message":"…"}}` with codes `invalid`, `not_found`, `refused`,
+are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `invalid`, `not_found`, `refused`,
 `conflict`, `timeout`, `unavailable`.
 
 | | |
 |---|---|
-| `POST /v1/messages` | send. Body: `to`, `body`, `task`, `thread`, `meta`, `ttl`. Header `Idempotency-Key`. 201, or 200 for a repeat |
+| `POST /v1/messages` | send. Body: `to`, `body`, `task`, `thread`, `session`, `meta`, `ttl`. Header `Idempotency-Key`. 201, or 200 for a repeat |
 | `GET /v1/messages/{id}` | the message |
 | `GET /v1/messages/{id}/wait?timeout=30s` | returns when the message is final or the timeout (max 60s) passes; look at `state` |
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
@@ -260,6 +287,7 @@ are `{"error":{"code":"not_found","message":"…"}}` with codes `invalid`, `not_
 | `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…"}` or `{"lease":"…","error":"…"}` |
 | `POST /v1/messages/{id}/lease` | extend a claim |
 | `GET /v1/agents` | agents, their drivers and queues |
+| `GET /v1/agents/{name}/sessions?cwd=&cursor=` | an ACP agent's sessions, newest first |
 | `GET /v1/health` | |
 
 Who sends is decided by the node, never by the request body: a request with the token of an agent

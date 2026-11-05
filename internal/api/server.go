@@ -35,6 +35,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/messages/{id}/lease", s.auth(s.extend))
 	mux.HandleFunc("GET /v1/agents", s.auth(s.agents))
 	mux.HandleFunc("POST /v1/agents/{name}/claim", s.auth(s.claim))
+	mux.HandleFunc("GET /v1/agents/{name}/sessions", s.auth(s.sessions))
 	mux.HandleFunc("POST /v1/nodes/{name}/announce", s.auth(s.announce))
 	mux.HandleFunc("POST /v1/nodes/{name}/claim", s.auth(s.nodeClaim))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +69,7 @@ func (s *server) auth(h handler) http.HandlerFunc {
 }
 
 var statusOf = map[string]int{
-	"invalid": http.StatusBadRequest, "refused": http.StatusForbidden, "not_found": http.StatusNotFound,
+	"invalid": http.StatusBadRequest, "unsupported": http.StatusNotImplemented, "refused": http.StatusForbidden, "not_found": http.StatusNotFound,
 	"conflict": http.StatusConflict, "timeout": http.StatusRequestTimeout, "unavailable": http.StatusServiceUnavailable,
 }
 
@@ -255,7 +256,7 @@ func (s *server) reply(w http.ResponseWriter, r *http.Request, p node.Principal)
 		writeErr(w, &node.Error{Code: "invalid", Message: "lease is required"})
 		return
 	}
-	if err := s.n.Reply(r.Context(), p, r.PathValue("id"), req.Lease, req.Body, req.Error); err != nil {
+	if err := s.n.ReplyCoded(r.Context(), p, r.PathValue("id"), req.Lease, req.Body, req.ErrorCode, req.Error); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -281,6 +282,15 @@ func (s *server) agents(w http.ResponseWriter, r *http.Request, p node.Principal
 		list = []client.AgentInfo{}
 	}
 	writeJSON(w, 200, list)
+}
+
+func (s *server) sessions(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	list, next, err := s.n.Sessions(r.Context(), p, r.PathValue("name"), r.URL.Query().Get("cwd"), r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": list, "next": next})
 }
 
 func (s *server) claimParams(w http.ResponseWriter, r *http.Request) (wait, lease time.Duration, ok bool) {

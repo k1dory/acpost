@@ -488,3 +488,35 @@ func appendCfg(t *testing.T, e *env, line string) {
 	s := strings.Replace(string(b), "node:\n", "node:\n  "+strings.Replace(line, "join_hub:", "join:", 1), 1)
 	os.WriteFile(e.config, []byte(s), 0o600)
 }
+
+// An agent reading stderr learns what failed and what to do; with --json it gets fields.
+func TestErrorsExplainThemselves(t *testing.T) {
+	state, err := os.MkdirTemp("/tmp", "acpst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(state)
+	os.WriteFile(state+"/s1", []byte("1"), 0o600)
+	e := newEnv(t, fmt.Sprintf("agents:\n  fake: {driver: acp, command: [%s], preamble: false, env: {FAKE_STATE: %s}}\n", filepath.Join(binDir, "fakeagent"), state))
+	e.serve()
+
+	if out := e.ok("", "sessions", "--agent", "fake"); !strings.Contains(out, "s1") {
+		t.Fatalf("sessions: %q", out)
+	}
+	r := e.run("", "send", "--to", "fake", "--session", "busy-1", "--body", "count", "--wait", "--timeout", "20s")
+	if r.code != 5 || !strings.Contains(r.err, "[session_busy]") || !strings.Contains(r.err, "hint:") || strings.Contains(r.err, "-32600") {
+		t.Fatalf("plain: exit %d\n%s", r.code, r.err)
+	}
+	r = e.run("", "send", "--to", "fake", "--session", "busy-1", "--body", "count", "--wait", "--timeout", "20s", "--json")
+	var m map[string]any
+	if err := json.Unmarshal([]byte(r.out), &m); err != nil || m["error_code"] != "session_busy" || m["hint"] == nil {
+		t.Fatalf("json message: %v %q", err, r.out)
+	}
+	r = e.run("", "send", "--to", "ghost", "--body", "x", "--json")
+	var eb struct {
+		Error struct{ Code, Message, Hint string }
+	}
+	if err := json.Unmarshal([]byte(r.err), &eb); err != nil || eb.Error.Code != "not_found" || !strings.Contains(eb.Error.Hint, "acpost agents") {
+		t.Fatalf("json error: %v %q", err, r.err)
+	}
+}

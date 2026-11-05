@@ -68,6 +68,8 @@ type Message struct {
 	Body       string            `json:"body,omitempty"`
 	Reply      string            `json:"reply,omitempty"`
 	Error      string            `json:"error,omitempty"`
+	ErrorCode  string            `json:"error_code,omitempty"` // stable: session_busy, turn_timeout… (README)
+	Hint       string            `json:"hint,omitempty"`       // what to do about the error; filled in by the node, not stored
 	BodySize   int               `json:"body_size"`
 	ReplySize  int               `json:"reply_size"`
 	CreatedAt  time.Time         `json:"created_at"`
@@ -262,6 +264,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	attempts    INTEGER NOT NULL DEFAULT 0,
 	meta        TEXT NOT NULL DEFAULT '',
 	error       TEXT NOT NULL DEFAULT '',
+	error_code  TEXT NOT NULL DEFAULT '',
 	body_size   INTEGER NOT NULL,
 	reply_size  INTEGER NOT NULL DEFAULT 0,
 	created_at  INTEGER NOT NULL,
@@ -306,8 +309,19 @@ CREATE TABLE IF NOT EXISTS sessions (
 `
 
 func (s *Store) migrate() error {
-	_, err := s.w.Exec(schema)
-	return err
+	if _, err := s.w.Exec(schema); err != nil {
+		return err
+	}
+	// Columns added after the first release.
+	var n int
+	if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'error_code'").Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err := s.w.Exec("ALTER TABLE messages ADD COLUMN error_code TEXT NOT NULL DEFAULT ''")
+		return err
+	}
+	return nil
 }
 
 // Path is the database file ("" for a memory store).
@@ -494,7 +508,7 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 	return out, true, nil
 }
 
-const cols = `m.id, m.sender, m.recipient, m.task, m.thread, m.parent, m.depth, m.state, m.attempts, m.meta, m.error,
+const cols = `m.id, m.sender, m.recipient, m.task, m.thread, m.parent, m.depth, m.state, m.attempts, m.meta, m.error, m.error_code,
 	m.body_size, m.reply_size, m.created_at, m.updated_at, m.expires_at, m.finished_at, m.origin, m.lease_id, m.lease_until`
 
 type scanner interface{ Scan(...any) error }
@@ -503,7 +517,7 @@ func scanMessage(sc scanner, extra ...any) (Message, error) {
 	var m Message
 	var meta string
 	var created, updated, expires, finished, leaseUntil int64
-	dest := append([]any{&m.ID, &m.From, &m.To, &m.Task, &m.Thread, &m.Parent, &m.Depth, &m.State, &m.Attempts, &meta, &m.Error,
+	dest := append([]any{&m.ID, &m.From, &m.To, &m.Task, &m.Thread, &m.Parent, &m.Depth, &m.State, &m.Attempts, &meta, &m.Error, &m.ErrorCode,
 		&m.BodySize, &m.ReplySize, &created, &updated, &expires, &finished, &m.Origin, &m.LeaseID, &leaseUntil}, extra...)
 	if err := sc.Scan(dest...); err != nil {
 		return m, err
@@ -646,15 +660,15 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 
 // Settle copies the outcome of a message handled elsewhere (a hub) onto its local copy: state,
 // reply, error and attempts. A local copy already final is left alone.
-func (s *Store) Settle(ctx context.Context, id string, state State, reply, errText string, attempts int) error {
+func (s *Store) Settle(ctx context.Context, id string, state State, reply, errCode, errText string, attempts int) error {
 	now := ms(time.Now())
 	finished := int64(0)
 	if state.Final() {
 		finished = now
 	}
 	return s.tx(ctx, func(t *sql.Tx) error {
-		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, reply_size = ?, attempts = ?, updated_at = ?, finished_at = ?
-			WHERE id = ? AND state IN ('queued', 'running')`, state, errText, len(reply), attempts, now, finished, id)
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, error_code = ?, reply_size = ?, attempts = ?, updated_at = ?, finished_at = ?
+			WHERE id = ? AND state IN ('queued', 'running')`, state, errText, errCode, len(reply), attempts, now, finished, id)
 		if err != nil {
 			return err
 		}
@@ -702,15 +716,15 @@ func (s *Store) UnsettledPage(ctx context.Context, prefix, after string, limit i
 
 // Complete ends a running message held under lease: state is final, reply and errText are what
 // came of it.
-func (s *Store) Complete(ctx context.Context, id, lease string, state State, reply, errText string) error {
+func (s *Store) Complete(ctx context.Context, id, lease string, state State, reply, errCode, errText string) error {
 	if !state.Final() {
 		return fmt.Errorf("store: complete with state %s", state)
 	}
 	now := ms(time.Now())
 	err := s.tx(ctx, func(t *sql.Tx) error {
-		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, reply_size = ?, lease_id = '', lease_until = 0,
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, error_code = ?, reply_size = ?, lease_id = '', lease_until = 0,
 			updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''`,
-			state, errText, len(reply), now, now, id, lease)
+			state, errText, errCode, len(reply), now, now, id, lease)
 		if err != nil {
 			return err
 		}
@@ -728,7 +742,7 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 
 // Release gives a running message back: queued again for another attempt, or failed with reason
 // when it has had maxAttempts.
-func (s *Store) Release(ctx context.Context, id, lease, reason string, maxAttempts int) (State, error) {
+func (s *Store) Release(ctx context.Context, id, lease, code, reason string, maxAttempts int) (State, error) {
 	now := ms(time.Now())
 	var state State
 	err := s.tx(ctx, func(t *sql.Tx) error {
@@ -742,13 +756,13 @@ func (s *Store) Release(ctx context.Context, id, lease, reason string, maxAttemp
 		}
 		if attempts >= maxAttempts {
 			state = Failed
-			_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = ?, lease_id = '', lease_until = 0, updated_at = ?, finished_at = ?
-				WHERE id = ?`, fmt.Sprintf("%s (after %d attempts)", reason, attempts), now, now, id)
+			_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = ?, error_code = ?, lease_id = '', lease_until = 0, updated_at = ?, finished_at = ?
+				WHERE id = ?`, fmt.Sprintf("%s (after %d attempts)", reason, attempts), code, now, now, id)
 			return err
 		}
 		state = Queued
-		_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = ?, lease_id = '', lease_until = 0, updated_at = ? WHERE id = ?`,
-			reason, now, id)
+		_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = ?, error_code = ?, lease_id = '', lease_until = 0, updated_at = ? WHERE id = ?`,
+			reason, code, now, id)
 		return err
 	})
 	return state, err
@@ -773,7 +787,7 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 	t := ms(now)
 	var n int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'lease lost after ' || attempts || ' attempts',
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'lease lost after ' || attempts || ' attempts', error_code = 'lease_lost',
 			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND attempts >= ?`, t, t, t, maxAttempts)
 		if err != nil {
 			return err
@@ -807,7 +821,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 			args = append(args, r)
 		}
 		args = append(args, maxAttempts)
-		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'interrupted by a node restart after ' || attempts || ' attempts',
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'interrupted by a node restart after ' || attempts || ' attempts', error_code = 'node_restart',
 			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND attempts >= ?`, args...)
 		if err != nil {
 			return err
@@ -832,7 +846,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 // Expire ends queued messages whose time ran out before now.
 func (s *Store) Expire(ctx context.Context, now time.Time) (int, error) {
 	t := ms(now)
-	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', updated_at = ?, finished_at = ?
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', error_code = 'expired', updated_at = ?, finished_at = ?
 		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ? AND origin <> 'remote'`, t, t, t)
 	if err != nil {
 		return 0, err
