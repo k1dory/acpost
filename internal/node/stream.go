@@ -131,12 +131,17 @@ func (n *Node) addEvent(ctx context.Context, id, kind, data string, turn bool) e
 	}
 	err := add(ctx, id, kind, data)
 	if err == nil {
-		n.mu.Lock()
-		close(n.evChanged)
-		n.evChanged = make(chan struct{})
-		n.mu.Unlock()
+		n.eventsAdded()
 	}
 	return err
+}
+
+// eventsAdded wakes whoever follows events.
+func (n *Node) eventsAdded() {
+	n.mu.Lock()
+	close(n.evChanged)
+	n.evChanged = make(chan struct{})
+	n.mu.Unlock()
 }
 
 func (n *Node) eventChanges() <-chan struct{} {

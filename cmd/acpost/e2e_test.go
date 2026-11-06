@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/store"
 )
 
 var binDir string
@@ -49,6 +51,16 @@ type env struct {
 	config string
 	sock   string
 	vars   []string
+	stops  []func() // stop the nodes serve started, latest first
+}
+
+// stop stops the node serve started last (SIGTERM, then a wait).
+func (e *env) stop() {
+	e.t.Helper()
+	if n := len(e.stops); n > 0 {
+		e.stops[n-1]()
+		e.stops = e.stops[:n-1]
+	}
 }
 
 func newEnv(t *testing.T, yaml string) *env {
@@ -123,16 +135,23 @@ func (e *env) serve(extra ...string) {
 	if err := cmd.Start(); err != nil {
 		e.t.Fatal(err)
 	}
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cmd.Process.Signal(syscall.SIGTERM)
+			done := make(chan struct{})
+			go func() { cmd.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				cmd.Process.Kill()
+				e.t.Error("node did not stop on SIGTERM")
+			}
+		})
+	}
+	e.stops = append(e.stops, stop)
 	e.t.Cleanup(func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { cmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			cmd.Process.Kill()
-			e.t.Error("node did not stop on SIGTERM")
-		}
+		stop()
 		if e.t.Failed() {
 			b, _ := os.ReadFile(filepath.Join(e.dir, "serve.log"))
 			e.t.Logf("serve log:\n%s", b)
@@ -635,5 +654,95 @@ func TestShowFollow(t *testing.T) {
 			t.Fatalf("never routed: %d %s", r.code, r.err)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// An answer written on another node streams to the sender's node through the hub: the text comes
+// while the turn runs, in order, and adds up to the reply.
+func TestFollowAcrossHub(t *testing.T) {
+	_, b := hubPair(t)
+	var id string
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		r := b.run("", "send", "--to", "agent:reviewer", "--body", "stream 10 200")
+		if r.code == 0 {
+			id = strings.TrimSpace(r.out)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never routed: %d %s", r.code, r.err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	c, err := client.New("unix://"+b.sock, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	var first time.Duration
+	var text strings.Builder
+	var kinds []string
+	m, err := c.Follow(context.Background(), id, 0, func(e store.Event) error {
+		kinds = append(kinds, e.Kind)
+		if e.Kind == "text" {
+			if first == 0 {
+				first = time.Since(start)
+			}
+			var d map[string]string
+			json.Unmarshal([]byte(e.Data), &d)
+			text.WriteString(d["text"])
+		}
+		return nil
+	})
+	total := time.Since(start)
+	if err != nil || m.State != store.Done || text.String() != m.Reply || !strings.HasPrefix(m.Reply, "w1 w2") {
+		t.Fatalf("%v %v: streamed %q, reply %q (%v)", m.State, err, text.String(), m.Reply, kinds)
+	}
+	if len(kinds) < 3 || kinds[0] != "thought" {
+		t.Fatalf("kinds %v", kinds)
+	}
+	if first > total-700*time.Millisecond {
+		t.Fatalf("the first text came at %v of %v: not while the turn ran", first, total)
+	}
+	// What came is kept on b's copy: show --follow later prints it whole.
+	if r := b.run("", "show", id, "--follow"); r.code != 0 || r.out != m.Reply+"\n" {
+		t.Fatalf("again: %d %q %q", r.code, r.out, r.err)
+	}
+}
+
+// The sender's node restarted while the agent wrote: the events it missed come from the hub's
+// pages before its copy is final.
+func TestFollowAcrossHubAfterRestart(t *testing.T) {
+	_, b := hubPair(t)
+	var id string
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		r := b.run("", "send", "--to", "agent:reviewer", "--body", "stream 10 300")
+		if r.code == 0 {
+			id = strings.TrimSpace(r.out)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never routed: %d %s", r.code, r.err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	time.Sleep(time.Second)
+	b.stop()
+	time.Sleep(1500 * time.Millisecond) // the agent writes on meanwhile
+	b.serve()
+	out := b.ok("", "wait", id, "--timeout", "30s")
+	evs := b.ok("", "show", id, "--follow", "--json")
+	var text strings.Builder
+	for _, l := range strings.Split(strings.TrimSpace(evs), "\n") {
+		var e store.Event
+		if json.Unmarshal([]byte(l), &e) == nil && e.Kind == "text" {
+			var d map[string]string
+			json.Unmarshal([]byte(e.Data), &d)
+			text.WriteString(d["text"])
+		}
+	}
+	if text.String() != out {
+		t.Fatalf("events after a restart: %q, reply %q", text.String(), out)
 	}
 }

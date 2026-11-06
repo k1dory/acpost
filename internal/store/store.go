@@ -320,13 +320,19 @@ func (s *Store) migrate() error {
 		return err
 	}
 	// Columns added after the first release.
-	var n int
-	if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'error_code'").Scan(&n); err != nil {
-		return err
-	}
-	if n == 0 {
-		_, err := s.w.Exec("ALTER TABLE messages ADD COLUMN error_code TEXT NOT NULL DEFAULT ''")
-		return err
+	for _, c := range []struct{ name, ddl string }{
+		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
+		{"relayed", "relayed INTEGER NOT NULL DEFAULT 0"}, // events taken from the node running the agent
+	} {
+		var n int
+		if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = ?", c.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := s.w.Exec("ALTER TABLE messages ADD COLUMN " + c.ddl); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -958,9 +964,6 @@ func (s *Store) AddTurnEvent(ctx context.Context, id, kind, data string) error {
 }
 
 func (s *Store) addEvent(ctx context.Context, id, kind, data string, live bool) error {
-	if len(data) > s.opt.MaxEventData {
-		data = data[:s.opt.MaxEventData] + truncMark
-	}
 	return s.tx(ctx, func(t *sql.Tx) error {
 		var seq int64
 		var n int
@@ -969,18 +972,73 @@ func (s *Store) addEvent(ctx context.Context, id, kind, data string, live bool) 
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
-		if err != nil || n >= s.opt.MaxEventsPerMessage || (live && state.Final()) {
+		if err != nil || (live && state.Final()) {
 			return err
 		}
-		if n == s.opt.MaxEventsPerMessage-1 {
-			kind, data = "truncated", "later events were not kept (limits.max_events_per_message)"
-		}
-		if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(time.Now()), kind, data); err != nil {
-			return err
-		}
-		_, err = t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
+		_, err = s.insertEvent(ctx, t, seq, n, kind, data)
 		return err
 	})
+}
+
+// insertEvent adds an event after the n a message has, within MaxEventsPerMessage (the last one
+// kept says the rest was dropped); it returns how many the message has then.
+func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, seq int64, n int, kind, data string) (int, error) {
+	if n >= s.opt.MaxEventsPerMessage {
+		return n, nil
+	}
+	if len(data) > s.opt.MaxEventData {
+		data = data[:s.opt.MaxEventData] + truncMark
+	}
+	if n == s.opt.MaxEventsPerMessage-1 {
+		kind, data = "truncated", "later events were not kept (limits.max_events_per_message)"
+	}
+	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(time.Now()), kind, data); err != nil {
+		return n, err
+	}
+	_, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
+	return n + 1, err
+}
+
+// RelayedEvent is an event the node running a message's agent hands over: its kind and data.
+type RelayedEvent struct {
+	Kind string `json:"kind"`
+	Data string `json:"data"`
+}
+
+// RelayEvents takes, for a running message held under lease, the events its agent's node recorded
+// after its event number after; it returns how many of that node's events the message has taken.
+// What was taken before is skipped (a retry, a new delivery from the start), and a batch that
+// would leave a gap is not taken: the caller sends again from the number returned.
+func (s *Store) RelayEvents(ctx context.Context, id, lease string, after int64, evs []RelayedEvent) (int64, error) {
+	var relayed int64
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		var seq int64
+		var n int
+		var state State
+		var held string
+		err := t.QueryRowContext(ctx, "SELECT seq, events, state, lease_id, relayed FROM messages WHERE id = ?", id).Scan(&seq, &n, &state, &held, &relayed)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if lease == "" || held != lease || state != Running {
+			return ErrLeaseLost
+		}
+		if after > relayed || after+int64(len(evs)) <= relayed {
+			return nil // a gap, or nothing new: the caller goes on from relayed
+		}
+		for _, e := range evs[relayed-after:] {
+			if n, err = s.insertEvent(ctx, t, seq, n, e.Kind, e.Data); err != nil {
+				return err
+			}
+		}
+		relayed = after + int64(len(evs))
+		_, err = t.ExecContext(ctx, "UPDATE messages SET relayed = ? WHERE seq = ?", relayed, seq)
+		return err
+	})
+	return relayed, err
 }
 
 // EventCount is how many events a message has.

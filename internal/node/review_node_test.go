@@ -9,8 +9,10 @@ import (
 	"github.com/k1dory/acpost/internal/store"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -296,5 +298,35 @@ func TestHubDeliveriesRunAtOnce(t *testing.T) {
 	}
 	if _, err := n.st.Get(ctx, big); err == nil {
 		t.Fatal("the big message arrived before its files")
+	}
+}
+
+// A node that keeps fewer events than its hub has still gets through the hub's pages, and says so.
+func TestCopyHubEventsPastLocalCap(t *testing.T) {
+	n := newNode(t, "limits: {max_events_per_message: 10}\n")
+	m, _, err := n.st.Insert(ctx, &store.Message{ID: store.NewID(), From: me.Address(), To: "agent:r@peer", Body: "x", Origin: originRemote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		var items []store.Event
+		for s := after + 1; s <= 600 && len(items) < limit; s++ {
+			items = append(items, store.Event{Seq: int64(s), Kind: "text", Data: `{"text":"x"}`})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+	}))
+	defer h.Close()
+	if n.hub, err = client.New(h.URL, "dummy", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !n.copyHubEvents(m.ID) || calls.Load() != 600/hubEventPage+1 {
+		t.Fatalf("calls %d", calls.Load())
+	}
+	if c, _ := n.st.EventCount(ctx, m.ID); c != 10 {
+		t.Fatalf("kept %d", c)
 	}
 }

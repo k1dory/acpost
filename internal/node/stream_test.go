@@ -157,3 +157,16 @@ func TestTextStreamEscapedFits(t *testing.T) {
 		t.Fatal(b)
 	}
 }
+
+// A page of events across the hub fits the smallest response a node takes (its 1 MiB base), even
+// when every event is at the size limit and escapes the most.
+func TestHubEventPageFits(t *testing.T) {
+	var items []store.Event
+	for i := range hubEventPage {
+		items = append(items, store.Event{Seq: int64(i + 1), Time: time.Now(), Kind: "tool_call_update", Data: strings.Repeat("\x01", 16<<10)})
+	}
+	b, _ := json.Marshal(map[string]any{"items": items})
+	if len(b) >= 1<<20 {
+		t.Fatalf("a page is %d bytes", len(b))
+	}
+}

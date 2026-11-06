@@ -41,6 +41,14 @@ type SendRequest struct {
 }
 
 // ReplyRequest is the body of POST /v1/messages/{id}/reply.
+// RelayRequest carries events a joined node's agent recorded for a message the node holds under
+// lease, to the hub's copy of it: those after the node's event number After.
+type RelayRequest struct {
+	Lease  string               `json:"lease"`
+	After  int64                `json:"after"`
+	Events []store.RelayedEvent `json:"events"`
+}
+
 type ReplyRequest struct {
 	Lease string `json:"lease"`
 	Body  string `json:"body,omitempty"`
@@ -492,6 +500,10 @@ func (c *Client) followOnce(ctx context.Context, id string, after *int64, fn fun
 	if resp.StatusCode >= 400 {
 		return store.Message{}, false, respErr("GET", path, resp)
 	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		// A node of an older version answers with a page of events: no stream to follow there.
+		return store.Message{}, false, fmt.Errorf("%w: %s does not stream events", ErrBadResponse, c.URL)
+	}
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	var kind string
 	var data strings.Builder
@@ -565,4 +577,14 @@ func readLine(rd *bufio.Reader, max int) (string, error) {
 			return string(b), nil
 		}
 	}
+}
+
+// RelayEvents hands the hub the events of a message this node holds under lease, those after its
+// event number after; it returns how many of this node's events the hub has taken.
+func (c *Client) RelayEvents(ctx context.Context, id, lease string, after int64, evs []store.RelayedEvent) (int64, error) {
+	var out struct {
+		Relayed int64 `json:"relayed"`
+	}
+	_, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(id)+"/events", nil, RelayRequest{Lease: lease, After: after, Events: evs}, &out, nil)
+	return out.Relayed, err
 }

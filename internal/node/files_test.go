@@ -456,3 +456,72 @@ func TestHubRefusesNodeReplyLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The hub takes a message's events only from the node holding it, under its lease, while it runs;
+// a retry or a new start adds nothing twice, and a gap is not taken.
+func TestRelayEventsOnlyByTheHolder(t *testing.T) {
+	hub := newNode(t, "node: {name: hub}\n")
+	edge, other := Principal{Kind: "node", Name: "edge"}, Principal{Kind: "node", Name: "other"}
+	if err := hub.Announce(ctx, edge, "edge", []string{"bot"}); err != nil {
+		t.Fatal(err)
+	}
+	sent, _, err := hub.Send(ctx, Principal{Kind: "user", Name: "boss"}, SendRequest{To: "agent:bot@edge", Body: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := func(texts ...string) []store.RelayedEvent {
+		var out []store.RelayedEvent
+		for _, x := range texts {
+			out = append(out, store.RelayedEvent{Kind: "text", Data: x})
+		}
+		return out
+	}
+	// Queued, not claimed: no lease to relay under, not even an empty one.
+	if _, err := hub.RelayEvents(ctx, edge, sent.ID, "", 0, ev("early")); code(err) != "conflict" {
+		t.Fatalf("queued: %v", err)
+	}
+	m, ok, err := hub.NodeClaim(ctx, edge, "edge", 0, time.Minute)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	for _, c := range []struct {
+		p           Principal
+		lease, code string
+		evs         []store.RelayedEvent
+	}{
+		{Principal{Kind: "user", Name: "boss"}, m.LeaseID, "refused", ev("a")},
+		{other, m.LeaseID, "not_found", ev("a")},
+		{edge, "stale", "conflict", ev("a")},
+		{edge, "", "conflict", ev("a")},
+		{edge, m.LeaseID, "invalid", []store.RelayedEvent{{Kind: "Text!", Data: "{}"}}},
+	} {
+		if _, err := hub.RelayEvents(ctx, c.p, m.ID, c.lease, 0, c.evs); code(err) != c.code {
+			t.Fatalf("%s/%q: %v", c.p.Name, c.lease, err)
+		}
+	}
+	steps := []struct {
+		after int64
+		evs   []store.RelayedEvent
+		want  int64
+	}{
+		{0, ev("1", "2"), 2},
+		{0, ev("1", "2", "3"), 3}, // a retry from the start: only 3 is new
+		{2, ev("3"), 3},           // the same again: nothing new
+		{5, ev("6"), 3},           // a gap: not taken, go on from 3
+		{3, ev("4"), 4},
+	}
+	for i, st := range steps {
+		got, err := hub.RelayEvents(ctx, edge, m.ID, m.LeaseID, st.after, st.evs)
+		if err != nil || got != st.want {
+			t.Fatalf("step %d: %d %v", i, got, err)
+		}
+	}
+	evs, _ := hub.st.Events(ctx, m.ID, 0, 10)
+	var data []string
+	for _, e := range evs {
+		data = append(data, e.Data)
+	}
+	if strings.Join(data, ",") != "1,2,3,4" {
+		t.Fatalf("%v", data)
+	}
+}

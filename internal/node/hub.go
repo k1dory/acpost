@@ -297,6 +297,9 @@ func (n *Node) followSweep() {
 				ctx, done := context.WithTimeout(n.ctx, 10*time.Second)
 				m, err := n.hub.Get(ctx, id)
 				done()
+				if err == nil && m.State.Final() && !n.copyHubEvents(id) {
+					continue // its events first: the next sweep tries again
+				}
 				n.settleFrom(id, m, err)
 			}
 			after = page[len(page)-1][0]
@@ -353,11 +356,21 @@ func (n *Node) settleFrom(id string, m store.Message, err error) bool {
 	return m.State.Final()
 }
 
-// follow copies the hub's outcome of a forwarded message onto its local copy.
+// follow copies the hub's events and outcome of a forwarded message onto its local copy: from the
+// hub's event stream, or (a hub without one) by waiting for the outcome.
 func (n *Node) follow(id string) {
+	m, err := n.followHub(id)
+	if err == nil && n.settleFrom(id, m, nil) {
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return // the local copy is gone
+	}
 	for n.ctx.Err() == nil {
 		m, err := n.hub.Wait(n.ctx, id, client.MaxWait)
-		if n.settleFrom(id, m, err) {
+		if err == nil && m.State.Final() && !n.copyHubEvents(id) {
+			err = errors.New("the hub's events did not come") // again, after the pause below
+		} else if n.settleFrom(id, m, err) {
 			return
 		}
 		if err != nil {
@@ -535,13 +548,22 @@ func (n *Node) deliver(m store.Message) {
 	n.goLoop(func() { n.relay(m.ID, m.LeaseID) })
 }
 
-// relay keeps the hub's lease on a delivered message alive while it runs here, and hands the
-// outcome back when it is final. A message the hub cancelled is cancelled here.
+// relay keeps the hub's lease on a delivered message alive while it runs here, hands the hub its
+// events as they are recorded, and the outcome when it is final (its events all handed first). A
+// message the hub cancelled is cancelled here.
 func (n *Node) relay(id, lease string) {
+	var sent int64
+	pushing, more, extended := true, false, time.Now()
 	for n.ctx.Err() == nil {
-		m, err := n.Wait(n.ctx, n.LocalUser(), id, hubLease/3)
+		evs, changed := n.eventChanges(), n.changes()
+		m, err := n.Get(n.ctx, n.LocalUser(), id)
 		if err != nil {
 			return
+		}
+		if pushing && m.State.Final() {
+			n.relayAll(id, lease, sent, extended) // the events before the reply that ends them
+		} else if pushing {
+			sent, pushing, more = n.relayEvents(id, lease, sent)
 		}
 		if m.State.Final() {
 			r := client.ReplyRequest{Lease: lease, Body: m.Reply}
@@ -578,14 +600,27 @@ func (n *Node) relay(id, lease string) {
 		if m.Origin != originHub+lease {
 			return // delivered again under another lease: that delivery's relay takes over
 		}
-		if err := n.hub.Extend(n.ctx, id, lease, hubLease); err != nil && isFinalErr(err) {
-			// The hub gave the message up (cancelled, or the lease went to another delivery).
-			if cur, _ := n.st.Get(n.ctx, id); cur.Origin != originHub+lease {
+		if time.Since(extended) >= hubLease/3 {
+			extended = time.Now()
+			if err := n.hub.Extend(n.ctx, id, lease, hubLease); err != nil && isFinalErr(err) {
+				// The hub gave the message up (cancelled, or the lease went to another delivery).
+				if cur, _ := n.st.Get(n.ctx, id); cur.Origin != originHub+lease {
+					return
+				}
+				if _, err := n.st.Cancel(n.ctx, id); err == nil {
+					n.notify()
+				}
 				return
 			}
-			if _, err := n.st.Cancel(n.ctx, id); err == nil {
-				n.notify()
-			}
+		}
+		if more {
+			continue // more events waiting: on, after the lease above
+		}
+		select {
+		case <-evs:
+		case <-changed:
+		case <-time.After(hubLease/3 - time.Since(extended)):
+		case <-n.ctx.Done():
 			return
 		}
 	}

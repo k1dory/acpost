@@ -152,8 +152,11 @@ acpost status
 `thought` events while its turn runs (gathered to a few a second, at most 4 KiB each), in order
 with its tool calls and plan. `GET /v1/messages/{id}/events?follow=1` streams them as Server-Sent
 Events, `acpost show ID --follow` prints them (the text on stdout, the rest on stderr), and the
-reply is the turn's text as before. A message to an agent on another node has its events there:
-it is followed to its end, and its answer comes whole.
+reply is the turn's text as before. Through a hub too: the agent's node hands each message's
+events to the hub as they are recorded (the hub keeps how far it took them, so a retry adds nothing
+twice), and the sender's node copies them from the hub's stream onto its own copy, so following a
+message works the same wherever its agent runs (a node restarted meanwhile gets what it missed
+from the hub before the message is final there).
 
 `acpost message send …` is the same as `acpost send …` (and so on for the other message commands).
 
@@ -330,6 +333,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
 | `GET /v1/messages/{id}/events?after=` | what the agent did: its text (`text`, `thought`), tool calls, plan, permissions, notices |
 | `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
+| `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |
 | `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…","files":[…]}` or `{"lease":"…","error":"…"}` |
