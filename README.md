@@ -149,6 +149,18 @@ acpost status
 acpost usage   [--since 30d | --from DAY [--to DAY]] [--by agent|model|day|session|""] [--agent A]
 ```
 
+**What the agent did.** A tool call is a `tool_call` event when it starts and `tool_call_update`
+events as it goes (when its input becomes known, an edit, its end), each with the call as its
+updates made it so far: title, kind, status, input (the command, the path; up to 2 KiB), what the
+agent says it is for (`description`), locations, the tail of its output (4 KiB) and exit code,
+and its edits (`path`, lines `added`/`removed`, `old`/`new` text up to 8 KiB). The node declares
+the `terminal_output` extension, so codex-acp sends a command's output and exit code too. Secrets
+are masked before anything is kept or relayed: values of fields named like one (`token`,
+`password`, `api_key`, `authorization`…), bearer and basic credentials, `NAME_TOKEN=…`-style
+assignments, `--token …`-style flags and passwords in URLs. This is masking by pattern, a defence in
+depth, not a guarantee: a secret in a shape it does not know, or (in a command's output past 64 KiB,
+which is cut to its tail) one split across the cut, can stay as it is.
+
 **Watching an answer being written.** An ACP agent's text and thinking are kept as `text` and
 `thought` events while its turn runs (gathered to a few a second, at most 4 KiB each), in order
 with its tool calls and plan. `GET /v1/messages/{id}/events?follow=1` streams them as Server-Sent

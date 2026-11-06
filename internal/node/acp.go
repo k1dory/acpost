@@ -293,7 +293,8 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	init, err := p.conn.Initialize(ictx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		// The agent works with its own tools: the node offers no file system or terminal.
-		ClientCapabilities: acp.ClientCapabilities{},
+		// terminal_output: codex-acp then sends a command's output and exit code with its tool call.
+		ClientCapabilities: acp.ClientCapabilities{Meta: map[string]any{"terminal_output": true}},
 		ClientInfo:         &acp.Implementation{Name: "acpost", Version: Version},
 	})
 	if err != nil {
@@ -756,6 +757,7 @@ type acpTurn struct {
 	bytes, meta        int // content, and names, links and types (each bounded on its own)
 	dropped            int
 	usage              *acp.SessionUsageUpdate // the agent's last word on the session's context and cost
+	tools              map[string]*toolTrack   // the turn's tool calls as their updates made them
 }
 
 func (t *acpTurn) file(b replyBlock) {
@@ -904,14 +906,11 @@ func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification
 		}
 	case u.ToolCall != nil:
 		t.toolCall()
-		c.event(t, "tool_call", map[string]any{"id": u.ToolCall.ToolCallId, "title": u.ToolCall.Title, "kind": u.ToolCall.Kind, "status": u.ToolCall.Status})
+		c.event(t, "tool_call", t.trackCall(u.ToolCall))
 	case u.ToolCallUpdate != nil:
-		if st := u.ToolCallUpdate.Status; st != nil && (*st == acp.ToolCallStatusCompleted || *st == acp.ToolCallStatusFailed) {
-			ev := map[string]any{"id": u.ToolCallUpdate.ToolCallId, "status": *st}
-			if u.ToolCallUpdate.Title != nil {
-				ev["title"] = *u.ToolCallUpdate.Title
-			}
-			c.event(t, "tool_call_update", ev)
+		// The call as its updates made it, when there is something to say (not every tick).
+		if e, ok := t.trackUpdate(u.ToolCallUpdate); ok {
+			c.event(t, "tool_call_update", e)
 		}
 	case u.UsageUpdate != nil:
 		t.mu.Lock()
