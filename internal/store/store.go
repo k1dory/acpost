@@ -322,6 +322,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(usageSchema); err != nil {
 		return err
 	}
+	if _, err := s.w.Exec(changesSchema); err != nil {
+		return err
+	}
 	// Columns added after the first release.
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
@@ -1136,6 +1139,9 @@ func (s *Store) GC(ctx context.Context, before time.Time) (int, error) {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE msg IN ("+sel+")", t, gcBatch); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM turn_changes WHERE msg IN (SELECT id FROM messages WHERE seq IN ("+sel+"))", t, gcBatch); err != nil {
 				return err
 			}
 			// Content that no file refers to any more: of these messages, or of reply files an

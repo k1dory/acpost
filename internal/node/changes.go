@@ -1,0 +1,383 @@
+package node
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/k1dory/acpost/internal/store"
+)
+
+// What a turn changed, where its agent works in a git repository: the working tree is snapshot
+// before and after the turn, through an index of its own (the repository's index, the working
+// tree and its refs are not touched; .gitignore is followed), and when the two trees differ the
+// node keeps the files and the diff, and says what changed in a "changes" event (which crosses
+// the hub like the others; the diff itself stays here).
+
+const (
+	gitTimeout     = 20 * time.Second // a snapshot or a diff takes at most this
+	changesDiffMax = 1 << 20          // the diff of a turn kept, at most
+	changesFiles   = 100              // files listed in the event
+	snapshotFiles  = 10000            // untracked files a snapshot takes at most
+	snapshotBytes  = 64 << 20         // and their bytes
+)
+
+// gitSnap is a working tree as it was.
+type gitSnap struct {
+	repo, tree, branch string
+	at                 time.Time
+}
+
+// git runs git in dir with env added; its output, at most max bytes (cut says it went on).
+//
+// The repository is the agent's, and so is its configuration: nothing it names is run with the
+// node's rights. Hooks and fsmonitor are off, every filter driver the configuration declares is a
+// pass-through (gitDefuse), diffs are without textconv. Past gitTimeout the whole process group
+// is killed and its pipes let go.
+func git(ctx context.Context, dir string, env []string, max int, args ...string) (out []byte, cut bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), append(gitSafeEnv(gitDefuse(ctx, dir)), env...)...)
+	killGroupOnCancel(cmd)
+	cmd.WaitDelay = 2 * time.Second
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, false, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, false, err
+	}
+	out, _ = io.ReadAll(io.LimitReader(stdout, int64(max)+1))
+	if len(out) > max {
+		out, cut = out[:max], true
+		_, _ = io.Copy(io.Discard, stdout)
+	}
+	if err := cmd.Wait(); err != nil {
+		return out, cut, errors.New(strings.TrimSpace(stderr.String() + " " + err.Error()))
+	}
+	return out, cut, nil
+}
+
+// snapshot is dir's working tree as it is now, when dir is in a git repository (else nil).
+func snapshot(ctx context.Context, dir string) *gitSnap {
+	top, _, err := git(ctx, dir, nil, 4096, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil
+	}
+	repo := strings.TrimSpace(string(top))
+	if !untrackedFits(ctx, repo) {
+		return nil // too much untracked to take into the repository's objects
+	}
+	index, _, err := git(ctx, repo, nil, 4096, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	if err != nil {
+		return nil
+	}
+	tmp, err := os.CreateTemp("", "acpost-index-")
+	if err != nil {
+		return nil
+	}
+	tmp.Close()
+	defer os.Remove(tmp.Name())
+	defer os.Remove(tmp.Name() + ".lock")
+	// The repository's index as a start: files unchanged since it are not read again.
+	if b, err := os.ReadFile(strings.TrimSpace(string(index))); err == nil {
+		_ = os.WriteFile(tmp.Name(), b, 0o600)
+	} else {
+		os.Remove(tmp.Name())
+	}
+	env := []string{"GIT_INDEX_FILE=" + tmp.Name()}
+	if _, _, err := git(ctx, repo, env, 1<<16, "add", "-A", "--", "."); err != nil {
+		return nil
+	}
+	tree, _, err := git(ctx, repo, env, 4096, "write-tree")
+	if err != nil {
+		return nil
+	}
+	snap := &gitSnap{repo: repo, tree: strings.TrimSpace(string(tree)), at: time.Now().UTC()}
+	if b, _, err := git(ctx, repo, nil, 4096, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
+		snap.branch = strings.TrimSpace(string(b))
+	}
+	return snap
+}
+
+// diffSnaps is what changed from one snapshot to the other: the files and the diff.
+func diffSnaps(ctx context.Context, before, after *gitSnap) ([]store.ChangedFile, string, bool, error) {
+	status, _, err := git(ctx, before.repo, nil, 1<<20, "diff", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", "--name-status", "-z", before.tree, after.tree)
+	if err != nil {
+		return nil, "", false, err
+	}
+	files := parseNameStatus(status)
+	if num, _, err := git(ctx, before.repo, nil, 1<<20, "diff", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", "--numstat", "-z", before.tree, after.tree); err == nil {
+		addNumstat(files, num)
+	}
+	// Whole files only, masked, then cut between files: a cut does not leave half a secret.
+	diff, cut, err := git(ctx, before.repo, nil, 2*changesDiffMax, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", before.tree, after.tree)
+	if err != nil {
+		return files, "", false, err
+	}
+	text := string(diff)
+	if cut {
+		text = wholeFiles(text, len(text))
+	}
+	text = redact(text)
+	if len(text) > changesDiffMax {
+		cut, text = true, wholeFiles(text, changesDiffMax)
+	}
+	return files, text, cut, nil
+}
+
+// parseNameStatus reads `git diff --name-status -z`: status, then a path (two for a rename or copy).
+func parseNameStatus(b []byte) []store.ChangedFile {
+	parts := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+	var out []store.ChangedFile
+	for i := 0; i < len(parts); i++ {
+		st := parts[i]
+		if st == "" || i+1 >= len(parts) {
+			break
+		}
+		f := store.ChangedFile{Status: st[:1]}
+		if st[0] == 'R' || st[0] == 'C' {
+			if i+2 >= len(parts) {
+				break
+			}
+			f.Path = parts[i+2]
+			i += 2
+		} else {
+			f.Path = parts[i+1]
+			i++
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// addNumstat adds the lines of `git diff --numstat -z` to the files ("-" for a binary file).
+func addNumstat(files []store.ChangedFile, b []byte) {
+	idx := map[string]int{}
+	for i, f := range files {
+		idx[f.Path] = i
+	}
+	parts := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+	for i := 0; i < len(parts); i++ {
+		fields := strings.SplitN(parts[i], "\t", 3)
+		if len(fields) < 3 {
+			continue
+		}
+		path := fields[2]
+		if path == "" && i+2 < len(parts) { // a rename: the old path, then the new
+			path = parts[i+2]
+			i += 2
+		}
+		j, ok := idx[path]
+		if !ok {
+			continue
+		}
+		if fields[0] == "-" {
+			files[j].Added, files[j].Removed = -1, -1
+			continue
+		}
+		files[j].Added, _ = strconv.Atoi(fields[0])
+		files[j].Removed, _ = strconv.Atoi(fields[1])
+	}
+}
+
+// recordChanges keeps what a turn of m changed between the snapshots, and says so in an event.
+func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir string) {
+	if before == nil {
+		return
+	}
+	ctx := n.ctx
+	after := snapshot(ctx, dir)
+	if after == nil || after.repo != before.repo || after.tree == before.tree {
+		return
+	}
+	files, diff, cut, err := diffSnaps(ctx, before, after)
+	if err != nil {
+		n.log.Debug("changes", "id", m.ID, "err", err)
+		return
+	}
+	c := store.TurnChanges{Msg: m.ID, Agent: agent, Start: before.at, At: after.at, Repo: before.repo, Branch: after.branch,
+		Before: before.tree, After: after.tree, Files: files, Diff: diff, Cut: cut}
+	if err := n.st.AddChanges(ctx, c); err != nil {
+		n.log.Debug("changes", "id", m.ID, "err", err)
+		return
+	}
+	ev := struct {
+		Agent  string              `json:"agent"`
+		Repo   string              `json:"repo"`
+		Branch string              `json:"branch,omitempty"`
+		Before string              `json:"before"`
+		After  string              `json:"after"`
+		Files  []store.ChangedFile `json:"files"`
+		More   int                 `json:"more,omitempty"`
+	}{Agent: agent, Repo: filepath.Base(before.repo), Branch: after.branch, Before: before.tree, After: after.tree, Files: files}
+	if len(ev.Files) > changesFiles {
+		ev.Files, ev.More = ev.Files[:changesFiles], len(files)-changesFiles
+	}
+	for len(eventJSON(ev)) > toolEventMax && len(ev.Files) > 1 {
+		ev.More += len(ev.Files) / 2
+		ev.Files = ev.Files[:len(ev.Files)-len(ev.Files)/2]
+	}
+	_ = n.addEvent(ctx, m.ID, "changes", eventJSON(ev), false)
+}
+
+// Changes is what the turns of a message changed, and with tree those of the messages its agent
+// sent while working on it (subagents), on this node; with each repository's diff from its first
+// snapshot to its last, when the repository still has them.
+//
+// A diff of a repository is all that changed in it, whoever changed it: only the node's user and
+// its agents may read them.
+func (n *Node) Changes(ctx context.Context, p Principal, id string, tree, withDiff bool) ([]store.TurnChanges, []store.RepoDiff, error) {
+	if !p.local() {
+		return nil, nil, errf("refused", "changes are for the node's user")
+	}
+	if _, err := n.Get(ctx, p, id); err != nil {
+		return nil, nil, err
+	}
+	ids := []string{id}
+	if tree {
+		all, err := n.st.Descendants(ctx, id, 1000)
+		if err != nil {
+			return nil, nil, err
+		}
+		ids = ids[:0]
+		for _, d := range all {
+			if m, err := n.st.Get(ctx, d); err == nil && n.canSee(p, m) {
+				ids = append(ids, d)
+			}
+		}
+	}
+	turns, err := n.st.ChangesOf(ctx, ids, withDiff)
+	if err != nil {
+		return nil, nil, err
+	}
+	var whole []store.RepoDiff
+	if withDiff {
+		// From the earliest snapshot before a turn to the latest after one (turns nest: a subagent's
+		// ends before its lead's).
+		first, last := map[string]*gitSnap{}, map[string]*gitSnap{}
+		var repos []string
+		for _, t := range turns {
+			if f := first[t.Repo]; f == nil {
+				repos = append(repos, t.Repo)
+				first[t.Repo] = &gitSnap{repo: t.Repo, tree: t.Before, at: t.Start}
+			} else if t.Start.Before(f.at) {
+				f.tree, f.at = t.Before, t.Start
+			}
+			if l := last[t.Repo]; l == nil || !t.At.Before(l.at) {
+				last[t.Repo] = &gitSnap{repo: t.Repo, tree: t.After, branch: t.Branch, at: t.At}
+			}
+		}
+		for _, r := range repos {
+			files, diff, cut, err := diffSnaps(ctx, first[r], last[r])
+			if err != nil {
+				continue // the repository has let the trees go
+			}
+			whole = append(whole, store.RepoDiff{Repo: r, Branch: last[r].branch, Before: first[r].tree, After: last[r].tree, Files: files, Diff: diff, Cut: cut})
+		}
+	}
+	return turns, whole, nil
+}
+
+// gitSafeEnv is the environment git runs in: no prompt, no pager, no external diff, no network
+// (no lazy fetch, no protocol, no ssh command), and configuration (given as GIT_CONFIG_KEY_n and
+// _VALUE_n: a key is not split at "=" there) that turns off what the repository may name to run:
+// hooks, fsmonitor, submodule diffs, and the filters in extra.
+func gitSafeEnv(extra [][2]string) []string {
+	conf := append([][2]string{
+		{"core.hooksPath", "/dev/null"}, {"core.fsmonitor", "false"}, {"core.untrackedCache", "false"},
+		{"diff.submodule", "short"}, {"submodule.recurse", "false"}, {"protocol.allow", "never"},
+		{"core.sshCommand", "false"}, {"diff.external", ""},
+	}, extra...)
+	env := []string{"GIT_OPTIONAL_LOCKS=0", "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_EXTERNAL_DIFF=", "GIT_PAGER=cat",
+		"GIT_NO_LAZY_FETCH=1", "GIT_SSH_COMMAND=false", "GIT_ALLOW_PROTOCOL=", "GIT_CONFIG_COUNT=" + strconv.Itoa(len(conf))}
+	for i, kv := range conf {
+		env = append(env, "GIT_CONFIG_KEY_"+strconv.Itoa(i)+"="+kv[0], "GIT_CONFIG_VALUE_"+strconv.Itoa(i)+"="+kv[1])
+	}
+	return env
+}
+
+// gitDefuse is the configuration that makes every filter driver the repository declares a
+// pass-through (clean, smudge and process are commands it would run), not required.
+func gitDefuse(ctx context.Context, dir string) [][2]string {
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|smudge|process|required)$`)
+	cmd.Env = append(os.Environ(), gitSafeEnv(nil)...)
+	killGroupOnCancel(cmd)
+	cmd.WaitDelay = 2 * time.Second
+	b, _ := cmd.Output()
+	seen := map[string]bool{}
+	var out [][2]string
+	for _, key := range strings.Split(string(b), "\x00") {
+		i := strings.LastIndexByte(key, '.')
+		if !strings.HasPrefix(key, "filter.") || i < len("filter.") {
+			continue
+		}
+		driver := key[:i] // filter.<name>
+		if seen[driver] {
+			continue
+		}
+		seen[driver] = true
+		out = append(out, [2]string{driver + ".clean", "cat"}, [2]string{driver + ".smudge", "cat"}, [2]string{driver + ".process", ""}, [2]string{driver + ".required", "false"})
+	}
+	return out
+}
+
+// untrackedFits says whether the files a snapshot would take into repo's object store (untracked,
+// and tracked but changed since the index) are few and small enough.
+func untrackedFits(ctx context.Context, repo string) bool {
+	b, cut, err := git(ctx, repo, nil, 4<<20, "ls-files", "-z", "--others", "--modified", "--exclude-standard")
+	if err != nil || cut {
+		return false
+	}
+	var n int
+	var size int64
+	for _, name := range strings.Split(string(b), "\x00") {
+		if name == "" {
+			continue
+		}
+		if n++; n > snapshotFiles {
+			return false
+		}
+		if st, err := os.Lstat(filepath.Join(repo, name)); err == nil {
+			if size += st.Size(); size > snapshotBytes {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// killGroupOnCancel makes cmd a process group of its own, killed whole when its context ends: a
+// hook or filter it started does not outlive it.
+func killGroupOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}
+
+// wholeFiles is the files of a diff that fit in max bytes, each whole (the last one, cut, goes;
+// none if the first does not fit).
+func wholeFiles(diff string, max int) string {
+	head := diff[:min(len(diff), max)]
+	if i := strings.LastIndex(head, "\ndiff --git "); i >= 0 {
+		return head[:i+1]
+	}
+	return ""
+}

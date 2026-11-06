@@ -652,6 +652,12 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
+	// The working tree before the turn: what the turn changed is told after it (changes.go).
+	dir := s.cwd()
+	if c := m.Meta[metaSessionCwd]; c != "" {
+		dir = c
+	}
+	before := snapshot(ctx, dir)
 	turn = p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply), n.cfg.Limits.MaxFiles, int(n.cfg.Limits.MaxFilesSize))
 	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
 	// The SDK writes a request before it watches the context: an agent that stopped reading its
@@ -680,6 +686,7 @@ func (s *acpSlot) handle(m store.Message) {
 	timedOut := errors.Is(turnCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 	turnCancel()
 	p.cl.end(sid)
+	n.recordChanges(m, a.addr+"@"+n.Name(), before, dir) // after the turn's deadline was read
 	reply := turn.reply(a.cfg.Reply)
 
 	if err != nil || timedOut {

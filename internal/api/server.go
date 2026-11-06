@@ -35,6 +35,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/messages/{id}/events", s.auth(s.events))
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
 	mux.HandleFunc("GET /v1/usage", s.auth(s.usage))
+	mux.HandleFunc("GET /v1/messages/{id}/changes", s.auth(s.changes))
 	mux.HandleFunc("GET /v1/messages/{id}/files", s.auth(s.files))
 	mux.HandleFunc("POST /v1/attach", s.auth(s.attach))
 	mux.HandleFunc("POST /v1/messages/{id}/cancel", s.auth(s.cancel))
@@ -276,6 +277,19 @@ func (s *server) reply(w http.ResponseWriter, r *http.Request, p node.Principal)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) changes(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	q := r.URL.Query()
+	turns, whole, err := s.n.Changes(r.Context(), p, r.PathValue("id"), q.Get("tree") != "", q.Get("diff") != "")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if turns == nil {
+		turns = []store.TurnChanges{}
+	}
+	writeJSON(w, 200, client.Changes{Turns: turns, Repos: whole})
 }
 
 func (s *server) usage(w http.ResponseWriter, r *http.Request, p node.Principal) {

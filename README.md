@@ -146,6 +146,7 @@ acpost agents                              # this node's, and (joined) other nod
 acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
 acpost status
+acpost changes ID [--tree] [--stat]         # what its turns changed in their git repository
 acpost usage   [--since 30d | --from DAY [--to DAY]] [--by agent|model|day|session|""] [--agent A]
 ```
 
@@ -160,6 +161,20 @@ are masked before anything is kept or relayed: values of fields named like one (
 assignments, `--token …`-style flags and passwords in URLs. This is masking by pattern, a defence in
 depth, not a guarantee: a secret in a shape it does not know, or (in a command's output past 64 KiB,
 which is cut to its tail) one split across the cut, can stay as it is.
+
+**What a session changed.** When an ACP agent works in a git repository, the node takes the
+working tree before and after each turn (`git add -A` and `write-tree` through an index of its
+own: the repository's index, working tree and refs are not touched, `.gitignore` is followed; the
+snapshots are trees in the repository's object store, collected by git in time) and, when they
+differ, keeps the turn's files and diff (up to 1 MiB, secrets masked) and records a `changes`
+event with the files and their lines, which crosses the hub like the others (the diff itself stays
+on the agent's node). The repository is the agent's, and so is its configuration: git runs with
+hooks and fsmonitor off, every filter driver it declares a pass-through and no textconv, in a
+process group killed after 20 s; a repository with over 64 MiB or 10 000 untracked files is not
+snapshot. Changes are for the node's user and its agents. `acpost changes ID` and `GET /v1/messages/{id}/changes?diff=1` give a
+message's turns and each repository's diff from its first snapshot to its last; `--tree`
+(`tree=1`) adds the messages its agent sent while working (subagents) on this node. Turns that run
+at once in one repository each see the other's changes.
 
 **Watching an answer being written.** An ACP agent's text and thinking are kept as `text` and
 `thought` events while its turn runs (gathered to a few a second, at most 4 KiB each), in order
@@ -368,6 +383,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
 | `GET /v1/messages/{id}/events?after=` | what the agent did: its text (`text`, `thought`), tool calls, plan, permissions, notices |
 | `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
+| `GET /v1/messages/{id}/changes?tree=1&diff=1` | what its turns changed, per turn and per repository |
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |

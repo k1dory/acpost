@@ -216,7 +216,7 @@ func rootCmd(g *globals) *cobra.Command {
 	root.AddCommand(msgCmds()...)
 	message := &cobra.Command{Use: "message", Short: "The message commands again (acpost message send … = acpost send …)"}
 	message.AddCommand(msgCmds()...)
-	root.AddCommand(message, filesCmd(g), attachCmd(g), agentsCmd(g), sessionsCmd(g), statusCmd(g), usageCmd(g), serveCmd(g))
+	root.AddCommand(message, filesCmd(g), attachCmd(g), agentsCmd(g), sessionsCmd(g), statusCmd(g), usageCmd(g), changesCmd(g), serveCmd(g))
 	return root
 }
 

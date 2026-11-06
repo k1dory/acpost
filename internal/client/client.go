@@ -629,3 +629,24 @@ func (c *Client) Usage(ctx context.Context, f UsageFilter) ([]UsageReport, error
 	_, err := c.do(ctx, "GET", "/v1/usage", q, nil, &out, nil)
 	return out.Items, err
 }
+
+// Changes is what a message's turns changed (and its subagents' with tree): each turn's files and
+// diff, and each repository's diff over them all.
+type Changes struct {
+	Turns []store.TurnChanges `json:"turns"`
+	Repos []store.RepoDiff    `json:"repos,omitempty"`
+}
+
+// ChangesOf is what a message's turns changed; tree adds its subagents', diff the diffs.
+func (c *Client) ChangesOf(ctx context.Context, id string, tree, diff bool) (Changes, error) {
+	q := url.Values{}
+	if tree {
+		q.Set("tree", "1")
+	}
+	if diff {
+		q.Set("diff", "1")
+	}
+	var out Changes
+	_, err := c.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id)+"/changes", q, nil, &out, nil)
+	return out, err
+}

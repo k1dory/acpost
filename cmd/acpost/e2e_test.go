@@ -787,3 +787,48 @@ func TestUsageAcrossHub(t *testing.T) {
 		t.Fatalf("table: %s", table)
 	}
 }
+
+// What an agent changed in its repository, with what the agent it asked changed: per turn, and the
+// repository's whole diff; nothing outside a repository.
+func TestChangesWithSubagent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	e := newEnv(t, "agents:\n"+fakeAgent("lead", ", cwd: "+repo)+fakeAgent("helper", ", cwd: "+repo))
+	e.serve()
+	id := strings.TrimSpace(e.ok("", "send", "--to", "lead", "--body",
+		"shell echo lead > lead.txt && acpost send --to helper --body 'shell echo help > help.txt' --wait --timeout 20s"))
+	e.ok("", "wait", id, "--timeout", "30s")
+
+	var ch client.Changes
+	json.Unmarshal([]byte(e.ok("", "changes", id, "--tree", "--json")), &ch)
+	agents := map[string]bool{}
+	for _, t := range ch.Turns {
+		agents[strings.SplitN(t.Agent, "@", 2)[0]] = true
+	}
+	if len(ch.Turns) != 2 || !agents["agent:lead"] || !agents["agent:helper"] {
+		t.Fatalf("%+v", ch.Turns)
+	}
+	if len(ch.Repos) != 1 || !strings.Contains(ch.Repos[0].Diff, "+lead") || !strings.Contains(ch.Repos[0].Diff, "+help") {
+		t.Fatalf("%+v", ch.Repos)
+	}
+	if stat := e.ok("", "changes", id, "--tree", "--stat"); !strings.Contains(stat, "A help.txt") || !strings.Contains(stat, "+1 -0") {
+		t.Fatalf("%s", stat)
+	}
+	// Without --tree: the lead's own turn (which saw the helper's file appear too).
+	var own client.Changes
+	json.Unmarshal([]byte(e.ok("", "changes", id, "--json")), &own)
+	if len(own.Turns) != 1 {
+		t.Fatalf("%+v", own.Turns)
+	}
+	evs := e.ok("", "show", id, "--events")
+	if !strings.Contains(evs, " changes ") || !strings.Contains(evs, "lead.txt") {
+		t.Fatalf("no changes event: %s", evs)
+	}
+}
