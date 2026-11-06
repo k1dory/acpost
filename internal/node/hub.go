@@ -29,6 +29,9 @@ const (
 	announceEvery = 20 * time.Second
 	announceTTL   = 70 * time.Second
 	hubLease      = 2 * time.Minute
+	// hubDeliveries is how many messages from the hub a node takes in at once: a delivery
+	// downloading its files does not hold up the next ones.
+	hubDeliveries = 8
 )
 
 type registry struct {
@@ -414,9 +417,20 @@ func (n *Node) startJoin() {
 	}
 }
 
+// hubClaimLoop takes the node's messages from the hub: one long poll while idle, and each message
+// delivered on its own (up to hubDeliveries at once) while the next is claimed.
 func (n *Node) hubClaimLoop() {
+	slots := make(chan struct{}, hubDeliveries)
 	for n.ctx.Err() == nil {
+		select {
+		case slots <- struct{}{}: // a free delivery slot before claiming: nothing is held unrun
+		case <-n.ctx.Done():
+			return
+		}
 		m, ok, err := n.hub.NodeClaim(n.ctx, n.Name(), 30*time.Second, hubLease)
+		if err != nil || !ok {
+			<-slots
+		}
 		if err != nil {
 			if n.ctx.Err() != nil {
 				return
@@ -430,7 +444,10 @@ func (n *Node) hubClaimLoop() {
 			continue
 		}
 		if ok {
-			n.deliver(m)
+			n.goLoop(func() {
+				defer func() { <-slots }()
+				n.deliver(m)
+			})
 		}
 	}
 }

@@ -79,7 +79,9 @@ local work there is nothing to set up but the agents. `SIGTERM` stops it cleanly
 
 **Hub.** A node other nodes join (`acpost serve --join https://hub:7420`). A joined node announces
 its agents; a message to an agent the node does not have goes to the hub, and the hub hands it to
-the node that announced that agent. Nodes connect out to the hub, so a node behind NAT works. The
+the node that announced that agent. A node takes messages from its hub over one long poll while idle and delivers up to 8 at
+once, so one downloading large files does not hold up the rest (messages from the hub are not
+ordered among themselves). Nodes connect out to the hub, so a node behind NAT works. The
 sending node keeps a local copy that follows the hub's outcome, so `wait`, `show` and `list` work
 alike for local and remote messages.
 

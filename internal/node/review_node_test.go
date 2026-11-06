@@ -233,3 +233,68 @@ agents: {bot: {driver: inbox}}
 		t.Fatalf("reply length=%d err=%v", len(got.Reply), err)
 	}
 }
+
+// A delivery that is downloading its files does not hold up the node's next messages: they are
+// claimed and delivered meanwhile.
+func TestHubDeliveriesRunAtOnce(t *testing.T) {
+	n := newNode(t, inboxCfg)
+	big, small := store.NewID(), store.NewID()
+	release := make(chan struct{})
+	var mu sync.Mutex
+	queue := []store.Message{
+		{ID: big, From: "user:x@other", To: "agent:bot@" + n.Name(), Body: "big", LeaseID: "l1",
+			Files: store.Files{{Name: "f.bin", Size: 1, SHA256: strings.Repeat("0", 64)}}},
+		{ID: small, From: "user:x@other", To: "agent:bot@" + n.Name(), Body: "small", LeaseID: "l2"},
+	}
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/claim"):
+			mu.Lock()
+			if len(queue) == 0 {
+				mu.Unlock()
+				select {
+				case <-time.After(200 * time.Millisecond):
+				case <-r.Context().Done():
+				}
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			m := queue[0]
+			queue = queue[1:]
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(m)
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			select { // the big message's files take until the test lets them go
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"name": "f.bin", "size": 1, "data": "eA=="}}})
+		default: // lease extensions, announces
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		}
+	}))
+	defer h.Close()
+	defer close(release)
+	var err error
+	n.hub, err = client.New(h.URL, "dummy", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.goLoop(n.hubClaimLoop)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if m, err := n.st.Get(ctx, small); err == nil && m.Body == "small" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the small message waited for the big one's files")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := n.st.Get(ctx, big); err == nil {
+		t.Fatal("the big message arrived before its files")
+	}
+}
