@@ -77,8 +77,9 @@ type Node struct {
 	wg     sync.WaitGroup
 
 	// changed is closed and replaced whenever a message changes: waiters and claimers re-check.
-	mu      sync.Mutex
-	changed chan struct{}
+	mu        sync.Mutex
+	changed   chan struct{}
+	evChanged chan struct{} // closed when an event is recorded: followers read on
 
 	tokMu   sync.Mutex
 	agentTk map[string]*agentToken // token → agent process
@@ -118,7 +119,7 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	n := &Node{cfg: cfg, st: st, log: log, changed: make(chan struct{}), agentTk: map[string]*agentToken{},
+	n := &Node{cfg: cfg, st: st, log: log, changed: make(chan struct{}), evChanged: make(chan struct{}), agentTk: map[string]*agentToken{},
 		acp: map[string]*acpAgent{}, wake: make(chan struct{}, 1), remote: newRegistry(),
 		following: map[string]bool{}, followWake: make(chan struct{}, 1)}
 	n.maintainEvery.Store(int64(30 * time.Second))

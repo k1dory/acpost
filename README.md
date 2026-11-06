@@ -135,7 +135,7 @@ acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--attach FILE]..
                [--link PATH|URL]... [--session ACP-ID] [--meta k=v]... [--ttl DUR] [--idempotency-key K]
                [--wait [--timeout DUR] [--save DIR]]
 acpost wait    ID... [--timeout DUR] [--save DIR]
-acpost show    ID [--events]
+acpost show    ID [--events | --follow]    # --follow: the agent's text as it writes, then the outcome
 acpost list    [--to ADDR] [--from ADDR] [--task T] [--thread ID] [--state S] [--limit N] [--after CURSOR]
 acpost cancel  ID
 acpost recv    --as NAME [--wait DUR] [--lease DUR]
@@ -147,6 +147,13 @@ acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
 acpost status
 ```
+
+**Watching an answer being written.** An ACP agent's text and thinking are kept as `text` and
+`thought` events while its turn runs (gathered to a few a second, at most 4 KiB each), in order
+with its tool calls and plan. `GET /v1/messages/{id}/events?follow=1` streams them as Server-Sent
+Events, `acpost show ID --follow` prints them (the text on stdout, the rest on stderr), and the
+reply is the turn's text as before. A message to an agent on another node has its events there:
+it is followed to its end, and its answer comes whole.
 
 `acpost message send …` is the same as `acpost send …` (and so on for the other message commands).
 
@@ -321,7 +328,8 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `POST /v1/attach` | `{"files":[…]}`: an agent process attaches files to the reply it is working on |
 | `GET /v1/messages/{id}/wait?timeout=30s` | returns when the message is final or the timeout (max 60s) passes; look at `state` |
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
-| `GET /v1/messages/{id}/events?after=` | what the agent did: tool calls, permissions, notices |
+| `GET /v1/messages/{id}/events?after=` | what the agent did: its text (`text`, `thought`), tool calls, plan, permissions, notices |
+| `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
 | `POST /v1/messages/{id}/cancel` | |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |
 | `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…","files":[…]}` or `{"lease":"…","error":"…"}` |

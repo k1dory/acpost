@@ -378,3 +378,26 @@ func TestFilesArePrivate(t *testing.T) {
 		t.Fatalf("db mode %v", st.Mode().Perm())
 	}
 }
+
+// A turn's events are kept while the message runs; once it is final they are dropped, so reading
+// the events of a final message reads them all. Other events (notices) are still kept.
+func TestTurnEventsStopAtFinal(t *testing.T) {
+	s := openTest(t, Options{})
+	m := mustInsert(t, s, msg("agent:r", "x"))
+	if err := s.AddTurnEvent(ctx, m.ID, "text", `{"text":"a"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Cancel(ctx, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddTurnEvent(ctx, m.ID, "text", `{"text":"late"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddEvent(ctx, m.ID, "notice", `"n"`); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := s.Events(ctx, m.ID, 0, 10)
+	if len(evs) != 2 || evs[0].Data != `{"text":"a"}` || evs[1].Kind != "notice" {
+		t.Fatalf("%+v", evs)
+	}
+}

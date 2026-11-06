@@ -594,3 +594,46 @@ func TestSocketPermissionHint(t *testing.T) {
 		t.Fatalf("ENOENT hint: %q", h)
 	}
 }
+
+// show --follow prints the agent's text as it writes it and ends with the outcome; --json gives
+// the events and the final message; an unknown id is a plain error. Through a hub the answer
+// comes whole at the end.
+func TestShowFollow(t *testing.T) {
+	e := newEnv(t, "agents:\n"+fakeAgent("fake", ""))
+	e.serve()
+	id := strings.TrimSpace(e.ok("", "send", "--to", "fake", "--body", "stream 6 150"))
+	r := e.run("", "show", id, "--follow")
+	if r.code != 0 || r.out != "w1 w2 w3 w4 w5 w6\n" {
+		t.Fatalf("%d %q %q", r.code, r.out, r.err)
+	}
+	r = e.run("", "show", id, "--follow", "--json")
+	lines := strings.Split(strings.TrimSpace(r.out), "\n")
+	if r.code != 0 || len(lines) < 3 || !strings.Contains(lines[0], `"kind":"thought"`) || !strings.Contains(lines[len(lines)-1], `"state":"done"`) {
+		t.Fatalf("%d %s", r.code, r.out)
+	}
+	// With reply: last the text before a tool call is streamed but is not the reply: the reply follows.
+	id = strings.TrimSpace(e.ok("", "send", "--to", "fake", "--body", "tools"))
+	if r := e.run("", "show", id, "--follow"); r.code != 0 || !strings.HasSuffix(r.out, "\n--- reply\nfinal\n") {
+		t.Fatalf("tools: %d %q %q", r.code, r.out, r.err)
+	}
+	if r := e.run("", "show", "msg_01M6RT5P63ENPZ7GH7083B56P2", "--follow"); r.code != 3 || !strings.Contains(r.err, "no message") {
+		t.Fatalf("unknown id: %d %s", r.code, r.err)
+	}
+
+	a, b := hubPair(t)
+	_ = a
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		r := b.run("", "send", "--to", "agent:reviewer", "--body", "echo across")
+		if r.code == 0 {
+			if f := b.run("", "show", strings.TrimSpace(r.out), "--follow"); f.code != 0 || f.out != "across\n" {
+				t.Fatalf("remote follow: %d %q %q", f.code, f.out, f.err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never routed: %d %s", r.code, r.err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}

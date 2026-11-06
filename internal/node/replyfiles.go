@@ -277,5 +277,5 @@ func (n *Node) keepReplyFiles(ctx context.Context, m store.Message, blocks []rep
 // notice records a notice event on a message.
 func (n *Node) notice(ctx context.Context, id, text string) {
 	b, _ := json.Marshal(text)
-	_ = n.st.AddEvent(ctx, id, "notice", string(b))
+	_ = n.addEvent(ctx, id, "notice", string(b), false)
 }

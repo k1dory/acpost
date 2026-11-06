@@ -948,17 +948,28 @@ func (s *Store) Counts(ctx context.Context, recipient string) (queued, running i
 // AddEvent records an event of a message. Past MaxEventsPerMessage events are dropped (the last
 // one kept says so); data longer than MaxEventData is cut.
 func (s *Store) AddEvent(ctx context.Context, id, kind, data string) error {
+	return s.addEvent(ctx, id, kind, data, false)
+}
+
+// AddTurnEvent records an event of a running turn: once the message is final (cancelled while the
+// turn still ran) it is dropped, so whoever read the events of a final message read them all.
+func (s *Store) AddTurnEvent(ctx context.Context, id, kind, data string) error {
+	return s.addEvent(ctx, id, kind, data, true)
+}
+
+func (s *Store) addEvent(ctx context.Context, id, kind, data string, live bool) error {
 	if len(data) > s.opt.MaxEventData {
 		data = data[:s.opt.MaxEventData] + truncMark
 	}
 	return s.tx(ctx, func(t *sql.Tx) error {
 		var seq int64
 		var n int
-		err := t.QueryRowContext(ctx, "SELECT seq, events FROM messages WHERE id = ?", id).Scan(&seq, &n)
+		var state State
+		err := t.QueryRowContext(ctx, "SELECT seq, events, state FROM messages WHERE id = ?", id).Scan(&seq, &n, &state)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
-		if err != nil || n >= s.opt.MaxEventsPerMessage {
+		if err != nil || n >= s.opt.MaxEventsPerMessage || (live && state.Final()) {
 			return err
 		}
 		if n == s.opt.MaxEventsPerMessage-1 {
@@ -970,6 +981,16 @@ func (s *Store) AddEvent(ctx context.Context, id, kind, data string) error {
 		_, err = t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
 		return err
 	})
+}
+
+// EventCount is how many events a message has.
+func (s *Store) EventCount(ctx context.Context, id string) (int, error) {
+	var n int
+	err := s.r.QueryRowContext(ctx, "SELECT events FROM messages WHERE id = ?", id).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return n, err
 }
 
 // Events returns up to limit events of a message after the event numbered after.

@@ -2,6 +2,7 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -212,15 +213,7 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		var eb struct {
-			Error Error `json:"error"`
-		}
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		if json.Unmarshal(b, &eb) != nil || eb.Error.Code == "" {
-			eb.Error = Error{Code: "internal", Message: fmt.Sprintf("%s %s: %s %s", method, path, resp.Status, strings.TrimSpace(string(b)))}
-		}
-		eb.Error.Status = resp.StatusCode
-		return resp.StatusCode, &eb.Error
+		return resp.StatusCode, respErr(method, path, resp)
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
 		cr := &capReader{r: resp.Body, left: c.MaxResponse}
@@ -444,4 +437,132 @@ func (c *Client) NodeClaim(ctx context.Context, node string, wait, lease time.Du
 	q := url.Values{"wait": {min(wait, MaxWait).String()}, "lease": {lease.String()}}
 	code, err := c.do(ctx, "POST", "/v1/nodes/"+url.PathEscape(node)+"/claim", q, nil, &m, nil)
 	return m, err == nil && code == http.StatusOK, err
+}
+
+// respErr is the API error a response of status 400 or more carries.
+func respErr(method, path string, resp *http.Response) *Error {
+	var eb struct {
+		Error Error `json:"error"`
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if json.Unmarshal(b, &eb) != nil || eb.Error.Code == "" {
+		eb.Error = Error{Code: "internal", Message: fmt.Sprintf("%s %s: %s %s", method, path, resp.Status, strings.TrimSpace(string(b)))}
+	}
+	eb.Error.Status = resp.StatusCode
+	return &eb.Error
+}
+
+// Follow streams a message's events as they are recorded (Server-Sent Events) and calls fn with
+// each, until the message is final; it returns the final message. after skips the events up to
+// that seq. A broken stream is reopened where it stopped (Last-Event-ID); an API error or fn's
+// error ends it.
+func (c *Client) Follow(ctx context.Context, id string, after int64, fn func(store.Event) error) (store.Message, error) {
+	for {
+		m, done, err := c.followOnce(ctx, id, &after, fn)
+		if done || err != nil && (ctx.Err() != nil || !errors.Is(err, ErrUnavailable)) {
+			return m, err
+		}
+		select { // the connection dropped: again, from the last event seen
+		case <-ctx.Done():
+			return m, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// followOnce reads one SSE connection; done says the end came.
+func (c *Client) followOnce(ctx context.Context, id string, after *int64, fn func(store.Event) error) (store.Message, bool, error) {
+	path := "/v1/messages/" + url.PathEscape(id) + "/events"
+	req, err := http.NewRequestWithContext(ctx, "GET", c.base+path+"?follow=1&after="+strconv.FormatInt(*after, 10), nil)
+	if err != nil {
+		return store.Message{}, false, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return store.Message{}, false, ctx.Err()
+		}
+		return store.Message{}, false, fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return store.Message{}, false, respErr("GET", path, resp)
+	}
+	rd := bufio.NewReaderSize(resp.Body, 64<<10)
+	var kind string
+	var data strings.Builder
+	for {
+		line, err := readLine(rd, maxEventLine)
+		if errors.Is(err, errLongLine) {
+			return store.Message{}, false, fmt.Errorf("%w: %v", ErrBadResponse, err) // the same again on a retry
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return store.Message{}, false, ctx.Err()
+			}
+			return store.Message{}, false, fmt.Errorf("%w: %s: the event stream broke: %w", ErrUnavailable, c.URL, err)
+		}
+		switch {
+		case line == "": // the end of one event
+			if data.Len() == 0 {
+				kind = ""
+				continue
+			}
+			if kind == "end" {
+				var m store.Message
+				if err := json.Unmarshal([]byte(data.String()), &m); err != nil {
+					return m, false, fmt.Errorf("%w: the end of the event stream: %w", ErrBadResponse, err)
+				}
+				return m, true, nil
+			}
+			var e store.Event
+			if err := json.Unmarshal([]byte(data.String()), &e); err != nil {
+				return store.Message{}, false, fmt.Errorf("%w: an event: %w", ErrBadResponse, err)
+			}
+			if e.Seq > *after {
+				if err := fn(e); err != nil {
+					return store.Message{}, false, err
+				}
+				*after = e.Seq
+			}
+			kind = ""
+			data.Reset()
+		case strings.HasPrefix(line, ":"): // a comment: the stream is alive
+		case strings.HasPrefix(line, "event:"):
+			kind = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+}
+
+// maxEventLine bounds one line of an event stream: the end carries the whole message (a body and
+// a reply of the largest sizes a node may take, escaped).
+var maxEventLine = 64 << 20
+
+var errLongLine = errors.New("an event stream line is over its limit")
+
+// readLine reads one line without its end, of at most max bytes.
+func readLine(rd *bufio.Reader, max int) (string, error) {
+	var b []byte
+	for {
+		part, more, err := rd.ReadLine()
+		if err != nil {
+			return "", err
+		}
+		b = append(b, part...)
+		if len(b) > max {
+			return "", fmt.Errorf("%w (%d bytes)", errLongLine, max)
+		}
+		if !more {
+			return string(b), nil
+		}
+	}
 }

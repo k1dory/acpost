@@ -2,11 +2,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
@@ -230,6 +233,10 @@ func (s *server) list(w http.ResponseWriter, r *http.Request, p node.Principal) 
 }
 
 func (s *server) events(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if r.URL.Query().Get("follow") != "" || strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		s.follow(w, r, p)
+		return
+	}
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	evs, err := s.n.Events(r.Context(), p, r.PathValue("id"), after, limit)
@@ -404,4 +411,80 @@ func (s *server) nodeClaim(w http.ResponseWriter, r *http.Request, p node.Princi
 	default:
 		writeJSON(w, 200, m)
 	}
+}
+
+// follow streams a message's events as Server-Sent Events while they are recorded: one `event:
+// <kind>` per event (its seq as the SSE id, so Last-Event-ID resumes), then `event: end` with the
+// final message. A comment every 15 s keeps idle connections open.
+func (s *server) follow(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	id := r.PathValue("id")
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
+		after = last
+	}
+	if _, err := s.n.Get(r.Context(), p, id); err != nil {
+		writeErr(w, err) // before the stream starts: a plain error
+		return
+	}
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, &node.Error{Code: "internal", Message: "streaming is not supported here"})
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	fl.Flush()
+
+	var mu sync.Mutex
+	closed := false
+	send := func(format string, args ...any) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if closed {
+			return context.Canceled
+		}
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			return err
+		}
+		fl.Flush()
+		return nil
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	var beat sync.WaitGroup
+	defer func() { // nothing writes to w once the handler returns
+		cancel()
+		beat.Wait()
+		mu.Lock()
+		closed = true
+		mu.Unlock()
+	}()
+	beat.Add(1)
+	go func() {
+		defer beat.Done()
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if send(": ping\n\n") != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	m, err := s.n.Follow(ctx, p, id, after, func(e store.Event) error {
+		b, _ := json.Marshal(e)
+		return send("id: %d\nevent: %s\ndata: %s\n\n", e.Seq, e.Kind, b)
+	})
+	if err != nil {
+		return // the client went away, or the message is gone
+	}
+	b, _ := json.Marshal(m)
+	_ = send("event: end\ndata: %s\n\n", b)
 }

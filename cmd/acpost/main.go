@@ -564,7 +564,7 @@ func waitCmd(g *globals) *cobra.Command {
 }
 
 func showCmd(g *globals) *cobra.Command {
-	var events bool
+	var events, follow bool
 	cmd := &cobra.Command{
 		Use:   "show ID",
 		Short: "Show a message",
@@ -574,6 +574,9 @@ func showCmd(g *globals) *cobra.Command {
 			c, err := g.connect(ctx)
 			if err != nil {
 				return err
+			}
+			if follow {
+				return followMessage(ctx, g, c, args[0])
 			}
 			m, err := c.Get(ctx, args[0])
 			if err != nil {
@@ -648,6 +651,7 @@ func showCmd(g *globals) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&events, "events", false, "also show what the agent did (tool calls, permissions)")
+	cmd.Flags().BoolVar(&follow, "follow", false, "show it as it runs: the agent's text as it writes, what it does, then the outcome")
 	return cmd
 }
 

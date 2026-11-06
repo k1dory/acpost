@@ -8,7 +8,6 @@ package node
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -736,11 +735,12 @@ func (s *acpSlot) closeIfOneOff(p *acpProc, key string, sid acp.SessionId) {
 
 // acpTurn collects what the agent says in one turn.
 type acpTurn struct {
-	msgID string
-	limit int
-	mu    sync.Mutex
-	all   strings.Builder
-	last  strings.Builder
+	msgID  string
+	limit  int
+	stream *textStream // its events, the text as it comes among them
+	mu     sync.Mutex
+	all    strings.Builder
+	last   strings.Builder
 	// Files the agent handed back, within the reply's limits (more are counted, not kept).
 	files              []replyBlock
 	maxFiles, maxBytes int
@@ -810,6 +810,10 @@ type acpClient struct {
 
 func (c *acpClient) begin(sid acp.SessionId, msgID string, limit, maxFiles, maxBytes int) *acpTurn {
 	t := &acpTurn{msgID: msgID, limit: limit, maxFiles: maxFiles, maxBytes: maxBytes}
+	// Half of what the message's events have left is for this turn's text (earlier attempts took theirs).
+	n := c.slot.a.n
+	had, _ := n.st.EventCount(n.ctx, msgID)
+	t.stream = &textStream{record: func(kind string, data any) { c.record(t, kind, data) }, budget: max(n.cfg.Limits.MaxEventsPerMessage-had, 0) / 2}
 	c.mu.Lock()
 	c.turns[sid] = t
 	c.mu.Unlock()
@@ -817,6 +821,9 @@ func (c *acpClient) begin(sid acp.SessionId, msgID string, limit, maxFiles, maxB
 }
 
 func (c *acpClient) end(sid acp.SessionId) {
+	if t := c.turn(sid); t != nil {
+		t.stream.close() // the turn's text is all in its events before anyone learns it ended
+	}
 	c.mu.Lock()
 	delete(c.turns, sid)
 	c.mu.Unlock()
@@ -828,10 +835,13 @@ func (c *acpClient) turn(sid acp.SessionId) *acpTurn {
 	return c.turns[sid]
 }
 
-func (c *acpClient) event(t *acpTurn, kind string, data any) {
-	b, _ := json.Marshal(data)
+// event records an event of the turn, after the text that came before it.
+func (c *acpClient) event(t *acpTurn, kind string, data any) { t.stream.event(kind, data) }
+
+func (c *acpClient) record(t *acpTurn, kind string, data any) {
+	b := eventJSON(data)
 	n := c.slot.a.n
-	if err := n.st.AddEvent(n.ctx, t.msgID, kind, string(b)); err != nil && n.ctx.Err() == nil {
+	if err := n.addEvent(n.ctx, t.msgID, kind, b, true); err != nil && n.ctx.Err() == nil {
 		n.log.Debug("event", "err", err)
 	}
 }
@@ -853,9 +863,14 @@ func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification
 	case u.AgentMessageChunk != nil:
 		if tb := u.AgentMessageChunk.Content.Text; tb != nil {
 			t.text(tb.Text)
+			t.stream.add("text", tb.Text)
 		} else if b, ok := fileBlock(u.AgentMessageChunk.Content); ok {
 			// A file in the answer: kept with the reply, not written into its text.
 			t.file(b)
+		}
+	case u.AgentThoughtChunk != nil:
+		if tb := u.AgentThoughtChunk.Content.Text; tb != nil {
+			t.stream.add("thought", tb.Text)
 		}
 	case u.ToolCall != nil:
 		t.toolCall()

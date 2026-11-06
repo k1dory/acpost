@@ -4,6 +4,7 @@
 //	tools            says "thinking", makes a tool call, then answers "final"
 //	permission       asks permission for a tool call; answers "allowed" or "denied"
 //	sleep MS         takes MS milliseconds (or until cancelled)
+//	stream N MS      thinks "hmm", then answers "w1 w2 … wN" a word at a time, MS milliseconds apart
 //	crash            exits mid-turn
 //	count            answers how many prompts its session has had
 //	env NAME         answers the value of $NAME
@@ -161,6 +162,22 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			a.say(ctx, sid, "slept")
 		case <-ctx.Done():
 			return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		}
+	case "stream":
+		var count, ms int
+		fmt.Sscan(arg, &count, &ms)
+		_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: acp.UpdateAgentThoughtText("hmm")})
+		for i := 1; i <= count; i++ {
+			word := "w" + strconv.Itoa(i)
+			if i < count {
+				word += " "
+			}
+			a.say(ctx, sid, word)
+			select {
+			case <-time.After(time.Duration(ms) * time.Millisecond):
+			case <-ctx.Done():
+				return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+			}
 		}
 	case "crash":
 		a.say(ctx, sid, "about to crash")
