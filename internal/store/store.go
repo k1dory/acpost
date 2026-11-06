@@ -319,6 +319,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(filesSchema); err != nil {
 		return err
 	}
+	if _, err := s.w.Exec(usageSchema); err != nil {
+		return err
+	}
 	// Columns added after the first release.
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
@@ -975,24 +978,46 @@ func (s *Store) addEvent(ctx context.Context, id, kind, data string, live bool) 
 		if err != nil || (live && state.Final()) {
 			return err
 		}
-		_, err = s.insertEvent(ctx, t, seq, n, kind, data)
+		_, err = s.insertEvent(ctx, t, id, seq, n, kind, data)
 		return err
 	})
 }
 
 // insertEvent adds an event after the n a message has, within MaxEventsPerMessage (the last one
 // kept says the rest was dropped); it returns how many the message has then.
-func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, seq int64, n int, kind, data string) (int, error) {
-	if n >= s.opt.MaxEventsPerMessage {
-		return n, nil
-	}
+//
+// A "usage" event is counted (usage.go) whether or not it is kept among the message's events.
+func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64, n int, kind, data string) (int, error) {
+	now := time.Now()
 	if len(data) > s.opt.MaxEventData {
 		data = data[:s.opt.MaxEventData] + truncMark
 	}
-	if n == s.opt.MaxEventsPerMessage-1 {
+	switch {
+	case kind == "usage":
+		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
+		u, ok := readUsage(data)
+		if !ok {
+			return n, nil
+		}
+		var have, counted int
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'usage'", seq).Scan(&have); err != nil {
+			return n, err
+		}
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM turn_usage WHERE turn = ?", u.Turn).Scan(&counted); err != nil {
+			return n, err
+		}
+		if counted > 0 || have >= maxUsageEvents {
+			return n, nil // a turn counted already (its event come again) takes no place
+		}
+		if err := addUsage(ctx, t, id, u, now); err != nil {
+			return n, err
+		}
+	case n >= s.opt.MaxEventsPerMessage:
+		return n, nil
+	case n == s.opt.MaxEventsPerMessage-1:
 		kind, data = "truncated", "later events were not kept (limits.max_events_per_message)"
 	}
-	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(time.Now()), kind, data); err != nil {
+	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(now), kind, data); err != nil {
 		return n, err
 	}
 	_, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
@@ -1030,7 +1055,7 @@ func (s *Store) RelayEvents(ctx context.Context, id, lease string, after int64, 
 			return nil // a gap, or nothing new: the caller goes on from relayed
 		}
 		for _, e := range evs[relayed-after:] {
-			if n, err = s.insertEvent(ctx, t, seq, n, e.Kind, e.Data); err != nil {
+			if n, err = s.insertEvent(ctx, t, id, seq, n, e.Kind, e.Data); err != nil {
 				return err
 			}
 		}
@@ -1116,6 +1141,9 @@ func (s *Store) GC(ctx context.Context, before time.Time) (int, error) {
 			// Content that no file refers to any more: of these messages, or of reply files an
 			// earlier attempt or a settled copy dropped.
 			if err := dropOrphans(ctx, tx); err != nil {
+				return err
+			}
+			if err := gcUsage(ctx, tx, time.Now()); err != nil {
 				return err
 			}
 			res, err := tx.ExecContext(ctx, "DELETE FROM messages WHERE seq IN ("+sel+")", t, gcBatch)

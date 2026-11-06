@@ -524,4 +524,16 @@ func TestRelayEventsOnlyByTheHolder(t *testing.T) {
 	if strings.Join(data, ",") != "1,2,3,4" {
 		t.Fatalf("%v", data)
 	}
+	// The node's own agent's turns only: usage in another agent's name is refused.
+	forged := []store.RelayedEvent{{Kind: "usage", Data: `{"turn":"x","agent":"agent:other@elsewhere","input":5}`}}
+	if _, err := hub.RelayEvents(ctx, edge, m.ID, m.LeaseID, 4, forged); code(err) != "invalid" {
+		t.Fatalf("forged usage: %v", err)
+	}
+	own := []store.RelayedEvent{{Kind: "usage", Data: `{"turn":"y","agent":"agent:bot@edge","input":5}`}}
+	if _, err := hub.RelayEvents(ctx, edge, m.ID, m.LeaseID, 4, own); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := hub.st.UsageOf(ctx, store.UsageQuery{}); len(u) != 1 || u[0].Input != 5 {
+		t.Fatalf("%+v", u)
+	}
 }

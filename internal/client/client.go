@@ -588,3 +588,44 @@ func (c *Client) RelayEvents(ctx context.Context, id, lease string, after int64,
 	_, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(id)+"/events", nil, RelayRequest{Lease: lease, After: after, Events: evs}, &out, nil)
 	return out.Relayed, err
 }
+
+// UsageReport is a group of turns' usage, with what the node adds: the cache's share of what was
+// read, and an estimate (by the node's prices) for turns whose agent gave no cost.
+type UsageReport struct {
+	store.UsageSum
+	CacheRatio        float64  `json:"cache_ratio"`
+	Estimated         float64  `json:"estimated,omitempty"`
+	EstimatedTurns    int      `json:"estimated_turns,omitempty"`
+	EstimatedCurrency string   `json:"estimated_currency,omitempty"`
+	Unpriced          []string `json:"unpriced,omitempty"` // models of uncosted turns the node has no price for
+	UnpricedTurns     int      `json:"unpriced_turns,omitempty"`
+}
+
+// UsageFilter selects the usage to sum: [From, To), grouped By agent, model, day or session.
+type UsageFilter struct {
+	From, To time.Time
+	By       string
+	Agent    string
+}
+
+// Usage sums agents' usage as f says.
+func (c *Client) Usage(ctx context.Context, f UsageFilter) ([]UsageReport, error) {
+	q := url.Values{}
+	if !f.From.IsZero() {
+		q.Set("from", f.From.Format(time.RFC3339))
+	}
+	if !f.To.IsZero() {
+		q.Set("to", f.To.Format(time.RFC3339))
+	}
+	if f.By != "" {
+		q.Set("by", f.By)
+	}
+	if f.Agent != "" {
+		q.Set("agent", f.Agent)
+	}
+	var out struct {
+		Items []UsageReport `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/usage", q, nil, &out, nil)
+	return out.Items, err
+}

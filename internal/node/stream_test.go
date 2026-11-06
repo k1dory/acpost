@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	acp "github.com/coder/acp-go-sdk"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -168,5 +169,47 @@ func TestHubEventPageFits(t *testing.T) {
 	b, _ := json.Marshal(map[string]any{"items": items})
 	if len(b) >= 1<<20 {
 		t.Fatalf("a page is %d bytes", len(b))
+	}
+}
+
+// Usage is the node's user's: a client token is refused.
+func TestUsageForTheNodesUser(t *testing.T) {
+	n := newNode(t, "")
+	if _, err := n.Usage(ctx, Principal{Kind: "client", Name: "ci"}, store.UsageQuery{}); code(err) != "refused" {
+		t.Fatalf("%v", err)
+	}
+	if _, err := n.Usage(ctx, me, store.UsageQuery{By: "agent"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A turn that failed (past its timeout) after the agent said what the session cost is counted.
+func TestUsageOfAFailedTurn(t *testing.T) {
+	n := newNode(t, fmt.Sprintf("agents:\n  fake:\n    driver: acp\n    command: [%q]\n    preamble: false\n    turn_timeout: 500ms\n    env: {ACPOST_FAKE_AGENT: \"1\"}\n", os.Args[0]))
+	m, _, err := n.Send(ctx, me, SendRequest{To: "agent:fake", Body: "costly 0.25 5000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || final.State != store.Failed {
+		t.Fatalf("%v %v", final.State, err)
+	}
+	u, _ := n.st.UsageOf(ctx, store.UsageQuery{})
+	if len(u) != 1 || u[0].Turns != 1 || u[0].Cost != 0.25 || u[0].Reported != 0 {
+		t.Fatalf("%+v", u)
+	}
+}
+
+// A loaded session's cost is a base only in its own currency; one created here starts at 0.
+func TestCostBaseCurrency(t *testing.T) {
+	c := &acpClient{loadedCost: map[acp.SessionId]acp.Cost{"s": {Amount: 100, Currency: "USD"}}}
+	if b, ok := c.base("s", nil, "usd"); !ok || b != 100 {
+		t.Fatalf("%v %v", b, ok)
+	}
+	if _, ok := c.base("s", nil, "EUR"); ok {
+		t.Fatal("a USD base for EUR")
+	}
+	if b, ok := c.base("new", map[acp.SessionId]float64{"new": 0}, "EUR"); !ok || b != 0 {
+		t.Fatalf("created: %v %v", b, ok)
 	}
 }

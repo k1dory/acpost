@@ -34,6 +34,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/messages/{id}/wait", s.auth(s.wait))
 	mux.HandleFunc("GET /v1/messages/{id}/events", s.auth(s.events))
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
+	mux.HandleFunc("GET /v1/usage", s.auth(s.usage))
 	mux.HandleFunc("GET /v1/messages/{id}/files", s.auth(s.files))
 	mux.HandleFunc("POST /v1/attach", s.auth(s.attach))
 	mux.HandleFunc("POST /v1/messages/{id}/cancel", s.auth(s.cancel))
@@ -275,6 +276,29 @@ func (s *server) reply(w http.ResponseWriter, r *http.Request, p node.Principal)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) usage(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	q := store.UsageQuery{By: r.URL.Query().Get("by"), Agent: r.URL.Query().Get("agent")}
+	for _, t := range []struct {
+		name string
+		into *time.Time
+	}{{"from", &q.From}, {"to", &q.To}} {
+		if v := r.URL.Query().Get(t.name); v != "" {
+			at, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				writeErr(w, &node.Error{Code: "invalid", Message: t.name + ": an RFC 3339 time"})
+				return
+			}
+			*t.into = at
+		}
+	}
+	items, err := s.n.Usage(r.Context(), p, q)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
 }
 
 func (s *server) relayEvents(w http.ResponseWriter, r *http.Request, p node.Principal) {

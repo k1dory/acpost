@@ -146,6 +146,7 @@ acpost agents                              # this node's, and (joined) other nod
 acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
 acpost status
+acpost usage   [--since 30d | --from DAY [--to DAY]] [--by agent|model|day|session|""] [--agent A]
 ```
 
 **Watching an answer being written.** An ACP agent's text and thinking are kept as `text` and
@@ -157,6 +158,28 @@ events to the hub as they are recorded (the hub keeps how far it took them, so a
 twice), and the sender's node copies them from the hub's stream onto its own copy, so following a
 message works the same wherever its agent runs (a node restarted meanwhile gets what it missed
 from the hub before the message is final there).
+
+**What agents used and cost.** At the end of each ACP turn the node records a `usage` event: the
+turn's tokens as the agent reports them (input without the cache, output, cache read and write,
+thinking; ACP's `usage`, an unstable part of the protocol that claude-agent-acp and codex-acp
+send), the session's cumulative cost and context (`usage_update`), and the model (the selected
+option's name; for claude-agent-acp's "default" its description, such as "Opus 5.5"). The event
+carries the turn's own cost, worked out where the agent runs (how much the session's cost grew
+since its turn before), the turn's time and an id. It crosses the hub like the other events, and
+past the event limit (a few a message), and each node counts a turn once, on the day it ran: the
+agent's node, the sender's, the hub (which takes a node's usage only in the name of the agent the
+message went to). A turn that failed after the agent said what it cost is counted too; one that was
+cancelled is counted where the agent runs only (the hub has let the message go by then). A
+session taken up in the middle (`--session`, or loaded without saying its cost) has its first turn
+here counted without a cost: what the session cost before is not known. Counts are
+kept 400 days, past the messages. `acpost usage` and `GET /v1/usage` sum them by agent, model, day
+or session; the cache's share is cache read / (input + cache read + cache write), and for turns
+whose agent gives no cost (codex-acp) the node estimates by `prices` in its config:
+
+```yaml
+prices:                              # per million tokens, by the model name usage shows
+  gpt-6.1-sol: {input: 1.25, output: 10, cache_read: 0.125, currency: USD}
+```
 
 `acpost message send …` is the same as `acpost send …` (and so on for the other message commands).
 
@@ -333,6 +356,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
 | `GET /v1/messages/{id}/events?after=` | what the agent did: its text (`text`, `thought`), tool calls, plan, permissions, notices |
 | `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
+| `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |

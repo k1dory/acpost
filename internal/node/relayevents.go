@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"time"
@@ -43,6 +44,13 @@ func (n *Node) RelayEvents(ctx context.Context, p Principal, id, lease string, a
 	for _, e := range evs {
 		if !eventKind.MatchString(e.Kind) {
 			return 0, errf("invalid", "event kind %q: lower case letters and _", e.Kind)
+		}
+		// A node counts only its own agent's turns: the one this message went to.
+		if e.Kind == "usage" {
+			var u store.Usage
+			if json.Unmarshal([]byte(e.Data), &u) != nil || u.Agent != m.To {
+				return 0, errf("invalid", "usage of %q in a message to %s", u.Agent, m.To)
+			}
 		}
 	}
 	relayed, err := n.st.RelayEvents(ctx, id, lease, after, evs)

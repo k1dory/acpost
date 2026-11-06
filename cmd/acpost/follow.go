@@ -19,11 +19,13 @@ import (
 // line per event, then the final message.
 func followMessage(ctx context.Context, g *globals, c *client.Client, id string) error {
 	var streamed strings.Builder
-	open := false // stdout's last line has no end yet
+	open := false   // stdout's last line has no end yet
+	broken := false // a note began its own line after it: stdout still ends it, at the end
+	var used []store.Usage
 	note := func(format string, args ...any) {
-		if open {
+		if open && !broken {
 			fmt.Fprintln(os.Stderr)
-			open = false
+			broken = true
 		}
 		fmt.Fprintf(os.Stderr, "· "+format+"\n", args...)
 	}
@@ -39,8 +41,13 @@ func followMessage(ctx context.Context, g *globals, c *client.Client, id string)
 		case "text":
 			fmt.Print(str("text"))
 			streamed.WriteString(str("text"))
-			open = !strings.HasSuffix(str("text"), "\n")
+			open, broken = !strings.HasSuffix(str("text"), "\n"), false
 		case "thought": // the agent's thinking: not part of its answer
+		case "usage": // said once, at the end
+			var u store.Usage
+			if json.Unmarshal([]byte(e.Data), &u) == nil {
+				used = append(used, u)
+			}
 		case "tool_call":
 			note("%s", strings.TrimSpace(str("title")+" "+bracket(str("kind"))))
 		case "tool_call_update":
@@ -86,6 +93,9 @@ func followMessage(ctx context.Context, g *globals, c *client.Client, id string)
 		if open {
 			fmt.Println()
 		}
+		if s := usageLine(used); s != "" {
+			fmt.Fprintln(os.Stderr, "· "+s)
+		}
 		noteFiles(m.ID, m.Files, true)
 	}
 	if m.State != store.Done {
@@ -107,4 +117,29 @@ func bracket(s string) string {
 		return ""
 	}
 	return "(" + s + ")"
+}
+
+// usageLine says in one line what the turns used: tokens, the cache's share, the cost.
+func usageLine(used []store.Usage) string {
+	var tok, read, in, cw int64
+	var cost float64
+	cur, costed := "", false
+	for _, u := range used {
+		tok += int64(u.Input + u.Output + u.CacheRead + u.CacheWrite)
+		read, in, cw = read+int64(u.CacheRead), in+int64(u.Input), cw+int64(u.CacheWrite)
+		if u.Cost != nil {
+			cost, cur, costed = cost+*u.Cost, u.Currency, true
+		}
+	}
+	if tok == 0 && !costed {
+		return ""
+	}
+	s := tokens(tok) + " tokens"
+	if all := in + read + cw; all > 0 {
+		s += fmt.Sprintf(", %.0f%% from the cache", float64(read)*100/float64(all))
+	}
+	if costed {
+		s += fmt.Sprintf(", %.4f %s", cost, cur)
+	}
+	return s
 }

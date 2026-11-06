@@ -5,6 +5,9 @@
 //	permission       asks permission for a tool call; answers "allowed" or "denied"
 //	sleep MS         takes MS milliseconds (or until cancelled)
 //	stream N MS      thinks "hmm", then answers "w1 w2 … wN" a word at a time, MS milliseconds apart
+//	costly COST MS   says the session's cumulative COST in a usage_update, then takes MS milliseconds
+//	usage IN OUT CR CW [COST]  answers "used": the turn's tokens in its response, the session's
+//	                 cumulative COST (USD) in a usage_update when given
 //	crash            exits mid-turn
 //	count            answers how many prompts its session has had
 //	env NAME         answers the value of $NAME
@@ -259,8 +262,33 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			}
 		}
 		a.say(ctx, sid, b.String())
+	case "usage": // answered below, with the response
+	case "costly":
+		var total float64
+		var ms int
+		fmt.Sscan(arg, &total, &ms)
+		_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: acp.SessionUpdate{
+			UsageUpdate: &acp.SessionUsageUpdate{SessionUpdate: "usage_update", Cost: &acp.Cost{Amount: total, Currency: "USD"}}}})
+		select {
+		case <-time.After(time.Duration(ms) * time.Millisecond):
+		case <-ctx.Done():
+			return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		}
 	default:
 		a.say(ctx, sid, "unknown: "+cmd)
+	}
+	if cmd == "usage" {
+		var in, out, cr, cw int
+		var total float64
+		n, _ := fmt.Sscan(arg, &in, &out, &cr, &cw, &total)
+		if n == 5 {
+			_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: acp.SessionUpdate{
+				UsageUpdate: &acp.SessionUsageUpdate{SessionUpdate: "usage_update", Used: in + cr, Size: 200000,
+					Cost: &acp.Cost{Amount: total, Currency: "USD"}}}})
+		}
+		a.say(ctx, sid, "used")
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn, Usage: &acp.Usage{InputTokens: in, OutputTokens: out,
+			CachedReadTokens: &cr, CachedWriteTokens: &cw, TotalTokens: in + out + cr + cw}}, nil
 	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 }

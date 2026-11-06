@@ -29,6 +29,17 @@ type Config struct {
 	Limits    Limits            `yaml:"limits" json:"limits"`
 	Tokens    []*Token          `yaml:"tokens" json:"tokens"`
 	Agents    map[string]*Agent `yaml:"agents" json:"agents"`
+	// Prices per model, for turns whose agent does not say what they cost: what usage estimates.
+	Prices map[string]Price `yaml:"prices" json:"prices"`
+}
+
+// Price is a model's price per million tokens, in Currency (default USD).
+type Price struct {
+	Input      float64 `yaml:"input" json:"input"`
+	Output     float64 `yaml:"output" json:"output"`
+	CacheRead  float64 `yaml:"cache_read" json:"cache_read"`
+	CacheWrite float64 `yaml:"cache_write" json:"cache_write"`
+	Currency   string  `yaml:"currency" json:"currency"`
 }
 
 type Node struct {

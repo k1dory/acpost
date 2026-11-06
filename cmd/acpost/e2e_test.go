@@ -448,7 +448,7 @@ func TestConcurrentHTTPClients(t *testing.T) {
 // hubPair starts a hub and two nodes joined to it: a serves agent:reviewer (a fake agent), b none.
 // extra lines go into the configuration of b, of the hub and of a.
 // lastHub is the hub of the last hubPair (tests here do not run in parallel).
-var lastHub *env
+var lastHub, lastHubA *env
 
 // hubEnv is the hub b joined in hubPair.
 func hubEnv(t *testing.T, _ *env) *env {
@@ -482,7 +482,7 @@ tokens:
 	cfg, _ := os.ReadFile(hub.config)
 	os.WriteFile(hub.config, []byte(strings.Replace(string(cfg), fmt.Sprintf("listen: [tcp://127.0.0.1:%d]", port),
 		fmt.Sprintf("listen: [tcp://127.0.0.1:%d, unix://%s]", port, hub.sock), 1)), 0o600)
-	lastHub = hub
+	lastHub, lastHubA = hub, a
 	hubCmd := exec.Command(filepath.Join(binDir, "acpost"), "serve")
 	hubCmd.Env = append(cleanEnv(), hub.vars...)
 	hubLog, _ := os.Create(filepath.Join(hub.dir, "serve.log"))
@@ -744,5 +744,46 @@ func TestFollowAcrossHubAfterRestart(t *testing.T) {
 	}
 	if text.String() != out {
 		t.Fatalf("events after a restart: %q, reply %q", text.String(), out)
+	}
+}
+
+// What an agent on another node used reaches the sender's node with the turn's events: tokens,
+// the cost by the agent's account turn by turn, an estimate by the sender's prices for a turn
+// without one, the cache's share.
+func TestUsageAcrossHub(t *testing.T) {
+	_, b := hubPair(t, "prices: {fakemodel: {input: 1, output: 2, cache_read: 0.1}}\n", "", "", ", model: fakemodel")
+	send := func(body string) {
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			r := b.run("", "send", "--to", "agent:reviewer", "--task", "T", "--body", body, "--wait", "--timeout", "20s")
+			if r.code == 0 {
+				return
+			}
+			if time.Now().After(deadline) || (r.code != 3 && r.code != 6) {
+				t.Fatalf("exit %d %s %s", r.code, r.out, r.err)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	send("usage 100 10 900 0 0.1")
+	send("usage 200 20 800 0 0.3")
+	send("usage 1000000 0 0 0") // no cost: 1 M input at 1 per M
+	out := b.ok("", "usage", "--json")
+	var r client.UsageReport
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &r); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if r.Key != "agent:reviewer@"+nodeName(lastHubA) || r.Turns != 3 || r.Input != 1000300 || r.CacheRead != 1700 {
+		t.Fatalf("%+v", r)
+	}
+	if r.Costed != 2 || r.Cost < 0.299 || r.Cost > 0.301 || r.EstimatedTurns != 1 || r.Estimated != 1 || r.EstimatedCurrency != "USD" {
+		t.Fatalf("cost: %+v", r)
+	}
+	if want := 1700.0 / (1000300 + 1700); r.CacheRatio < want-1e-9 || r.CacheRatio > want+1e-9 {
+		t.Fatalf("cache ratio %v, want %v", r.CacheRatio, want)
+	}
+	table := b.ok("", "usage")
+	if !strings.Contains(table, "0.30 USD (~1.00 est.)") && !strings.Contains(table, "1.30 USD (~1.00 est.)") {
+		t.Fatalf("table: %s", table)
 	}
 }

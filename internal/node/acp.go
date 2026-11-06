@@ -80,6 +80,10 @@ type acpProc struct {
 	cl       *acpClient
 	init     acp.InitializeResponse
 	sessions map[string]acp.SessionId
+	models   map[acp.SessionId]string // the model each session runs, as the agent names it
+	// costBase is where a session's cost stood when this process took it up: 0 for one it created,
+	// what the agent said while loading one (absent: not known).
+	costBase map[acp.SessionId]float64
 	done     chan struct{}
 	exitErr  error
 }
@@ -265,7 +269,7 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", a.cfg.Command[0], err)
 	}
-	p := &acpProc{cmd: cmd, stdin: stdin, sessions: map[string]acp.SessionId{}, done: make(chan struct{})}
+	p := &acpProc{cmd: cmd, stdin: stdin, sessions: map[string]acp.SessionId{}, models: map[acp.SessionId]string{}, costBase: map[acp.SessionId]float64{}, done: make(chan struct{})}
 	go func() {
 		sc := bufio.NewScanner(stderr)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -277,7 +281,7 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	go func() { p.exitErr = cmd.Wait(); close(p.done) }()
 
 	wire := acpx.NewWire(stdin, stdout, acpx.WireOptions{Notices: true})
-	p.cl = &acpClient{slot: s, wire: wire, turns: map[acp.SessionId]*acpTurn{}}
+	p.cl = &acpClient{slot: s, wire: wire, turns: map[acp.SessionId]*acpTurn{}, loadedCost: map[acp.SessionId]acp.Cost{}}
 	p.conn = wire.Connect(p.cl)
 	p.conn.SetLogger(n.log.With("agent", a.name))
 	ictx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -436,6 +440,7 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 			return "", fmt.Errorf("session/new: %w", procErr(p, err))
 		}
 		sid, st = r.SessionId, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
+		p.costBase[sid] = 0 // a new session: its cost starts here
 	}
 	for _, set := range []struct {
 		s    acpx.Setting
@@ -448,6 +453,7 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 		}
 		st = next
 	}
+	p.setModel(sid, st.Options)
 	if key != "" {
 		p.sessions[key] = sid
 		a.setOwner(string(sid), s.idx)
@@ -476,15 +482,17 @@ func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.Sessio
 	caps := p.init.AgentCapabilities
 	var errs []error
 	if caps.SessionCapabilities.Resume != nil {
-		_, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
+		r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
 		if err == nil {
+			p.setModel(id, r.ConfigOptions)
 			return id, nil
 		}
 		errs = append(errs, err)
 	}
 	if caps.LoadSession {
-		_, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
+		r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
 		if err == nil {
+			p.setModel(id, r.ConfigOptions)
 			return id, nil
 		}
 		errs = append(errs, err)
@@ -665,6 +673,7 @@ func (s *acpSlot) handle(m store.Message) {
 	})
 	resp, err := p.conn.Prompt(turnCtx, acp.PromptRequest{SessionId: sid, Prompt: blocks})
 	close(promptDone)
+	s.recordUsage(m.ID, p, sid, turn, resp.Usage) // whatever the outcome: a failed turn may have cost too
 	stopWatch()
 	cleanup() // the copies go with the turn, before anyone learns it ended
 	timedOut := errors.Is(turnCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
@@ -746,6 +755,7 @@ type acpTurn struct {
 	maxFiles, maxBytes int
 	bytes, meta        int // content, and names, links and types (each bounded on its own)
 	dropped            int
+	usage              *acp.SessionUsageUpdate // the agent's last word on the session's context and cost
 }
 
 func (t *acpTurn) file(b replyBlock) {
@@ -806,6 +816,20 @@ type acpClient struct {
 	wire  *acpx.Wire
 	mu    sync.Mutex
 	turns map[acp.SessionId]*acpTurn
+	// loadedCost is a session's cost as the agent said it outside a turn (loading the session).
+	loadedCost map[acp.SessionId]acp.Cost
+}
+
+// base is where a session's cost in currency stood before its first turn here, when known: 0 for
+// a session created here, what the agent said loading it in that currency.
+func (c *acpClient) base(sid acp.SessionId, created map[acp.SessionId]float64, currency string) (float64, bool) {
+	if b, ok := created[sid]; ok {
+		return b, true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b, ok := c.loadedCost[sid]
+	return b.Amount, ok && strings.EqualFold(b.Currency, currency)
 }
 
 func (c *acpClient) begin(sid acp.SessionId, msgID string, limit, maxFiles, maxBytes int) *acpTurn {
@@ -850,7 +874,13 @@ func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification
 	extra, sdk := c.wire.Classify(p.Update)
 	t := c.turn(p.SessionId)
 	if t == nil {
-		return nil // a replayed history (session/load) or a late update
+		// A replayed history (session/load) or a late update: only where the session's cost stands.
+		if uu := p.Update.UsageUpdate; sdk && uu != nil && uu.Cost != nil {
+			c.mu.Lock()
+			c.loadedCost[p.SessionId] = *uu.Cost
+			c.mu.Unlock()
+		}
+		return nil
 	}
 	if !sdk {
 		if extra != nil && extra.Notice != nil {
@@ -883,6 +913,10 @@ func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification
 			}
 			c.event(t, "tool_call_update", ev)
 		}
+	case u.UsageUpdate != nil:
+		t.mu.Lock()
+		t.usage = u.UsageUpdate
+		t.mu.Unlock()
 	case u.Plan != nil:
 		var entries []string
 		for _, e := range u.Plan.Entries {
@@ -1017,4 +1051,82 @@ func newer(a, b string) bool {
 		return ea == nil
 	}
 	return ta.After(tb)
+}
+
+// setModel notes the model a session runs, from its configuration options.
+func (p *acpProc) setModel(sid acp.SessionId, options []acp.SessionConfigOption) {
+	if opt := acpx.ConfigOption(options, acp.SessionConfigOptionCategoryModel); opt != nil {
+		p.models[sid] = modelName(opt)
+	}
+}
+
+// recordUsage records what a turn used and cost, as the agent reported it (its tokens in the
+// prompt response, an unstable part of ACP; the session's cumulative cost in usage_update), when it
+// reported anything. The cost is the turn's own: how much the session's cost grew since its turn
+// before, kept here where the agent runs; the event, with the turn's time and an id of its own,
+// is counted once on each node that gets it (the hub's, the sender's).
+func (s *acpSlot) recordUsage(msgID string, p *acpProc, sid acp.SessionId, t *acpTurn, u *acp.Usage) {
+	t.mu.Lock()
+	uu := t.usage
+	t.mu.Unlock()
+	if u == nil && uu == nil {
+		return
+	}
+	n := s.a.n
+	model := p.models[sid]
+	if model == "" {
+		model = s.a.cfg.Model
+	}
+	out := store.Usage{Turn: store.NewID(), At: time.Now().UTC(), Agent: s.a.addr + "@" + n.Name(), Session: string(sid), Model: model}
+	if u != nil {
+		out.Reported = true
+		out.Input, out.Output, out.Total = u.InputTokens, u.OutputTokens, u.TotalTokens
+		out.CacheRead, out.CacheWrite, out.Thought = deref(u.CachedReadTokens), deref(u.CachedWriteTokens), deref(u.ThoughtTokens)
+	}
+	if uu != nil {
+		out.ContextUsed, out.ContextSize = uu.Used, uu.Size
+		if uu.Cost != nil {
+			var base *float64
+			if b, ok := p.cl.base(sid, p.costBase, uu.Cost.Currency); ok {
+				base = &b
+			}
+			cost, known, err := n.st.TurnCost(n.ctx, out.Agent, out.Session, uu.Cost.Currency, uu.Cost.Amount, base)
+			if err == nil && known {
+				out.Cost, out.Currency = &cost, uu.Cost.Currency
+			}
+		}
+	}
+	// Kept even when the message is final already (cancelled while the turn ran).
+	if err := n.addEvent(n.ctx, msgID, "usage", eventJSON(out), false); err != nil && n.ctx.Err() == nil {
+		n.log.Debug("usage", "err", err)
+	}
+}
+
+func deref(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// modelName names the model a session runs for usage: the display name of the option selected,
+// or for a "Default…" option its description (claude-agent-acp: "default" is "Opus 5.5"), else the
+// option's value.
+func modelName(opt *acp.SessionConfigOptionSelect) string {
+	for _, o := range acpx.SelectOptions(opt) {
+		if o.Value != opt.CurrentValue {
+			continue
+		}
+		desc := ""
+		if o.Description != nil {
+			desc = strings.TrimSpace(*o.Description)
+		}
+		switch name := strings.TrimSpace(o.Name); {
+		case strings.HasPrefix(strings.ToLower(name), "default") && desc != "":
+			return desc
+		case name != "":
+			return name
+		}
+	}
+	return string(opt.CurrentValue)
 }
