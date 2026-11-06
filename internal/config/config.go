@@ -55,6 +55,8 @@ type Limits struct {
 	MaxBody             Size `yaml:"max_body" json:"max_body"`
 	MaxReply            Size `yaml:"max_reply" json:"max_reply"`
 	MaxMeta             Size `yaml:"max_meta" json:"max_meta"`
+	MaxFiles            int  `yaml:"max_files" json:"max_files"`           // files attached to a message, and to its reply
+	MaxFilesSize        Size `yaml:"max_files_size" json:"max_files_size"` // their bytes together, each side
 	MaxDepth            int  `yaml:"max_depth" json:"max_depth"`
 	MaxQueuedPerAgent   int  `yaml:"max_queued_per_agent" json:"max_queued_per_agent"`
 	MaxEventsPerMessage int  `yaml:"max_events_per_message" json:"max_events_per_message"`
@@ -254,6 +256,11 @@ func (c *Config) fill() error {
 	def(&l.MaxBody, 1<<20)
 	def(&l.MaxReply, 1<<20)
 	def(&l.MaxMeta, 4<<10)
+	def(&l.MaxFilesSize, 16<<20)
+	defInt(&l.MaxFiles, 16)
+	if l.MaxFiles < 0 || l.MaxFiles > 256 {
+		return fmt.Errorf("limits.max_files: 0..256")
+	}
 	def(&l.MaxStore, 2<<30)
 	defInt(&l.MaxDepth, 4)
 	defInt(&l.MaxQueuedPerAgent, 1000)

@@ -214,7 +214,7 @@ func TestSameTaskSelfSendRefusedWithTwoSlots(t *testing.T) {
 
 	unlock := slot.a.lockKey("task:T")
 	defer unlock()
-	n.setCurrent(slot.token, parent.ID)
+	n.setCurrent(slot.token, parent.ID, "")
 	p, _ := n.PrincipalForToken(slot.token)
 
 	child, _, err := n.Send(ctx, p, SendRequest{To: "fake", Body: "child"})

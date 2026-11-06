@@ -156,6 +156,37 @@ func hubErr(err error) error {
 	return err
 }
 
+// fetchFiles downloads one side of a message's files from the hub, after checking what the listing
+// announces against this node's limits, and reading no more than those limits allow. A *Error is
+// final (over the limits, or not what was listed); any other error may pass.
+func (n *Node) fetchFiles(ctx context.Context, id string, reply bool, listed []store.File, side string) ([]store.File, error) {
+	if err := n.checkListed(listed, side); err != nil {
+		return nil, err
+	}
+	// Base64 takes a third more, JSON a little per file.
+	limit := int64(n.cfg.Limits.MaxFilesSize)/3*4 + int64(len(listed))*1024 + 1<<20
+	files, err := n.hub.SideFiles(ctx, id, reply, limit)
+	if errors.Is(err, client.ErrBadResponse) {
+		return nil, errf("refused", "the hub sent %s's files over this node's limits or malformed: %v", side, err)
+	}
+	if err != nil {
+		return nil, err // passing: the caller retries, or says the hub failed
+	}
+	if err := n.checkFiles(files, nil, side); err != nil {
+		return nil, err
+	}
+	for i := range files {
+		files[i].Reply = reply
+	}
+	return files, nil
+}
+
+// filesRefused says the hub refused a request for its files (limits, names), not for a passing cause.
+func filesRefused(err error) bool {
+	var ce *client.Error
+	return errors.As(err, &ce) && (ce.Code == "refused" || ce.Code == "invalid" || (ce.Code == "conflict" && strings.Contains(ce.Message, "file")))
+}
+
 func isFinalErr(err error) bool {
 	var ce *client.Error
 	return errors.As(err, &ce) && ce.Code == "conflict"
@@ -163,7 +194,7 @@ func isFinalErr(err error) bool {
 
 // forward sends a message to the hub and keeps a local copy that follows it.
 func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store.Message, bool, error) {
-	req := client.SendRequest{To: to.String(), Body: m.Body, Task: m.Task, Thread: m.Thread, Meta: m.Meta,
+	req := client.SendRequest{To: to.String(), Body: m.Body, Task: m.Task, Thread: m.Thread, Meta: m.Meta, Files: m.Files,
 		ID: m.ID, From: n.qualify(m.From), Parent: m.Parent, Depth: m.Depth}
 	if !m.ExpiresAt.IsZero() {
 		req.TTL = time.Until(m.ExpiresAt).Round(time.Millisecond).String()
@@ -176,8 +207,24 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 	if err != nil {
 		return store.Message{}, false, hubErr(err)
 	}
+	files := m.Files
+	if !created {
+		// A repeat: the hub kept the first send, whose files may differ from this one's.
+		files = nil
+		if listed := pick(sent.Files, false); len(listed) > 0 {
+			got, err := n.fetchFiles(ctx, sent.ID, false, listed, "the message")
+			var e *Error
+			if err != nil && !errors.As(err, &e) {
+				err = hubErr(err)
+			}
+			if err != nil {
+				return store.Message{}, false, err
+			}
+			files = got
+		}
+	}
 	local := &store.Message{ID: sent.ID, From: m.From, To: sent.To, Task: sent.Task, Thread: sent.Thread, Parent: sent.Parent,
-		Depth: sent.Depth, Meta: sent.Meta, Body: sent.Body, ExpiresAt: sent.ExpiresAt, Origin: originRemote}
+		Depth: sent.Depth, Meta: sent.Meta, Body: sent.Body, ExpiresAt: sent.ExpiresAt, Origin: originRemote, Files: files}
 	got, _, err := n.st.Insert(ctx, local)
 	if err != nil {
 		// Sent before (a repeat with the same key): the local copy exists.
@@ -267,7 +314,36 @@ func (n *Node) settleFrom(id string, m store.Message, err error) bool {
 		return false
 	}
 	if m.State == store.Running || m.State.Final() {
-		if err := n.st.Settle(n.ctx, id, m.State, m.Reply, m.ErrorCode, m.Error, m.Attempts); err == nil {
+		var files []store.File
+		state, code, why := m.State, m.ErrorCode, m.Error
+		refuse := func(err error) {
+			files, state, code = nil, store.Failed, "files_refused"
+			why = fmt.Sprintf("the reply's files were refused by node %s: %v", n.Name(), err)
+		}
+		if m.State.Final() && len(replyFiles(m.Files)) > 0 {
+			// The listing says what is coming: this node's limits hold before anything is read.
+			if err := n.checkListed(replyFiles(m.Files), "the reply"); err != nil {
+				refuse(err)
+			} else {
+				ctx, done := context.WithTimeout(n.ctx, time.Minute)
+				got, err := n.fetchFiles(ctx, id, true, replyFiles(m.Files), "the reply")
+				done()
+				var e *Error
+				switch {
+				case errors.As(err, &e):
+					refuse(err) // not what the listing said, or over the limits: it will not get better
+				case err != nil:
+					return false // the outcome is copied with its files, or not yet
+				}
+				files = got
+			}
+		}
+		err := n.st.Settle(n.ctx, id, state, m.Reply, code, why, m.Attempts, files...)
+		if errors.Is(err, store.ErrStoreFull) {
+			refuse(err)
+			err = n.st.Settle(n.ctx, id, state, m.Reply, code, why, m.Attempts)
+		}
+		if err == nil {
 			n.notify()
 		}
 	}
@@ -387,8 +463,43 @@ func (n *Node) deliver(m store.Message) {
 		refuse(fmt.Sprintf("node %s: the chain is over limits.max_depth (%d)", n.Name(), lim.MaxDepth))
 		return
 	}
+	var files []store.File
+	var leased time.Time // when the hub last renewed its lease to this node
+	if listed := pick(m.Files, false); len(listed) > 0 {
+		var err error
+		for try := 0; ; try++ {
+			// The hub's lease is kept while the files come: a delivery it gave up is not run here.
+			ectx, edone := context.WithTimeout(ctx, 10*time.Second)
+			eerr := n.hub.Extend(ectx, m.ID, m.LeaseID, hubLease)
+			edone()
+			if eerr != nil && isFinalErr(eerr) {
+				return
+			}
+			if eerr == nil {
+				leased = time.Now()
+			}
+			fctx, done := context.WithTimeout(ctx, hubLease/3)
+			files, err = n.fetchFiles(fctx, m.ID, false, listed, "the message")
+			done()
+			var e *Error
+			if err == nil || errors.As(err, &e) || try == 2 || ctx.Err() != nil {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil {
+			refuse(fmt.Sprintf("node %s: %v", n.Name(), err))
+			return
+		}
+		if leased.IsZero() || time.Since(leased) > hubLease*2/3 {
+			// The hub has not confirmed the lease lately (it may have run out there, however late
+			// the claim arrived): it delivers again, and that delivery runs.
+			n.log.Warn("delivery outlived its hub lease; left to the next delivery", "id", m.ID)
+			return
+		}
+	}
 	local := &store.Message{ID: m.ID, From: m.From, To: "agent:" + to.Name, Task: m.Task, Thread: m.Thread, Parent: m.Parent,
-		Depth: m.Depth, Meta: m.Meta, Body: m.Body, ExpiresAt: m.ExpiresAt, Origin: originHub + m.LeaseID}
+		Depth: m.Depth, Meta: m.Meta, Body: m.Body, ExpiresAt: m.ExpiresAt, Origin: originHub + m.LeaseID, Files: files}
 	if _, _, err := n.st.InsertLimited(ctx, local, lim.MaxQueuedPerAgent); err != nil {
 		if errors.Is(err, store.ErrQueueFull) {
 			refuse(fmt.Sprintf("node %s: %s has a full queue (limits.max_queued_per_agent)", n.Name(), local.To))
@@ -417,6 +528,13 @@ func (n *Node) relay(id, lease string) {
 		}
 		if m.State.Final() {
 			r := client.ReplyRequest{Lease: lease, Body: m.Reply}
+			if len(replyFiles(m.Files)) > 0 {
+				files, err := n.st.FilesOf(n.ctx, id)
+				if err != nil {
+					return
+				}
+				r.Files = replyFiles(files)
+			}
 			if m.State != store.Done {
 				r.Error, r.ErrorCode = m.Error, m.ErrorCode
 				if r.Error == "" {
@@ -428,6 +546,11 @@ func (n *Node) relay(id, lease string) {
 			}
 			for try := 0; n.ctx.Err() == nil; try++ {
 				err := n.hub.Reply(n.ctx, id, r)
+				if err != nil && len(r.Files) > 0 && filesRefused(err) {
+					// The hub takes no such files: the sender still gets the text, and why the files are missing.
+					r.Files, r.Error, r.ErrorCode = nil, "the reply's files were refused by the hub: "+err.Error(), "files_refused"
+					continue
+				}
 				if err == nil || isFinalErr(err) || try >= 20 {
 					return
 				}

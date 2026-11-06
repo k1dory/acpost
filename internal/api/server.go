@@ -30,6 +30,8 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/messages/{id}", s.auth(s.get))
 	mux.HandleFunc("GET /v1/messages/{id}/wait", s.auth(s.wait))
 	mux.HandleFunc("GET /v1/messages/{id}/events", s.auth(s.events))
+	mux.HandleFunc("GET /v1/messages/{id}/files", s.auth(s.files))
+	mux.HandleFunc("POST /v1/attach", s.auth(s.attach))
 	mux.HandleFunc("POST /v1/messages/{id}/cancel", s.auth(s.cancel))
 	mux.HandleFunc("POST /v1/messages/{id}/reply", s.auth(s.reply))
 	mux.HandleFunc("POST /v1/messages/{id}/lease", s.auth(s.extend))
@@ -143,7 +145,7 @@ func (s *server) send(w http.ResponseWriter, r *http.Request, p node.Principal) 
 		return
 	}
 	sr := node.SendRequest{To: req.To, Body: req.Body, Task: req.Task, Thread: req.Thread, Meta: req.Meta, Session: req.Session,
-		IdemKey: r.Header.Get("Idempotency-Key")}
+		Files: req.Files, IdemKey: r.Header.Get("Idempotency-Key")}
 	if req.TTL != "" {
 		d, err := time.ParseDuration(req.TTL)
 		if err != nil {
@@ -260,11 +262,58 @@ func (s *server) reply(w http.ResponseWriter, r *http.Request, p node.Principal)
 		writeErr(w, &node.Error{Code: "invalid", Message: "lease is required"})
 		return
 	}
-	if err := s.n.ReplyCoded(r.Context(), p, r.PathValue("id"), req.Lease, req.Body, req.ErrorCode, req.Error); err != nil {
+	if err := s.n.ReplyCoded(r.Context(), p, r.PathValue("id"), req.Lease, req.Body, req.ErrorCode, req.Error, req.Files); err != nil {
 		writeErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) files(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	files, err := s.n.Files(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	switch side := r.URL.Query().Get("side"); side {
+	case "":
+	case "message", "reply":
+		var picked []store.File
+		for _, f := range files {
+			if f.Reply == (side == "reply") {
+				picked = append(picked, f)
+			}
+		}
+		files = picked
+	default:
+		writeErr(w, &node.Error{Code: "invalid", Message: "side: message or reply"})
+		return
+	}
+	if files == nil {
+		files = []store.File{}
+	}
+	writeJSON(w, 200, map[string]any{"items": files})
+}
+
+func (s *server) attach(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	// Only an agent in a turn may attach, nobody else's upload is read; and the attempt is the one
+	// running when the upload began.
+	turn, err := s.n.AttachTurn(p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var req client.AttachRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	id, err := s.n.Attach(r.Context(), turn, req.Files)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id})
 }
 
 func (s *server) extend(w http.ResponseWriter, r *http.Request, p node.Principal) {

@@ -241,7 +241,7 @@ func TestAgentTokenChain(t *testing.T) {
 	n := newNode(t, inboxCfg+"  helper: {driver: inbox}\n")
 	root, _, _ := n.Send(ctx, me, SendRequest{To: "bot", Body: "start", Task: "T"})
 	tok := n.issueAgentToken("bot")
-	n.setCurrent(tok, root.ID)
+	n.setCurrent(tok, root.ID, "")
 	p, ok := n.PrincipalForToken(tok)
 	if !ok || p.Address() != "agent:bot" {
 		t.Fatal(p, ok)
@@ -254,14 +254,14 @@ func TestAgentTokenChain(t *testing.T) {
 		t.Fatalf("child %+v", child)
 	}
 	tok2 := n.issueAgentToken("helper")
-	n.setCurrent(tok2, child.ID)
+	n.setCurrent(tok2, child.ID, "")
 	p2, _ := n.PrincipalForToken(tok2)
 	grand, _, err := n.Send(ctx, p2, SendRequest{To: "bot", Body: "subsub"})
 	if err != nil || grand.Depth != 2 {
 		t.Fatal(grand.Depth, err)
 	}
 	tok3 := n.issueAgentToken("bot")
-	n.setCurrent(tok3, grand.ID)
+	n.setCurrent(tok3, grand.ID, "")
 	p3, _ := n.PrincipalForToken(tok3)
 	if _, _, err := n.Send(ctx, p3, SendRequest{To: "helper", Body: "too deep"}); code(err) != "refused" {
 		t.Fatalf("depth 3 with max 2: %v", err)

@@ -12,6 +12,8 @@
 //	prompt           answers the whole prompt it got
 //	sessions         answers how many sessions this process created
 //	shell CMD        runs CMD with sh -c and answers its combined output
+//	blocks           answers one line per non-text block it got (FAKE_PLAIN=1: it declares no
+//	                 embedded context or images)
 package acptest
 
 import (
@@ -47,9 +49,10 @@ func Run() {
 
 func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
-		ProtocolVersion:   acp.ProtocolVersionNumber,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}}},
-		AgentInfo:         &acp.Implementation{Name: "fake-agent", Version: "1"},
+		ProtocolVersion: acp.ProtocolVersionNumber,
+		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}},
+			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: os.Getenv("FAKE_PLAIN") == "", Image: os.Getenv("FAKE_PLAIN") == ""}},
+		AgentInfo: &acp.Implementation{Name: "fake-agent", Version: "1"},
 	}, nil
 }
 
@@ -182,6 +185,23 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 		a.say(ctx, sid, string(out))
 	case "sessions":
 		a.say(ctx, sid, strconv.FormatInt(a.sessions.Load(), 10))
+	case "blocks":
+		var b strings.Builder
+		for _, c := range p.Prompt {
+			switch {
+			case c.Resource != nil && c.Resource.Resource.TextResourceContents != nil:
+				r := c.Resource.Resource.TextResourceContents
+				fmt.Fprintf(&b, "resource %s %q\n", r.Uri, r.Text)
+			case c.Resource != nil && c.Resource.Resource.BlobResourceContents != nil:
+				fmt.Fprintf(&b, "blob %s\n", c.Resource.Resource.BlobResourceContents.Uri)
+			case c.Image != nil:
+				fmt.Fprintf(&b, "image %s %d\n", c.Image.MimeType, len(c.Image.Data))
+			case c.ResourceLink != nil:
+				data, err := os.ReadFile(strings.TrimPrefix(c.ResourceLink.Uri, "file://"))
+				fmt.Fprintf(&b, "link %s %q %v\n", c.ResourceLink.Name, data, err)
+			}
+		}
+		a.say(ctx, sid, b.String())
 	default:
 		a.say(ctx, sid, "unknown: "+cmd)
 	}

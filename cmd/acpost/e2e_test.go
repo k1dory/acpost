@@ -426,14 +426,16 @@ func TestConcurrentHTTPClients(t *testing.T) {
 	}
 }
 
-// Two nodes join a hub; a message sent on node B to an agent of node A is answered by A's agent.
-func TestHubJoin(t *testing.T) {
+// hubPair starts a hub and two nodes joined to it: a serves agent:reviewer (a fake agent), b none.
+// extra lines go into the configuration of b, of the hub and of a.
+func hubPair(t *testing.T, extra ...string) (a, b *env) {
+	extra = append(extra, "", "", "")
 	port := freePort(t)
 	hubURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	a := newEnv(t, fmt.Sprintf("agents:\n%s", fakeAgent("reviewer", ", allow_from: [\"*\"]")))
+	a = newEnv(t, fmt.Sprintf("%sagents:\n%s", extra[2], fakeAgent("reviewer", ", allow_from: [\"*\"]")))
 	a.vars = append(a.vars, "ACPOST_JOIN_TOKEN=node-a-token")
 	appendCfg(t, a, fmt.Sprintf("join_hub: {url: %s, token_env: ACPOST_JOIN_TOKEN}\n", hubURL))
-	b := newEnv(t, "")
+	b = newEnv(t, extra[0])
 	b.vars = append(b.vars, "ACPOST_JOIN_TOKEN=node-b-token")
 	appendCfg(t, b, fmt.Sprintf("join_hub: {url: %s, token_env: ACPOST_JOIN_TOKEN}\n", hubURL))
 
@@ -444,7 +446,7 @@ func TestHubJoin(t *testing.T) {
 tokens:
   - {name: %s, sha256: %s, node: true}
   - {name: %s, sha256: %s, node: true}
-`, port, nodeName(a), sha("node-a-token"), nodeName(b), sha("node-b-token")))
+%s`, port, nodeName(a), sha("node-a-token"), nodeName(b), sha("node-b-token"), extra[1]))
 	hubCmd := exec.Command(filepath.Join(binDir, "acpost"), "serve")
 	hubCmd.Env = append(cleanEnv(), hub.vars...)
 	hubLog, _ := os.Create(filepath.Join(hub.dir, "serve.log"))
@@ -461,6 +463,12 @@ tokens:
 
 	a.serve()
 	b.serve()
+	return a, b
+}
+
+// Two nodes join a hub; a message sent on node B to an agent of node A is answered by A's agent.
+func TestHubJoin(t *testing.T) {
+	a, b := hubPair(t)
 
 	deadline := time.Now().Add(15 * time.Second)
 	for {

@@ -216,7 +216,7 @@ func rootCmd(g *globals) *cobra.Command {
 	root.AddCommand(msgCmds()...)
 	message := &cobra.Command{Use: "message", Short: "The message commands again (acpost message send … = acpost send …)"}
 	message.AddCommand(msgCmds()...)
-	root.AddCommand(message, agentsCmd(g), sessionsCmd(g), statusCmd(g), serveCmd(g))
+	root.AddCommand(message, filesCmd(g), attachCmd(g), agentsCmd(g), sessionsCmd(g), statusCmd(g), serveCmd(g))
 	return root
 }
 
@@ -273,6 +273,7 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 		return err
 	}
 	defer logf.Close()
+	logStart, _ := logf.Seek(0, io.SeekEnd)
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -302,11 +303,32 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 			if _, err := c.Status(ctx); err == nil {
 				return nil
 			}
-			return &exitErr{code: exitNoNode, err: fmt.Errorf("the local node did not start"), hint: "its log is " + filepath.Join(dir, "acpost.log")}
+			return startFailed(filepath.Join(dir, "acpost.log"), logStart)
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	return &exitErr{code: exitNoNode, err: fmt.Errorf("the local node did not answer within 15s"), hint: "its log is " + filepath.Join(dir, "acpost.log")}
+}
+
+// startFailed says why the node just started from this command exited: the last line it logged.
+func startFailed(log string, from int64) error {
+	why, hint := "", "its log is "+log
+	if f, err := os.Open(log); err == nil {
+		if _, err := f.Seek(from, io.SeekStart); err == nil {
+			b, _ := io.ReadAll(io.LimitReader(f, 64<<10))
+			lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+			why = strings.TrimPrefix(lines[len(lines)-1], "acpost: ")
+		}
+		f.Close()
+	}
+	if strings.Contains(why, "in use by another node") {
+		hint = "a node on this store is still stopping, or runs from another config: try again in a moment; " + hint
+	}
+	err := errors.New("the local node did not start")
+	if why != "" {
+		err = fmt.Errorf("the local node did not start: %s", why)
+	}
+	return &exitErr{code: exitNoNode, err: err, hint: hint}
 }
 
 func printJSON(v any) {
@@ -336,28 +358,41 @@ func readBody(cmd *cobra.Command, body, file string) (string, bool, error) {
 }
 
 func sendCmd(g *globals) *cobra.Command {
-	var to, body, bodyFile, task, thread, idem, session string
-	var meta []string
+	var to, body, bodyFile, task, thread, idem, session, save string
+	var meta, attach []string
 	var ttl, timeout time.Duration
 	var wait bool
 	cmd := &cobra.Command{
-		Use:   "send --to ADDR [--body TEXT | --body-file F | stdin]",
+		Use:   "send --to ADDR [--body TEXT | --body-file F | stdin] [--attach FILE]...",
 		Short: "Send a message; prints its id",
 		Example: `  acpost send --to agent:reviewer --task TASK-42 --body "Review PR #123"
-  git diff | acpost send --to reviewer --wait --timeout 10m`,
+  git diff | acpost send --to reviewer --wait --timeout 10m
+  acpost send --to reviewer --body "Check the report" --attach report.md --attach shot.png`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if to == "" {
 				return usageErr(errors.New("--to is required"))
 			}
+			if save != "" && !wait {
+				return usageErr(errors.New("--save goes with --wait"))
+			}
 			text, ok, err := readBody(cmd, body, bodyFile)
 			if err != nil {
 				return err
 			}
-			if !ok {
-				return usageErr(errors.New("no body: --body, --body-file or stdin"))
+			if !ok && len(attach) == 0 {
+				return usageErr(errors.New("no body: --body, --body-file, stdin or --attach"))
 			}
-			req := client.SendRequest{To: to, Body: text, Task: task, Thread: thread, Session: session}
+			ctx := cmd.Context()
+			c, err := g.connect(ctx)
+			if err != nil {
+				return err
+			}
+			files, err := readFiles(ctx, c, attach)
+			if err != nil {
+				return err
+			}
+			req := client.SendRequest{To: to, Body: text, Task: task, Thread: thread, Session: session, Files: files}
 			for _, kv := range meta {
 				k, v, found := strings.Cut(kv, "=")
 				if !found || k == "" {
@@ -371,17 +406,12 @@ func sendCmd(g *globals) *cobra.Command {
 			if ttl > 0 {
 				req.TTL = ttl.String()
 			}
-			ctx := cmd.Context()
-			c, err := g.connect(ctx)
-			if err != nil {
-				return err
-			}
 			m, _, err := c.Send(ctx, req, idem)
 			if err != nil {
 				return err
 			}
 			if wait {
-				return waitAndPrint(ctx, g, c, []string{m.ID}, timeout)
+				return waitAndPrint(ctx, g, c, []string{m.ID}, timeout, save)
 			}
 			if g.json {
 				printJSON(m)
@@ -395,6 +425,7 @@ func sendCmd(g *globals) *cobra.Command {
 	f.StringVar(&to, "to", "", "recipient: agent:NAME, agent:NAME@NODE or NAME")
 	f.StringVar(&body, "body", "", "the message")
 	f.StringVar(&bodyFile, "body-file", "", "read the message from a file (- for stdin)")
+	f.StringArrayVarP(&attach, "attach", "a", nil, "attach a file (repeatable); an ACP agent gets text embedded, images inline, the rest as a path")
 	f.StringVar(&task, "task", "", "task label; messages of one task share the agent's session")
 	f.StringVar(&thread, "thread", "", "thread id")
 	f.StringVar(&session, "session", "", "continue this existing ACP session of the agent (an editor's, say)")
@@ -403,11 +434,13 @@ func sendCmd(g *globals) *cobra.Command {
 	f.StringVar(&idem, "idempotency-key", "", "a repeat with the same key returns the first message")
 	f.BoolVar(&wait, "wait", false, "wait for the reply and print it")
 	f.DurationVar(&timeout, "timeout", 0, "with --wait: give up waiting after this long (exit 4)")
+	f.StringVar(&save, "save", "", "with --wait: save the files attached to the reply into this directory")
 	return cmd
 }
 
 // waitAndPrint waits for each message to be final and prints the replies.
-func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []string, timeout time.Duration) error {
+// save, when set, is the directory the replies' files go to.
+func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []string, timeout time.Duration, save string) error {
 	var deadline time.Time
 	if timeout > 0 {
 		deadline = time.Now().Add(timeout)
@@ -423,8 +456,20 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 		if err != nil {
 			return err
 		}
+		var saved []savedFile
+		var saveErr error
+		if save != "" && m.State.Final() {
+			saved, saveErr = saveReplyFiles(ctx, c, m, save)
+		}
 		if g.json {
-			printJSON(m)
+			if save != "" {
+				printJSON(struct {
+					store.Message
+					Saved []savedFile `json:"saved"`
+				}{m, saved})
+			} else {
+				printJSON(m)
+			}
 		} else {
 			if len(ids) > 1 {
 				if i > 0 && !strings.HasSuffix(m.Reply, "\n") {
@@ -437,6 +482,15 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 			if m.Reply != "" && !strings.HasSuffix(m.Reply, "\n") && term.IsTerminal(int(os.Stdout.Fd())) {
 				fmt.Println()
 			}
+			if save == "" {
+				noteFiles(m.ID, m.Files, true)
+			}
+			for _, s := range saved {
+				fmt.Fprintf(os.Stderr, "saved: %s\n", s.Path)
+			}
+		}
+		if saveErr != nil {
+			return saveErr
 		}
 		switch {
 		case !m.State.Final():
@@ -475,8 +529,9 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 
 func waitCmd(g *globals) *cobra.Command {
 	var timeout time.Duration
+	var save string
 	cmd := &cobra.Command{
-		Use:   "wait ID...",
+		Use:   "wait ID... [--save DIR]",
 		Short: "Wait for messages to be answered and print the replies",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, ids []string) error {
@@ -484,10 +539,11 @@ func waitCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return waitAndPrint(cmd.Context(), g, c, ids, timeout)
+			return waitAndPrint(cmd.Context(), g, c, ids, timeout, save)
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "give up after this long (exit 4); 0: no limit")
+	cmd.Flags().StringVar(&save, "save", "", "save the files attached to the replies into this directory")
 	return cmd
 }
 
@@ -551,10 +607,20 @@ func showCmd(g *globals) *cobra.Command {
 				row("finished", m.FinishedAt.Local().Format(time.DateTime))
 			}
 			row("error", m.Error)
+			for _, f := range m.Files {
+				k := "file"
+				if f.Reply {
+					k = "reply file"
+				}
+				row(k, fmt.Sprintf("%s (%s, %d bytes)", f.Name, f.Type, f.Size))
+			}
 			w.Flush()
 			fmt.Printf("\n%s\n", strings.TrimRight(m.Body, "\n"))
 			if m.Reply != "" {
 				fmt.Printf("\n--- reply\n%s\n", strings.TrimRight(m.Reply, "\n"))
+			}
+			if len(m.Files) > 0 {
+				fmt.Printf("\n`acpost files %s` saves the message's files, `--reply` the reply's\n", m.ID)
 			}
 			if events {
 				fmt.Println("\n--- events")
@@ -669,7 +735,13 @@ func recvCmd(g *globals) *cobra.Command {
 						if m.Task != "" {
 							fmt.Printf("task: %s\n", m.Task)
 						}
+						for _, f := range m.Files {
+							fmt.Printf("file: %s (%s, %d bytes)\n", f.Name, f.Type, f.Size)
+						}
 						fmt.Printf("\n%s", m.Body)
+						if len(m.Files) > 0 {
+							fmt.Fprintf(os.Stderr, "\n`acpost files %s` saves the files\n", m.ID)
+						}
 					}
 					return nil
 				}
@@ -687,8 +759,9 @@ func recvCmd(g *globals) *cobra.Command {
 
 func replyCmd(g *globals) *cobra.Command {
 	var lease, body, bodyFile, fail string
+	var attach []string
 	cmd := &cobra.Command{
-		Use:   "reply ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON)",
+		Use:   "reply ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON) [--attach FILE]...",
 		Short: "Answer a message taken with recv",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -701,8 +774,8 @@ func replyCmd(g *globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if !ok {
-					return usageErr(errors.New("no reply: --body, --body-file, stdin or --fail"))
+				if !ok && len(attach) == 0 {
+					return usageErr(errors.New("no reply: --body, --body-file, stdin, --attach or --fail"))
 				}
 				r.Body = text
 			}
@@ -710,6 +783,11 @@ func replyCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			files, err := readFiles(cmd.Context(), c, attach)
+			if err != nil {
+				return err
+			}
+			r.Files = files
 			return c.Reply(cmd.Context(), args[0], r)
 		},
 	}
@@ -717,6 +795,7 @@ func replyCmd(g *globals) *cobra.Command {
 	f.StringVar(&lease, "lease", "", "the lease recv gave")
 	f.StringVar(&body, "body", "", "the reply")
 	f.StringVar(&bodyFile, "body-file", "", "read the reply from a file (- for stdin)")
+	f.StringArrayVarP(&attach, "attach", "a", nil, "attach a file to the reply (repeatable)")
 	f.StringVar(&fail, "fail", "", "end the message as failed, with this reason")
 	return cmd
 }

@@ -500,11 +500,19 @@ func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.Sessio
 	return "", errors.Join(errs...)
 }
 
-func (s *acpSlot) prompt(m store.Message) string {
-	if !s.a.cfg.PreambleOn() {
-		return m.Body
-	}
+func (s *acpSlot) prompt(m store.Message, files []attached) string {
 	var b strings.Builder
+	if len(files) > 0 {
+		b.WriteString("[acpost] Attached files (on disk until this turn ends; copy what you need to keep):\n")
+		for _, f := range files {
+			fmt.Fprintf(&b, "- %s (%s, %d bytes): %s\n", f.Name, f.Type, f.Size, f.path)
+		}
+		b.WriteString("\n")
+	}
+	if !s.a.cfg.PreambleOn() {
+		b.WriteString(m.Body)
+		return b.String()
+	}
 	fmt.Fprintf(&b, "[acpost] Message %s from %s", m.ID, m.From)
 	if m.Task != "" {
 		fmt.Fprintf(&b, ", task %s", m.Task)
@@ -513,7 +521,8 @@ func (s *acpSlot) prompt(m store.Message) string {
 		fmt.Fprintf(&b, " (attempt %d: an earlier attempt was interrupted)", m.Attempts)
 	}
 	b.WriteString(".\nYour final answer in this turn is sent back to the sender as the reply. " +
-		"To ask another agent, run `acpost send --to agent:<name> --body \"…\" --wait`.\n\n")
+		"To ask another agent, run `acpost send --to agent:<name> --body \"…\" --wait`. " +
+		"To attach files to your reply, run `acpost attach FILE…`.\n\n")
 	b.WriteString(m.Body)
 	return b.String()
 }
@@ -523,8 +532,8 @@ func (s *acpSlot) handle(m store.Message) {
 	a, n := s.a, s.a.n
 	unlock := a.lockKey(s.lockID(m))
 	defer unlock()
-	n.setCurrent(s.token, m.ID)
-	defer n.setCurrent(s.token, "")
+	n.setCurrent(s.token, m.ID, m.LeaseID)
+	defer n.setCurrent(s.token, "", "")
 
 	// The claim may have waited for the session key's lock longer than its lease: if it was reaped
 	// (and maybe taken again) meanwhile, it is not ours to run.
@@ -605,6 +614,14 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
+	blocks, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
+	defer cleanup()
+	if err != nil {
+		if n.ctx.Err() == nil && !cancelled.Load() {
+			release(failf("agent_error", "the message's files: %v", err))
+		}
+		return
+	}
 	turn := p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply))
 	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
 	// The SDK writes a request before it watches the context: an agent that stopped reading its
@@ -625,9 +642,10 @@ func (s *acpSlot) handle(m store.Message) {
 			killGroupNow(p)
 		}
 	})
-	resp, err := p.conn.Prompt(turnCtx, acp.PromptRequest{SessionId: sid, Prompt: []acp.ContentBlock{acp.TextBlock(s.prompt(m))}})
+	resp, err := p.conn.Prompt(turnCtx, acp.PromptRequest{SessionId: sid, Prompt: blocks})
 	close(promptDone)
 	stopWatch()
+	cleanup() // the copies go with the turn, before anyone learns it ended
 	timedOut := errors.Is(turnCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 	turnCancel()
 	p.cl.end(sid)

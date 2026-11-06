@@ -30,6 +30,7 @@ type SendRequest struct {
 	// Session continues an existing ACP session of the agent.
 	Session string            `json:"session,omitempty"`
 	Meta    map[string]string `json:"meta,omitempty"`
+	Files   store.Files       `json:"files,omitempty"`
 	TTL     string            `json:"ttl,omitempty"`
 	// Set only by a node forwarding its own message to a hub.
 	ID     string `json:"id,omitempty"`
@@ -44,7 +45,13 @@ type ReplyRequest struct {
 	Body  string `json:"body,omitempty"`
 	Error string `json:"error,omitempty"`
 	// ErrorCode is the failure's code (README, "Errors"); a joined node passes on its agent's.
-	ErrorCode string `json:"error_code,omitempty"`
+	ErrorCode string      `json:"error_code,omitempty"`
+	Files     store.Files `json:"files,omitempty"`
+}
+
+// AttachRequest is the body of POST /v1/attach: files an agent adds to the reply it works on.
+type AttachRequest struct {
+	Files store.Files `json:"files"`
 }
 
 // Page is a page of a list.
@@ -96,6 +103,15 @@ type Status struct {
 	Version string `json:"version"`
 	You     string `json:"you"`
 	Hub     string `json:"hub,omitempty"`
+	// Limits a sender checks before reading what it sends.
+	Limits *Limits `json:"limits,omitempty"`
+}
+
+// Limits are the node's limits on what a message carries.
+type Limits struct {
+	MaxBody      int64 `json:"max_body"`
+	MaxFiles     int   `json:"max_files"`
+	MaxFilesSize int64 `json:"max_files_size"`
 }
 
 // Announce is the body of POST /v1/nodes/{name}/announce.
@@ -122,6 +138,8 @@ type Client struct {
 	token string
 	hc    *http.Client
 	URL   string
+	// MaxResponse bounds the bytes of a response read (0: no bound): a node reading its hub.
+	MaxResponse int64
 }
 
 // New makes a client for a node URL: unix:///path/to.sock, http://host:port or https://host:port.
@@ -205,8 +223,19 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 		return resp.StatusCode, &eb.Error
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			return resp.StatusCode, fmt.Errorf("%s %s: bad response: %v", method, path, err)
+		cr := &capReader{r: resp.Body, left: c.MaxResponse}
+		if err := json.NewDecoder(cr).Decode(out); err != nil {
+			// Only what is wrong with the content is final; anything the connection did may pass.
+			var se *json.SyntaxError
+			var te *json.UnmarshalTypeError
+			switch {
+			case cr.hit:
+				return resp.StatusCode, fmt.Errorf("%s %s: %w: over %d bytes", method, path, ErrBadResponse, c.MaxResponse)
+			case errors.As(err, &se), errors.As(err, &te), errors.Is(err, store.ErrBadFiles):
+				return resp.StatusCode, fmt.Errorf("%s %s: %w: %v", method, path, ErrBadResponse, err)
+			}
+			// The connection broke while the response came: it may work the next time.
+			return resp.StatusCode, fmt.Errorf("%w: %s: %s %s: %w", ErrUnavailable, c.URL, method, path, err)
 		}
 	}
 	return resp.StatusCode, nil
@@ -322,6 +351,68 @@ func (c *Client) Claim(ctx context.Context, agent string, wait, lease time.Durat
 func (c *Client) Reply(ctx context.Context, id string, r ReplyRequest) error {
 	_, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(id)+"/reply", nil, r, nil, nil)
 	return err
+}
+
+// capReader reads at most left bytes (0: no bound) and records reaching the bound.
+type capReader struct {
+	r    io.Reader
+	left int64
+	hit  bool
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.left == 0 && c.hit {
+		return 0, io.ErrUnexpectedEOF
+	}
+	if c.left > 0 {
+		if int64(len(p)) > c.left {
+			p = p[:c.left]
+		}
+		n, err := c.r.Read(p)
+		c.left -= int64(n)
+		if c.left == 0 {
+			c.hit = true
+		}
+		return n, err
+	}
+	return c.r.Read(p)
+}
+
+// ErrBadResponse is a response that could not be read: malformed, or over MaxResponse.
+var ErrBadResponse = errors.New("bad response")
+
+// Files returns a message's files with their data.
+func (c *Client) Files(ctx context.Context, id string) ([]store.File, error) {
+	var out struct {
+		Items store.Files `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id)+"/files", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// SideFiles returns the files of one side of a message (the reply's, or the message's own), with
+// their data, reading at most max bytes of response (0: no bound).
+func (c *Client) SideFiles(ctx context.Context, id string, reply bool, max int64) ([]store.File, error) {
+	cc := *c
+	cc.MaxResponse = max
+	side := "message"
+	if reply {
+		side = "reply"
+	}
+	var out struct {
+		Items store.Files `json:"items"`
+	}
+	_, err := cc.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id)+"/files", url.Values{"side": {side}}, nil, &out, nil)
+	return out.Items, err
+}
+
+// Attach adds files to the reply the calling agent process works on; it returns that message's id.
+func (c *Client) Attach(ctx context.Context, files []store.File) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	_, err := c.do(ctx, "POST", "/v1/attach", nil, AttachRequest{Files: files}, &out, nil)
+	return out.ID, err
 }
 
 func (c *Client) Extend(ctx context.Context, id, lease string, d time.Duration) error {

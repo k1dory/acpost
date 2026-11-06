@@ -70,6 +70,7 @@ type Message struct {
 	Error      string            `json:"error,omitempty"`
 	ErrorCode  string            `json:"error_code,omitempty"` // stable: session_busy, turn_timeout… (README)
 	Hint       string            `json:"hint,omitempty"`       // what to do about the error; filled in by the node, not stored
+	Files      Files             `json:"files,omitempty"`      // attached to the message and to its reply (Get lists them, without data)
 	BodySize   int               `json:"body_size"`
 	ReplySize  int               `json:"reply_size"`
 	CreatedAt  time.Time         `json:"created_at"`
@@ -309,7 +310,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 `
 
 func (s *Store) migrate() error {
-	if _, err := s.w.Exec(schema); err != nil {
+	if _, err := s.w.Exec(schema + filesSchema); err != nil {
 		return err
 	}
 	// Columns added after the first release.
@@ -473,14 +474,8 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 				return ErrQueueFull
 			}
 		}
-		if s.opt.MaxStore > 0 {
-			live, err := liveBytes(ctx, t)
-			if err != nil {
-				return err
-			}
-			if live+int64(len(out.Body)) > s.opt.MaxStore {
-				return ErrStoreFull
-			}
+		if err := s.roomFor(ctx, t, int64(len(out.Body))+filesSize(out.Files)); err != nil {
+			return err
 		}
 		res, err := t.ExecContext(ctx, `INSERT INTO messages
 			(id, sender, recipient, task, thread, parent, depth, state, meta, body_size, created_at, updated_at, expires_at, origin, idem_key)
@@ -494,17 +489,20 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 		if err != nil {
 			return err
 		}
-		_, err = t.ExecContext(ctx, "INSERT INTO contents (seq, body) VALUES (?, ?)", seq, out.Body)
-		return err
+		if _, err = t.ExecContext(ctx, "INSERT INTO contents (seq, body) VALUES (?, ?)", seq, out.Body); err != nil {
+			return err
+		}
+		return putFiles(ctx, t, seq, false, out.Files)
 	})
 	if err != nil {
 		return Message{}, false, err
 	}
-	s.afterWrite(ctx, int64(len(out.Body)))
+	s.afterWrite(ctx, int64(len(out.Body))+filesSize(out.Files))
 	if existing != "" {
 		prev, err := s.Get(ctx, existing)
 		return prev, false, err
 	}
+	out.Files = withoutData(out.Files)
 	return out, true, nil
 }
 
@@ -550,14 +548,33 @@ func (s *Store) Get(ctx context.Context, id string) (Message, error) {
 
 func (s *Store) get(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+	querier
 }, id string) (Message, error) {
 	var body, reply string
 	m, err := scanMessage(q.QueryRowContext(ctx, "SELECT "+cols+", c.body, c.reply FROM messages m JOIN contents c ON c.seq = m.seq WHERE m.id = ?", id), &body, &reply)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Message{}, ErrNotFound
 	}
+	if err != nil {
+		return m, err
+	}
 	m.Body, m.Reply = body, reply
+	m.Files, err = listFiles(ctx, q, id, false)
 	return m, err
+}
+
+// withoutData lists files without their data.
+func withoutData(files []File) []File {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]File, len(files))
+	for i, f := range files {
+		f.Data = nil
+		f.Size = len(files[i].Data)
+		out[i] = f
+	}
+	return out
 }
 
 // List returns a page of messages, oldest first, without bodies; next is the cursor of the
@@ -659,6 +676,10 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 			WHERE id = ?`, lid, ms(now.Add(lease)), ms(now), id); err != nil {
 			return err
 		}
+		// What an earlier attempt attached to its reply is not this attempt's.
+		if _, err := t.ExecContext(ctx, "DELETE FROM files WHERE reply = 1 AND msg = (SELECT seq FROM messages WHERE id = ?)", id); err != nil {
+			return err
+		}
 		m, err = s.get(ctx, t, id)
 		return err
 	})
@@ -673,7 +694,7 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 
 // Settle copies the outcome of a message handled elsewhere (a hub) onto its local copy: state,
 // reply, error and attempts. A local copy already final is left alone.
-func (s *Store) Settle(ctx context.Context, id string, state State, reply, errCode, errText string, attempts int) error {
+func (s *Store) Settle(ctx context.Context, id string, state State, reply, errCode, errText string, attempts int, files ...File) error {
 	now := ms(time.Now())
 	finished := int64(0)
 	if state.Final() {
@@ -689,7 +710,20 @@ func (s *Store) Settle(ctx context.Context, id string, state State, reply, errCo
 			return nil
 		}
 		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
-		return err
+		if err != nil || len(files) == 0 {
+			return err
+		}
+		var seq int64
+		if err := t.QueryRowContext(ctx, "SELECT seq FROM messages WHERE id = ?", id).Scan(&seq); err != nil {
+			return err
+		}
+		if _, err := t.ExecContext(ctx, "DELETE FROM files WHERE msg = ? AND reply = 1", seq); err != nil {
+			return err
+		}
+		if err := s.roomFor(ctx, t, filesSize(files)); err != nil {
+			return err
+		}
+		return putFiles(ctx, t, seq, true, files)
 	})
 }
 
@@ -729,7 +763,7 @@ func (s *Store) UnsettledPage(ctx context.Context, prefix, after string, limit i
 
 // Complete ends a running message held under lease: state is final, reply and errText are what
 // came of it.
-func (s *Store) Complete(ctx context.Context, id, lease string, state State, reply, errCode, errText string) error {
+func (s *Store) Complete(ctx context.Context, id, lease string, state State, reply, errCode, errText string, files ...File) error {
 	if !state.Final() {
 		return fmt.Errorf("store: complete with state %s", state)
 	}
@@ -745,10 +779,20 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 			return ErrLeaseLost
 		}
 		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
-		return err
+		if err != nil || len(files) == 0 {
+			return err
+		}
+		if err := s.roomFor(ctx, t, filesSize(files)); err != nil {
+			return err
+		}
+		var seq int64
+		if err := t.QueryRowContext(ctx, "SELECT seq FROM messages WHERE id = ?", id).Scan(&seq); err != nil {
+			return err
+		}
+		return putFiles(ctx, t, seq, true, files)
 	})
 	if err == nil {
-		s.afterWrite(ctx, int64(len(reply)))
+		s.afterWrite(ctx, int64(len(reply))+filesSize(files))
 	}
 	return err
 }
@@ -983,6 +1027,9 @@ func (s *Store) GC(ctx context.Context, before time.Time) (int, error) {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM contents WHERE seq IN ("+sel+")", t, gcBatch); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE msg IN ("+sel+")", t, gcBatch); err != nil {
 				return err
 			}
 			res, err := tx.ExecContext(ctx, "DELETE FROM messages WHERE seq IN ("+sel+")", t, gcBatch)

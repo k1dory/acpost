@@ -45,7 +45,8 @@ the node runs, `client:<token>` for a program authenticated by a token.
 | `task` | free-form label (`TASK-42`, a ticket URL). Messages with the same task to the same agent share its ACP session |
 | `thread` | conversation id; a new message starts its own (`thread = id`) |
 | `parent`, `depth` | the message during whose handling this one was sent, and how deep the chain is |
-| `body` | text, up to `limits.max_body` (1 MiB) |
+| `body` | text, up to `limits.max_body` (1 MiB); Markdown goes as it is |
+| `files` | files attached to the message and to its reply: `name`, `type`, `size`, `reply`. Up to `limits.max_files` (16) and `max_files_size` (16 MiB) each side |
 | `meta` | string map, up to 4 KiB |
 | `state` | see below |
 | `reply` / `error` | the answer, or why there is none |
@@ -128,14 +129,16 @@ bounded (`limits.max_depth`).
 ## Commands
 
 ```
-acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--task T] [--thread ID] [--session ACP-ID]
-               [--meta k=v]... [--ttl DUR] [--idempotency-key K] [--wait [--timeout DUR]]
-acpost wait    ID... [--timeout DUR]
+acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--attach FILE]... [--task T] [--thread ID]
+               [--session ACP-ID] [--meta k=v]... [--ttl DUR] [--idempotency-key K] [--wait [--timeout DUR] [--save DIR]]
+acpost wait    ID... [--timeout DUR] [--save DIR]
 acpost show    ID [--events]
 acpost list    [--to ADDR] [--from ADDR] [--task T] [--thread ID] [--state S] [--limit N] [--after CURSOR]
 acpost cancel  ID
 acpost recv    --as NAME [--wait DUR] [--lease DUR]
-acpost reply   ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON)
+acpost reply   ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON) [--attach FILE]...
+acpost files   ID [NAME...] [--reply] [-o DIR | --stdout] [--force]
+acpost attach  FILE...                     # inside an agent's turn: files for its reply
 acpost agents
 acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
@@ -149,6 +152,17 @@ manages: a Codex conversation started in an editor, say. `acpost sessions --agen
 agent's sessions, newest first (ACP `session/list`); `--session latest` takes the newest. The node
 resumes or loads the session; if the agent cannot (Codex lets one client write a conversation at a
 time), the message fails with `session_busy` and says what to do.
+
+**Files.** `--attach` (repeatable) sends files with a message or a reply; a file goes by its base
+name, and its type comes from the extension or its first bytes. An `acp` agent gets them in its
+prompt the way ACP carries context: a text file embedded (`resource`) when the agent takes embedded
+context, an image inline (`image`) when it takes images, anything else as a `resource_link` to a
+copy on disk that lives until the turn ends; the prompt lists the files and their paths either
+way. An agent attaches files to its answer from inside its turn with `acpost attach FILE…` (its
+`ACPOST_TOKEN` says which message it is answering); an inbox consumer uses `reply --attach`.
+What is embedded in a prompt is bounded (4 MiB of encoded content); past it files go as links.
+The CLI checks the node's limits (`status` reports them) before it reads a file. `recv`, `show` and `wait` list the files; `acpost files ID` saves the message's, `--reply` the
+reply's, and `send --wait --save DIR` (or `wait --save DIR`) saves the reply's files as it arrives. Files cross a hub with their message both ways, within each node's limits.
 
 **Global flags** (and their variables): `--node URL` (`ACPOST_NODE`; `unix:///path` or
 `http(s)://host:port`, default the local socket), `--token T` (`ACPOST_TOKEN`), `--json`
@@ -189,6 +203,7 @@ text, when it adds something, is in `error` after the explanation.
 | `unsupported` | the agent does not offer what was asked (e.g. `session/list`) |
 | `lease_lost` | an inbox consumer or a node lost its claim too often |
 | `node_restart` | the node restarted during the last allowed attempt |
+| `files_refused` | a node on the way (the hub, the sender's node) refused the reply's files by its limits; the reply's text is kept |
 | `agent_error` | anything else the agent reported |
 
 **Exit codes.**
@@ -228,6 +243,8 @@ limits:
   max_body: 1MiB
   max_reply: 1MiB
   max_meta: 4KiB
+  max_files: 16                      # files attached to a message, and to its reply (at most 256)
+  max_files_size: 16MiB              # their bytes together, each side
   max_depth: 4                       # parent chain length
   max_queued_per_agent: 1000
   max_events_per_message: 1000
@@ -277,14 +294,16 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 
 | | |
 |---|---|
-| `POST /v1/messages` | send. Body: `to`, `body`, `task`, `thread`, `session`, `meta`, `ttl`. Header `Idempotency-Key`. 201, or 200 for a repeat |
-| `GET /v1/messages/{id}` | the message |
+| `POST /v1/messages` | send. Body: `to`, `body`, `task`, `thread`, `session`, `meta`, `ttl`, `files` (`[{"name":"a.md","data":"<base64>"}]`). Header `Idempotency-Key`. 201, or 200 for a repeat |
+| `GET /v1/messages/{id}` | the message; `files` lists its files without their data |
+| `GET /v1/messages/{id}/files` | the files of the message and its reply, with `data` (base64) |
+| `POST /v1/attach` | `{"files":[…]}`: an agent process attaches files to the reply it is working on |
 | `GET /v1/messages/{id}/wait?timeout=30s` | returns when the message is final or the timeout (max 60s) passes; look at `state` |
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
 | `GET /v1/messages/{id}/events?after=` | what the agent did: tool calls, permissions, notices |
 | `POST /v1/messages/{id}/cancel` | |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |
-| `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…"}` or `{"lease":"…","error":"…"}` |
+| `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…","files":[…]}` or `{"lease":"…","error":"…"}` |
 | `POST /v1/messages/{id}/lease` | extend a claim |
 | `GET /v1/agents` | agents, their drivers and queues |
 | `GET /v1/agents/{name}/sessions?cwd=&cursor=` | an ACP agent's sessions, newest first |
@@ -308,7 +327,8 @@ store). That is all the "database" there is: nothing to install or start.
 - **Limits are checked on the text**, not on its JSON: a body at `max_body` is accepted however
   much JSON escaping inflates it.
 - **Reads are bounded.** Lists are pages of at most 500 messages and never carry bodies; events come
-  in pages; a body or reply is never bigger than its limit. Memory does not grow with the number of
+  in pages; a body or reply is never bigger than its limit. Files live in their own table and are
+  read only when asked for (`acpost files`, an agent's turn), never with a message or a list. Memory does not grow with the number of
   messages stored.
 
 The tests check each of these claims: `go test ./internal/store -run 'Concurrent|Growth|Memory'`.
@@ -335,7 +355,15 @@ The tests check each of these claims: `go test ./internal/store -run 'Concurrent
 - An agent's sessions are its conversations with whoever started them: only the node's own user and
   agents (within `allow_from`) may list them or send into one (`--session`); token clients may not.
   Meta keys starting with `acp_` are acpost's own and refused from senders.
-- Bodies are stored in clear text in the store. Do not send secrets.
+- Bodies and files are stored in clear text in the store. Do not send secrets. An `acp` agent's
+  copies of attached files are in `<store>.turns` (next to the store file, private), each file in
+  a directory of its own, removed when its turn ends and, after a crash, when the node starts again.
+- Files are checked by every node they pass: names are base names (no `/`, `..`), counts and sizes
+  are within that node's limits (checked on the listing before anything is downloaded), and a hub's
+  response is read only up to what the node would accept.
+  `acpost files` and `--save` write only inside the directory given; `--force` replaces a file (a
+  symlink too) without writing through it. Only an agent process in a turn may `attach`, and only to
+  the attempt it is running.
 
 ## How ACP is used
 
@@ -348,7 +376,8 @@ notion of addresses or mailboxes, so acpost puts its own envelope around it: the
 | agent process started | `initialize` (no client `fs`/`terminal`: agents use their own tools), `authenticate` when `auth_method` is set |
 | first message of a session key | `session/new` (cwd) and the configured mode, model, thought level |
 | next message with that key | `session/prompt` in the same session; after a restart of the agent `session/resume` or `session/load` when the agent offers them |
-| reply | `agent_message_chunk` text of the turn; `stopReason` other than `end_turn` is a failure |
+| attached files | `resource` (text, with `embeddedContext`), `image` (with `image`), else `resource_link` to a copy on disk |
+| reply | `agent_message_chunk` text of the turn, plus files the agent attached with `acpost attach`; `stopReason` other than `end_turn` is a failure |
 | permission request | answered by `permissions`, recorded as an event |
 | `acpost cancel` | `session/cancel` |
 | tool calls, plans, notices | events of the message (`show --events`) |

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/user"
 	"slices"
 	"sort"
@@ -25,6 +26,12 @@ import (
 
 // Version is set at build time.
 var Version = "dev"
+
+// maxError bounds the text of a failure.
+const maxError = 16 << 10
+
+// maxLabel bounds a task, a thread, an idempotency key or a session id: labels, not content.
+const maxLabel = 1024
 
 const truncatedMark = "\n…[truncated by acpost: limits.max_reply]"
 
@@ -49,6 +56,8 @@ type SendRequest struct {
 	Meta                   map[string]string
 	// Session continues an existing ACP session of the agent (one opened in an editor, say).
 	Session string
+	// Files go with the message (checked against limits.max_files and max_files_size).
+	Files   []store.File
 	TTL     time.Duration
 	IdemKey string
 	// Honoured only from a node principal (a node forwarding its own message to its hub).
@@ -86,13 +95,18 @@ type Node struct {
 	following  map[string]bool // forwarded messages with a long poll of their own
 	followWake chan struct{}
 
+	// turns holds the copies of attached files an agent reads during its turn.
+	turns string
+
 	closed atomic.Bool
 }
 
 type agentToken struct {
 	agent   string
-	current atomic.Value // string: the message the agent process is working on
+	current atomic.Value // turnRef: the message the agent process is working on, and the attempt's lease
 }
+
+type turnRef struct{ id, lease string }
 
 // StoreOptions are the store limits a configuration sets.
 func StoreOptions(cfg *config.Config) store.Options {
@@ -122,6 +136,12 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 		if err != nil {
 			return nil, fmt.Errorf("node.join: %w", err)
 		}
+		// What the hub sends is read within what this node would take: a message carries its body and
+		// reply, never file data (files come by SideFiles, under fileResponse).
+		l := cfg.Limits
+		c.MaxResponse = 6*(int64(l.MaxBody)+int64(l.MaxReply)+int64(l.MaxMeta)+4*maxLabel+maxError) +
+			// and the listing of both sides' files: names up to 255 bytes, types up to 127, as JSON
+			int64(2*l.MaxFiles)*(6*(255+127)+128) + 1<<20
 		n.hub = c
 	}
 	return n, nil
@@ -131,6 +151,9 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 // maintenance loop and, when joined, the link to the hub.
 func (n *Node) Start(ctx context.Context) error {
 	n.ctx, n.cancel = context.WithCancel(context.WithoutCancel(ctx))
+	if err := n.openTurns(); err != nil {
+		return err
+	}
 	var mine []string
 	for name := range n.acp {
 		mine = append(mine, "agent:"+name)
@@ -166,6 +189,9 @@ func (n *Node) Close() {
 		a.stop()
 	}
 	n.wg.Wait()
+	if n.st.Path() == "" {
+		_ = os.RemoveAll(n.turns)
+	}
 }
 
 // LocalURL is the address the node's own agents reach it at.
@@ -221,19 +247,19 @@ func randomToken() string {
 func (n *Node) issueAgentToken(agent string) string {
 	t := randomToken()
 	at := &agentToken{agent: agent}
-	at.current.Store("")
+	at.current.Store(turnRef{})
 	n.tokMu.Lock()
 	n.agentTk[t] = at
 	n.tokMu.Unlock()
 	return t
 }
 
-func (n *Node) setCurrent(token, msgID string) {
+func (n *Node) setCurrent(token, msgID, lease string) {
 	n.tokMu.Lock()
 	at := n.agentTk[token]
 	n.tokMu.Unlock()
 	if at != nil {
-		at.current.Store(msgID)
+		at.current.Store(turnRef{msgID, lease})
 	}
 }
 
@@ -260,14 +286,17 @@ func (n *Node) PrincipalForToken(tok string) (Principal, bool) {
 }
 
 // currentOf is the message the agent process p works on.
-func (n *Node) currentOf(p Principal) string {
+func (n *Node) currentOf(p Principal) string { return n.turnOf(p).id }
+
+// turnOf is the message the agent process p works on, with the lease of its attempt.
+func (n *Node) turnOf(p Principal) turnRef {
 	n.tokMu.Lock()
 	at := n.agentTk[p.agent]
 	n.tokMu.Unlock()
 	if at == nil || at.agent != p.Name {
-		return ""
+		return turnRef{}
 	}
-	return at.current.Load().(string)
+	return at.current.Load().(turnRef)
 }
 
 func (n *Node) agentCfg(name string) *config.Agent { return n.cfg.Agents[name] }
@@ -281,7 +310,7 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	if to.Kind != "agent" {
 		return store.Message{}, false, errf("invalid", "%s: messages go to agents (agent:name)", r.To)
 	}
-	if r.Body == "" {
+	if r.Body == "" && len(r.Files) == 0 {
 		return store.Message{}, false, errf("invalid", "the body is empty")
 	}
 	if r.TTL < 0 {
@@ -291,8 +320,21 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	if len(r.Body) > int(lim.MaxBody) {
 		return store.Message{}, false, errf("refused", "the body is %d bytes, over limits.max_body (%d)", len(r.Body), lim.MaxBody)
 	}
+	switch {
+	case len(r.Task) > maxLabel:
+		return store.Message{}, false, errf("invalid", "the task is %d bytes, over %d", len(r.Task), maxLabel)
+	case len(r.Thread) > maxLabel:
+		return store.Message{}, false, errf("invalid", "the thread is %d bytes, over %d", len(r.Thread), maxLabel)
+	case len(r.IdemKey) > maxLabel:
+		return store.Message{}, false, errf("invalid", "the idempotency key is %d bytes, over %d", len(r.IdemKey), maxLabel)
+	case len(r.Session) > maxLabel:
+		return store.Message{}, false, errf("invalid", "the session is %d bytes, over %d", len(r.Session), maxLabel)
+	}
 	if ms := metaSize(r.Meta); ms > int(lim.MaxMeta) {
 		return store.Message{}, false, errf("refused", "meta is %d bytes, over limits.max_meta (%d)", ms, lim.MaxMeta)
+	}
+	if err := n.checkFiles(r.Files, nil, "the message"); err != nil {
+		return store.Message{}, false, err
 	}
 
 	// A repeat (same sender, same key) returns the first message before anything is resolved again.
@@ -304,7 +346,7 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	if err := n.resolveSession(ctx, p, to, &r); err != nil {
 		return store.Message{}, false, err
 	}
-	m := &store.Message{ID: store.NewID(), From: p.Address(), Body: r.Body, Task: r.Task, Thread: r.Thread, Meta: r.Meta, IdemKey: r.IdemKey}
+	m := &store.Message{ID: store.NewID(), From: p.Address(), Body: r.Body, Task: r.Task, Thread: r.Thread, Meta: r.Meta, IdemKey: r.IdemKey, Files: r.Files}
 	if r.TTL > 0 {
 		m.ExpiresAt = time.Now().Add(r.TTL)
 	}
@@ -379,11 +421,8 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	if errors.Is(err, store.ErrQueueFull) {
 		return got, false, errf("refused", "%s has %d messages queued (limits.max_queued_per_agent)", m.To, lim.MaxQueuedPerAgent)
 	}
-	if errors.Is(err, store.ErrStoreFull) {
-		return got, false, errf("refused", "%v", err)
-	}
 	if err != nil {
-		return got, false, err
+		return got, false, n.fileErr(err, m.ID)
 	}
 	if created {
 		n.notify()
@@ -577,11 +616,12 @@ func (n *Node) claim(ctx context.Context, recipients []string, wait, lease time.
 
 // Reply answers a message taken under lease: body is the reply, or errText says why there is none.
 func (n *Node) Reply(ctx context.Context, p Principal, id, lease, body, errText string) error {
-	return n.ReplyCoded(ctx, p, id, lease, body, "", errText)
+	return n.ReplyCoded(ctx, p, id, lease, body, "", errText, nil)
 }
 
 // ReplyCoded is Reply with the failure's code (a joined node passes on its agent's; "" is "failed").
-func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, errCode, errText string) error {
+// files go with the reply.
+func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, errCode, errText string, files []store.File) error {
 	m, err := n.st.Get(ctx, id)
 	if err != nil {
 		return errf("not_found", "no message %s", id)
@@ -590,6 +630,9 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 		return errf("refused", "%s may not answer for %s", p.Address(), m.To)
 	}
 	state := store.Done
+	if len(errText) > maxError {
+		errText = strings.ToValidUTF8(errText[:maxError], "") + "…"
+	}
 	if errText != "" {
 		state = store.Failed
 		if _, known := hints[errCode]; !known {
@@ -598,12 +641,15 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 	} else {
 		errCode = ""
 	}
+	if err := n.checkFiles(files, replyFiles(m.Files), "the reply"); err != nil {
+		return err
+	}
 	body = capReply(body, int(n.cfg.Limits.MaxReply))
-	if err := n.st.Complete(ctx, id, lease, state, body, errCode, errText); err != nil {
+	if err := n.st.Complete(ctx, id, lease, state, body, errCode, errText, files...); err != nil {
 		if errors.Is(err, store.ErrLeaseLost) {
 			return errf("conflict", "%v", err)
 		}
-		return err
+		return n.fileErr(err, id)
 	}
 	n.notify()
 	return nil
@@ -654,7 +700,9 @@ func (n *Node) agentRunning(name string) bool {
 
 // Status is the node's health.
 func (n *Node) Status(p Principal) client.Status {
-	s := client.Status{OK: true, Node: n.Name(), Version: Version, You: p.Address()}
+	l := n.cfg.Limits
+	s := client.Status{OK: true, Node: n.Name(), Version: Version, You: p.Address(),
+		Limits: &client.Limits{MaxBody: int64(l.MaxBody), MaxFiles: l.MaxFiles, MaxFilesSize: int64(l.MaxFilesSize)}}
 	if n.hub != nil {
 		s.Hub = n.hub.URL
 	}

@@ -34,6 +34,7 @@ var hints = map[string]string{
 	"expired":           "no agent took the message before its --ttl; send again with a longer --ttl, or check the agent is served",
 	"agent_error":       "the agent reported an error (in `error`); check the agent and its configuration",
 	"failed":            "the consumer of the message reported it failed (in `error`)",
+	"files_refused":     "a node on the way refused the reply's files (limits.max_files, max_files_size, max_store); the text of the reply is kept: ask for fewer or smaller files",
 }
 
 // HintFor is what to do about a failure code ("" for none).
