@@ -428,11 +428,23 @@ func TestConcurrentHTTPClients(t *testing.T) {
 
 // hubPair starts a hub and two nodes joined to it: a serves agent:reviewer (a fake agent), b none.
 // extra lines go into the configuration of b, of the hub and of a.
+// lastHub is the hub of the last hubPair (tests here do not run in parallel).
+var lastHub *env
+
+// hubEnv is the hub b joined in hubPair.
+func hubEnv(t *testing.T, _ *env) *env {
+	if lastHub == nil {
+		t.Fatal("no hubPair")
+	}
+	return lastHub
+}
+
+// extra: b's configuration, the hub's, a's (before agents:), and more of a's reviewer (", env: …").
 func hubPair(t *testing.T, extra ...string) (a, b *env) {
-	extra = append(extra, "", "", "")
+	extra = append(extra, "", "", "", "")
 	port := freePort(t)
 	hubURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	a = newEnv(t, fmt.Sprintf("%sagents:\n%s", extra[2], fakeAgent("reviewer", ", allow_from: [\"*\"]")))
+	a = newEnv(t, fmt.Sprintf("%sagents:\n%s", extra[2], fakeAgent("reviewer", ", allow_from: [\"*\"]"+extra[3])))
 	a.vars = append(a.vars, "ACPOST_JOIN_TOKEN=node-a-token")
 	appendCfg(t, a, fmt.Sprintf("join_hub: {url: %s, token_env: ACPOST_JOIN_TOKEN}\n", hubURL))
 	b = newEnv(t, extra[0])
@@ -447,6 +459,11 @@ tokens:
   - {name: %s, sha256: %s, node: true}
   - {name: %s, sha256: %s, node: true}
 %s`, port, nodeName(a), sha("node-a-token"), nodeName(b), sha("node-b-token"), extra[1]))
+	// The hub's own CLI talks to it on a socket of its own.
+	cfg, _ := os.ReadFile(hub.config)
+	os.WriteFile(hub.config, []byte(strings.Replace(string(cfg), fmt.Sprintf("listen: [tcp://127.0.0.1:%d]", port),
+		fmt.Sprintf("listen: [tcp://127.0.0.1:%d, unix://%s]", port, hub.sock), 1)), 0o600)
+	lastHub = hub
 	hubCmd := exec.Command(filepath.Join(binDir, "acpost"), "serve")
 	hubCmd.Env = append(cleanEnv(), hub.vars...)
 	hubLog, _ := os.Create(filepath.Join(hub.dir, "serve.log"))
@@ -487,6 +504,14 @@ func TestHubJoin(t *testing.T) {
 	// The same through an explicit node name.
 	if out := b.ok("", "send", "--to", "agent:reviewer@"+nodeName(a), "--body", "echo named", "--wait", "--timeout", "20s"); out != "named" {
 		t.Fatalf("%q", out)
+	}
+	// B lists the agents on the other side of the hub, and not its own twice.
+	out := b.ok("", "agents")
+	if !strings.Contains(out, "agent:reviewer@"+nodeName(a)) || !strings.Contains(out, "remote") {
+		t.Fatalf("agents on b: %s", out)
+	}
+	if out := a.ok("", "agents"); strings.Count(out, "reviewer") != 1 {
+		t.Fatalf("agents on a lists its own twice: %s", out)
 	}
 }
 

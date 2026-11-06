@@ -147,3 +147,18 @@ func TestSizes(t *testing.T) {
 		}
 	}
 }
+
+// The CLI reads the node's file without the hub's token: only the node, joining, needs it.
+func TestJoinTokenNeededOnlyByTheNode(t *testing.T) {
+	t.Setenv("ACPOST_TEST_UNSET_TOKEN", "")
+	c, err := Parse([]byte("node: {join: {url: https://hub:7420, token_env: ACPOST_TEST_UNSET_TOKEN}}\n"), ".yaml")
+	if err != nil {
+		t.Fatalf("a CLI without the token cannot read the config: %v", err)
+	}
+	if c.Node.Join.Token != "" {
+		t.Fatal("token from nowhere")
+	}
+	if _, err := Parse([]byte("node: {join: {url: https://hub:7420}}\n"), ".yaml"); err == nil {
+		t.Fatal("join without any token accepted")
+	}
+}

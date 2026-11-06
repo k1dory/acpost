@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -407,4 +408,51 @@ func TestACPReplyFileAtLimitTyped(t *testing.T) {
 		}
 	}
 	t.Fatalf("new.txt (5 bytes, the limit) not kept: %+v", w.Files)
+}
+
+func TestJoinWithoutTokenSaysWhich(t *testing.T) {
+	t.Setenv("ACPOST_TEST_UNSET_TOKEN", "")
+	cfg, err := config.Parse([]byte("store: memory\nnode: {join: {url: https://hub:7420, token_env: ACPOST_TEST_UNSET_TOKEN}}\n"), ".yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(cfg, nil, slog.Default()); err == nil || !strings.Contains(err.Error(), "ACPOST_TEST_UNSET_TOKEN is not set") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// The guard reads the scheme as url.Parse does: FILE:// is a local link too.
+func TestLocalLinkAnyCase(t *testing.T) {
+	for _, uri := range []string{"file:///tmp/x", "FILE:///tmp/x", "File:///tmp/x"} {
+		if err := noLocalLinks([]store.File{{Name: "x", URI: uri}}, "agent:b@n", sendCopyHint); err == nil {
+			t.Fatalf("%s crossed", uri)
+		}
+	}
+	if err := noLocalLinks([]store.File{{Name: "x", URI: "https://example.com/file:x"}}, "agent:b@n", sendCopyHint); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A joined node answering on its hub lease is another machine: its file:// links are refused, even
+// for a message the hub's own user sent.
+func TestHubRefusesNodeReplyLinks(t *testing.T) {
+	hub := newNode(t, "node: {name: hub}\n")
+	edge := Principal{Kind: "node", Name: "edge"}
+	if err := hub.Announce(ctx, edge, "edge", []string{"bot"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := hub.Send(ctx, Principal{Kind: "user", Name: "boss"}, SendRequest{To: "agent:bot@edge", Body: "run"}); err != nil {
+		t.Fatal(err)
+	}
+	m, ok, err := hub.NodeClaim(ctx, edge, "edge", 0, time.Minute)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	link := []store.File{{Name: "r.txt", URI: "file:///tmp/r.txt"}}
+	if err := hub.ReplyCoded(ctx, edge, m.ID, m.LeaseID, "done", "", "", link); code(err) != "invalid" {
+		t.Fatalf("hub took a link from a node: %v", err)
+	}
+	if err := hub.ReplyCoded(ctx, edge, m.ID, m.LeaseID, "done", "", "", []store.File{{Name: "r.txt", Data: []byte("r")}}); err != nil {
+		t.Fatal(err)
+	}
 }

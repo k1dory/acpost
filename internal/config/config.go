@@ -224,8 +224,8 @@ func (c *Config) fill() error {
 		if j.TokenEnv != "" {
 			j.Token = os.Getenv(j.TokenEnv)
 		}
-		if j.Token == "" {
-			return errors.New("node.join: token or token_env (set) needed")
+		if j.Token == "" && j.TokenEnv == "" {
+			return errors.New("node.join: token or token_env needed")
 		}
 		j.CA = expand(j.CA)
 	}

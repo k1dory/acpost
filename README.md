@@ -140,7 +140,7 @@ acpost recv    --as NAME [--wait DUR] [--lease DUR]
 acpost reply   ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON) [--attach FILE]...
 acpost files   ID [NAME...] [--reply] [-o DIR | --stdout] [--force]
 acpost attach  FILE... [--link]            # inside an agent's turn: files for its reply
-acpost agents
+acpost agents                              # this node's, and (joined) other nodes' through the hub
 acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
 acpost status
@@ -158,12 +158,19 @@ time), the message fails with `session_busy` and says what to do.
 the same file in many messages, or handed back in a reply, takes its bytes once. A link (`--link
 PATH|URL`: a file of this machine or an http(s) URL) is kept where it is; acpost stores only the
 link, `files` and `--save` report it rather than copy it, and an agent gets it as the link.
+A `file://` link opens only on its machine, so it does not leave the node: a message with one to
+an agent on another node is refused (`--attach` sends a copy), and so is `acpost attach --link`
+for a sender on another node.
 
 **Files in an agent's answer.** The `image`, `resource` and `resource_link` blocks an ACP agent
 puts in its answer become the reply's files (not text of the reply): a `resource_link` stays a
 link; content the agent was given in the turn is the stored file again; embedded content whose
 `file://` URI names a file on disk with the same bytes is a link to that file; anything else is
-content. Past the reply's limits the rest is left out and said in an event.
+content. For a sender on another node there are no `file://` links: embedded content stays content,
+and a `resource_link` to a file on disk is left out and said (the node does not read files for an
+agent; `acpost attach FILE` sends a copy). Past the reply's limits the rest is left out and said
+in an event; for a sender on another node, whose events are elsewhere, also in `[acpost]` lines at
+the end of the reply.
 
 `--attach` (repeatable) sends files with a message or a reply; a file goes by its base
 name, and its type comes from the extension or its first bytes. An `acp` agent gets them in its

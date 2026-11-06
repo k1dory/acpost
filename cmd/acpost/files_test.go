@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -291,5 +293,135 @@ func TestLinksNotCopied(t *testing.T) {
 	}
 	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", filepath.Join(e.dir, "missing")); r.code != 2 {
 		t.Fatalf("link to a missing file: %d %s", r.code, r.err)
+	}
+	// file:// URIs are taken; one naming another host is not this machine's file.
+	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", "file://"+local); r.code != 0 {
+		t.Fatalf("file:// URI: %d %s", r.code, r.err)
+	}
+	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", "file://other-host"+local); r.code != 2 || !strings.Contains(r.err, "not on this machine") {
+		t.Fatalf("file://other-host: %d %s", r.code, r.err)
+	}
+}
+
+// A file:// link opens only where the file is: it does not go to another node, either way, and
+// the node does not read files from disk for an agent. Agents on sibling nodes and on the hub alike.
+func TestLocalLinksStayOnTheirNode(t *testing.T) {
+	disk := filepath.Join(t.TempDir(), "disk.txt")
+	linked := filepath.Join(t.TempDir(), "linked-src.txt")
+	os.WriteFile(disk, []byte("on a's disk"), 0o600)
+	os.WriteFile(linked, []byte("linked on a"), 0o600)
+	env := fmt.Sprintf(", env: {FAKE_DISK: %s, FAKE_LINK: %s}", disk, linked)
+	hubAgents := "agents:\n" + fakeAgent("hubbot", ", allow_from: [\"*\"]"+env) + "  hubinbox: {driver: inbox, allow_from: [\"*\"]}\n"
+	a, b := hubPair(t, "", hubAgents, "", env)
+
+	local := filepath.Join(b.dir, "notes.txt")
+	os.WriteFile(local, []byte("only on b"), 0o600)
+	for _, to := range []string{"agent:reviewer", "agent:hubbot"} {
+		for _, link := range []string{local, "FILE://" + local} {
+			if r := b.run("", "send", "--to", to, "--body", "x", "--link", link); r.code != 2 || !strings.Contains(r.err, "--attach FILE instead of --link") {
+				t.Fatalf("a local link %s sent to %s: %d %s", link, to, r.code, r.err)
+			}
+		}
+	}
+
+	for _, to := range []string{"agent:reviewer", "agent:hubbot"} {
+		var id string
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			r := b.run("", "send", "--to", to, "--body", "give", "--wait", "--timeout", "20s", "--json")
+			if r.code == 0 {
+				var m store.Message
+				json.Unmarshal([]byte(r.out), &m)
+				id = m.ID
+				// Events stay on the agent's node: b learns from the reply what was left out.
+				if !strings.Contains(m.Reply, "[acpost] linked.txt not kept") {
+					t.Fatalf("%s: reply does not say what was left out: %q", to, m.Reply)
+				}
+				break
+			}
+			if time.Now().After(deadline) || (r.code != 3 && r.code != 6) {
+				t.Fatalf("%s: exit %d\n%s\n%s", to, r.code, r.out, r.err)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		dir := filepath.Join(b.dir, "got-"+strings.TrimPrefix(to, "agent:"))
+		out := b.ok("", "files", id, "--reply", "-o", dir)
+		if strings.Contains(out, "file://") {
+			t.Fatalf("%s: b got a link to the agent's disk: %s", to, out)
+		}
+		if got, err := os.ReadFile(filepath.Join(dir, "disk.txt")); err != nil || string(got) != "on a's disk" {
+			t.Fatalf("%s: embedded file: %q %v (files: %s)", to, got, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "linked.txt")); err == nil {
+			t.Fatalf("%s: the node read a linked file from disk for the agent", to)
+		}
+		if show := b.ok("", "show", id); !strings.Contains(show, "spec.pdf") {
+			t.Fatalf("%s: an https link is kept: %s", to, show)
+		}
+	}
+
+	// acpost attach --link from an agent answering b is refused, and says what to do.
+	r := b.run("", "send", "--to", "agent:reviewer", "--body", "shell printf x > l.txt && acpost attach --link l.txt; echo rc=$?", "--wait", "--timeout", "20s")
+	if !strings.Contains(r.out, "`acpost attach FILE`, without --link") || strings.Contains(r.out, "rc=0") {
+		t.Fatalf("attach --link for another node: %d %s %s", r.code, r.out, r.err)
+	}
+
+	// An inbox consumer on the hub answering b with a local link is refused too.
+	id := strings.TrimSpace(b.ok("", "send", "--to", "agent:hubinbox", "--body", "q"))
+	_ = a
+	hub := hubEnv(t, b)
+	got := hub.ok("", "recv", "--as", "hubinbox", "--json")
+	var m store.Message
+	json.Unmarshal([]byte(got), &m)
+	os.WriteFile(filepath.Join(hub.dir, "r.txt"), []byte("r"), 0o600)
+	if r := hub.run("", "reply", id, "--lease", m.LeaseID, "--body", "a", "--link", filepath.Join(hub.dir, "r.txt")); r.code != 2 || !strings.Contains(r.err, "instead of --link") {
+		t.Fatalf("inbox reply --link to another node: %d %s", r.code, r.err)
+	}
+
+	// B lists the hub's own agents with their node.
+	if out := b.ok("", "agents"); !strings.Contains(out, "agent:hubbot@hub") {
+		t.Fatalf("agents on b: %s", out)
+	}
+}
+
+// A reply without a final newline goes to a pipe exactly as it is; the notes on stderr start a line
+// of their own (with 2>&1 they would follow the reply's last line).
+func TestNotesStartTheirOwnLine(t *testing.T) {
+	e := newEnv(t, inbox)
+	e.serve()
+	f := filepath.Join(e.dir, "r.txt")
+	os.WriteFile(f, []byte("r"), 0o600)
+	id := strings.TrimSpace(e.ok("", "send", "--to", "bot", "--body", "q"))
+	var m store.Message
+	json.Unmarshal([]byte(e.ok("", "recv", "--as", "bot", "--json")), &m)
+	e.ok("", "reply", id, "--lease", m.LeaseID, "--body", "no newline", "--attach", f)
+	for _, args := range [][]string{{"wait", id}, {"wait", id, "--save", filepath.Join(e.dir, "out")}} {
+		r := e.run("", args...)
+		if r.code != 0 || r.out != "no newline" || !strings.HasPrefix(r.err, "\n") {
+			t.Fatalf("%v: %d out %q err %q", args, r.code, r.out, r.err)
+		}
+	}
+}
+
+// The note for a sender elsewhere survives an answer cut to max_reply.
+func TestRemoteNoteKeptInLongReply(t *testing.T) {
+	linked := filepath.Join(t.TempDir(), "linked-src.txt")
+	os.WriteFile(linked, []byte("l"), 0o600)
+	_, b := hubPair(t, "", "", "limits: {max_reply: 600}\n", fmt.Sprintf(", env: {FAKE_LINK: %s}", linked))
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		r := b.run("", "send", "--to", "agent:reviewer", "--body", "give 5000", "--wait", "--timeout", "20s", "--json")
+		if r.code == 0 {
+			var m store.Message
+			json.Unmarshal([]byte(r.out), &m)
+			if !strings.Contains(m.Reply, "[acpost] linked.txt not kept") || !strings.HasPrefix(m.Reply, "xxx") || len(m.Reply) > 600 {
+				t.Fatalf("reply %d bytes: %q", len(m.Reply), m.Reply)
+			}
+			return
+		}
+		if time.Now().After(deadline) || (r.code != 3 && r.code != 6) {
+			t.Fatalf("exit %d\n%s\n%s", r.code, r.out, r.err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

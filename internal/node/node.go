@@ -132,6 +132,10 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 		}
 	}
 	if j := cfg.Node.Join; j != nil {
+		if j.Token == "" {
+			// Only the node needs the hub's token; the CLI reads the same file without it.
+			return nil, fmt.Errorf("node.join: %s is not set in this process's environment: the node needs the hub's token to join", j.TokenEnv)
+		}
 		c, err := client.New(j.URL, j.Token, j.CA)
 		if err != nil {
 			return nil, fmt.Errorf("node.join: %w", err)
@@ -401,6 +405,11 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	switch {
 	case local:
 		m.To = "agent:" + to.Name
+		if p.Kind == "node" {
+			if err := noLocalLinks(m.Files, m.To, sendCopyHint); err != nil {
+				return store.Message{}, false, err
+			}
+		}
 		a := n.agentCfg(to.Name)
 		if !matchAny(a.AllowFrom, m.From) {
 			return store.Message{}, false, errf("refused", "%s does not take messages from %s (allow_from)", m.To, m.From)
@@ -412,7 +421,13 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 			return store.Message{}, false, err
 		}
 		m.To = "agent:" + to.Name + "@" + node
+		if err := noLocalLinks(m.Files, m.To, sendCopyHint); err != nil {
+			return store.Message{}, false, err
+		}
 	case n.hub != nil && p.Kind != "node":
+		if err := noLocalLinks(m.Files, to.String(), sendCopyHint); err != nil {
+			return store.Message{}, false, err
+		}
 		return n.forward(ctx, m, to)
 	default:
 		return store.Message{}, false, errh("not_found", "`acpost agents` lists the agents this node knows", "no agent %s here", to)
@@ -644,6 +659,12 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 	if err := n.checkFiles(files, replyFiles(m.Files), "the reply"); err != nil {
 		return err
 	}
+	// A joined node answering for its agent is another machine, whoever sent the message.
+	if p.Kind == "node" || n.senderElsewhere(m) {
+		if err := noLocalLinks(files, m.From, sendCopyHint); err != nil {
+			return err
+		}
+	}
 	body = capReply(body, int(n.cfg.Limits.MaxReply))
 	if err := n.st.Complete(ctx, id, lease, state, body, errCode, errText, files...); err != nil {
 		if errors.Is(err, store.ErrLeaseLost) {
@@ -671,7 +692,8 @@ func (n *Node) Extend(ctx context.Context, p Principal, id, lease string, d time
 	}
 }
 
-// Agents lists the agents this node knows: its own and, on a hub, those joined nodes announced.
+// Agents lists the agents this node knows: its own and, on a hub, those joined nodes announced; a
+// joined node adds what its hub lists of other nodes (a hub that does not answer soon is left out).
 func (n *Node) Agents(ctx context.Context) []client.AgentInfo {
 	var out []client.AgentInfo
 	for name, a := range n.cfg.Agents {
@@ -686,6 +708,20 @@ func (n *Node) Agents(ctx context.Context) []client.AgentInfo {
 		info := client.AgentInfo{Name: r.agent, Address: "agent:" + r.agent + "@" + r.node, Driver: "remote", Node: r.node}
 		info.Queued, info.Running, _ = n.st.Counts(ctx, info.Address)
 		out = append(out, info)
+	}
+	if n.hub != nil {
+		hctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		elsewhere, err := n.hub.Agents(hctx)
+		cancel()
+		for _, info := range elsewhere {
+			if err == nil && info.Node != n.Name() && info.Node != "" {
+				if !strings.Contains(info.Address, "@") {
+					info.Address += "@" + info.Node // the hub's own agent
+				}
+				info.Driver, info.Process = "remote", false
+				out = append(out, info)
+			}
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out

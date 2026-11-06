@@ -585,12 +585,19 @@ func (s *acpSlot) handle(m store.Message) {
 	var turn *acpTurn
 	var tf *turnFiles
 	complete := func(state store.State, reply string, f Failure) {
+		max := int(n.cfg.Limits.MaxReply)
 		if turn != nil {
 			// What the agent handed back as files goes with its reply, under this attempt's lease.
 			got, dropped := turn.blocks()
-			n.keepReplyFiles(n.ctx, m, got, dropped, tf)
+			said := n.keepReplyFiles(n.ctx, m, got, dropped, tf)
+			// Events stay on this node: a sender elsewhere learns what was left out from the reply,
+			// at its end, kept when the agent's text is cut to max_reply (up to half of it).
+			if len(said) > 0 && n.senderElsewhere(m) {
+				note := capReply("\n\n[acpost] "+strings.Join(said, "\n[acpost] "), max/2)
+				reply = capReply(reply, max-len(note)) + note
+			}
 		}
-		reply = capReply(reply, int(n.cfg.Limits.MaxReply))
+		reply = capReply(reply, max)
 		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, state, reply, f.Code, f.Message); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("complete", "id", m.ID, "err", err)
 		}

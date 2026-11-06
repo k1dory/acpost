@@ -172,6 +172,13 @@ func (n *Node) Attach(ctx context.Context, turn Turn, files []store.File) (strin
 	if err := n.checkFiles(files, nil, "the reply"); err != nil {
 		return "", err
 	}
+	if _, ok := localLink(files); ok {
+		if m, err := n.st.Get(ctx, turn.id); err != nil || n.senderElsewhere(m) {
+			if err := noLocalLinks(files, m.From, attachCopyHint); err != nil {
+				return "", err
+			}
+		}
+	}
 	lim := store.FileLimits{Count: n.cfg.Limits.MaxFiles, Size: int64(n.cfg.Limits.MaxFilesSize)}
 	if err := n.st.AttachReply(ctx, turn.id, turn.lease, files, lim); err != nil {
 		return "", n.fileErr(err, turn.id)
@@ -487,4 +494,46 @@ func isImage(t string) bool {
 		return true
 	}
 	return false
+}
+
+// A file:// link opens only on the machine that has the file: it does not leave this node. The hint
+// names how the command at hand sends a copy.
+const (
+	sendCopyHint   = "a file:// link opens only on the machine that has the file; send a copy: --attach FILE instead of --link"
+	attachCopyHint = "a file:// link opens only on the machine that has the file; attach a copy: `acpost attach FILE`, without --link"
+)
+
+// isFileLink says whether uri is a file:// link, by its parsed scheme (FILE:// is one too).
+func isFileLink(uri string) bool {
+	u, err := url.Parse(uri)
+	return err == nil && strings.EqualFold(u.Scheme, "file")
+}
+
+// localLink is the first file:// link of files.
+func localLink(files []store.File) (store.File, bool) {
+	for _, f := range files {
+		if f.URI != "" && isFileLink(f.URI) {
+			return f, true
+		}
+	}
+	return store.File{}, false
+}
+
+// noLocalLinks refuses file:// links for a message that crosses to another node (where: who is
+// there).
+func noLocalLinks(files []store.File, where, hint string) error {
+	if f, ok := localLink(files); ok {
+		return errh("invalid", hint, "%s is a link to a file on this machine (%s), and %s is on another node", f.Name, f.URI, where)
+	}
+	return nil
+}
+
+// senderElsewhere says whether m's sender is on another node: it came through the hub, or (on the
+// hub) a joined node sent it.
+func (n *Node) senderElsewhere(m store.Message) bool {
+	if strings.HasPrefix(m.Origin, originHub) {
+		return true
+	}
+	from, err := ParseAddress(m.From)
+	return err != nil || (from.Node != "" && from.Node != n.Name())
 }

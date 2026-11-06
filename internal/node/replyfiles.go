@@ -12,6 +12,7 @@ package node
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -91,7 +92,11 @@ func fileBlock(c acp.ContentBlock) (replyBlock, bool) {
 
 // replyFilesOf makes the reply's files of what the agent handed back; taken are the names already
 // on the reply (acpost attach). What cannot be kept is said in notes.
-func (n *Node) replyFilesOf(blocks []replyBlock, tf *turnFiles, taken []store.File) (files []store.File, notes []string) {
+//
+// For a sender on another node (remote) a file:// link would not open there, and the node does not
+// read files on the agent's behalf (its sandbox may not reach them): such a link is not kept, and
+// said; embedded content stays content.
+func (n *Node) replyFilesOf(blocks []replyBlock, tf *turnFiles, taken []store.File, remote bool) (files []store.File, notes []string) {
 	names := map[string]bool{}
 	for _, f := range taken {
 		names[f.Name] = true
@@ -119,9 +124,12 @@ func (n *Node) replyFilesOf(blocks []replyBlock, tf *turnFiles, taken []store.Fi
 			if f.Name == "" {
 				f.Name = known.Name
 			}
+		case b.link && remote && isFileLink(b.uri):
+			notes = append(notes, fmt.Sprintf("%s not kept: a file:// link, and the sender is on another node; the agent attaches a copy with `acpost attach FILE`", cmp.Or(f.Name, b.uri)))
+			continue
 		case b.link:
 			f.URI = b.uri
-		case onDisk(b.uri, b.data):
+		case !remote && onDisk(b.uri, b.data):
 			// The agent embedded a file it has on disk: that file is where it is kept.
 			f.URI, f.Size = b.uri, len(b.data)
 		default:
@@ -212,20 +220,21 @@ func uniqueName(taken map[string]bool, name string) string {
 }
 
 // keepReplyFiles stores what the agent handed back with its reply, within the reply's limits; what
-// does not fit is said in an event, and the reply's text stays.
-func (n *Node) keepReplyFiles(ctx context.Context, m store.Message, blocks []replyBlock, dropped int, tf *turnFiles) {
+// does not fit is said in an event, and the reply's text stays. It returns what it said.
+func (n *Node) keepReplyFiles(ctx context.Context, m store.Message, blocks []replyBlock, dropped int, tf *turnFiles) (said []string) {
 	if dropped > 0 {
-		n.notice(ctx, m.ID, fmt.Sprintf("the agent handed back %d more files than the reply keeps (limits.max_files, max_files_size)", dropped))
+		said = append(said, fmt.Sprintf("the agent handed back %d more files than the reply keeps (limits.max_files, max_files_size)", dropped))
+		n.notice(ctx, m.ID, said[0])
 	}
 	if len(blocks) == 0 {
-		return
+		return said
 	}
 	cur, err := n.st.Get(ctx, m.ID)
 	if err != nil {
-		return
+		return said
 	}
 	have := replyFiles(cur.Files)
-	files, notes := n.replyFilesOf(blocks, tf, have)
+	files, notes := n.replyFilesOf(blocks, tf, have, n.senderElsewhere(cur))
 	// Kept in order while they fit with what the reply has already (acpost attach); the rest is said.
 	count, size := len(have), int64(0)
 	for _, f := range have {
@@ -262,6 +271,7 @@ func (n *Node) keepReplyFiles(ctx context.Context, m store.Message, blocks []rep
 	for _, note := range notes {
 		n.notice(ctx, m.ID, note)
 	}
+	return append(said, notes...)
 }
 
 // notice records a notice event on a message.

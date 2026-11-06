@@ -149,6 +149,13 @@ func readLinks(targets []string) ([]store.File, error) {
 				f.Name = u.Host
 			}
 		} else {
+			if u, err := url.Parse(t); err == nil && u.Scheme == "file" {
+				// file:///path (any case of the scheme) is the path; a file on another host is not here.
+				if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+					return nil, bad(fmt.Errorf("%s names a file on %s, not on this machine", t, u.Host), "--link takes a file of this machine or an http(s) URL")
+				}
+				t = u.Path
+			}
 			abs, err := filepath.Abs(t)
 			if err != nil {
 				return nil, err

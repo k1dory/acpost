@@ -484,9 +484,15 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 				fmt.Println("--- " + m.ID)
 			}
 			fmt.Print(m.Reply)
-			// A terminal gets a final newline; a pipe gets the reply exactly as it is.
-			if m.Reply != "" && !strings.HasSuffix(m.Reply, "\n") && term.IsTerminal(int(os.Stdout.Fd())) {
+			// A terminal gets a final newline; a pipe gets the reply exactly as it is, and the notes on
+			// stderr start a line of their own (2>&1 would glue them to the reply's last line).
+			open := m.Reply != "" && !strings.HasSuffix(m.Reply, "\n")
+			if open && term.IsTerminal(int(os.Stdout.Fd())) {
 				fmt.Println()
+				open = false
+			}
+			if open && (len(saved) > 0 || (save == "" && slices.ContainsFunc(m.Files, func(f store.File) bool { return f.Reply }))) {
+				fmt.Fprintln(os.Stderr)
 			}
 			if save == "" {
 				noteFiles(m.ID, m.Files, true)

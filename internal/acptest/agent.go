@@ -12,9 +12,10 @@
 //	prompt           answers the whole prompt it got
 //	sessions         answers how many sessions this process created
 //	shell CMD        runs CMD with sh -c and answers its combined output
-//	give             answers "here" with files in its answer: an image, a link to a URL, the
+//	give [N]         answers "here" (N bytes of text instead) with files in its answer: an image, a link to a URL, the
 //	                 file $FAKE_DISK embedded (it exists with that content), new embedded text,
-//	                 and each resource it was given handed back as a resource_link
+//	                 a resource_link to the file $FAKE_LINK, and each resource it was given
+//	                 handed back as a resource_link
 //	blocks           answers one line per non-text block it got (FAKE_PLAIN=1: it declares no
 //	                 embedded context or images)
 package acptest
@@ -193,7 +194,11 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: acp.SessionUpdate{
 				AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{Content: c, SessionUpdate: "agent_message_chunk"}}})
 		}
-		a.say(ctx, sid, "here")
+		if size, err := strconv.Atoi(arg); err == nil {
+			a.say(ctx, sid, strings.Repeat("x", size))
+		} else {
+			a.say(ctx, sid, "here")
+		}
 		send(acp.ImageBlock("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "image/png"))
 		send(acp.ResourceLinkBlock("spec.pdf", "https://example.com/download?id=42"))
 		if disk := os.Getenv("FAKE_DISK"); disk != "" {
@@ -201,6 +206,9 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			send(acp.ResourceBlock(acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{Uri: "file://" + disk, Text: string(data)}}))
 		}
 		send(acp.ResourceBlock(acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{Uri: "file:///nowhere/new.txt", Text: "fresh"}}))
+		if link := os.Getenv("FAKE_LINK"); link != "" {
+			send(acp.ResourceLinkBlock("linked.txt", "file://"+link))
+		}
 		for _, c := range p.Prompt {
 			if c.Resource != nil && c.Resource.Resource.TextResourceContents != nil {
 				send(acp.ResourceLinkBlock("", c.Resource.Resource.TextResourceContents.Uri))
