@@ -213,3 +213,24 @@ func TestCostBaseCurrency(t *testing.T) {
 		t.Fatalf("created: %v %v", b, ok)
 	}
 }
+
+// One model, one name: claude-agent-acp's default and its alias alike, codex-acp's ids as they are.
+func TestModelName(t *testing.T) {
+	desc := func(s string) *string { return &s }
+	claude := []acp.SessionConfigSelectOption{
+		{Value: "default", Name: "Default (recommended)", Description: desc("Opus 5.5")},
+		{Value: "opus", Name: "Opus 5.5", Description: desc("For complex work")},
+		{Value: "claude-haiku-4-5-20251001", Name: "Haiku 4.5"},
+	}
+	codex := []acp.SessionConfigSelectOption{{Value: "gpt-6.1-sol", Name: "6.1 Sol", Description: desc("Latest workhorse")}}
+	for _, c := range []struct {
+		opts    []acp.SessionConfigSelectOption
+		current string
+		want    string
+	}{{claude, "default", "Opus 5.5"}, {claude, "opus", "Opus 5.5"}, {claude, "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"}, {codex, "gpt-6.1-sol", "gpt-6.1-sol"}, {codex, "unknown", "unknown"}} {
+		opt := &acp.SessionConfigOptionSelect{CurrentValue: acp.SessionConfigValueId(c.current), Options: acp.SessionConfigSelectOptions{Ungrouped: (*acp.SessionConfigSelectOptionsUngrouped)(&c.opts)}}
+		if got := modelName(opt); got != c.want {
+			t.Fatalf("%s: %q, want %q", c.current, got, c.want)
+		}
+	}
+}

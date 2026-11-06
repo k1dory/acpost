@@ -1109,10 +1109,12 @@ func deref(p *int) int {
 	return *p
 }
 
-// modelName names the model a session runs for usage: the display name of the option selected,
-// or for a "Default…" option its description (claude-agent-acp: "default" is "Opus 5.5"), else the
-// option's value.
+// modelName names the model a session runs for usage, so one model has one name (prices go by it):
+// for a "Default…" option its description (claude-agent-acp: "default" is "Opus 5.5"); a value
+// that is a model id (it has a digit: gpt-6.1-sol, claude-haiku-4-5-20251001) as it is; an alias
+// by the option's name (claude-agent-acp: "opus" is "Opus 5.5").
 func modelName(opt *acp.SessionConfigOptionSelect) string {
+	value := string(opt.CurrentValue)
 	for _, o := range acpx.SelectOptions(opt) {
 		if o.Value != opt.CurrentValue {
 			continue
@@ -1122,11 +1124,15 @@ func modelName(opt *acp.SessionConfigOptionSelect) string {
 			desc = strings.TrimSpace(*o.Description)
 		}
 		switch name := strings.TrimSpace(o.Name); {
-		case strings.HasPrefix(strings.ToLower(name), "default") && desc != "":
-			return desc
+		case strings.HasPrefix(strings.ToLower(name), "default") || value == "default":
+			if desc != "" {
+				return desc
+			}
+		case strings.ContainsAny(value, "0123456789"):
+			return value
 		case name != "":
 			return name
 		}
 	}
-	return string(opt.CurrentValue)
+	return value
 }
