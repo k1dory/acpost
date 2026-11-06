@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -113,7 +115,56 @@ type savedFile struct {
 	Type  string `json:"type"`
 	Size  int    `json:"size"`
 	Reply bool   `json:"reply,omitempty"`
-	Path  string `json:"path"`
+	Path  string `json:"path,omitempty"` // where it was saved
+	URI   string `json:"uri,omitempty"`  // a link: where it is, nothing saved
+}
+
+// where is the saved path, or the link.
+func (s savedFile) where() string {
+	if s.URI != "" {
+		return "link " + s.Name + ": " + s.URI
+	}
+	return s.Path
+}
+
+// describe is a file as a line shows it.
+func describe(f store.File) string {
+	if f.Link() {
+		return fmt.Sprintf("%s (%s) → %s", f.Name, f.Type, f.URI)
+	}
+	return fmt.Sprintf("%s (%s, %d bytes)", f.Name, f.Type, f.Size)
+}
+
+// readLinks makes links of paths (this machine's files, absolute) and URLs: nothing is read or copied.
+func readLinks(targets []string) ([]store.File, error) {
+	var out []store.File
+	bad := func(err error, hint string) error {
+		return &exitErr{code: exitUsage, name: "invalid", err: err, hint: hint}
+	}
+	for _, t := range targets {
+		f := store.File{}
+		if u, err := url.Parse(t); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+			f.URI, f.Name = t, path.Base(u.Path)
+			if f.Name == "/" || f.Name == "." || f.Name == "" {
+				f.Name = u.Host
+			}
+		} else {
+			abs, err := filepath.Abs(t)
+			if err != nil {
+				return nil, err
+			}
+			st, err := os.Stat(abs)
+			if err != nil {
+				return nil, bad(err, "--link takes a file of this machine or an http(s) URL")
+			}
+			if !st.Mode().IsRegular() {
+				return nil, bad(fmt.Errorf("%s is not a file", t), "link the files of a directory one by one")
+			}
+			f.URI, f.Name, f.Size = (&url.URL{Scheme: "file", Path: abs}).String(), filepath.Base(abs), int(st.Size())
+		}
+		out = append(out, f)
+	}
+	return out, nil
 }
 
 // saveFiles writes files into dir, refusing to overwrite unless force; exists is the hint then.
@@ -133,6 +184,11 @@ func saveFiles(files []store.File, dir string, force bool, exists string) ([]sav
 	defer root.Close()
 	var out []savedFile
 	for _, f := range files {
+		if f.Link() {
+			// A link is kept where it is: said, not copied.
+			out = append(out, savedFile{Name: f.Name, Type: f.Type, Size: f.Size, Reply: f.Reply, URI: f.URI})
+			continue
+		}
 		// A name from a node is a base name or nothing is written.
 		if f.Name == "" || f.Name == "." || f.Name == ".." || strings.ContainsAny(f.Name, "/\\\x00") {
 			return out, &exitErr{code: exitError, name: "invalid", err: fmt.Errorf("refusing to save a file named %q", f.Name)}
@@ -143,7 +199,7 @@ func saveFiles(files []store.File, dir string, force bool, exists string) ([]sav
 		} else if err != nil {
 			return out, err
 		}
-		out = append(out, savedFile{f.Name, f.Type, f.Size, f.Reply, path})
+		out = append(out, savedFile{Name: f.Name, Type: f.Type, Size: f.Size, Reply: f.Reply, Path: path})
 	}
 	return out, nil
 }
@@ -191,7 +247,7 @@ func noteFiles(id string, files []store.File, reply bool) {
 	var names []string
 	for _, f := range files {
 		if f.Reply == reply {
-			names = append(names, fmt.Sprintf("%s (%s, %d bytes)", f.Name, f.Type, f.Size))
+			names = append(names, describe(f))
 		}
 	}
 	if len(names) == 0 {
@@ -259,6 +315,9 @@ func filesCmd(g *globals) *cobra.Command {
 				if len(picked) != 1 {
 					return usageErr(errors.New("--stdout takes one file: name it"))
 				}
+				if picked[0].Link() {
+					return &exitErr{code: exitError, name: "link", err: fmt.Errorf("%s is a link, kept where it is: %s", picked[0].Name, picked[0].URI)}
+				}
 				_, err := os.Stdout.Write(picked[0].Data)
 				return err
 			}
@@ -267,7 +326,7 @@ func filesCmd(g *globals) *cobra.Command {
 				if g.json {
 					printJSON(s)
 				} else {
-					fmt.Println(s.Path)
+					fmt.Println(s.where())
 				}
 			}
 			return err
@@ -281,18 +340,25 @@ func filesCmd(g *globals) *cobra.Command {
 }
 
 func attachCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
-		Use:   "attach FILE...",
+	var link bool
+	cmd := &cobra.Command{
+		Use:   "attach FILE... [--link]",
 		Short: "Inside an agent's turn: attach files to the reply it is writing",
 		Long: "An ACP agent's reply is its final answer in the turn; files it attaches with this command go with\n" +
-			"that answer. (To answer a message taken with recv, use reply --attach.)",
+			"that answer. With --link the files are kept where they are (a path of this machine, or an http(s) URL):\n" +
+			"the reply names them, nothing is copied. (To answer a message taken with recv, use reply --attach.)",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
 				return err
 			}
-			files, err := readFiles(cmd.Context(), c, args)
+			var files []store.File
+			if link {
+				files, err = readLinks(args)
+			} else {
+				files, err = readFiles(cmd.Context(), c, args)
+			}
 			if err != nil {
 				return err
 			}
@@ -308,6 +374,8 @@ func attachCmd(g *globals) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&link, "link", false, "attach links to the files (or URLs), not copies")
+	return cmd
 }
 
 // saveReplyFiles saves the files of m's reply into dir.

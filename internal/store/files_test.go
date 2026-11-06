@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +116,103 @@ func TestFilesDecodingStrict(t *testing.T) {
 	both := "[" + strings.Repeat(`{"name":"a"},`, 511) + `{"name":"a"}]`
 	if err := json.Unmarshal([]byte(both), &fs); err != nil || len(fs) != 512 {
 		t.Fatalf("a listing of both sides at 256 each: %v", err)
+	}
+}
+
+func blobCount(t *testing.T, s *Store) (n int, bytes int64) {
+	t.Helper()
+	if err := s.r.QueryRow("SELECT count(*), coalesce(sum(length(data)), 0) FROM blobs").Scan(&n, &bytes); err != nil {
+		t.Fatal(err)
+	}
+	return n, bytes
+}
+
+// The same content is kept once, whatever messages and replies carry it; a link keeps nothing.
+func TestFilesContentKeptOnceLinksNotCopied(t *testing.T) {
+	s := openTest(t, Options{})
+	shot := bytes.Repeat([]byte("png"), 1000)
+	a := msg("agent:a", "one")
+	a.Files = []File{{Name: "shot.png", Data: shot}, {Name: "spec", URI: "https://example.com/spec.pdf", Type: "application/pdf", Size: 1234}}
+	mustInsert(t, s, a)
+	b := msg("agent:a", "two")
+	b.Files = []File{{Name: "same-shot.png", Data: shot}}
+	mustInsert(t, s, b)
+	if n, sz := blobCount(t, s); n != 1 || sz != int64(len(shot)) {
+		t.Fatalf("%d blobs, %d bytes", n, sz)
+	}
+	// The reply hands the same content back: still one copy.
+	c, _, _ := s.Claim(ctx, "agent:a", time.Minute)
+	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "ok", "", "", File{Name: "back.png", Data: shot}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := blobCount(t, s); n != 1 {
+		t.Fatalf("%d blobs after a reply with the same content", n)
+	}
+	got, _ := s.Get(ctx, a.ID)
+	if len(got.Files) != 3 || got.Files[1].URI != "https://example.com/spec.pdf" || got.Files[1].Size != 1234 || got.Files[0].SHA256 != Hash(shot) {
+		t.Fatalf("%+v", got.Files)
+	}
+	all, _ := s.FilesOf(ctx, a.ID)
+	if !bytes.Equal(all[0].Data, shot) || all[1].Data != nil {
+		t.Fatalf("data %d %v", len(all[0].Data), all[1].Data)
+	}
+	// Content goes when the last message that has it goes: a (done) goes first, b still has it.
+	if k, err := s.GC(ctx, time.Now().Add(time.Hour)); err != nil || k != 1 {
+		t.Fatalf("gc %d %v", k, err)
+	}
+	if n, _ := blobCount(t, s); n != 1 {
+		t.Fatalf("%d blobs: the content is still b's", n)
+	}
+	s.Cancel(ctx, b.ID)
+	s.GC(ctx, time.Now().Add(time.Hour))
+	if n, _ := blobCount(t, s); n != 0 {
+		t.Fatalf("%d blobs after both messages went", n)
+	}
+}
+
+// A store of the first release (data in each file row) is moved to blobs on open.
+func TestFilesMigrateFromRowData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s", "store.db")
+	s, err := Open("sqlite://"+path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := msg("agent:a", "x")
+	mustInsert(t, s, m)
+	// Back to the old layout, with two rows of the same content.
+	for _, q := range []string{"DROP TABLE files", "DROP TABLE blobs",
+		"CREATE TABLE files (id INTEGER PRIMARY KEY, msg INTEGER NOT NULL, name TEXT NOT NULL, reply INTEGER NOT NULL DEFAULT 0, type TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL)",
+		"CREATE UNIQUE INDEX files_msg ON files (msg, reply, name)",
+		"INSERT INTO files (msg, name, reply, type, size, data) SELECT seq, 'a.txt', 0, 'text/plain', 3, X'616263' FROM messages",
+		"INSERT INTO files (msg, name, reply, type, size, data) SELECT seq, 'b.txt', 1, 'text/plain', 3, X'616263' FROM messages"} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	s.Close()
+	s, err = Open("sqlite://"+path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	all, err := s.FilesOf(ctx, m.ID)
+	if err != nil || len(all) != 2 || string(all[0].Data) != "abc" || string(all[1].Data) != "abc" || !all[1].Reply {
+		t.Fatalf("%+v %v", all, err)
+	}
+	if n, _ := blobCount(t, s); n != 1 {
+		t.Fatalf("%d blobs", n)
+	}
+}
+
+// The same new content twice in one request needs room once.
+func TestSameNewContentCountedOnce(t *testing.T) {
+	s := openTest(t, Options{})
+	live, _ := s.Live(ctx)
+	s.opt.MaxStore = live + 6<<20
+	data := bytes.Repeat([]byte("z"), 4<<20)
+	m := msg("agent:a", "x")
+	m.Files = []File{{Name: "a.bin", Data: data}, {Name: "b.bin", Data: data}}
+	if _, _, err := s.Insert(ctx, m); err != nil {
+		t.Fatalf("refused though it needs 4 MiB once: %v", err)
 	}
 }

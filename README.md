@@ -46,7 +46,7 @@ the node runs, `client:<token>` for a program authenticated by a token.
 | `thread` | conversation id; a new message starts its own (`thread = id`) |
 | `parent`, `depth` | the message during whose handling this one was sent, and how deep the chain is |
 | `body` | text, up to `limits.max_body` (1 MiB); Markdown goes as it is |
-| `files` | files attached to the message and to its reply: `name`, `type`, `size`, `reply`. Up to `limits.max_files` (16) and `max_files_size` (16 MiB) each side |
+| `files` | files attached to the message and to its reply: `name`, `type`, `size`, `reply`, and `sha256` of content or `uri` of a link. Up to `limits.max_files` (16) and `max_files_size` (16 MiB) each side |
 | `meta` | string map, up to 4 KiB |
 | `state` | see below |
 | `reply` / `error` | the answer, or why there is none |
@@ -130,7 +130,8 @@ bounded (`limits.max_depth`).
 
 ```
 acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--attach FILE]... [--task T] [--thread ID]
-               [--session ACP-ID] [--meta k=v]... [--ttl DUR] [--idempotency-key K] [--wait [--timeout DUR] [--save DIR]]
+               [--link PATH|URL]... [--session ACP-ID] [--meta k=v]... [--ttl DUR] [--idempotency-key K]
+               [--wait [--timeout DUR] [--save DIR]]
 acpost wait    ID... [--timeout DUR] [--save DIR]
 acpost show    ID [--events]
 acpost list    [--to ADDR] [--from ADDR] [--task T] [--thread ID] [--state S] [--limit N] [--after CURSOR]
@@ -138,7 +139,7 @@ acpost cancel  ID
 acpost recv    --as NAME [--wait DUR] [--lease DUR]
 acpost reply   ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON) [--attach FILE]...
 acpost files   ID [NAME...] [--reply] [-o DIR | --stdout] [--force]
-acpost attach  FILE...                     # inside an agent's turn: files for its reply
+acpost attach  FILE... [--link]            # inside an agent's turn: files for its reply
 acpost agents
 acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
@@ -153,12 +154,23 @@ agent's sessions, newest first (ACP `session/list`); `--session latest` takes th
 resumes or loads the session; if the agent cannot (Codex lets one client write a conversation at a
 time), the message fails with `session_busy` and says what to do.
 
-**Files.** `--attach` (repeatable) sends files with a message or a reply; a file goes by its base
+**Files are content or links, and nothing is kept twice.** Content is stored once per SHA-256:
+the same file in many messages, or handed back in a reply, takes its bytes once. A link (`--link
+PATH|URL`: a file of this machine or an http(s) URL) is kept where it is; acpost stores only the
+link, `files` and `--save` report it rather than copy it, and an agent gets it as the link.
+
+**Files in an agent's answer.** The `image`, `resource` and `resource_link` blocks an ACP agent
+puts in its answer become the reply's files (not text of the reply): a `resource_link` stays a
+link; content the agent was given in the turn is the stored file again; embedded content whose
+`file://` URI names a file on disk with the same bytes is a link to that file; anything else is
+content. Past the reply's limits the rest is left out and said in an event.
+
+`--attach` (repeatable) sends files with a message or a reply; a file goes by its base
 name, and its type comes from the extension or its first bytes. An `acp` agent gets them in its
-prompt the way ACP carries context: a text file embedded (`resource`) when the agent takes embedded
-context, an image inline (`image`) when it takes images, anything else as a `resource_link` to a
-copy on disk that lives until the turn ends; the prompt lists the files and their paths either
-way. An agent attaches files to its answer from inside its turn with `acpost attach FILE…` (its
+prompt the way ACP carries context: a link as the link, a text file embedded (`resource`) when
+the agent takes embedded context, an image inline (`image`) when it takes images, anything else as
+a `resource_link` to a copy on disk that lives until the turn ends (only these are copied); the
+prompt lists the files and where each is. An agent attaches files to its answer from inside its turn with `acpost attach FILE…` (its
 `ACPOST_TOKEN` says which message it is answering); an inbox consumer uses `reply --attach`.
 What is embedded in a prompt is bounded (4 MiB of encoded content); past it files go as links.
 The CLI checks the node's limits (`status` reports them) before it reads a file. `recv`, `show` and `wait` list the files; `acpost files ID` saves the message's, `--reply` the
@@ -377,7 +389,7 @@ notion of addresses or mailboxes, so acpost puts its own envelope around it: the
 | first message of a session key | `session/new` (cwd) and the configured mode, model, thought level |
 | next message with that key | `session/prompt` in the same session; after a restart of the agent `session/resume` or `session/load` when the agent offers them |
 | attached files | `resource` (text, with `embeddedContext`), `image` (with `image`), else `resource_link` to a copy on disk |
-| reply | `agent_message_chunk` text of the turn, plus files the agent attached with `acpost attach`; `stopReason` other than `end_turn` is a failure |
+| reply | `agent_message_chunk` text of the turn; its `image`/`resource`/`resource_link` blocks and files from `acpost attach` are the reply's files; `stopReason` other than `end_turn` is a failure |
 | permission request | answered by `permissions`, recorded as an event |
 | `acpost cancel` | `session/cancel` |
 | tool calls, plans, notices | events of the message (`show --events`) |

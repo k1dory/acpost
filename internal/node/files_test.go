@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -98,15 +99,17 @@ func TestACPGetsFilesAsBlocks(t *testing.T) {
 		t.Fatalf("%s %s", w.State, w.Error)
 	}
 	lines := strings.Split(strings.TrimSpace(w.Reply), "\n")
-	if len(lines) != 3 || !strings.HasPrefix(lines[0], "resource file://") || !strings.HasSuffix(lines[0], `notes.md "# notes"`) ||
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], "resource acpost://") || !strings.HasSuffix(lines[0], `notes.md "# notes"`) ||
 		lines[1] != "image image/png "+strconv.Itoa(base64.StdEncoding.EncodedLen(len(png1))) ||
 		!strings.HasPrefix(lines[2], "link data.bin \"\\x00\\x01\\x02\\xff\" <nil>") {
 		t.Fatalf("blocks:\n%s", w.Reply)
 	}
-	// The copies on disk are gone with the turn.
-	path := strings.TrimPrefix(strings.Fields(lines[0])[1], "file://")
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("%s still there: %v", path, err)
+	// Embedded files get no copy on disk; the one sent as a link had one, gone with the turn.
+	entries, _ := os.ReadDir(n.turns)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "msg_") {
+			t.Fatalf("turn copies left: %v", e.Name())
+		}
 	}
 }
 
@@ -288,4 +291,120 @@ func TestLabelsBounded(t *testing.T) {
 			t.Fatalf("%v", err)
 		}
 	}
+}
+
+// Files in the agent's answer are kept with its reply, each the cheapest way that loses nothing.
+func TestACPReplyFilesCollected(t *testing.T) {
+	disk := filepath.Join(t.TempDir(), "made.md")
+	os.WriteFile(disk, []byte("on disk"), 0o600)
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    preamble: false
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_DISK: %q}
+`, os.Args[0], disk))
+	w := ask(t, n, SendRequest{Body: "give", Files: []store.File{file("notes.md", "# notes")}})
+	if w.State != store.Done || w.Reply != "here" {
+		t.Fatalf("%s %q %s: the files are not in the text", w.State, w.Reply, w.Error)
+	}
+	got := map[string]store.File{}
+	var given store.File
+	for _, f := range w.Files {
+		if f.Reply {
+			got[f.Name] = f
+		} else {
+			given = f
+		}
+	}
+	check := func(name string, ok bool) {
+		t.Helper()
+		if !ok {
+			t.Fatalf("%s: %+v\nall: %+v", name, got[name], w.Files)
+		}
+	}
+	img := got["image-1.png"]
+	check("image-1.png", !img.Link() && img.Size == len(png1) && img.Type == "image/png")
+	check("spec.pdf", got["spec.pdf"].URI == "https://example.com/download?id=42") // the name it gave, not the URI's
+	check("made.md", got["made.md"].URI == "file://"+disk && got["made.md"].Size == 7)
+	check("new.txt", !got["new.txt"].Link() && got["new.txt"].Size == 5)
+	// The file it was given, handed back: the stored file again, the same content, not a new one.
+	back := got["notes.md"]
+	check("notes.md", !back.Link() && back.SHA256 == given.SHA256 && back.SHA256 != "")
+	all, _ := n.Files(ctx, me, w.ID)
+	for _, f := range all {
+		if f.Name == "made.md" && f.Data != nil {
+			t.Fatal("a file on disk was copied into the store")
+		}
+	}
+}
+
+// A file handed back changed is the changed file, not the one it was given.
+func TestACPEditedFileKeptAsEdited(t *testing.T) {
+	n := newNode(t, fmt.Sprintf("agents:\n  fake:\n    driver: acp\n    command: [%q]\n    preamble: false\n    env: {ACPOST_FAKE_AGENT: \"1\"}\n", os.Args[0]))
+	w := ask(t, n, SendRequest{Body: "edit", Files: []store.File{file("report.md", "draft")}})
+	all, _ := n.Files(ctx, me, w.ID)
+	var back store.File
+	for _, f := range all {
+		if f.Reply {
+			back = f
+		}
+	}
+	if back.Name != "report.md" || string(back.Data) != "draft (fixed)" {
+		t.Fatalf("%+v", back)
+	}
+}
+
+// Past the reply's limits the files that fit stay, in order; the rest is said.
+func TestACPReplyFilesPartlyKept(t *testing.T) {
+	n := newNode(t, fmt.Sprintf("limits: {max_files: 2}\nagents:\n  fake:\n    driver: acp\n    command: [%q]\n    preamble: false\n    env: {ACPOST_FAKE_AGENT: \"1\"}\n", os.Args[0]))
+	w := ask(t, n, SendRequest{Body: "give"})
+	var names []string
+	for _, f := range w.Files {
+		names = append(names, f.Name)
+	}
+	if strings.Join(names, " ") != "image-1.png spec.pdf" {
+		t.Fatalf("kept %v", names)
+	}
+	evs, _ := n.Events(ctx, me, w.ID, 0, 100)
+	said := false
+	for _, e := range evs {
+		said = said || (e.Kind == "notice" && strings.Contains(e.Data, "more files than the reply keeps"))
+	}
+	if !said {
+		t.Fatalf("not said: %+v", evs)
+	}
+}
+
+func TestOnDiskRefusesFIFOAtOnce(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "p")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip(err)
+	}
+	done := make(chan bool, 1)
+	go func() { done <- onDisk("file://"+fifo, []byte("x")) }()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("a FIFO taken for a file on disk")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("onDisk waits on a FIFO")
+	}
+}
+
+// A file at the size limit is kept, and it has its type.
+func TestACPReplyFileAtLimitTyped(t *testing.T) {
+	n := newNode(t, fmt.Sprintf("limits: {max_files_size: 5}\nagents:\n  fake:\n    driver: acp\n    command: [%q]\n    preamble: false\n    env: {ACPOST_FAKE_AGENT: \"1\"}\n", os.Args[0]))
+	w := ask(t, n, SendRequest{Body: "give"})
+	for _, f := range w.Files {
+		if f.Name == "new.txt" {
+			if f.Type != "text/plain; charset=utf-8" || f.Size != 5 {
+				t.Fatalf("%+v", f)
+			}
+			return
+		}
+	}
+	t.Fatalf("new.txt (5 bytes, the limit) not kept: %+v", w.Files)
 }

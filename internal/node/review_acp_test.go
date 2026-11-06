@@ -139,7 +139,7 @@ func TestACPSessionStateAcrossSlots(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		turn := p.cl.begin(sid, "session-regression", 1024)
+		turn := p.cl.begin(sid, "session-regression", 1024, 16, 1<<20)
 		_, err = p.conn.Prompt(ctx, acp.PromptRequest{
 			SessionId: sid,
 			Prompt:    []acp.ContentBlock{acp.TextBlock("count")},

@@ -359,7 +359,7 @@ func readBody(cmd *cobra.Command, body, file string) (string, bool, error) {
 
 func sendCmd(g *globals) *cobra.Command {
 	var to, body, bodyFile, task, thread, idem, session, save string
-	var meta, attach []string
+	var meta, attach, links []string
 	var ttl, timeout time.Duration
 	var wait bool
 	cmd := &cobra.Command{
@@ -380,8 +380,8 @@ func sendCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !ok && len(attach) == 0 {
-				return usageErr(errors.New("no body: --body, --body-file, stdin or --attach"))
+			if !ok && len(attach) == 0 && len(links) == 0 {
+				return usageErr(errors.New("no body: --body, --body-file, stdin, --attach or --link"))
 			}
 			ctx := cmd.Context()
 			c, err := g.connect(ctx)
@@ -392,6 +392,11 @@ func sendCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			linked, err := readLinks(links)
+			if err != nil {
+				return err
+			}
+			files = append(files, linked...)
 			req := client.SendRequest{To: to, Body: text, Task: task, Thread: thread, Session: session, Files: files}
 			for _, kv := range meta {
 				k, v, found := strings.Cut(kv, "=")
@@ -426,6 +431,7 @@ func sendCmd(g *globals) *cobra.Command {
 	f.StringVar(&body, "body", "", "the message")
 	f.StringVar(&bodyFile, "body-file", "", "read the message from a file (- for stdin)")
 	f.StringArrayVarP(&attach, "attach", "a", nil, "attach a file (repeatable); an ACP agent gets text embedded, images inline, the rest as a path")
+	f.StringArrayVar(&links, "link", nil, "attach a link to a file of this machine or an http(s) URL, not a copy (repeatable)")
 	f.StringVar(&task, "task", "", "task label; messages of one task share the agent's session")
 	f.StringVar(&thread, "thread", "", "thread id")
 	f.StringVar(&session, "session", "", "continue this existing ACP session of the agent (an editor's, say)")
@@ -486,7 +492,11 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 				noteFiles(m.ID, m.Files, true)
 			}
 			for _, s := range saved {
-				fmt.Fprintf(os.Stderr, "saved: %s\n", s.Path)
+				if s.URI != "" {
+					fmt.Fprintf(os.Stderr, "link: %s → %s\n", s.Name, s.URI)
+				} else {
+					fmt.Fprintf(os.Stderr, "saved: %s\n", s.Path)
+				}
 			}
 		}
 		if saveErr != nil {
@@ -612,7 +622,7 @@ func showCmd(g *globals) *cobra.Command {
 				if f.Reply {
 					k = "reply file"
 				}
-				row(k, fmt.Sprintf("%s (%s, %d bytes)", f.Name, f.Type, f.Size))
+				row(k, describe(f))
 			}
 			w.Flush()
 			fmt.Printf("\n%s\n", strings.TrimRight(m.Body, "\n"))
@@ -736,7 +746,7 @@ func recvCmd(g *globals) *cobra.Command {
 							fmt.Printf("task: %s\n", m.Task)
 						}
 						for _, f := range m.Files {
-							fmt.Printf("file: %s (%s, %d bytes)\n", f.Name, f.Type, f.Size)
+							fmt.Printf("file: %s\n", describe(f))
 						}
 						fmt.Printf("\n%s", m.Body)
 						if len(m.Files) > 0 {
@@ -759,7 +769,7 @@ func recvCmd(g *globals) *cobra.Command {
 
 func replyCmd(g *globals) *cobra.Command {
 	var lease, body, bodyFile, fail string
-	var attach []string
+	var attach, links []string
 	cmd := &cobra.Command{
 		Use:   "reply ID --lease L (--body TEXT | --body-file F | stdin | --fail REASON) [--attach FILE]...",
 		Short: "Answer a message taken with recv",
@@ -774,8 +784,8 @@ func replyCmd(g *globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if !ok && len(attach) == 0 {
-					return usageErr(errors.New("no reply: --body, --body-file, stdin, --attach or --fail"))
+				if !ok && len(attach) == 0 && len(links) == 0 {
+					return usageErr(errors.New("no reply: --body, --body-file, stdin, --attach, --link or --fail"))
 				}
 				r.Body = text
 			}
@@ -787,7 +797,11 @@ func replyCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			r.Files = files
+			linked, err := readLinks(links)
+			if err != nil {
+				return err
+			}
+			r.Files = append(files, linked...)
 			return c.Reply(cmd.Context(), args[0], r)
 		},
 	}
@@ -796,6 +810,7 @@ func replyCmd(g *globals) *cobra.Command {
 	f.StringVar(&body, "body", "", "the reply")
 	f.StringVar(&bodyFile, "body-file", "", "read the reply from a file (- for stdin)")
 	f.StringArrayVarP(&attach, "attach", "a", nil, "attach a file to the reply (repeatable)")
+	f.StringArrayVar(&links, "link", nil, "attach a link to a file of this machine or an http(s) URL, not a copy (repeatable)")
 	f.StringVar(&fail, "fail", "", "end the message as failed, with this reason")
 	return cmd
 }

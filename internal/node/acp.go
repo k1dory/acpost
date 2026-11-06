@@ -503,9 +503,16 @@ func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.Sessio
 func (s *acpSlot) prompt(m store.Message, files []attached) string {
 	var b strings.Builder
 	if len(files) > 0 {
-		b.WriteString("[acpost] Attached files (on disk until this turn ends; copy what you need to keep):\n")
+		b.WriteString("[acpost] Attached files:\n")
 		for _, f := range files {
-			fmt.Fprintf(&b, "- %s (%s, %d bytes): %s\n", f.Name, f.Type, f.Size, f.path)
+			switch {
+			case f.Link():
+				fmt.Fprintf(&b, "- %s (%s): a link, %s\n", f.Name, f.Type, f.URI)
+			case f.embedded:
+				fmt.Fprintf(&b, "- %s (%s, %d bytes): in this prompt\n", f.Name, f.Type, f.Size)
+			default:
+				fmt.Fprintf(&b, "- %s (%s, %d bytes): %s (a copy until this turn ends)\n", f.Name, f.Type, f.Size, f.path)
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -575,7 +582,14 @@ func (s *acpSlot) handle(m store.Message) {
 	}()
 	defer func() { cancel(); <-watchDone }()
 
+	var turn *acpTurn
+	var tf *turnFiles
 	complete := func(state store.State, reply string, f Failure) {
+		if turn != nil {
+			// What the agent handed back as files goes with its reply, under this attempt's lease.
+			got, dropped := turn.blocks()
+			n.keepReplyFiles(n.ctx, m, got, dropped, tf)
+		}
 		reply = capReply(reply, int(n.cfg.Limits.MaxReply))
 		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, state, reply, f.Code, f.Message); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("complete", "id", m.ID, "err", err)
@@ -614,7 +628,8 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
-	blocks, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
+	blocks, tfiles, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
+	tf = tfiles
 	defer cleanup()
 	if err != nil {
 		if n.ctx.Err() == nil && !cancelled.Load() {
@@ -622,7 +637,7 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
-	turn := p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply))
+	turn = p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply), n.cfg.Limits.MaxFiles, int(n.cfg.Limits.MaxFilesSize))
 	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
 	// The SDK writes a request before it watches the context: an agent that stopped reading its
 	// stdin holds Prompt in that write. If Prompt has not returned shortly after the turn ended,
@@ -719,6 +734,36 @@ type acpTurn struct {
 	mu    sync.Mutex
 	all   strings.Builder
 	last  strings.Builder
+	// Files the agent handed back, within the reply's limits (more are counted, not kept).
+	files              []replyBlock
+	maxFiles, maxBytes int
+	bytes, meta        int // content, and names, links and types (each bounded on its own)
+	dropped            int
+}
+
+func (t *acpTurn) file(b replyBlock) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Names, links and types are bounded as they come, and count with the content: what is kept
+	// while the turn runs stays within the reply's limits.
+	if len(b.uri) > 2048 || len(b.name) > 255 || len(b.typ) > 127 {
+		t.dropped++
+		return
+	}
+	if len(t.files) >= t.maxFiles || t.bytes+len(b.data) > t.maxBytes {
+		t.dropped++
+		return
+	}
+	t.files = append(t.files, b)
+	t.bytes += len(b.data)
+	t.meta += len(b.uri) + len(b.name) + len(b.typ) // at most max_files × 2430 bytes, by the checks above
+}
+
+// blocks are the files the agent handed back, and how many more there were than the limits keep.
+func (t *acpTurn) blocks() ([]replyBlock, int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.files, t.dropped
 }
 
 func (t *acpTurn) text(s string) {
@@ -756,8 +801,8 @@ type acpClient struct {
 	turns map[acp.SessionId]*acpTurn
 }
 
-func (c *acpClient) begin(sid acp.SessionId, msgID string, limit int) *acpTurn {
-	t := &acpTurn{msgID: msgID, limit: limit}
+func (c *acpClient) begin(sid acp.SessionId, msgID string, limit, maxFiles, maxBytes int) *acpTurn {
+	t := &acpTurn{msgID: msgID, limit: limit, maxFiles: maxFiles, maxBytes: maxBytes}
 	c.mu.Lock()
 	c.turns[sid] = t
 	c.mu.Unlock()
@@ -801,6 +846,9 @@ func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification
 	case u.AgentMessageChunk != nil:
 		if tb := u.AgentMessageChunk.Content.Text; tb != nil {
 			t.text(tb.Text)
+		} else if b, ok := fileBlock(u.AgentMessageChunk.Content); ok {
+			// A file in the answer: kept with the reply, not written into its text.
+			t.file(b)
 		}
 	case u.ToolCall != nil:
 		t.toolCall()

@@ -263,3 +263,33 @@ func TestDeliveredFilesOverLimitRefused(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 }
+
+// Links are kept where they are: sent with --link, listed and reported, never copied or saved.
+func TestLinksNotCopied(t *testing.T) {
+	e := newEnv(t, inbox)
+	e.serve()
+	local := filepath.Join(e.dir, "big.iso")
+	os.WriteFile(local, []byte("pretend this is large"), 0o600)
+	id := strings.TrimSpace(e.ok("", "send", "--to", "bot", "--body", "see", "--link", local, "--link", "https://example.com/doc.pdf"))
+	got := e.ok("", "recv", "--as", "bot")
+	if !strings.Contains(got, "→ file://"+local) {
+		t.Fatalf("recv %q", got)
+	}
+	if !strings.Contains(got, "→ https://example.com/doc.pdf") {
+		t.Fatalf("recv %q", got)
+	}
+	dir := filepath.Join(e.dir, "out")
+	out := e.ok("", "files", id, "-o", dir)
+	if !strings.Contains(out, "link big.iso: file://"+local) || !strings.Contains(out, "link doc.pdf: https://example.com/doc.pdf") {
+		t.Fatalf("files %q", out)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("links were saved as files: %v", entries)
+	}
+	if r := e.run("", "files", id, "doc.pdf", "--stdout"); r.code != 1 || !strings.Contains(r.err, "is a link") {
+		t.Fatalf("--stdout of a link: %d %s", r.code, r.err)
+	}
+	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", filepath.Join(e.dir, "missing")); r.code != 2 {
+		t.Fatalf("link to a missing file: %d %s", r.code, r.err)
+	}
+}

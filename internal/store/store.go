@@ -310,7 +310,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 `
 
 func (s *Store) migrate() error {
-	if _, err := s.w.Exec(schema + filesSchema); err != nil {
+	if _, err := s.w.Exec(schema); err != nil {
+		return err
+	}
+	if err := migrateFiles(s.w); err != nil {
+		return fmt.Errorf("migrate files: %w", err)
+	}
+	if _, err := s.w.Exec(filesSchema); err != nil {
 		return err
 	}
 	// Columns added after the first release.
@@ -474,7 +480,7 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 				return ErrQueueFull
 			}
 		}
-		if err := s.roomFor(ctx, t, int64(len(out.Body))+filesSize(out.Files)); err != nil {
+		if err := s.roomFor(ctx, t, int64(len(out.Body))); err != nil { // and putFiles for new content
 			return err
 		}
 		res, err := t.ExecContext(ctx, `INSERT INTO messages
@@ -492,7 +498,7 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 		if _, err = t.ExecContext(ctx, "INSERT INTO contents (seq, body) VALUES (?, ?)", seq, out.Body); err != nil {
 			return err
 		}
-		return putFiles(ctx, t, seq, false, out.Files)
+		return s.putFiles(ctx, t, seq, false, out.Files)
 	})
 	if err != nil {
 		return Message{}, false, err
@@ -570,8 +576,10 @@ func withoutData(files []File) []File {
 	}
 	out := make([]File, len(files))
 	for i, f := range files {
+		if !f.Link() {
+			f.Size, f.SHA256 = len(files[i].Data), Hash(files[i].Data)
+		}
 		f.Data = nil
-		f.Size = len(files[i].Data)
 		out[i] = f
 	}
 	return out
@@ -720,10 +728,7 @@ func (s *Store) Settle(ctx context.Context, id string, state State, reply, errCo
 		if _, err := t.ExecContext(ctx, "DELETE FROM files WHERE msg = ? AND reply = 1", seq); err != nil {
 			return err
 		}
-		if err := s.roomFor(ctx, t, filesSize(files)); err != nil {
-			return err
-		}
-		return putFiles(ctx, t, seq, true, files)
+		return s.putFiles(ctx, t, seq, true, files)
 	})
 }
 
@@ -782,14 +787,11 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 		if err != nil || len(files) == 0 {
 			return err
 		}
-		if err := s.roomFor(ctx, t, filesSize(files)); err != nil {
-			return err
-		}
 		var seq int64
 		if err := t.QueryRowContext(ctx, "SELECT seq FROM messages WHERE id = ?", id).Scan(&seq); err != nil {
 			return err
 		}
-		return putFiles(ctx, t, seq, true, files)
+		return s.putFiles(ctx, t, seq, true, files)
 	})
 	if err == nil {
 		s.afterWrite(ctx, int64(len(reply))+filesSize(files))
@@ -1030,6 +1032,11 @@ func (s *Store) GC(ctx context.Context, before time.Time) (int, error) {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE msg IN ("+sel+")", t, gcBatch); err != nil {
+				return err
+			}
+			// Content that no file refers to any more: of these messages, or of reply files an
+			// earlier attempt or a settled copy dropped.
+			if err := dropOrphans(ctx, tx); err != nil {
 				return err
 			}
 			res, err := tx.ExecContext(ctx, "DELETE FROM messages WHERE seq IN ("+sel+")", t, gcBatch)

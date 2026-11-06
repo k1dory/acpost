@@ -37,13 +37,21 @@ func (n *Node) checkFiles(files, have []store.File, side string) error {
 	size := int64(0)
 	earlier, now := map[string]bool{}, map[string]bool{}
 	for _, f := range have {
-		size += int64(f.Size)
+		if !f.Link() {
+			size += int64(f.Size)
+		}
 		earlier[f.Name] = true
 	}
 	for i := range files {
 		f := &files[i]
 		if err := validFileName(f.Name); err != nil {
 			return err
+		}
+		f.SHA256 = "" // the store's to say
+		if f.Link() {
+			if err := validLink(f); err != nil {
+				return err
+			}
 		}
 		switch {
 		case now[f.Name]:
@@ -52,13 +60,54 @@ func (n *Node) checkFiles(files, have []store.File, side string) error {
 			return errh("conflict", "rename the file; what is attached stays", "%s already has a file %s (attached earlier)", side, f.Name)
 		}
 		now[f.Name] = true
+		f.Reply = false
+		if f.Link() {
+			// A link is kept as a link: its type from what was given or its name, its size as said.
+			f.Type = fileType(f.Name, f.Type, nil)
+			continue
+		}
 		size += int64(len(f.Data))
 		f.Type = fileType(f.Name, f.Type, f.Data)
 		f.Size = len(f.Data)
-		f.Reply = false
 	}
 	if size > int64(lim.MaxFilesSize) {
 		return errf("refused", "the files of %s are %d bytes together, over limits.max_files_size (%d)", side, size, lim.MaxFilesSize)
+	}
+	return nil
+}
+
+// maxLinkSize bounds the size a link may claim (it is the sender's word, shown, never read).
+const maxLinkSize = 1 << 50
+
+// validLink checks a link: an absolute file:// path, or an http(s) URL; no content with it.
+func validLink(f *store.File) error {
+	bad := func(why string) error {
+		return errh("invalid", "a link is file:///absolute/path or an http(s) URL, without data", "link %s: %s", f.Name, why)
+	}
+	if len(f.Data) > 0 {
+		return bad("a file is content or a link, not both")
+	}
+	if len(f.URI) > 2048 || strings.ContainsFunc(f.URI, unicode.IsControl) {
+		return bad("the URI is too long or has control characters")
+	}
+	u, err := url.Parse(f.URI)
+	if err != nil {
+		return bad(err.Error())
+	}
+	switch u.Scheme {
+	case "file":
+		if u.Host != "" && u.Host != "localhost" || !filepath.IsAbs(u.Path) {
+			return bad("a file link names an absolute path on this machine")
+		}
+	case "http", "https":
+		if u.Host == "" {
+			return bad("no host")
+		}
+	default:
+		return bad("scheme " + u.Scheme)
+	}
+	if f.Size < 0 || f.Size > maxLinkSize {
+		f.Size = 0
 	}
 	return nil
 }
@@ -174,7 +223,9 @@ func (n *Node) checkListed(files []store.File, side string) error {
 		if err := validFileName(f.Name); err != nil {
 			return err
 		}
-		size += int64(f.Size)
+		if !f.Link() {
+			size += int64(f.Size)
+		}
 	}
 	if size > int64(lim.MaxFilesSize) {
 		return errf("refused", "the files of %s are %d bytes together, over limits.max_files_size (%d)", side, size, lim.MaxFilesSize)
@@ -192,97 +243,156 @@ func pick(files []store.File, reply bool) []store.File {
 	return out
 }
 
-// attached is a message's file put on disk for an agent's turn.
+// attached is a message's file as an agent's turn gets it: a link as it is, content embedded in
+// the prompt or, when it is not, a copy on disk at path.
 type attached struct {
 	store.File
-	path string
+	path     string
+	embedded bool
+	block    *acp.ContentBlock // the embedded block, when the agent takes this file embedded
+}
+
+// uri is where the agent finds the file: the link, the copy, or (embedded) the message's own name.
+func (a *attached) uri(msgID string) string {
+	switch {
+	case a.Link():
+		return a.URI
+	case a.embedded:
+		return "acpost://" + msgID + "/files/" + url.PathEscape(a.Name)
+	}
+	return fileURI(a.path)
+}
+
+func (a *attached) linkBlock(msgID string) acp.ContentBlock {
+	link := acp.ResourceLinkBlock(a.Name, a.uri(msgID))
+	typ := a.Type
+	link.ResourceLink.MimeType = &typ
+	if a.Size > 0 || !a.Link() {
+		size := a.Size
+		link.ResourceLink.Size = &size
+	}
+	return link
+}
+
+// turnFiles are a turn's attached files and where their copies are: the agent may hand them back,
+// and what it hands back is then the stored file, not new content.
+type turnFiles struct {
+	dir   string
+	byURI map[string]store.File // the URIs and paths the agent was given → the message's file
 }
 
 // promptBlocks is the prompt of a turn: the text, then each attached file as the agent takes it —
-// text embedded, an image inline, anything else (or for an agent that takes neither) a link to
-// its copy on disk. The copies go when the turn ends (cleanup).
-func (s *acpSlot) promptBlocks(ctx context.Context, m store.Message, caps acp.PromptCapabilities) ([]acp.ContentBlock, func(), error) {
+// a link as the link, text embedded, an image inline, anything else (or for an agent that takes
+// neither) a link to a copy on disk. Only those copies are written, and they go when the turn
+// ends (cleanup).
+func (s *acpSlot) promptBlocks(ctx context.Context, m store.Message, caps acp.PromptCapabilities) ([]acp.ContentBlock, *turnFiles, func(), error) {
 	nothing := func() {}
+	tf := &turnFiles{byURI: map[string]store.File{}}
 	if len(m.Files) == 0 && jsonLen([]byte(m.Body)) <= maxPrompt-promptOverhead {
-		return []acp.ContentBlock{acp.TextBlock(s.prompt(m, nil))}, nothing, nil
+		return []acp.ContentBlock{acp.TextBlock(s.prompt(m, nil))}, tf, nothing, nil
 	}
 	var all []store.File
 	if len(m.Files) > 0 {
 		var err error
 		if all, err = s.a.n.st.FilesOf(ctx, m.ID); err != nil {
-			return nil, nothing, err
+			return nil, nil, nothing, err
 		}
 	}
 	dir, err := os.MkdirTemp(s.a.n.turns, m.ID+"-")
 	if err != nil {
-		return nil, nothing, err
+		return nil, nil, nothing, err
 	}
+	tf.dir = dir
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	fail := func(err error) ([]acp.ContentBlock, func(), error) { cleanup(); return nil, nothing, err }
-	var files []attached
+	fail := func(err error) ([]acp.ContentBlock, *turnFiles, func(), error) {
+		cleanup()
+		return nil, nil, nothing, err
+	}
+
+	files := make([]*attached, 0, len(all))
 	for i, f := range pick(all, false) {
 		// A directory per file: names that differ only in case are two files on any file system.
-		sub := filepath.Join(dir, strconv.Itoa(i))
-		if err := os.Mkdir(sub, 0o700); err != nil {
-			return fail(err)
+		a := &attached{File: f, path: filepath.Join(dir, strconv.Itoa(i), f.Name)}
+		if !f.Link() {
+			// What the agent takes embedded, within the budget for embedded content.
+			var b acp.ContentBlock
+			switch {
+			case caps.EmbeddedContext && len(f.Data) <= embedBudget && isText(f):
+				typ := f.Type
+				a.embedded = true
+				b = acp.ResourceBlock(acp.EmbeddedResourceResource{
+					TextResourceContents: &acp.TextResourceContents{Uri: a.uri(m.ID), Text: string(f.Data), MimeType: &typ}})
+				a.block = &b
+			case caps.Image && isImage(f.Type) && base64.StdEncoding.EncodedLen(len(f.Data)) <= embedBudget:
+				a.embedded = true
+				b = acp.ImageBlock(base64.StdEncoding.EncodeToString(f.Data), mediaType(f.Type))
+				a.block = &b
+			}
 		}
-		path := filepath.Join(sub, f.Name)
-		if err := os.WriteFile(path, f.Data, 0o600); err != nil {
-			return fail(err)
-		}
-		files = append(files, attached{File: f, path: path})
+		files = append(files, a)
 	}
 
 	// The request stays inside the frame an agent reads (the Go SDK's is 10 MiB): its size is
-	// measured as the JSON it is. Every file starts as a link; then, file by file, what the agent
-	// takes is embedded while it fits.
-	links := make([]acp.ContentBlock, len(files))
-	for i, f := range files {
-		link := acp.ResourceLinkBlock(f.Name, fileURI(f.path))
-		typ, size := f.Type, f.Size
-		link.ResourceLink.MimeType, link.ResourceLink.Size = &typ, &size
-		links[i] = link
-	}
-	text := s.prompt(m, files)
-	used := blockLen(acp.TextBlock(text)) + blocksLen(links)
-	if used > maxPrompt-promptOverhead {
-		// The body is what does not fit: it goes as a file the prompt points to.
-		path := filepath.Join(dir, "message.txt")
-		if err := os.WriteFile(path, []byte(m.Body), 0o600); err != nil {
-			return fail(err)
+	// measured as the JSON it is. What does not fit goes as a link instead, the biggest first;
+	// then the body goes as a file the prompt points to.
+	build := func() ([]acp.ContentBlock, int, int) {
+		list := make([]attached, len(files))
+		for i, a := range files {
+			list[i] = *a
 		}
-		m.Body = fmt.Sprintf("[acpost] The message is %d bytes, too large to send in the prompt: it is in %s (until this turn ends). Read it there; it is the task.", len(m.Body), path)
-		text = s.prompt(m, files)
-		used = blockLen(acp.TextBlock(text)) + blocksLen(links)
-		if used > maxPrompt-promptOverhead {
-			return fail(fmt.Errorf("the names and paths of %d files alone are %d bytes, over what one prompt carries (%d): send fewer files", len(files), used, maxPrompt))
-		}
-	}
-	blocks := []acp.ContentBlock{acp.TextBlock(text)}
-	embedded := 0
-	for i, f := range files {
-		var embed *acp.ContentBlock
-		switch {
-		case caps.EmbeddedContext && len(f.Data) <= embedBudget-embedded && isText(f.File):
-			typ := f.Type
-			b := acp.ResourceBlock(acp.EmbeddedResourceResource{
-				TextResourceContents: &acp.TextResourceContents{Uri: fileURI(f.path), Text: string(f.Data), MimeType: &typ}})
-			embed = &b
-		case caps.Image && isImage(f.Type) && base64.StdEncoding.EncodedLen(len(f.Data)) <= embedBudget-embedded:
-			b := acp.ImageBlock(base64.StdEncoding.EncodeToString(f.Data), mediaType(f.Type))
-			embed = &b
-		}
-		if embed != nil {
-			n, linkN := blockLen(*embed), blockLen(links[i])
-			if used-linkN+n <= maxPrompt-promptOverhead && embedded+n <= embedBudget {
-				blocks = append(blocks, *embed)
-				used, embedded = used-linkN+n, embedded+n
-				continue
+		text := s.prompt(m, list)
+		blocks := []acp.ContentBlock{acp.TextBlock(text)}
+		embedded := 0
+		for _, a := range files {
+			if a.embedded {
+				blocks = append(blocks, *a.block)
+				embedded += blockLen(*a.block)
+			} else {
+				blocks = append(blocks, a.linkBlock(m.ID))
 			}
 		}
-		blocks = append(blocks, links[i])
+		return blocks, blocksLen(blocks), embedded
 	}
-	return blocks, cleanup, nil
+	blocks, used, embedded := build()
+	movedBody := false
+	for used > maxPrompt-promptOverhead || embedded > embedBudget {
+		var biggest *attached
+		for _, a := range files {
+			if a.embedded && (biggest == nil || len(a.Data) > len(biggest.Data)) {
+				biggest = a
+			}
+		}
+		switch {
+		case biggest != nil:
+			biggest.embedded, biggest.block = false, nil
+		case !movedBody:
+			path := filepath.Join(dir, "message.txt")
+			if err := os.WriteFile(path, []byte(m.Body), 0o600); err != nil {
+				return fail(err)
+			}
+			m.Body = fmt.Sprintf("[acpost] The message is %d bytes, too large to send in the prompt: it is in %s (until this turn ends). Read it there; it is the task.", len(m.Body), path)
+			movedBody = true
+		default:
+			return fail(fmt.Errorf("the names and links of %d files alone are %d bytes, over what one prompt carries (%d): send fewer files", len(files), used, maxPrompt))
+		}
+		blocks, used, embedded = build()
+	}
+
+	// Copies only of what goes as a copy.
+	for _, a := range files {
+		tf.byURI[a.uri(m.ID)] = a.File
+		if a.Link() || a.embedded {
+			continue
+		}
+		if err := os.Mkdir(filepath.Dir(a.path), 0o700); err != nil {
+			return fail(err)
+		}
+		if err := os.WriteFile(a.path, a.Data, 0o600); err != nil {
+			return fail(err)
+		}
+		tf.byURI[a.path] = a.File
+	}
+	return blocks, tf, cleanup, nil
 }
 
 func fileURI(path string) string { return (&url.URL{Scheme: "file", Path: path}).String() }
