@@ -2,6 +2,7 @@
   import { app } from "../lib/state.svelte";
   import { Node } from "../lib/api";
   import Icon from "./Icon.svelte";
+  import Dropdown from "./Dropdown.svelte";
 
   // Where a new task runs, which agent, in which directory (a repository in the cloud).
   const cloud = $derived(app.draft.where === "cloud");
@@ -107,9 +108,7 @@
       {/if}
     </div>
   {:else}
-    <select class="input sel" bind:value={app.draft.cloudAgent}>
-      {#each app.cloudAgents as a (a.ref)}<option value={a.ref}>{a.name}{a.description ? " — " + a.description : ""}</option>{/each}
-    </select>
+    <Dropdown bind:value={app.draft.cloudAgent} icon="cloud" items={app.cloudAgents.map(a => ({ value: a.ref, label: a.name }))} />
     <input class="input repo" placeholder="Repository (optional)" bind:value={app.draft.repo} />
   {/if}
 </div>
@@ -131,6 +130,5 @@
   .pth { font: 11px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mi.strong { font: 500 12.5px var(--sans); border-top: 1px solid var(--line-soft); margin-top: 4px; padding-top: 9px; border-radius: 0 0 8px 8px; }
   .none { font-size: 12px; padding: 8px 10px; }
-  .sel { width: auto; height: 28px; padding: 0 8px; border-radius: 10px; font-size: 12px; max-width: 320px; }
   .repo { width: 260px; height: 28px; padding: 0 10px; border-radius: 10px; font-size: 12px; }
 </style>

@@ -4,6 +4,7 @@
   import { splitDiff } from "../lib/turn";
   import { who } from "../lib/format";
   import DiffLines from "./DiffLines.svelte";
+  import Dropdown from "./Dropdown.svelte";
 
   let data = $state<any>(null);
   let err = $state("");
@@ -42,10 +43,7 @@
 
 <div class="ch">
   <div class="tools">
-    <select class="input sel" bind:value={agent}>
-      <option value="">All agents</option>
-      {#each agents as a}<option value={a}>{who(a).name}</option>{/each}
-    </select>
+    <Dropdown bind:value={agent} items={[{ value: "", label: "All agents" }, ...agents.map(a => ({ value: a, label: who(a).name }))]} />
     <span class="muted num">{stats.size} files</span>
     <span class="sp"></span>
     <button class="btn sm" onclick={() => load(root)}>Refresh</button>

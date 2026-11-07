@@ -97,7 +97,7 @@
     <div class="menu card">
       {#each slash as it, i (it.name)}
         <button class="mi" class:sel={i === slashSel} onmouseenter={() => (slashSel = i)} onclick={() => takeSlash(i)}>
-          <span class="mono">/{it.name}</span><span class="muted">{it.description}</span>
+          <span class="mono">/{it.name}</span>
         </button>
       {/each}
     </div>
@@ -109,7 +109,7 @@
         <div class="mh">{o.name}</div>
         {#each o.values as v (v.value)}
           <button class="mi" class:sel={(app.draft[pickerFor] || o.current) === v.value} onclick={() => setDraft(pickerFor as any, v.value)}>
-            <span>{v.name}</span>{#if v.description}<span class="muted">{v.description}</span>{/if}
+            <span>{v.name}</span>
           </button>
         {/each}
       </div>
@@ -153,5 +153,4 @@
   .mh { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; padding: 4px 10px 6px; }
   .mi { display: flex; gap: 12px; align-items: baseline; border: 0; background: transparent; text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; }
   .mi.sel, .mi:hover { background: var(--hover); }
-  .mi .muted { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
