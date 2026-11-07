@@ -18,7 +18,7 @@
     const ql = q.trim().toLowerCase();
     const m = (s?: string) => !ql || (s ?? "").toLowerCase().includes(ql);
     const out: Item[] = [];
-    for (const a of actions) if (m(a.label)) out.push(a);
+    for (const a of actions) if (m(a.label) || m(t(a.label))) out.push(a);
     for (const p of app.playbooks) if (m(p.name)) out.push({ kind: "Playbook", label: "/" + p.name, icon: "book", run: () => { app.newTask(); app.quote = p.body; } });
     for (const c of app.chats) {
       if (out.length > 60) break;

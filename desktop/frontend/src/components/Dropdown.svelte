@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
+  import { screenScale } from "../lib/format";
 
   // The app's own dropdown (never the system's): a chip, and a menu of names under it.
   let { value = $bindable(), items, placeholder = "Choose", icon = "", up = false }: {
@@ -14,10 +15,14 @@
   let pos = $state("");
   $effect(() => {
     if (!open || !menu) return;
+    // In the page's coordinates (the app's zoom taken out): what fixed positions are in.
+    const k = screenScale();
     const r = root.getBoundingClientRect(), m = menu.getBoundingClientRect();
-    const left = Math.max(8, Math.min(r.left, window.innerWidth - m.width - 8));
-    const below = r.bottom + 4 + m.height <= window.innerHeight - 8;
-    const top = up || !below ? Math.max(8, r.top - 4 - m.height) : r.bottom + 4;
+    const W = window.innerWidth / k, H = window.innerHeight / k;
+    const rl = r.left / k, rt = r.top / k, rb = r.bottom / k, mw = m.width / k, mh = m.height / k;
+    const left = Math.max(8, Math.min(rl, W - mw - 8));
+    const below = rb + 4 + mh <= H - 8;
+    const top = up || !below ? Math.max(8, rt - 4 - mh) : rb + 4;
     pos = `left:${left}px;top:${top}px`;
   });
   const current = $derived(items.find(i => i.value === value));

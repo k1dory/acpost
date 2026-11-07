@@ -60,3 +60,15 @@ export function hue(name: string): number {
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
   return h;
 }
+
+/** How much the page's own coordinates are scaled on screen (the app's zoom, as the engine applies
+ * it): a measured box at left 100 is at 100 × this. Screen coordinates (a click, a box's rect)
+ * divided by it are what fixed positions take. */
+export function screenScale(): number {
+  const el = document.createElement("div");
+  el.style.cssText = "position:fixed;left:100px;top:0;width:1px;height:1px;visibility:hidden";
+  document.body.appendChild(el);
+  const r = el.getBoundingClientRect().left / 100;
+  el.remove();
+  return r > 0 ? r : 1;
+}

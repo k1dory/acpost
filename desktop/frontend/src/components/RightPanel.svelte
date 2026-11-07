@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { screenScale } from "../lib/format";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
@@ -13,8 +14,8 @@
   const asks = $derived((app.rev, Object.values(app.turns).reduce((a, t) => a + t.waiting().length, 0)));
 
   function drag(e: PointerEvent) {
-    const x0 = e.clientX, w0 = width;
-    const move = (ev: PointerEvent) => (width = Math.max(340, Math.min(760, w0 - (ev.clientX - x0))));
+    const x0 = e.clientX, w0 = width, k = screenScale(); // the mouse moves in screen pixels
+    const move = (ev: PointerEvent) => (width = Math.max(340, Math.min(760, w0 - (ev.clientX - x0) / k)));
     const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); try { localStorage.setItem("panel", String(width)); } catch {} };
     addEventListener("pointermove", move); addEventListener("pointerup", up);
   }

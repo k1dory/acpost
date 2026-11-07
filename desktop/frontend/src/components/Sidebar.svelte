@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
   import { app, type Chat } from "../lib/state.svelte";
-  import { ago } from "../lib/format";
+  import { ago, screenScale } from "../lib/format";
   import Icon from "./Icon.svelte";
   import AgentMark, { brandOf } from "./AgentMark.svelte";
 
@@ -70,7 +70,8 @@
   }
   function onMenu(e: MouseEvent, chat?: Chat, folder?: string) {
     e.preventDefault();
-    menu = { x: Math.min(e.clientX, innerWidth - 230), y: Math.min(e.clientY, innerHeight - 260), chat, folder };
+    const k = screenScale(); // the app's zoom taken out: fixed positions are in the page's coordinates
+    menu = { x: Math.min(e.clientX / k, innerWidth / k - 230), y: Math.min(e.clientY / k, innerHeight / k - 260), chat, folder };
   }
   function drag(e: DragEvent, c: Chat) { e.dataTransfer?.setData("text/acpost-chat", c.key); }
   function over(e: DragEvent, target: string) {
