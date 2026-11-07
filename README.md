@@ -132,6 +132,7 @@ bounded (`limits.max_depth`).
 
 ```
 acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--attach FILE]... [--task T] [--thread ID]
+               [--cwd DIR] [--model M] [--effort E] [--mode M]
                [--link PATH|URL]... [--session ACP-ID] [--meta k=v]... [--ttl DUR] [--idempotency-key K]
                [--wait [--timeout DUR] [--save DIR]]
 acpost wait    ID... [--timeout DUR] [--save DIR]
@@ -404,6 +405,7 @@ agents:
   backend-bot:
     driver: inbox
     lease: 5m
+  # (a cloud: below, each sandbox of the tenant is an agent of its own, agent:sb_…)
   cloud:
     driver: sandbox                  # a cloud agent: a sandbox of agent-sandbox
     sandbox:
@@ -413,6 +415,18 @@ agents:
       ca: ""                         # a CA file for sandboxd's certificate, beside the system's
     turn_timeout: 30m
 ```
+
+**The cloud.** `cloud: {env_file: ~/.config/agent-sandbox/pilot.env}` (or `url` and `token_env`)
+names an agent-sandbox tenant: its URL and token from the env file as `sandboxctl` reads it
+(`SANDBOXD_URL`, `SANDBOXD_TOKEN`; the token is never written out). Each sandbox of the tenant is an
+agent of the node named by its id (`agent:sb_…`), added when the node's user first writes to it;
+it takes messages from the node's user and its own agents only, never through the hub. A new cloud
+task makes a sandbox of an agent of the tenant's catalogue (`POST /v1/cloud/tasks`).
+
+**A task's directory and settings.** `acpost send --cwd DIR` starts a task's ACP session in that
+directory (the thread's next messages stay there); `--model`, `--effort`, `--mode` select them in
+the session before the message's turn (`GET /v1/agents/{name}/options` lists what the agent
+offers). The node's user and its agents only.
 
 **Cloud agents** (`driver: sandbox`). A message is the next message of the sandbox's conversation
 (`POST /v1/sandboxes/{id}/messages`, its files as uploads: 8 of at most 16 MiB; links are named in
@@ -466,6 +480,11 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `POST /v1/messages/{id}/lease` | extend a claim |
 | `GET /v1/agents` | agents, their drivers and queues |
 | `GET /v1/agents/{name}/sessions?cwd=&cursor=` | an ACP agent's sessions, newest first |
+| `GET /v1/agents/{name}/options` | what an ACP agent offers to choose: models, reasoning levels, modes, and its slash commands (`send --model/--effort/--mode`) |
+| `GET /v1/agents/{name}/sessions/{id}/history?cwd=` | a session's conversation (started anywhere: a terminal's Claude Code, Codex) replayed as events, in a process of its own; `send --session` continues it |
+| `GET /v1/chats` | every chat of the node's user, the most recently active first: threads, the ACP agents' sessions (not already a thread's), the cloud's sandboxes; with the folders |
+| `GET/POST /v1/folders` · `PATCH/DELETE /v1/folders/{id}` · `PUT /v1/chats/folder` | the app's folders of chats (`thread:<id>`, `session:<agent>/<id>`, `cloud:<sandbox>`); a chat is in one or none |
+| `GET /v1/cloud/agents` · `POST /v1/cloud/tasks` · `GET /v1/cloud/sandboxes/{id}/history` | the cloud tenant's catalogue; a new cloud task (a sandbox of a catalogue agent; its messages go to `agent:<sandbox id>`); a sandbox's conversation |
 | `GET /v1/health` | |
 
 Who sends is decided by the node, never by the request body: a request with the token of an agent
