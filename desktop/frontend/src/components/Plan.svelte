@@ -15,11 +15,11 @@
 </div>
 
 <style>
-  .plan { border: 1px solid var(--line-soft); border-radius: var(--r-row); padding: 10px 12px; margin: 6px 0; background: var(--card); display: grid; gap: 4px; }
-  .h { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .plan { border: 1px solid var(--line-soft); border-radius: var(--r-row); padding: 12px 14px; background: var(--card); display: grid; gap: 6px; }
+  .h { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 12.5px; margin-bottom: 4px; }
   .bar { flex: 1; height: 4px; border-radius: 4px; background: var(--track); overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--good); border-radius: 4px; transition: width .3s; }
-  .e { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; color: var(--ink-2); }
+  .e { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; color: var(--ink-2); }
   .e.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
   .e.now { color: var(--ink); font-weight: 500; }
   .st { width: 14px; display: grid; place-items: center; padding-top: 3px; color: var(--good); }

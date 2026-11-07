@@ -103,20 +103,20 @@
 </div>
 
 <style>
-  .fg { height: 100%; padding: 10px; }
+  .fg { height: 100%; padding: 12px; }
   .pad { padding: 10px; }
   .repo { display: flex; align-items: center; gap: 8px; padding: 4px 4px 10px; flex-wrap: wrap; }
   .repo a { color: var(--ink); font-weight: 600; text-decoration: none; }
   .sp { flex: 1; }
-  .h { font-size: 12px; font-weight: 600; color: var(--muted); padding: 10px 6px 6px; text-transform: uppercase; letter-spacing: .02em; }
+  .h { font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 6px 8px; text-transform: uppercase; letter-spacing: .02em; }
   .inner { border: 1px solid var(--line-soft); border-radius: var(--r-card); background: var(--card); overflow: hidden; }
-  .row { display: flex; align-items: center; gap: 9px; padding: 0 14px; min-height: 48px; border-bottom: 1px solid var(--line-soft); color: inherit; text-decoration: none; width: 100%; border-left: 0; border-right: 0; border-top: 0; background: transparent; text-align: left; font-size: 13.5px; }
+  .row { display: flex; align-items: center; gap: 9px; padding: 0 14px; min-height: 42px; border-bottom: 1px solid var(--line-soft); color: inherit; text-decoration: none; width: 100%; border-left: 0; border-right: 0; border-top: 0; background: transparent; text-align: left; font-size: 12.5px; }
   .row:last-child { border-bottom: 0; }
   a.row:hover, button.row:hover { background: var(--hover); }
-  .row.job { min-height: 36px; padding-left: 28px; font-size: 13px; }
+  .row.job { min-height: 32px; padding-left: 28px; font-size: 12px; }
   .row.job.fail { background: var(--crit-bg); color: var(--crit); }
   .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .small { font-size: 12px; }
+  .small { font-size: 11px; }
   .none { padding: 14px; font-size: 13px; }
   .lh { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; }
   .lh .btn { flex: none; white-space: nowrap; }

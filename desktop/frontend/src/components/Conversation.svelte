@@ -40,12 +40,12 @@
 
 <style>
   .conv { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--page); }
-  header { height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 22px; border-bottom: 1px solid var(--line-soft); }
-  .title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header { height: 46px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 28px; border-bottom: 1px solid var(--line-soft); }
+  .title { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sp { flex: 1; }
-  .body { flex: 1; min-height: 0; padding: 18px 22px 8px; }
-  .col { max-width: 780px; margin: 0 auto; }
-  .foot { padding: 6px 22px 18px; }
+  .body { flex: 1; min-height: 0; padding: 28px 32px 12px; }
+  .col { max-width: 720px; margin: 0 auto; }
+  .foot { padding: 8px 32px 20px; }
   .hello { padding: 18vh 0 24px; display: grid; gap: 6px; }
-  .big { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
+  .big { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
 </style>

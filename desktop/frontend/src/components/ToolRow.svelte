@@ -44,22 +44,22 @@
 </div>
 
 <style>
-  .tool { border-radius: var(--r-row); border: 1px solid var(--line-soft); background: var(--card); margin: 4px 0; overflow: hidden; }
+  .tool { border-radius: var(--r-row); border: 1px solid var(--line-soft); background: var(--card); overflow: hidden; }
   .tool.failed { background: var(--crit-bg); border-color: color-mix(in srgb, var(--crit) 25%, transparent); }
-  .head { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; background: transparent; padding: 8px 12px; text-align: left; min-height: 38px; }
+  .head { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; background: transparent; padding: 6px 12px; text-align: left; min-height: 34px; font-size: 12.5px; }
   .head.more:hover { background: var(--hover); }
   .tool.failed .head.more:hover { background: transparent; }
   .st { width: 16px; display: grid; place-items: center; flex: none; }
   .ok { color: var(--good); } .bad { color: var(--crit); }
-  .name { color: var(--muted); font-size: 12px; flex: none; min-width: 44px; }
+  .name { color: var(--muted); font-size: 11px; flex: none; min-width: 52px; }
   .what { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
   .tool.failed .what { color: var(--crit); }
   .stat { font-size: 12px; flex: none; }
   .plus { color: var(--add-ink); } .minus { color: var(--del-ink); }
-  .took { font-size: 12px; flex: none; min-width: 36px; text-align: right; }
+  .took { font-size: 11px; flex: none; min-width: 36px; text-align: right; }
   .chev { color: var(--muted); transition: transform .15s; display: grid; } .chev.rot { transform: rotate(90deg); }
-  .body { border-top: 1px solid var(--line-soft); padding: 10px 12px; display: grid; gap: 10px; background: var(--page); }
-  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 var(--mono); max-height: 320px; overflow: auto; }
+  .body { border-top: 1px solid var(--line-soft); padding: 12px 14px; display: grid; gap: 12px; background: var(--page); }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 11.5px/1.55 var(--mono); max-height: 320px; overflow: auto; }
   .cmd { color: var(--ink); }
   .out { color: var(--ink-2); }
   .edit { border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; background: var(--card); }

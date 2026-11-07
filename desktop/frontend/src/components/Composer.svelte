@@ -64,13 +64,13 @@
 
 <style>
   .comp { padding: 10px 10px 8px 14px; border-radius: var(--r-panel); }
-  textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; padding: 6px 2px; font-size: 14.5px; line-height: 1.5; max-height: 240px; user-select: text; cursor: text; }
+  textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; padding: 4px 2px 8px; font-size: 13.5px; line-height: 1.5; max-height: 240px; user-select: text; cursor: text; }
   .bar { display: flex; align-items: center; gap: 8px; }
   .sp { flex: 1; }
   .hint { font: 11px var(--mono); }
-  .send { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 12px; }
-  .agent { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 9px; border-radius: 10px; border: 1px solid var(--line); color: var(--ink-2); }
-  .agent select { border: 0; background: transparent; outline: 0; font-size: 13px; font-weight: 500; max-width: 200px; }
+  .send { width: 30px; height: 30px; padding: 0; justify-content: center; border-radius: 10px; }
+  .agent { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 8px; border-radius: 9px; border: 1px solid var(--line); color: var(--ink-2); }
+  .agent select { border: 0; background: transparent; outline: 0; font-size: 12px; font-weight: 500; max-width: 200px; }
   .files { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px; }
   .x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 2px; display: grid; }
 </style>

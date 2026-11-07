@@ -46,13 +46,13 @@
 </div>
 
 <style>
-  .ask { padding: 14px 16px; margin: 8px 0; display: grid; gap: 10px; border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+  .ask { padding: 14px 16px; display: grid; gap: 10px; border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
   .ask.done { border-color: var(--line); opacity: .85; }
   .row { display: flex; gap: 12px; align-items: flex-start; }
   .ic { color: var(--warn); padding-top: 2px; }
   .t { flex: 1; min-width: 0; }
   .title { font-weight: 600; }
-  .desc { font-size: 13px; margin-top: 2px; white-space: pre-wrap; }
+  .desc { font-size: 12.5px; margin-top: 2px; white-space: pre-wrap; }
   .raw { margin: 0; font: 12px/1.5 var(--mono); background: var(--page); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
   .acts { display: flex; gap: 8px; justify-content: flex-end; }
   .btn.ghost { justify-self: start; }

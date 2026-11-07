@@ -62,16 +62,16 @@
 </section>
 
 <style>
-  .us { flex: 1; min-width: 0; padding: 0 28px 28px; background: var(--page); }
+  .us { flex: 1; min-width: 0; padding: 0 36px 36px; background: var(--page); }
   header { height: 60px; display: flex; align-items: center; gap: 10px; }
-  h1 { font-size: 19px; font-weight: 600; margin: 0; }
+  h1 { font-size: 16px; font-weight: 600; margin: 0; }
   .sp { flex: 1; }
-  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 6px 0 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 8px 0 20px; }
   .tile { padding: 16px 18px; }
-  .k { font-size: 12.5px; } .v { font-size: 24px; font-weight: 600; margin-top: 4px; letter-spacing: -.01em; } .s { font-size: 12px; margin-top: 2px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .k { font-size: 11.5px; } .v { font-size: 20px; font-weight: 600; margin-top: 4px; letter-spacing: -.01em; } .s { font-size: 12px; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); text-transform: capitalize; }
-  td { padding: 0 14px; height: 52px; border-bottom: 1px solid var(--line-soft); }
+  td { padding: 0 14px; height: 44px; border-bottom: 1px solid var(--line-soft); }
   tr:last-child td { border-bottom: 0; }
   .r { text-align: right; }
   .key { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }

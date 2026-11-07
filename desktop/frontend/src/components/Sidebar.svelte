@@ -79,28 +79,28 @@
 </aside>
 
 <style>
-  .side { width: 264px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; }
-  .top { height: 40px; flex: none; }
-  .pad { padding: 4px 12px 10px; display: grid; gap: 8px; }
-  .new { justify-content: center; height: 36px; border-radius: 14px; }
+  .side { width: 240px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; }
+  .top { height: 38px; flex: none; }
+  .pad { padding: 4px 14px 12px; display: grid; gap: 8px; }
+  .new { justify-content: center; height: 32px; border-radius: 11px; }
   kbd { font: 11px var(--mono); opacity: .55; margin-left: 4px; }
-  .search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 11px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); color: var(--muted); }
+  .search { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 11px; font-size: 12.5px; border: 1px solid var(--line); background: var(--card); color: var(--muted); }
   .search input { border: 0; outline: 0; background: transparent; flex: 1; color: var(--ink); min-width: 0; }
-  .list { flex: 1; padding: 0 8px 8px; min-height: 0; }
-  .h { font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 14px 8px 6px; letter-spacing: .02em; text-transform: uppercase; }
-  .row { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; border: 0; background: transparent; padding: 8px; border-radius: var(--r-row); min-height: 44px; }
+  .list { flex: 1; padding: 0 10px 10px; min-height: 0; }
+  .h { font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 18px 8px 6px; letter-spacing: .02em; text-transform: uppercase; }
+  .row { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; border: 0; background: transparent; padding: 6px 8px; border-radius: var(--r-row); min-height: 40px; margin-bottom: 1px; }
   .row:hover { background: var(--hover); }
   .row.sel { background: var(--sel); box-shadow: inset 0 1px 0 var(--edge); }
-  .row.agent { min-height: 36px; padding: 6px 8px; }
+  .row.agent { min-height: 32px; padding: 5px 8px; }
   .t { flex: 1; min-width: 0; display: grid; }
   .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
-  .sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .when { font-size: 11.5px; }
+  .sub { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .when { font-size: 11px; }
   .ic { color: var(--muted); display: grid; place-items: center; width: 22px; }
   .none { padding: 8px; font-size: 13px; }
   .skrow { height: 36px; margin: 6px 8px; }
   .more { margin: 4px 8px; }
-  .foot { border-top: 1px solid var(--line-soft); padding: 8px; display: grid; gap: 6px; }
+  .foot { border-top: 1px solid var(--line-soft); padding: 10px; display: grid; gap: 8px; }
   .theme { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 4px; }
   .node { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; max-width: 90px; overflow: hidden; white-space: nowrap; }
 </style>

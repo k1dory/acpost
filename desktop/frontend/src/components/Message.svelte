@@ -78,18 +78,19 @@
 </div>
 
 <style>
-  .pair { display: grid; gap: 14px; padding: 6px 0 18px; }
-  .meta { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; flex-wrap: wrap; }
+  .pair { display: grid; gap: 18px; padding: 4px 0 32px; }
+  .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; flex-wrap: wrap; }
   .nm { font-weight: 600; }
   .sp { flex: 1; }
   .user { justify-self: end; max-width: 85%; }
   .user .meta { justify-content: flex-end; }
-  .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 20px 20px 6px 20px; padding: 10px 14px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
+  .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
-  .agent { min-width: 0; }
-  .notice { font-size: 12.5px; color: var(--muted); padding: 4px 0; }
+  .agent { min-width: 0; display: grid; gap: 8px; }
+  .agent > .meta { margin-bottom: 2px; }
+  .notice { font-size: 12px; color: var(--muted); }
   .notice.warnn { color: var(--warn); }
-  .err { margin-top: 8px; padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
+  .err { padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
   .wait { display: grid; gap: 8px; } .wait .sk { height: 12px; }
-  .acts { margin-top: 6px; }
+  .acts { margin-top: 2px; }
 </style>

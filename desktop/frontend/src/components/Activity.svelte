@@ -41,15 +41,15 @@
 </div>
 
 <style>
-  .act { height: 100%; padding: 8px; }
-  .grp { border-radius: var(--r-row); padding: 4px; margin-bottom: 6px; }
+  .act { height: 100%; padding: 10px; }
+  .grp { border-radius: var(--r-row); padding: 4px 4px 8px; margin-bottom: 8px; }
   .grp.sel { background: var(--hover); }
   .gh { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px; text-align: left; border-radius: 10px; }
   .nm { font-weight: 600; flex: none; }
-  .what { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
-  .tl { display: flex; align-items: center; gap: 9px; padding: 5px 8px 5px 14px; font-size: 13px; border-left: 1px solid var(--line); margin-left: 15px; }
+  .what { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .tl { display: flex; align-items: center; gap: 9px; padding: 6px 8px 6px 14px; font-size: 12px; border-left: 1px solid var(--line); margin-left: 15px; }
   .tl.failed { background: var(--crit-bg); color: var(--crit); border-radius: 0 10px 10px 0; }
-  .tn { color: var(--muted); font-size: 11.5px; min-width: 40px; }
+  .tn { color: var(--muted); font-size: 10.5px; min-width: 48px; }
   .ti { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tt { font-size: 11.5px; }
+  .tt { font-size: 11px; }
 </style>
