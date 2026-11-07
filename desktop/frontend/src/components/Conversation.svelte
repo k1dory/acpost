@@ -58,7 +58,8 @@
 <section class="conv">
   <header class="drag">
     <div class="t">
-      <div class="title">{title}</div>
+      <!-- A new task has its heading in the middle ("What should we work on?"): none up here. -->
+      {#if app.chat || app.thread}<div class="title">{title}</div>{/if}
       {#if app.chat || app.thread}
         <div class="sub muted">
           {#if source}<span class="src">{source}</span>{/if}
