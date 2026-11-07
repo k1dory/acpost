@@ -308,12 +308,16 @@ func (n *Node) Unfollow(id string) {
 
 // Events reads a message's events (no stream).
 func (n *Node) Events(id string, after int64) ([]store.Event, error) {
-	return call(n, func(ctx context.Context, c *client.Client) ([]store.Event, error) { return c.Events(ctx, id, after, 1000) })
+	return call(n, func(ctx context.Context, c *client.Client) ([]store.Event, error) {
+		return c.Events(ctx, id, after, 1000)
+	})
 }
 
 // Changes is what a message's turns (and its subagents') changed, with the diffs.
 func (n *Node) Changes(id string) (client.Changes, error) {
-	return call(n, func(ctx context.Context, c *client.Client) (client.Changes, error) { return c.ChangesOf(ctx, id, true, true) })
+	return call(n, func(ctx context.Context, c *client.Client) (client.Changes, error) {
+		return c.ChangesOf(ctx, id, true, true)
+	})
 }
 
 // Usage sums usage since `days` days ago, grouped by agent, model, day or session.
@@ -391,7 +395,9 @@ func (n *Node) TermInput(id, data string) error {
 	if err != nil {
 		return err
 	}
-	_, err = call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.TermInput(ctx, id, b) })
+	_, err = call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.TermInput(ctx, id, b)
+	})
 	return err
 }
 
@@ -411,6 +417,8 @@ func (n *Node) CloseTerminal(id string) error {
 		delete(n.terms, id)
 	}
 	n.mu.Unlock()
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.CloseTerminal(ctx, id) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.CloseTerminal(ctx, id)
+	})
 	return err
 }

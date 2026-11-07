@@ -133,15 +133,14 @@ func (n *Node) Answer(ctx context.Context, p Principal, msgID string, reply acpx
 	if ref.req.ToolKind == "forge" && p.Kind != "user" {
 		return errh("refused", "the node's user approves it (the app, `acpost approve` on that node)", "%s is for a person to approve", ref.req.Title)
 	}
+	// Who answered is recorded with the answer, at once: of two answers at the same time, the one
+	// taken is the one named (the waiter reads it under the same lock, after the answer).
 	n.asks.mu.Lock()
-	n.asks.by[reply.RequestID] = p.Address()
-	n.asks.mu.Unlock()
+	defer n.asks.mu.Unlock()
 	if err := n.askPending().Resolve(reply); err != nil {
-		n.asks.mu.Lock()
-		delete(n.asks.by, reply.RequestID)
-		n.asks.mu.Unlock()
 		return errf("conflict", "the request was answered already, or timed out")
 	}
+	n.asks.by[reply.RequestID] = p.Address()
 	return nil
 }
 

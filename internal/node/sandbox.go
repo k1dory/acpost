@@ -19,7 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/store"
@@ -54,6 +53,58 @@ type sandboxAgent struct {
 	// cursor is the last event of the sandbox's stream seen (0: not known yet).
 	cursor atomic.Int64
 	busy   atomic.Bool
+	// open counts, per run, the messages the run has taken and not yet answered (a turn's end
+	// answers the oldest), as the stream up to observed says.
+	mu       sync.Mutex
+	open     map[string]int
+	observed int64
+}
+
+// observe counts a turn of the stream into open (each event once).
+func (a *sandboxAgent) observe(sm sandboxMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sm.ID <= a.observed {
+		return
+	}
+	a.observed = sm.ID
+	if a.open == nil {
+		a.open = map[string]int{}
+	}
+	countTurn(a.open, sm)
+}
+
+// countTurn moves a run's count of messages waiting for an answer.
+func countTurn(open map[string]int, sm sandboxMessage) {
+	switch {
+	case sm.Role == "user":
+		open[sm.RunID]++
+	case turnEnd(sm):
+		if open[sm.RunID] > 0 {
+			open[sm.RunID]--
+		}
+	case sm.Role == "system" && strings.HasPrefix(sm.Text, "run "):
+		delete(open, sm.RunID) // the run is over
+	}
+}
+
+// turnEnd says whether a turn of the stream is a harness's end of a turn.
+func turnEnd(sm sandboxMessage) bool {
+	if sm.Role != "log" || !strings.HasPrefix(strings.TrimSpace(sm.Text), "{") {
+		return false
+	}
+	var l struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal([]byte(sm.Text), &l)
+	return l.Type == "acp.turn_end" || l.Type == "turn.completed" || l.Type == "result"
+}
+
+// openOf is how many messages a run had waiting for an answer, as far as the stream was read.
+func (a *sandboxAgent) openOf(run string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.open[run]
 }
 
 func newSandboxAgent(n *Node, name string, cfg *config.Agent) (*sandboxAgent, error) {
@@ -103,13 +154,14 @@ func (a *sandboxAgent) loop() {
 type sandboxError struct {
 	status int
 	msg    string
+	later  bool // sandboxd said when to ask again (Retry-After: an Idempotency-Key still in flight)
 }
 
 func (e *sandboxError) Error() string { return e.msg }
 
 // retryable: sandboxd did not answer, or answered that it could not now.
 func (e *sandboxError) retryable() bool {
-	return e.status == 0 || e.status == http.StatusTooManyRequests || e.status >= 500
+	return e.status == 0 || e.status == http.StatusTooManyRequests || e.status >= 500 || e.later
 }
 
 func (a *sandboxAgent) path(p string) string {
@@ -141,7 +193,8 @@ func (a *sandboxAgent) call(ctx context.Context, method, p string, hdr http.Head
 		if json.Unmarshal(b, &e) == nil && (e.Message != "" || e.Error != "") {
 			msg = strings.TrimSpace(e.Error + " " + e.Message)
 		}
-		return resp.Header, &sandboxError{status: resp.StatusCode, msg: fmt.Sprintf("sandboxd %s %s: %d %s", method, p, resp.StatusCode, msg)}
+		return resp.Header, &sandboxError{status: resp.StatusCode, later: resp.Header.Get("Retry-After") != "",
+			msg: fmt.Sprintf("sandboxd %s %s: %d %s", method, p, resp.StatusCode, msg)}
 	}
 	if out != nil {
 		if err := json.Unmarshal(b, out); err != nil {
@@ -161,6 +214,7 @@ type sandboxMessage struct {
 }
 
 type sandboxRun struct {
+	Task    string `json:"task,omitempty"`
 	ID      string `json:"id"`
 	Status  string `json:"status"`
 	Session string `json:"session,omitempty"`
@@ -171,9 +225,13 @@ type sandboxRun struct {
 func (a *sandboxAgent) catchUp(ctx context.Context) error {
 	after := a.cursor.Load()
 	for range 1000 {
-		h, err := a.call(ctx, "GET", "/messages?raw=true&limit="+strconv.Itoa(sandboxCatchUp)+"&after="+strconv.FormatInt(after, 10), nil, nil, nil)
+		var page []sandboxMessage
+		h, err := a.call(ctx, "GET", "/messages?raw=true&limit="+strconv.Itoa(sandboxCatchUp)+"&after="+strconv.FormatInt(after, 10), nil, nil, &page)
 		if err != nil {
 			return err
+		}
+		for _, sm := range page {
+			a.observe(sm)
 		}
 		next, _ := strconv.ParseInt(h.Get("X-Next-Cursor"), 10, 64)
 		if next <= after {
@@ -229,6 +287,10 @@ func (a *sandboxAgent) post(ctx context.Context, m store.Message) (sandboxRun, s
 		text.WriteString(". Your final answer in this turn is sent back to the sender as the reply.\n\n")
 	}
 	text.WriteString(m.Body)
+	if !a.cfg.PreambleOn() {
+		// How the conversation's turn that carries it is known (the preamble names it otherwise).
+		fmt.Fprintf(&text, "\n\n[acpost %s]", m.ID)
+	}
 
 	hdr := http.Header{}
 	// The message posted again (sandboxd's answer was lost, the node stopped) is the same message
@@ -284,12 +346,20 @@ type sandboxTurn struct {
 	// with mark. Before it, the run's output is an earlier turn's.
 	mark    string
 	started bool
+	// waiting is how many messages of the run were ahead in it, until this one's is seen; ahead,
+	// how many of their turns are still to end after it.
+	waiting, ahead int
+	// quiet: the turn is read again from the sandbox's history (an earlier attempt recorded what
+	// it said): nothing is recorded again, and its requests are asked only if still open after it.
+	quiet atomic.Bool
+	hist  map[string]sandboxMessage
 }
 
 // sandboxAsk is a request of the sandbox waiting here: the id it has here, and the end of its wait.
 type sandboxAsk struct {
 	local string
 	stop  context.CancelFunc
+	done  bool // resolved by the sandbox
 }
 
 func (t *sandboxTurn) text(s string) {
@@ -324,14 +394,24 @@ type sandboxEnd struct {
 
 // take reads one turn of the conversation into the message's events; end says the turn is over.
 func (t *sandboxTurn) take(ctx context.Context, sm sandboxMessage) (sandboxEnd, bool) {
-	if !t.started {
+	// The run answers its messages in order: this one's turn begins once the run has answered
+	// those it took before (ahead), and everything until then is theirs.
+	if !t.started || t.ahead > 0 {
 		switch {
-		case sm.Role == "user" && strings.HasPrefix(strings.TrimSpace(sm.Text), t.mark):
-			t.started = true
+		case !t.started && sm.Role == "user" && strings.Contains(sm.Text, t.mark):
+			t.started, t.ahead = true, t.waiting
+		case sm.Role == "user":
+			t.waiting++
+		case turnEnd(sm):
+			if !t.started && t.waiting > 0 {
+				t.waiting--
+			} else if t.started && t.ahead > 0 {
+				t.ahead--
+			}
 		case sm.Role == "system" && strings.HasPrefix(sm.Text, "run "):
 			return sandboxEnd{store.Failed, sm.Text + " before it took the message"}, true
 		}
-		return sandboxEnd{}, false // an earlier turn of the run, or this one's own message
+		return sandboxEnd{}, false
 	}
 	switch sm.Role {
 	case "assistant":
@@ -345,6 +425,19 @@ func (t *sandboxTurn) take(ctx context.Context, sm sandboxMessage) (sandboxEnd, 
 		t.mu.Unlock()
 		t.stream.event("tool_call", toolEvent{ID: "sandbox-" + strconv.FormatInt(sm.ID, 10), Title: redact(cutString(sm.Text, 512)), Status: "pending"})
 	case "request":
+		if t.quiet.Load() {
+			if t.hist == nil {
+				t.hist = map[string]sandboxMessage{}
+			}
+			var d struct {
+				Request struct {
+					ID string `json:"request_id"`
+				} `json:"request"`
+			}
+			_ = json.Unmarshal(sm.Data, &d)
+			t.hist[d.Request.ID] = sm
+			break
+		}
 		t.ask(ctx, sm)
 	case "resolved":
 		var d struct {
@@ -354,8 +447,10 @@ func (t *sandboxTurn) take(ctx context.Context, sm sandboxMessage) (sandboxEnd, 
 		}
 		_ = json.Unmarshal(sm.Data, &d)
 		id := d.RequestID
+		delete(t.hist, d.RequestID)
 		t.mu.Lock()
 		if w := t.asks[d.RequestID]; w != nil {
+			w.done = true // no asking again after this
 			w.stop()
 			id = w.local // as the permission_request said it
 			delete(t.asks, d.RequestID)
@@ -450,18 +545,6 @@ func (t *sandboxTurn) line(s string) (sandboxEnd, bool) {
 	return sandboxEnd{}, false
 }
 
-// markOf is how the conversation's turn that carries a message is known: the start of its text.
-func markOf(posted string) string {
-	m := strings.TrimSpace(posted)
-	if len(m) > 120 {
-		m = m[:120]
-		for len(m) > 0 && !utf8.ValidString(m) {
-			m = m[:len(m)-1]
-		}
-	}
-	return m
-}
-
 func cmpOr(a, b string) string {
 	if a != "" {
 		return a
@@ -492,18 +575,26 @@ func (t *sandboxTurn) ask(ctx context.Context, sm sandboxMessage) {
 	t.mu.Unlock()
 	n := t.a.n
 	pending := n.askPending()
-	open := func() acpx.Request {
+	// Opening is serialized with the sandbox resolving the request (t.mu): a request it resolved
+	// is never asked again.
+	open := func() (acpx.Request, bool) {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if w.done {
+			return acpx.Request{}, false
+		}
 		r := pending.Open(base)
 		n.asks.mu.Lock()
 		n.asks.of[r.ID] = askRef{msg: t.msgID, req: r}
 		n.asks.mu.Unlock()
-		t.mu.Lock()
 		w.local = r.ID
-		t.mu.Unlock()
 		t.stream.event("permission_request", fitRequest(r))
-		return r
+		return r, true
 	}
-	r := open()
+	r, ok := open()
+	if !ok {
+		return
+	}
 	go func() {
 		defer stop()
 		for {
@@ -523,8 +614,12 @@ func (t *sandboxTurn) ask(ctx context.Context, sm sandboxMessage) {
 			if errors.As(err, &se) && se.status == http.StatusConflict {
 				return // the run that asked has ended
 			}
-			t.stream.event("notice", map[string]string{"severity": "warning", "text": "the answer of " + by + " did not reach the sandbox (" + err.Error() + "): asked again"})
-			r = open()
+			// The answer given is closed as not delivered; the person is asked again.
+			t.stream.event("permission", map[string]any{"request_id": r.ID, "decision": "undelivered", "by": by})
+			t.stream.event("notice", map[string]string{"severity": "warning", "text": "the answer did not reach the sandbox (" + err.Error() + "): asked again"})
+			if r, ok = open(); !ok {
+				return
+			}
 		}
 	}()
 }
@@ -558,6 +653,46 @@ func (a *sandboxAgent) answer(ctx context.Context, theirs, run string, reply acp
 		}
 	}
 	return err
+}
+
+// replay reads the run's history up to live quietly (recorded by an earlier attempt, or before
+// this one began): the turn's text and state come back, nothing is recorded again. Requests still
+// open at its end are asked.
+func (a *sandboxAgent) replay(ctx context.Context, t *sandboxTurn, live int64) (sandboxEnd, bool, error) {
+	t.quiet.Store(true)
+	defer func() {
+		t.stream.flush() // what it held is dropped while quiet
+		t.quiet.Store(false)
+		for _, sm := range t.hist {
+			t.ask(ctx, sm)
+		}
+		t.hist = nil
+	}()
+	after := int64(0)
+	for after < live {
+		var page []sandboxMessage
+		h, err := a.call(ctx, "GET", "/messages?raw=true&limit="+strconv.Itoa(sandboxCatchUp)+"&after="+strconv.FormatInt(after, 10), nil, nil, &page)
+		if err != nil {
+			return sandboxEnd{}, false, err
+		}
+		for _, sm := range page {
+			if sm.ID > live {
+				break
+			}
+			if sm.RunID == t.run.ID {
+				if end, done := t.take(ctx, sm); done {
+					t.after = max(t.after, sm.ID)
+					return end, true, nil
+				}
+			}
+		}
+		next, _ := strconv.ParseInt(h.Get("X-Next-Cursor"), 10, 64)
+		if next <= after {
+			break
+		}
+		after = next
+	}
+	return sandboxEnd{}, false, nil
 }
 
 // follow reads the conversation's stream after the cursor, the run's turns into t, until the turn
@@ -648,6 +783,7 @@ func (a *sandboxAgent) followOnce(ctx context.Context, t *sandboxTurn) (sandboxE
 		}
 		t.after = sm.ID
 		a.seen(sm.ID)
+		a.observe(sm)
 		if sm.RunID != t.run.ID {
 			continue
 		}
@@ -708,30 +844,46 @@ func (a *sandboxAgent) handle(m store.Message) {
 		failed(err, "the sandbox's conversation")
 		return
 	}
-	from := a.cursor.Load()
-	if m.Attempts > 1 {
-		// An earlier attempt may have posted it already (the same message there): its turn may be
-		// anywhere in the stream.
-		from = 0
-	}
-	run, delivery, posted, err := a.post(ctx, m)
+	live := a.cursor.Load() // what the stream says after this is new
+	run, delivery, _, err := a.post(ctx, m)
 	if err != nil {
 		failed(err, "the message to the sandbox")
 		return
 	}
 	had, _ := n.st.EventCount(n.ctx, m.ID)
-	t := &sandboxTurn{a: a, msgID: m.ID, run: run, limit: int(n.cfg.Limits.MaxReply), after: from, mark: markOf(posted),
-		// Joined to a run not started yet: nothing of the run comes before this message.
-		started: delivery == "input" && run.Status == "queued"}
+	t := &sandboxTurn{a: a, msgID: m.ID, run: run, limit: int(n.cfg.Limits.MaxReply), after: live, mark: m.ID}
 	t.stream = &textStream{record: func(kind string, data any) {
+		if t.quiet.Load() {
+			return
+		}
 		if err := n.addEvent(n.ctx, m.ID, kind, eventJSON(data), true); err != nil && n.ctx.Err() == nil {
 			n.log.Debug("event", "err", err)
 		}
 	}, budget: max(n.cfg.Limits.MaxEventsPerMessage-had, 0) / 2}
+	// The message is in the run's task (a new run, or text mode joining a queued task): the run's
+	// first turn is its turn. Otherwise it is the run's input that carries its id.
+	inTask := strings.Contains(run.Task, m.ID)
+	t.started = inTask
+	// The turn began before what this attempt reads live: an earlier attempt posted it (the same
+	// message there), or the run that carries it is under way. Its history is read again, quietly.
+	again := m.Attempts > 1 || (inTask && run.Status != "queued")
+	if !again {
+		t.waiting = a.openOf(run.ID) // what the run had taken and not answered when the cursor stood here
+	}
 	t.stream.event("notice", map[string]string{"text": "sandbox " + a.cfg.Sandbox.ID + ": run " + run.ID + " (" + delivery + ")"})
 
 	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
-	end, err := a.follow(turnCtx, t)
+	var end sandboxEnd
+	done := false
+	if again {
+		end, done, err = a.replay(turnCtx, t, live)
+		if err == nil && !done {
+			t.stream.event("notice", map[string]string{"text": "read again from the sandbox's history; what an earlier attempt recorded is not repeated"})
+		}
+	}
+	if err == nil && !done {
+		end, err = a.follow(turnCtx, t)
+	}
 	timedOut := errors.Is(turnCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 	turnCancel()
 	t.mu.Lock()

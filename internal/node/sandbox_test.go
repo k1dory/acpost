@@ -28,6 +28,9 @@ type fakeSandboxd struct {
 	afters   []string // ?after of each stream connection
 	frames   []string
 	next     int
+	history  []map[string]any // what GET /messages lists (up to event 5); text "POSTED": what was posted
+	runTask  bool             // the run's task is the posted text (text mode, a new run), queued
+	failPost int              // POSTs that take the message and answer 503
 }
 
 func (f *fakeSandboxd) handler(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +46,23 @@ func (f *fakeSandboxd) handler(w http.ResponseWriter, r *http.Request) {
 			cur = "5"
 		}
 		w.Header().Set("X-Next-Cursor", cur)
+		if r.URL.Query().Get("after") == "0" && f.history != nil {
+			f.mu.Lock()
+			var page []map[string]any
+			for _, h := range f.history {
+				c := map[string]any{}
+				for k, v := range h {
+					c[k] = v
+				}
+				if c["text"] == "POSTED" && len(f.posted) > 0 {
+					c["text"] = f.posted[len(f.posted)-1]
+				}
+				page = append(page, c)
+			}
+			f.mu.Unlock()
+			json.NewEncoder(w).Encode(page)
+			return
+		}
 		w.Write([]byte("[]"))
 	case r.Method == "POST" && r.URL.Path == "/v1/sandboxes/sb1/messages":
 		var body struct{ Text string }
@@ -50,9 +70,19 @@ func (f *fakeSandboxd) handler(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.posted = append(f.posted, body.Text)
 		f.keys = append(f.keys, r.Header.Get("Idempotency-Key"))
+		fail := f.failPost > 0
+		f.failPost--
 		f.mu.Unlock()
+		if fail {
+			w.WriteHeader(503)
+			return
+		}
 		w.WriteHeader(202)
-		json.NewEncoder(w).Encode(map[string]any{"run": map[string]any{"id": "r1", "status": "running", "session": "s-9"}, "delivery": "resumed"})
+		run := map[string]any{"id": "r1", "status": "running", "session": "s-9"}
+		if f.runTask {
+			run["task"], run["status"] = body.Text, "queued"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"run": run, "delivery": "input"})
 	case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/sandboxes/sb1/requests/"):
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
@@ -116,7 +146,9 @@ func frame(id int64, run, role, text string, data any) string {
 	return fmt.Sprintf("event: %s\nid: %d\ndata: %s\n\n", role, id, b)
 }
 
-func sandboxNode(t *testing.T, f *fakeSandboxd) *Node {
+func sandboxNode(t *testing.T, f *fakeSandboxd) *Node { return sandboxNodeWith(t, f, "") }
+
+func sandboxNodeWith(t *testing.T, f *fakeSandboxd, extra string) *Node {
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	t.Cleanup(srv.Close)
 	t.Setenv("SB_TOKEN", "sbtoken")
@@ -126,7 +158,7 @@ agents:
     driver: sandbox
     turn_timeout: 30s
     sandbox: {url: "`+srv.URL+`", id: sb1, token_env: SB_TOKEN}
-`)
+`+extra)
 }
 
 // A message is the sandbox's next message; what its run says becomes the message's events and
@@ -272,5 +304,82 @@ func TestSandboxRunEndedFirst(t *testing.T) {
 	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
 	if err != nil || w.State != store.Failed || w.Reply != "" || !strings.Contains(w.Error, "before it took the message") {
 		t.Fatalf("%+v %v", w, err)
+	}
+}
+
+// Messages the run took before this one are answered first: their turns' ends do not end this
+// one, and what they say is not its reply — whether they were seen catching up or in the stream.
+func TestSandboxTurnsInOrder(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
+	f.history = []map[string]any{{"id": 4, "run_id": "r1", "role": "user", "text": "first, from another client"}}
+	f.frames = []string{
+		frame(6, "r1", "user", "second, from another client", nil),
+		"USER:7",
+		frame(8, "r1", "assistant", "answer to the first", nil),
+		frame(9, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+		frame(10, "r1", "assistant", "answer to the second", nil),
+		frame(11, "r1", "log", `{"type":"result","is_error":false}`, nil),
+		frame(12, "r1", "assistant", "answer to this one", nil),
+		frame(13, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "third"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || w.Reply != "answer to this one" {
+		t.Fatalf("%+v %v", w, err)
+	}
+	evs, _ := n.Events(ctx, me, m.ID, 0, 100)
+	for _, e := range evs {
+		if strings.Contains(e.Data, "answer to the") {
+			t.Fatalf("another message's turn in this one's events: %s", e.Data)
+		}
+	}
+}
+
+// A message that is the run's task (text mode joining a queued run, a new run): the run's first
+// turn is its own, with no user turn of its own in the stream.
+func TestSandboxMessageInTask(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{}), runTask: true}
+	f.frames = []string{
+		frame(6, "r1", "assistant", "done in text mode", nil),
+		frame(7, "r1", "system", "run done", nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "go"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || w.Reply != "done in text mode" {
+		t.Fatalf("%+v %v", w, err)
+	}
+}
+
+// sandboxd took the message but its answer was lost: the retry posts it under the same key and
+// reads its turn from the history, recording nothing an earlier attempt could have recorded.
+func TestSandboxRetryReadsHistory(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{}), failPost: 1}
+	f.history = []map[string]any{
+		{"id": 4, "run_id": "r1", "role": "user", "text": "POSTED"},
+		{"id": 5, "run_id": "r1", "role": "assistant", "text": "said before the retry"},
+	}
+	f.frames = []string{
+		frame(6, "r1", "assistant", "said after", nil),
+		frame(7, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+	}
+	n := sandboxNodeWith(t, f, "limits: {max_attempts: 3}\n")
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "go"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || !strings.Contains(w.Reply, "said before the retry") || !strings.Contains(w.Reply, "said after") {
+		t.Fatalf("%+v %v", w, err)
+	}
+	f.mu.Lock()
+	keys := append([]string(nil), f.keys...)
+	f.mu.Unlock()
+	if len(keys) != 2 || keys[0] != keys[1] {
+		t.Fatalf("keys %v: the retry is the same message", keys)
+	}
+	evs, _ := n.Events(ctx, me, m.ID, 0, 100)
+	for _, e := range evs {
+		if e.Kind == "text" && strings.Contains(e.Data, "said before") {
+			t.Fatalf("history recorded again: %s", e.Data)
+		}
 	}
 }

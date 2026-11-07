@@ -425,8 +425,10 @@ in the sandbox too. A broken stream is opened again where it stopped. A cloud ag
 asking: the sandbox, its policy and the gateway are its boundary (its `harness.permissions`, allow
 by default). When the sandbox does ask, its requests are the message's permission requests,
 answered here and handed to the sandbox (asked again if the answer does not reach it). Turns of
-one sandbox go one at a time, and the sandbox's conversation is the agent's: a turn is the
-message's from the conversation's turn that carries its text. A message posted again (sandboxd's
+one sandbox go one at a time. A turn is the message's from the conversation's turn that carries
+its id (the preamble names it; with `preamble: false` a last line `[acpost <id>]` does), after the
+turns of the messages the run took before it; a message joined to a run's task takes the run's
+first turn. A message posted again (sandboxd's
 answer lost, the node restarted) is the same message there (`Idempotency-Key: acpost-<id>`), never a
 second run.
 
