@@ -293,6 +293,37 @@ func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
+// Wikis lists the repositories' wikis.
+func (c *Client) Wikis(ctx context.Context) ([]store.Wiki, error) {
+	var out struct {
+		Items []store.Wiki `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/wiki", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// WikiPages is a wiki's pages with their text.
+func (c *Client) WikiPages(ctx context.Context, repo string) ([]store.WikiPage, error) {
+	var out struct {
+		Items []store.WikiPage `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/wiki/pages", url.Values{"repo": {repo}}, nil, &out, nil)
+	return out.Items, err
+}
+
+// WriteWiki has an agent write a directory's wiki: the task doing it.
+func (c *Client) WriteWiki(ctx context.Context, repo, agent, lang string) (store.Message, error) {
+	var out store.Message
+	_, err := c.do(ctx, "POST", "/v1/wiki", nil, map[string]string{"repo": repo, "agent": agent, "lang": lang}, &out, nil)
+	return out, err
+}
+
+// DeleteWiki forgets a wiki.
+func (c *Client) DeleteWiki(ctx context.Context, repo string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/wiki", url.Values{"repo": {repo}}, nil, nil, nil)
+	return err
+}
+
 // Knowledge lists the notes agents are given at a new session.
 func (c *Client) Knowledge(ctx context.Context) ([]store.Note, error) {
 	var out struct {

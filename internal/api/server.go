@@ -72,6 +72,10 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/forge/accounts", s.auth(s.forgeAccounts))
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
 	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
+	mux.HandleFunc("GET /v1/wiki", s.auth(s.wikis))
+	mux.HandleFunc("GET /v1/wiki/pages", s.auth(s.wikiPages))
+	mux.HandleFunc("POST /v1/wiki", s.auth(s.writeWiki))
+	mux.HandleFunc("DELETE /v1/wiki", s.auth(s.deleteWiki))
 	mux.HandleFunc("GET /v1/knowledge", s.auth(s.knowledge))
 	mux.HandleFunc("PUT /v1/knowledge", s.auth(s.putNote))
 	mux.HandleFunc("DELETE /v1/knowledge/{name}", s.auth(s.deleteNote))
@@ -606,6 +610,50 @@ func (s *server) mcpPut(w http.ResponseWriter, r *http.Request, p node.Principal
 
 func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	if err := s.n.DeleteMCPServer(r.Context(), p, r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) wikis(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.Wikis(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) wikiPages(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.WikiPages(r.Context(), p, r.URL.Query().Get("repo"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) writeWiki(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		Repo  string `json:"repo"`
+		Agent string `json:"agent"`
+		Lang  string `json:"lang"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	m, err := s.n.WriteWiki(r.Context(), p, req.Repo, req.Agent, req.Lang)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, m)
+}
+
+func (s *server) deleteWiki(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.DeleteWiki(r.Context(), p, r.URL.Query().Get("repo")); err != nil {
 		writeErr(w, err)
 		return
 	}

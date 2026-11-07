@@ -730,6 +730,79 @@ export class TurnChanges {
     }
 }
 
+/**
+ * Wiki is a repository's wiki.
+ */
+export class Wiki {
+    "repo": string;
+    "agent": string;
+    "lang"?: string;
+    "status": string;
+    "msg"?: string;
+    "error"?: string;
+    "updated": string;
+    "pages": number;
+
+    /** Creates a new Wiki instance. */
+    constructor($$source: Partial<Wiki> = {}) {
+        if (!("repo" in $$source)) {
+            this["repo"] = "";
+        }
+        if (!("agent" in $$source)) {
+            this["agent"] = "";
+        }
+        if (!("status" in $$source)) {
+            this["status"] = "";
+        }
+        if (!("updated" in $$source)) {
+            this["updated"] = "0001-01-01T00:00:00.000Z";
+        }
+        if (!("pages" in $$source)) {
+            this["pages"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Wiki instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Wiki {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Wiki($$parsedSource as Partial<Wiki>);
+    }
+}
+
+/**
+ * WikiPage is a page of it.
+ */
+export class WikiPage {
+    "slug": string;
+    "title": string;
+    "parent"?: string;
+    "body"?: string;
+
+    /** Creates a new WikiPage instance. */
+    constructor($$source: Partial<WikiPage> = {}) {
+        if (!("slug" in $$source)) {
+            this["slug"] = "";
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new WikiPage instance from a string or object.
+     */
+    static createFrom($$source: any = {}): WikiPage {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new WikiPage($$parsedSource as Partial<WikiPage>);
+    }
+}
+
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = $Create.Map($Create.Any, $Create.Any);

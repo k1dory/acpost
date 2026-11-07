@@ -14,6 +14,8 @@
     renderer: {
       code({ text: code, lang }) {
         const want = (lang ?? "").trim().split(/\s+/)[0].toLowerCase();
+        // A diagram: drawn after (Mermaid, loaded when first needed), its text kept to show if it fails.
+        if (want === "mermaid") return `<div class="mm" data-src="${esc(code)}"><pre><code>${esc(code)}</code></pre></div>`;
         let out = "", name = want;
         if (want && hljs.getLanguage(want)) out = hljs.highlight(code, { language: want, ignoreIllegals: true }).value;
         else if (!want && code.length < 20000) {
@@ -28,6 +30,28 @@
     },
   });
   const html = $derived(DOMPurify.sanitize(md.parse(text ?? "", { async: false }) as string));
+
+  let box: HTMLDivElement;
+  let seq = 0;
+  // Diagrams: each drawn once its block is in the page; a drawing that fails leaves the text.
+  $effect(() => {
+    html;
+    const blocks = [...box.querySelectorAll<HTMLElement>(".mm[data-src]:not([data-done])")];
+    if (!blocks.length) return;
+    (async () => {
+      const { default: mermaid } = await import("mermaid");
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", flowchart: { htmlLabels: false },
+        theme: document.documentElement.dataset.theme === "dark" ? "dark" : "default" });
+      for (const b of blocks) {
+        b.dataset.done = "1";
+        try {
+          const { svg } = await mermaid.render("mm-" + Date.now().toString(36) + "-" + seq++, b.dataset.src ?? "");
+          b.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
+          b.classList.add("drawn");
+        } catch { /* the text stays */ }
+      }
+    })();
+  });
 
   async function copy(e: MouseEvent) {
     const btn = (e.target as HTMLElement).closest(".cp") as HTMLButtonElement | null;
@@ -44,7 +68,7 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="md selectable" onclick={copy}>{@html html}</div>
+<div class="md selectable" bind:this={box} onclick={copy}>{@html html}</div>
 
 <style>
   .md { line-height: 1.65; overflow-wrap: anywhere; font-size: 13.5px; min-width: 0; max-width: 100%; }
@@ -62,6 +86,10 @@
   .md :global(.cp:hover) { background: var(--hover); color: var(--ink); }
   .md :global(pre) { padding: 12px 14px; overflow: auto; margin: 0; }
   .md :global(pre code) { background: none; padding: 0; font-size: 12px; line-height: 1.55; overflow-wrap: normal; white-space: pre; }
+  .md :global(.mm) { margin: 0 0 .8em; }
+  .md :global(.mm.drawn) { border: 1px solid var(--line-soft); border-radius: 14px; padding: 14px; background: var(--page); overflow: auto; text-align: center; }
+  .md :global(.mm.drawn svg) { max-width: 100%; height: auto; }
+  .md :global(.mm pre) { border: 1px solid var(--line-soft); border-radius: 14px; }
   .md :global(a) { color: var(--accent); text-decoration: none; }
   .md :global(table) { border-collapse: collapse; margin: 0 0 .8em; font-size: 13px; }
   .md :global(th), .md :global(td) { border: 1px solid var(--line); padding: 5px 9px; }

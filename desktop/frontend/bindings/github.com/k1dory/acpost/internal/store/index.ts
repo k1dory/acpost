@@ -15,7 +15,9 @@ export {
     RepoDiff,
     Schedule,
     State,
-    TurnChanges
+    TurnChanges,
+    Wiki,
+    WikiPage
 } from "./models.js";
 
 export type {

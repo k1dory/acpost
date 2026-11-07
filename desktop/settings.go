@@ -130,3 +130,33 @@ func (n *Node) DeleteNote(name string) error {
 	})
 	return err
 }
+
+func (n *Node) Wikis() ([]store.Wiki, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]store.Wiki, error) { return c.Wikis(ctx) })
+}
+
+func (n *Node) WikiPages(repo string) ([]store.WikiPage, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]store.WikiPage, error) { return c.WikiPages(ctx, repo) })
+}
+
+// WriteWiki starts writing a directory's wiki: the task's thread.
+func (n *Node) WriteWiki(repo, agent, lang string) (string, error) {
+	m, err := callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) (store.Message, error) {
+		return c.WriteWiki(ctx, repo, agent, lang)
+	})
+	return cmpOr(m.Thread, m.ID), err
+}
+
+func (n *Node) DeleteWiki(repo string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.DeleteWiki(ctx, repo)
+	})
+	return err
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}

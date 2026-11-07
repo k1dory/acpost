@@ -165,6 +165,10 @@ export function DeleteSchedule(id: string): $CancellablePromise<void> {
     return $Call.ByID(1747447074, id);
 }
 
+export function DeleteWiki(repo: string): $CancellablePromise<void> {
+    return $Call.ByID(1939304583, repo);
+}
+
 /**
  * EditQueued changes what a queued message asks.
  */
@@ -425,6 +429,25 @@ export function Usage(days: number, by: string): $CancellablePromise<client$0.Us
     });
 }
 
+export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
+    return $Call.ByID(3522603132, repo).then(($result: any) => {
+        return $$createType37($result);
+    });
+}
+
+export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
+    return $Call.ByID(52380493).then(($result: any) => {
+        return $$createType39($result);
+    });
+}
+
+/**
+ * WriteWiki starts writing a directory's wiki: the task's thread.
+ */
+export function WriteWiki(repo: string, agent: string, lang: string): $CancellablePromise<string> {
+    return $Call.ByID(1613046835, repo, agent, lang);
+}
+
 // Private type creation functions
 const $$createType0 = client$0.AgentInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
@@ -462,3 +485,7 @@ const $$createType32 = $models.Connection.createFrom;
 const $$createType33 = $Create.Array($$createType4);
 const $$createType34 = client$0.UsageReport.createFrom;
 const $$createType35 = $Create.Array($$createType34);
+const $$createType36 = store$0.WikiPage.createFrom;
+const $$createType37 = $Create.Array($$createType36);
+const $$createType38 = store$0.Wiki.createFrom;
+const $$createType39 = $Create.Array($$createType38);

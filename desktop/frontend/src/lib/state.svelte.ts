@@ -76,7 +76,7 @@ class App {
     try { localStorage.setItem("panel-tab", k); } catch {}
   }
   panel = $state(true);
-  view = $state<"chat" | "usage" | "settings" | "board">("chat");
+  view = $state<"chat" | "usage" | "settings" | "board" | "wiki">("chat");
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
   palette = $state(false); // ⌘K

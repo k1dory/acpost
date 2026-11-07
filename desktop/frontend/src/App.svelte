@@ -8,6 +8,7 @@
   import Settings from "./components/Settings.svelte";
   import Board from "./components/Board.svelte";
   import Palette from "./components/Palette.svelte";
+  import Wiki from "./components/Wiki.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
 
   onMount(() => {
@@ -60,6 +61,8 @@
     <Settings />
   {:else if app.view === "board"}
     <Board />
+  {:else if app.view === "wiki"}
+    <Wiki />
   {:else}
     <Conversation />
   {/if}

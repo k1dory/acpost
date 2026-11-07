@@ -110,6 +110,7 @@
     <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> {t("New task")} <kbd>⌘N</kbd></button>
     <div class="quick">
       <button class="row qk" class:sel={app.view === "board"} onclick={() => (app.view = "board")}><span class="ic"><Icon name="activity" size={14} /></span><span class="t"><span class="title">{t("Agents")}</span></span>{#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}<kbd>⌘B</kbd></button>
+      <button class="row qk" class:sel={app.view === "wiki"} onclick={() => (app.view = "wiki")}><span class="ic"><Icon name="book" size={14} /></span><span class="t"><span class="title">{t("Wiki")}</span></span></button>
       <button class="row qk" onclick={() => (app.palette = true)}><span class="ic"><Icon name="search" size={14} /></span><span class="t"><span class="title">{t("Search")}</span></span><kbd>⌘K</kbd></button>
     </div>
     <label class="search">

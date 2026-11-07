@@ -221,6 +221,15 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 		_ = os.WriteFile(dir+"/"+string(p.SessionId), []byte(strconv.Itoa(count)), 0o600)
 	}
 	sid := p.SessionId
+	if strings.Contains(full, "Write a wiki for the repository") { // a wiki: pages in its format
+		a.mu.Lock()
+		dir := a.cwds[sid]
+		a.mu.Unlock()
+		a.say(ctx, sid, "Here it is.\n<<<PAGE slug=\"overview\" title=\"Overview\">>>\nThe code in "+dir+".\n<<<END>>>\n"+
+			"<<<PAGE slug=\"store\" title=\"Store\" parent=\"architecture\">>>\nSQLite.\n```mermaid\ngraph TD; a-->b\n```\n<<<END>>>\n"+
+			"<<<PAGE slug=\"overview\" title=\"Again\">>>\nduplicate\n<<<END>>>")
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+	}
 	switch cmd {
 	case "echo":
 		a.say(ctx, sid, arg)
