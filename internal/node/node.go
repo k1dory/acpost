@@ -533,10 +533,7 @@ func (n *Node) Wait(ctx context.Context, p Principal, id string, timeout time.Du
 func (n *Node) List(ctx context.Context, p Principal, f store.Filter) ([]store.Message, string, error) {
 	switch p.Kind {
 	case "client":
-		f.Party = []string{p.Address()}
-		for _, a := range p.Token.ActAs {
-			f.Party = append(f.Party, "agent:"+a)
-		}
+		f.Party = clientParty(p)
 	case "node":
 		return nil, "", errf("refused", "a node does not list messages")
 	}
@@ -548,6 +545,22 @@ func (n *Node) List(ctx context.Context, p Principal, f store.Filter) ([]store.M
 		list[i] = withHint(list[i])
 	}
 	return list, next, err
+}
+
+// Conversations lists threads p may see, the most recently active first.
+func (n *Node) Conversations(ctx context.Context, p Principal, before string, limit int) ([]store.Conversation, string, error) {
+	var party *store.Party
+	switch p.Kind {
+	case "client":
+		party = clientParty(p)
+	case "node":
+		return nil, "", errf("refused", "a node does not list messages")
+	}
+	out, next, err := n.st.Conversations(ctx, party, before, limit)
+	if err != nil {
+		return nil, "", errf("invalid", "%v", err)
+	}
+	return out, next, nil
 }
 
 // Events returns a page of what happened while a message was handled.
@@ -782,4 +795,14 @@ func (n *Node) maintainLoop() {
 			n.log.Warn("store maintenance", "err", err)
 		}
 	}
+}
+
+// clientParty is what a client token may see (as canSee has it): what it sent, and what went to
+// the agents it acts as.
+func clientParty(p Principal) *store.Party {
+	party := &store.Party{Sender: p.Address()}
+	for _, a := range p.Token.ActAs {
+		party.Recipients = append(party.Recipients, "agent:"+a)
+	}
+	return party
 }

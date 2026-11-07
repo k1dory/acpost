@@ -868,3 +868,20 @@ func (c *Client) OpenPull(ctx context.Context, q ForgeQuery, p forge.PullRequest
 	_, err := c.do(ctx, "POST", "/v1/forge/pulls", nil, body, &out, nil)
 	return out, err
 }
+
+// Conversations lists threads, the most recently active first; next continues (before).
+func (c *Client) Conversations(ctx context.Context, before string, limit int) ([]store.Conversation, string, error) {
+	q := url.Values{}
+	if before != "" {
+		q.Set("before", before)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out struct {
+		Items []store.Conversation `json:"items"`
+		Next  string               `json:"next"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/conversations", q, nil, &out, nil)
+	return out.Items, out.Next, err
+}

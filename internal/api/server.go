@@ -40,6 +40,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
 	mux.HandleFunc("GET /v1/usage", s.auth(s.usage))
 	mux.HandleFunc("GET /v1/messages/{id}/changes", s.auth(s.changes))
+	mux.HandleFunc("GET /v1/conversations", s.auth(s.conversations))
 	mux.HandleFunc("GET /v1/forge", s.auth(s.forgeInfo))
 	mux.HandleFunc("GET /v1/forge/pulls", s.auth(s.forgePulls))
 	mux.HandleFunc("POST /v1/forge/pulls", s.auth(s.forgeOpenPull))
@@ -732,4 +733,14 @@ func nonNilSlice[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+func (s *server) conversations(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, next, err := s.n.Conversations(r.Context(), p, r.URL.Query().Get("before"), limit)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items), "next": next})
 }

@@ -148,3 +148,54 @@ func TestUsageOutlivesMessages(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// Threads, the most recently active first, a page at a time; a party sees its own.
+func TestConversations(t *testing.T) {
+	s := openTest(t, Options{})
+	a := mustInsert(t, s, msg("agent:a", "first line of a\nmore"))
+	time.Sleep(3 * time.Millisecond)
+	b := mustInsert(t, s, msg("agent:b", "b"))
+	time.Sleep(3 * time.Millisecond)
+	c := mustInsert(t, s, msg("agent:c", "c"))
+	time.Sleep(3 * time.Millisecond)
+	if _, err := s.Cancel(ctx, a.ID); err != nil { // a, changed last, comes first
+		t.Fatal(err)
+	}
+	page, next, err := s.Conversations(ctx, nil, "", 2)
+	if err != nil || len(page) != 2 || page[0].Thread != a.ID || page[1].Thread != c.ID || next == "" {
+		t.Fatalf("%+v %q %v", page, next, err)
+	}
+	if page[0].Title != "first line of a" || page[0].Agents[0] != "agent:a" || page[0].Messages != 1 {
+		t.Fatalf("%+v", page[0])
+	}
+	rest, next, _ := s.Conversations(ctx, nil, next, 2)
+	if len(rest) != 1 || rest[0].Thread != b.ID || next != "" {
+		t.Fatalf("%+v %q", rest, next)
+	}
+	mine, _, _ := s.Conversations(ctx, &Party{Sender: "client:x", Recipients: []string{"agent:b"}}, "", 10)
+	if len(mine) != 1 || mine[0].Thread != b.ID {
+		t.Fatalf("%+v", mine)
+	}
+}
+
+// A party that is only in a later message of a thread gets its title from that message, not the
+// root it may not see.
+func TestConversationTitleVisible(t *testing.T) {
+	s := openTest(t, Options{})
+	root := mustInsert(t, s, msg("agent:private", "secret plans"))
+	later := msg("agent:pub", "public step")
+	later.Thread = root.ID
+	mustInsert(t, s, later)
+	got, _, _ := s.Conversations(ctx, &Party{Sender: "client:x", Recipients: []string{"agent:pub"}}, "", 10)
+	if len(got) != 1 || got[0].Title != "public step" {
+		t.Fatalf("%+v", got)
+	}
+	// Acting as agent:a sees what went to it, not what it sent to another agent.
+	sent := msg("agent:b2", "from a to b2")
+	sent.From = "agent:a"
+	mustInsert(t, s, sent)
+	got, _, _ = s.Conversations(ctx, &Party{Sender: "client:x", Recipients: []string{"agent:a"}}, "", 10)
+	if len(got) != 0 {
+		t.Fatalf("an agent's own sends shown to who acts as it: %+v", got)
+	}
+}

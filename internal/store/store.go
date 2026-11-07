@@ -96,8 +96,8 @@ type Event struct {
 type Filter struct {
 	To, From, Task, Thread string
 	State                  State
-	// Party, when set, keeps messages sent by or to one of these addresses.
-	Party []string
+	// Party, when set, keeps messages it may see: sent by its Sender, or to one of its Recipients.
+	Party *Party
 	After string // the cursor: the id of the last message of the previous page
 	Limit int
 }
@@ -624,14 +624,10 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Message, string, error) {
 	if f.After != "" {
 		add("m.id > ?", f.After)
 	}
-	if len(f.Party) > 0 {
-		ph := strings.TrimSuffix(strings.Repeat("?,", len(f.Party)), ",")
-		where = append(where, "(m.sender IN ("+ph+") OR m.recipient IN ("+ph+"))")
-		for range 2 {
-			for _, p := range f.Party {
-				args = append(args, p)
-			}
-		}
+	if f.Party != nil {
+		cond, pargs := f.Party.where("m.")
+		where = append(where, cond)
+		args = append(args, pargs...)
 	}
 	q := "SELECT " + cols + " FROM messages m"
 	if len(where) > 0 {
@@ -1212,3 +1208,21 @@ func (s *Store) IntegrityCheck(ctx context.Context) error {
 
 // Live is how many bytes of the store hold data.
 func (s *Store) Live(ctx context.Context) (int64, error) { return liveBytes(ctx, s.r) }
+
+// Party is who a token-holding client is: what it sent, and what went to the agents it acts as.
+type Party struct {
+	Sender     string
+	Recipients []string
+}
+
+func (p *Party) where(prefix string) (string, []any) {
+	cond := prefix + "sender = ?"
+	args := []any{p.Sender}
+	if len(p.Recipients) > 0 {
+		cond += " OR " + prefix + "recipient IN (" + strings.TrimSuffix(strings.Repeat("?,", len(p.Recipients)), ",") + ")"
+		for _, r := range p.Recipients {
+			args = append(args, r)
+		}
+	}
+	return "(" + cond + ")", args
+}

@@ -135,6 +135,7 @@ acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--attach FILE]..
                [--link PATH|URL]... [--session ACP-ID] [--meta k=v]... [--ttl DUR] [--idempotency-key K]
                [--wait [--timeout DUR] [--save DIR]]
 acpost wait    ID... [--timeout DUR] [--save DIR]
+acpost conversations [--limit N] [--before CURSOR]   # threads, the most recently active first
 acpost show    ID [--events | --follow]    # --follow: the agent's text as it writes, then the outcome
 acpost list    [--to ADDR] [--from ADDR] [--task T] [--thread ID] [--state S] [--limit N] [--after CURSOR]
 acpost cancel  ID
@@ -406,6 +407,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
 | `GET /v1/messages/{id}/events?after=` | what the agent did: its text (`text`, `thought`), tool calls, plan, permissions, notices |
 | `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
+| `GET /v1/conversations?before=&limit=` | threads, the most recently active first: title, agents, counts by state; `next` continues (a thread active again meanwhile is at the top, not on a later page) |
 | `GET /v1/messages/{id}/changes?tree=1&diff=1` | what its turns changed, per turn and per repository |
 | `POST /v1/terminals` · `GET /v1/terminals` · `GET /v1/terminals/{id}/output?from=` · `POST /v1/terminals/{id}/input` · `POST /v1/terminals/{id}/resize` · `DELETE /v1/terminals/{id}` | a shell on the node's machine (the node's user) |
 | `GET /v1/forge?agent=&dir=` · `GET /v1/forge/pulls?state=` · `POST /v1/forge/pulls` · `GET /v1/forge/checks?ref=` · `GET /v1/forge/log?job=` | the repository's forge: pull requests, CI, logs |
