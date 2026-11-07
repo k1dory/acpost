@@ -390,7 +390,7 @@ class App {
   }
 
   /** The preview: what its page did (problems, its address), kept across tabs. */
-  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean; pending: string }>({ events: [], url: "", title: "", loaded: false, pending: "" });
+  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean; pending: string; cleared: boolean }>({ events: [], url: "", title: "", loaded: false, pending: "", cleared: false });
   /** A page of this Mac (a dev server) opened in the app's preview, not the system's browser. */
   openInPreview(url: string) {
     this.preview.pending = url;
@@ -412,7 +412,9 @@ class App {
     this.openTab("artifacts");
   }
   notePreview(e: PreviewEvent) {
-    if (e.kind === "nav") { if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; } return; }
+    // A page loaded (a reload too): what it shows from now on is the truth, cleared or not.
+    if (e.kind === "nav") { if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; } this.preview.cleared = false; return; }
+    this.preview.cleared = false;
     this.preview.events = [...this.preview.events.slice(-299), e];
   }
 

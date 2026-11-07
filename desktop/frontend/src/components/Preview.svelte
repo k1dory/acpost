@@ -18,9 +18,8 @@
   let err = $state("");
   let open = $state(false); // the list of problems shown
   // Cleared by hand: the list is empty, the page's problems are not gone — they come again when it
-  // runs again.
-  let cleared = $state(false);
-  $effect(() => { if (problems.length) cleared = false; });
+  // runs again (app.preview.cleared, until the page loads again or reports something).
+  const cleared = $derived(app.preview.cleared);
   const problems = $derived(app.preview.events.filter(e => e.kind !== "nav"));
 
   function go(u = address) {
@@ -100,7 +99,7 @@
       {#if problems.length}
         <span class="btn primary sm toag" role="button" tabindex="0" onclick={e => { e.stopPropagation(); sendToAgent(); }}
           onkeydown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); sendToAgent(); } }}><Icon name="send" size={11} /> {t("To the agent")}</span>
-        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; cleared = true; }} onkeydown={() => {}}>{t("Clear")}</span>
+        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.cleared = true; }} onkeydown={() => {}}>{t("Clear")}</span>
       {/if}
     </button>
     {#if open}
