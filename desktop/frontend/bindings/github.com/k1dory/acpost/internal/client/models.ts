@@ -500,6 +500,82 @@ export class ForgeInfo {
 }
 
 /**
+ * HandoffRequest is a local chat to go on in the cloud.
+ */
+export class HandoffRequest {
+    "thread"?: string;
+    "agent"?: string;
+    "session"?: string;
+    "cwd"?: string;
+    "cloud_agent": string;
+    "note"?: string;
+
+    /** Creates a new HandoffRequest instance. */
+    constructor($$source: Partial<HandoffRequest> = {}) {
+        if (!("cloud_agent" in $$source)) {
+            this["cloud_agent"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new HandoffRequest instance from a string or object.
+     */
+    static createFrom($$source: any = {}): HandoffRequest {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new HandoffRequest($$parsedSource as Partial<HandoffRequest>);
+    }
+}
+
+/**
+ * HandoffResult is the cloud chat it goes on in, and what went with it.
+ */
+export class HandoffResult {
+    "chat": Chat;
+    "message": string;
+    "repo": string;
+    "branch"?: string;
+    "base"?: string;
+    "patch": number;
+    "left_out"?: string[];
+
+    /** Creates a new HandoffResult instance. */
+    constructor($$source: Partial<HandoffResult> = {}) {
+        if (!("chat" in $$source)) {
+            this["chat"] = (new Chat());
+        }
+        if (!("message" in $$source)) {
+            this["message"] = "";
+        }
+        if (!("repo" in $$source)) {
+            this["repo"] = "";
+        }
+        if (!("patch" in $$source)) {
+            this["patch"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new HandoffResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): HandoffResult {
+        const $$createField0_0 = $$createType12;
+        const $$createField6_0 = $$createType16;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("chat" in $$parsedSource) {
+            $$parsedSource["chat"] = $$createField0_0($$parsedSource["chat"]);
+        }
+        if ("left_out" in $$parsedSource) {
+            $$parsedSource["left_out"] = $$createField6_0($$parsedSource["left_out"]);
+        }
+        return new HandoffResult($$parsedSource as Partial<HandoffResult>);
+    }
+}
+
+/**
  * Limits are the node's limits on what a message carries.
  */
 export class Limits {

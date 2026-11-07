@@ -28,6 +28,21 @@
   const tilde = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
   const agentName = (a: string) => { const n = a.replace(/^agent:/, ""); return n === "claude" ? "Claude Code" : n === "codex" ? "Codex" : n; };
 
+  // A page's text as shown: links between pages ([[slug]], [[slug|text]]) made links, a first
+  // heading that only repeats the title dropped.
+  function prepared(p: Page): string {
+    let body = (p.body ?? "").replace(/^\s*#{1,6}\s+(.+)\n+/, (all, h) => (h.trim() === p.title.trim() ? "" : all));
+    return body.replace(/\[\[([a-z0-9-]+)(?:\|([^\]]+))?\]\]/g, (_, slug, label) => {
+      const to = pages.find(x => x.slug === slug);
+      return to ? `[${label ?? to.title}](#wiki:${slug})` : label ?? slug;
+    });
+  }
+  function follow(e: MouseEvent) {
+    const a = (e.target as HTMLElement).closest("a");
+    const h = a?.getAttribute("href") ?? "";
+    if (h.startsWith("#wiki:")) { e.preventDefault(); page = h.slice(6); (e.currentTarget as HTMLElement).closest(".main")?.scrollTo(0, 0); }
+  }
+
   async function load() {
     try { wikis = ((await Node.Wikis()) ?? []) as any; } catch (e) { err = errText(e); wikis = []; }
     if (!repo && wikis?.length) pick(wikis[0].repo);
@@ -157,10 +172,11 @@
         {:else if cur.status === "failed" && !pages.length}
           <div class="err selectable">{t("The wiki was not written")}: {cur.error}</div>
         {:else if shown}
-          <article class="page">
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+          <article class="page" onclick={follow}>
             {#if cur.status === "writing"}<div class="note muted"><span class="spin"></span> {t("Being written again; these are the pages before.")}</div>{/if}
             <h1 class="pt">{shown.title}</h1>
-            <Markdown text={shown.body ?? ""} />
+            <Markdown text={prepared(shown)} />
           </article>
         {/if}
       </div>

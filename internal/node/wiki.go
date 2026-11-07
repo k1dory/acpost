@@ -37,8 +37,10 @@ Then answer with the pages and nothing else, each in exactly this form:
 
 Rules:
 - 5 to 12 pages. The first is the overview: what it is, who uses it, the main parts. Then the architecture (with a Mermaid diagram in a ` + "```mermaid" + ` block), one page per important module or subsystem (parent="architecture" for those), data and storage, how to build, test and run, configuration, and a glossary when the domain has its own words.
-- slug: lowercase letters, digits and dashes; title: a short name.
+- slug: lowercase letters, digits and dashes; title: a short name. Link pages to each other as [[slug]].
+- Mermaid: valid syntax only (flowchart TD or LR, sequenceDiagram); put every node label and edge label in double quotes — A["cmd/acpost (CLI)"] -->|"HTTP /v1"| B["node"] — no HTML in labels, at most about 15 nodes.
 - Be concrete: name files as path/to/file.go:123, show real commands, say why things are as they are when the code or its comments tell. No filler, no guessing — what you are unsure of, leave out.
+- Do not repeat the page's title as a heading at its top.
 - Write the pages in ` + in + `.`
 }
 
@@ -129,7 +131,7 @@ func (n *Node) WriteWiki(ctx context.Context, p Principal, repo, agent, lang str
 		}
 	}
 	m, _, err := n.Send(ctx, p, SendRequest{To: to.String(), Body: wikiPrompt(lang), Cwd: dir, Mode: mode,
-		Meta: map[string]string{"wiki": dir}})
+		Meta: map[string]string{"wiki": "1"}}) // a mark (meta is small): the wiki keeps the task, not the task the wiki
 	if err != nil {
 		return m, err
 	}

@@ -13,6 +13,8 @@ export {
     CloudAgent,
     ForgeAccount,
     ForgeInfo,
+    HandoffRequest,
+    HandoffResult,
     Limits,
     OptionValue,
     Status,

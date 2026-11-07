@@ -239,3 +239,10 @@ func (n *Node) EditQueued(id, body string) (string, error) {
 	m, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) { return c.EditQueued(ctx, id, body) })
 	return m.Body, err
 }
+
+// Handoff sends a local chat on to the cloud: the cloud chat it goes on in.
+func (n *Node) Handoff(r client.HandoffRequest) (client.HandoffResult, error) {
+	return callLong(n, 3*time.Minute, func(ctx context.Context, c *client.Client) (client.HandoffResult, error) {
+		return c.Handoff(ctx, r)
+	})
+}

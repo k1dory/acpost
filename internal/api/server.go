@@ -72,6 +72,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/forge/accounts", s.auth(s.forgeAccounts))
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
 	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
+	mux.HandleFunc("POST /v1/handoff", s.auth(s.handoff))
 	mux.HandleFunc("GET /v1/wiki", s.auth(s.wikis))
 	mux.HandleFunc("GET /v1/wiki/pages", s.auth(s.wikiPages))
 	mux.HandleFunc("POST /v1/wiki", s.auth(s.writeWiki))
@@ -614,6 +615,20 @@ func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Princi
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (s *server) handoff(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req node.HandoffRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := s.n.Handoff(r.Context(), p, req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, out)
 }
 
 func (s *server) wikis(w http.ResponseWriter, r *http.Request, p node.Principal) {

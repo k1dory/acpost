@@ -293,6 +293,34 @@ func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
+// HandoffRequest is a local chat to go on in the cloud.
+type HandoffRequest struct {
+	Thread     string `json:"thread,omitempty"`
+	Agent      string `json:"agent,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	CloudAgent string `json:"cloud_agent"`
+	Note       string `json:"note,omitempty"`
+}
+
+// HandoffResult is the cloud chat it goes on in, and what went with it.
+type HandoffResult struct {
+	Chat    Chat     `json:"chat"`
+	Message string   `json:"message"`
+	Repo    string   `json:"repo"`
+	Branch  string   `json:"branch,omitempty"`
+	Base    string   `json:"base,omitempty"`
+	Patch   int      `json:"patch"`
+	Left    []string `json:"left_out,omitempty"`
+}
+
+// Handoff sends a local chat on to the cloud.
+func (c *Client) Handoff(ctx context.Context, r HandoffRequest) (HandoffResult, error) {
+	var out HandoffResult
+	_, err := c.do(ctx, "POST", "/v1/handoff", nil, r, &out, nil)
+	return out, err
+}
+
 // Wikis lists the repositories' wikis.
 func (c *Client) Wikis(ctx context.Context) ([]store.Wiki, error) {
 	var out struct {
