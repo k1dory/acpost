@@ -28,7 +28,7 @@
   });
   // Refreshed while the message or any of what it asked still runs or waits.
   const live = $derived(running || items.some(n => n.state === "running" || n.state === "queued"));
-  $effect(() => { msg; load(); });
+  $effect(() => { msg; running; load(); }); // and again when the message ends: what it asked last shows
   $effect(() => {
     if (!live) return;
     const id = setInterval(load, 4000);

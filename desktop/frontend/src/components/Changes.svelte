@@ -30,16 +30,20 @@
     if (agent) return turns.flatMap((t: any) => splitDiff(t.diff ?? "").map(f => ({ ...f, repo: t.repo })));
     return (data?.repos ?? []).flatMap((r: any) => splitDiff(r.diff ?? "").map(f => ({ ...f, repo: r.repo })));
   });
+  // A file is its repository and its path (two repositories may have the same path).
+  const keyOf = (repo: string, path: string) => repo + "\u0000" + path;
   const stats = $derived.by(() => {
-    const m = new Map<string, { added: number; removed: number; status: string }>();
+    const m = new Map<string, { path: string; repo: string; added: number; removed: number; status: string }>();
     for (const r of agent ? turns : data?.repos ?? []) for (const f of (r.files ?? []) as any[]) {
-      const s = m.get(f.path) ?? { added: 0, removed: 0, status: f.status };
+      const k = keyOf(r.repo, f.path);
+      const s = m.get(k) ?? { path: f.path, repo: r.repo, added: 0, removed: 0, status: f.status };
       s.added += Math.max(0, f.added); s.removed += Math.max(0, f.removed); s.status = f.status;
-      m.set(f.path, s);
+      m.set(k, s);
     }
     return m;
   });
-  const shown = $derived(files.find((f: any) => f.path === pick) ?? files[0]);
+  const repos = $derived(new Set([...stats.values()].map(s => s.repo)).size);
+  const shown = $derived(files.find((f: any) => keyOf(f.repo, f.path) === pick) ?? files[0]);
 
   // A file's versions: the turns that changed it, in order — each with its own diff of the file
   // and, on request, the whole file as that turn left it.
@@ -80,8 +84,9 @@
   {:else}
     <div class="split">
       <div class="tree scroll">
-        {#each [...stats] as [path, s]}
-          <button class="f" class:on={shown?.path === path} onclick={() => (pick = path)}>
+        {#each [...stats] as [k, s]}
+          {@const path = s.path}
+          <button class="f" class:on={shown && keyOf(shown.repo, shown.path) === k} onclick={() => (pick = k)} title={repos > 1 ? s.repo + "/" + path : path}>
             <span class="stt mono st-{s.status[0]}">{s.status[0]}</span>
             <span class="p mono" title={path}>{path.split("/").pop()}<span class="muted dir">{path.includes("/") ? " " + path.slice(0, path.lastIndexOf("/")) : ""}</span></span>
             <span class="mono n"><span class="plus">+{s.added}</span> <span class="minus">−{s.removed}</span></span>
@@ -108,7 +113,7 @@
             <div class="vbar">
               <span class="mono n"><span class="plus">+{Math.max(0, v.file?.added ?? 0)}</span> <span class="minus">−{Math.max(0, v.file?.removed ?? 0)}</span></span>
               <span class="sp"></span>
-              {#if v.file?.status !== "D"}<button class="btn ghost sm" onclick={() => (at ? (at = null) : fileAt(v))}>{at ? t("This version") : t("File at this version")}</button>{/if}
+              {#if v.file?.status !== "D"}<button class="btn ghost sm" onclick={() => { if (at) { at = null; asked++; } else fileAt(v); }}>{at ? t("This version") : t("File at this version")}</button>{/if}
             </div>
             {#if at}
               {#if at.err}<div class="empty">{at.err}</div>{:else}<pre class="whole selectable">{at.text}</pre>{/if}
