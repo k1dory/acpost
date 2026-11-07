@@ -14,8 +14,16 @@
   const filePath = /^(~\/|\/|\.{1,2}\/)?[\w@.+-]+(\/[\w@.+-]+)*\.[A-Za-z0-9]{1,8}$/;
   md.use({
     renderer: {
+      // A link to a file of this Mac: an artifact (a file: href would not survive the sanitizer, and
+      // must not navigate).
+      link(token) {
+        if (!/^file:/i.test(token.href)) return false;
+        let path = token.href.replace(/^file:\/\//i, "");
+        try { path = decodeURI(path); } catch {}
+        return `<a href="#artifact:${encodeURIComponent(path)}">${this.parser.parseInline(token.tokens)}</a>`;
+      },
       codespan({ text: code }) {
-        const raw = code.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        const raw = code; // as written: entities in code stay literal
         return filePath.test(raw) && raw.includes("/") || /\.(html?|md|png|jpe?g|gif|svg|pdf|csv|json)$/i.test(raw) && filePath.test(raw)
           ? `<code class="pl" title="${esc(raw)}">${esc(raw)}</code>` : `<code>${esc(raw)}</code>`;
       },
@@ -36,7 +44,9 @@
       },
     },
   });
-  const html = $derived(DOMPurify.sanitize(md.parse(text ?? "", { async: false }) as string));
+  // No forms or fields in what an agent writes: nothing in a chat may submit anywhere.
+  const html = $derived(DOMPurify.sanitize(md.parse(text ?? "", { async: false }) as string,
+    { FORBID_TAGS: ["form", "input", "button", "textarea", "select", "iframe", "object", "embed", "base", "meta"], FORBID_ATTR: ["formaction", "action", "target"] }));
 
   let box: HTMLDivElement;
   let seq = 0;

@@ -196,6 +196,8 @@ class App {
   }
 
   private reset() {
+    this.artifact = null; // artifacts are the chat's
+    this.openedArtifacts = [];
     for (const [id, stop] of this.unsub) { stop(); Node.Unfollow(id); }
     this.unsub.clear();
     this.msgs = [];
@@ -400,7 +402,7 @@ class App {
   artifact = $state<ArtifactRef | null>(null);
   openedArtifacts = $state<ArtifactRef[]>([]);
   openArtifact(a: ArtifactRef) {
-    const same = (x: ArtifactRef) => x.msg === a.msg && x.name === a.name && x.path === a.path;
+    const same = (x: ArtifactRef) => x.msg === a.msg && x.name === a.name && x.path === a.path && x.base === a.base;
     if (!this.openedArtifacts.some(same)) this.openedArtifacts = [...this.openedArtifacts, a];
     this.artifact = a;
     if (this.view !== "chat") this.view = "chat";

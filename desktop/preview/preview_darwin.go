@@ -19,6 +19,7 @@ void apHide(void);
 void apLoad(const char *url);
 void apReload(void);
 void apBack(void);
+void apGuardNavigation(void *nswindow);
 
 */
 import "C"
@@ -111,6 +112,31 @@ func Load(raw string) error {
 
 func Reload() { C.apReload() }
 func Back()   { C.apBack() }
+
+var navigate func(string)
+
+// GuardNavigation keeps window's own page where it is: a navigation of it elsewhere (a link, a
+// form, window.open) is cancelled and its address given to f.
+func GuardNavigation(window unsafe.Pointer, f func(url string)) {
+	if window == nil {
+		return
+	}
+	mu.Lock()
+	navigate = f
+	mu.Unlock()
+	C.apGuardNavigation(window)
+}
+
+//export goNavigation
+func goNavigation(s *C.char) {
+	u := C.GoString(s)
+	mu.Lock()
+	f := navigate
+	mu.Unlock()
+	if f != nil {
+		go f(u)
+	}
+}
 
 //export goPreviewEvent
 func goPreviewEvent(s *C.char) {

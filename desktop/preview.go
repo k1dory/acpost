@@ -28,6 +28,15 @@ func (n *Node) PreviewShow(x, y, w, h float64) error {
 	return preview.Show(n.win.NativeWindow(), x, y, w, h)
 }
 
+// GuardNavigation keeps the app's page where it is (called once the page is up): an address it
+// would have gone to comes to the interface as "app:navigate", to open where it belongs.
+func (n *Node) GuardNavigation() {
+	if n.win == nil {
+		return
+	}
+	preview.GuardNavigation(n.win.NativeWindow(), func(url string) { n.app.Event.Emit("app:navigate", url) })
+}
+
 // PreviewHide hides it (its page stays loaded).
 func (n *Node) PreviewHide() { preview.Hide() }
 

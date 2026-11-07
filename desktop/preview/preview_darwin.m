@@ -122,3 +122,70 @@ void apLoad(const char *url) {
 
 void apReload(void) { dispatch_async(dispatch_get_main_queue(), ^{ [apView reload]; }); }
 void apBack(void) { dispatch_async(dispatch_get_main_queue(), ^{ if (apView.canGoBack) [apView goBack]; }); }
+
+// ---- The app's own page never navigates away ----
+// Wails (v3.1, macOS) lets its webview go wherever a link, a form or window.open sends it: the
+// app would become that site. A proxy in front of its navigation delegate cancels navigations of
+// the main frame (or a new window) to anything but the app's own origin, and hands the address to
+// Go, which opens it where it belongs; everything else goes to Wails' delegate as before.
+
+@interface APNavGuard : NSProxy <WKNavigationDelegate>
+@property (strong) id inner;
+@end
+
+static BOOL apSameOrigin(NSURL *a, NSURL *b) {
+	if (!a || !b) return NO;
+	return [a.scheme isEqualToString:b.scheme] && ((!a.host && !b.host) || [a.host isEqualToString:b.host]) && ((!a.port && !b.port) || [a.port isEqual:b.port]);
+}
+
+static BOOL apVeto(WKWebView *w, WKNavigationAction *a) {
+	BOOL main = a.targetFrame == nil || a.targetFrame.isMainFrame;
+	NSURL *u = a.request.URL;
+	if (!main || !u) return NO;
+	if ([u.scheme isEqualToString:@"about"] || apSameOrigin(u, w.URL)) return NO;
+	if (!w.URL) return NO; // the first load: the app's own page
+	goNavigation((char *)[u.absoluteString UTF8String]);
+	return YES;
+}
+
+@implementation APNavGuard
+- (instancetype)initWithInner:(id)inner { _inner = inner; return self; }
+- (BOOL)respondsToSelector:(SEL)s {
+	if (s == @selector(webView:decidePolicyForNavigationAction:decisionHandler:) ||
+	    s == @selector(webView:decidePolicyForNavigationAction:preferences:decisionHandler:)) return YES;
+	return [_inner respondsToSelector:s];
+}
+- (BOOL)conformsToProtocol:(Protocol *)p { return [_inner conformsToProtocol:p]; }
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)s { return [_inner methodSignatureForSelector:s]; }
+- (void)forwardInvocation:(NSInvocation *)inv { [inv invokeWithTarget:_inner]; }
+- (void)webView:(WKWebView *)w decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
+	if (apVeto(w, a)) { h(WKNavigationActionPolicyCancel); return; }
+	if ([_inner respondsToSelector:_cmd]) [_inner webView:w decidePolicyForNavigationAction:a decisionHandler:h];
+	else h(WKNavigationActionPolicyAllow);
+}
+- (void)webView:(WKWebView *)w decidePolicyForNavigationAction:(WKNavigationAction *)a preferences:(WKWebpagePreferences *)p decisionHandler:(void (^)(WKNavigationActionPolicy, WKWebpagePreferences *))h {
+	if (apVeto(w, a)) { h(WKNavigationActionPolicyCancel, p); return; }
+	if ([_inner respondsToSelector:_cmd]) [_inner webView:w decidePolicyForNavigationAction:a preferences:p decisionHandler:h];
+	else if ([_inner respondsToSelector:@selector(webView:decidePolicyForNavigationAction:decisionHandler:)])
+		[_inner webView:w decidePolicyForNavigationAction:a decisionHandler:^(WKNavigationActionPolicy pol) { h(pol, p); }];
+	else h(WKNavigationActionPolicyAllow, p);
+}
+@end
+
+static APNavGuard *apGuard = nil;
+
+static WKWebView *apFindWebView(NSView *v) {
+	if ([v isKindOfClass:[WKWebView class]] && v != apView) return (WKWebView *)v;
+	for (NSView *s in v.subviews) { WKWebView *w = apFindWebView(s); if (w) return w; }
+	return nil;
+}
+
+void apGuardNavigation(void *nswindow) {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		NSWindow *win = (__bridge NSWindow *)nswindow;
+		WKWebView *w = apFindWebView(win.contentView);
+		if (!w || [(id)w.navigationDelegate isKindOfClass:[APNavGuard class]] || w.navigationDelegate == (id)apGuard) return;
+		apGuard = [[APNavGuard alloc] initWithInner:w.navigationDelegate];
+		w.navigationDelegate = (id<WKNavigationDelegate>)apGuard;
+	});
+}

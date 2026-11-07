@@ -233,6 +233,14 @@ export function ForkSession(agent: string, id: string, cwd: string): $Cancellabl
 }
 
 /**
+ * GuardNavigation keeps the app's page where it is (called once the page is up): an address it
+ * would have gone to comes to the interface as "app:navigate", to open where it belongs.
+ */
+export function GuardNavigation(): $CancellablePromise<void> {
+    return $Call.ByID(3349986179);
+}
+
+/**
  * Handoff sends a local chat on to the cloud: the cloud chat it goes on in.
  */
 export function Handoff(r: client$0.HandoffRequest): $CancellablePromise<client$0.HandoffResult> {

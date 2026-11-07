@@ -14,7 +14,7 @@
   const attached = $derived(app.msgs.flatMap(m => (m.files ?? []).filter(f => f.reply).map(f => ({ msg: m.id, name: f.name }) as ArtifactRef)));
   const all = $derived.by(() => {
     const out = [...attached];
-    for (const a of app.openedArtifacts) if (!out.some(x => x.msg === a.msg && x.name === a.name && x.path === a.path)) out.push(a);
+    for (const a of app.openedArtifacts) if (!out.some(x => x.msg === a.msg && x.name === a.name && x.path === a.path && x.base === a.base)) out.push(a);
     return out;
   });
   const cur = $derived(app.artifact ?? all[0] ?? null);
@@ -22,7 +22,6 @@
   let art = $state<Art | null>(null);
   let err = $state("");
   let loading = $state(false);
-  let blobUrl = "";
   let asked = 0;
   $effect(() => {
     const a = cur;
@@ -50,16 +49,19 @@
   const code = $derived.by(() => {
     if (kind !== "text" || !art) return "";
     const ext = art.name.split(".").pop()?.toLowerCase() ?? "";
-    try { return hljs.getLanguage(ext) ? hljs.highlight(text, { language: ext, ignoreIllegals: true }).value : hljs.highlightAuto(text.slice(0, 200000)).value; }
-    catch { return text.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+    const plain = () => text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    if (text.length > 400000) return plain(); // big: all of it, unhighlighted
+    try { return hljs.getLanguage(ext) ? hljs.highlight(text, { language: ext, ignoreIllegals: true }).value : hljs.highlightAuto(text).value; }
+    catch { return plain(); }
   });
   // A PDF from a blob: (the page does not reach the network or the app).
-  const pdf = $derived.by(() => {
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-    blobUrl = "";
-    if (kind !== "pdf" || !art) return "";
-    blobUrl = URL.createObjectURL(new Blob([unb64(art.data) as BlobPart], { type: "application/pdf" }));
-    return blobUrl;
+  // Made when a PDF is shown, let go when it is not (another file, the panel gone).
+  let pdf = $state("");
+  $effect(() => {
+    if (kind !== "pdf" || !art) { pdf = ""; return; }
+    const url = URL.createObjectURL(new Blob([unb64(art.data) as BlobPart], { type: "application/pdf" }));
+    pdf = url;
+    return () => URL.revokeObjectURL(url);
   });
   const label = (a: ArtifactRef) => a.name || a.path || "";
   const size = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`);

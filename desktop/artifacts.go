@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/k1dory/acpost/internal/client"
 )
@@ -54,13 +58,21 @@ func (n *Node) LocalFile(path, base string) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
-	st, err := os.Stat(p)
+	// Opened as checked: no symlink at the end (O_NOFOLLOW), a FIFO does not block (O_NONBLOCK), the
+	// open file itself regular, read up to the limit.
+	fd, err := syscall.Open(p, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return Artifact{}, errArtifact
+	}
+	f := os.NewFile(uintptr(fd), p)
+	defer f.Close()
+	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() || st.Size() > artifactMax {
 		return Artifact{}, errArtifact
 	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return Artifact{}, err
+	b, err := io.ReadAll(io.LimitReader(f, artifactMax+1))
+	if err != nil || len(b) > artifactMax {
+		return Artifact{}, errArtifact
 	}
 	return Artifact{Name: filepath.Base(p), Path: p, Type: typeOf(p, "", b), Size: len(b), Data: base64.StdEncoding.EncodeToString(b)}, nil
 }
@@ -93,15 +105,43 @@ func (n *Node) OpenArtifact(name, data string) error {
 	if err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp("", "acpost-artifact-")
+	dir, err := artifactTemp()
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(dir, filepath.Base(name))
+	sub, err := os.MkdirTemp(dir, "open-")
+	if err != nil {
+		return err
+	}
+	p := filepath.Join(sub, filepath.Base(name))
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		return err
 	}
 	return exec.Command("/usr/bin/open", "--", p).Run()
+}
+
+// artifactTemp is where opened attachments are copied: one folder, its copies older than a day
+// removed when it is first used (the app that opened one has read it by then).
+var (
+	tempOnce sync.Once
+	tempDir  string
+	tempErr  error
+)
+
+func artifactTemp() (string, error) {
+	tempOnce.Do(func() {
+		tempDir = filepath.Join(os.TempDir(), "acpost-artifacts")
+		if tempErr = os.MkdirAll(tempDir, 0o700); tempErr != nil {
+			return
+		}
+		entries, _ := os.ReadDir(tempDir)
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 24*time.Hour {
+				_ = os.RemoveAll(filepath.Join(tempDir, e.Name()))
+			}
+		}
+	})
+	return tempDir, tempErr
 }
 
 func artifactPath(path, base string) (string, error) {
@@ -129,14 +169,15 @@ func artifactPath(path, base string) (string, error) {
 
 // typeOf is a file's media type: by its name, else what it says, else by its first bytes.
 func typeOf(name, said string, b []byte) string {
-	if t := mime.TypeByExtension(strings.ToLower(filepath.Ext(name))); t != "" {
-		return t
-	}
+	// Source and text first: the system's table says .ts is video (MPEG transport stream).
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".md", ".markdown":
 		return "text/markdown"
-	case ".go", ".py", ".ts", ".tsx", ".js", ".rs", ".java", ".kt", ".swift", ".rb", ".sh", ".yaml", ".yml", ".toml", ".sql", ".svelte", ".vue", ".c", ".h", ".cpp", ".log", ".txt", ".csv", ".ini", ".conf":
-		return "text/plain"
+	case ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".rs", ".java", ".kt", ".swift", ".rb", ".sh", ".yaml", ".yml", ".toml", ".sql", ".svelte", ".vue", ".c", ".h", ".cpp", ".log", ".txt", ".csv", ".ini", ".conf", ".json":
+		return "text/plain; charset=utf-8"
+	}
+	if t := mime.TypeByExtension(strings.ToLower(filepath.Ext(name))); t != "" {
+		return t
 	}
 	if said != "" && said != "application/octet-stream" {
 		return said

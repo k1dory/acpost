@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { app, applyTheme } from "./lib/state.svelte";
-  import { on } from "./lib/api";
+  import { on, Node } from "./lib/api";
   import { Browser } from "@wailsio/runtime";
   import Sidebar from "./components/Sidebar.svelte";
   import Conversation from "./components/Conversation.svelte";
@@ -21,9 +21,11 @@
     document.documentElement.lang = i18n.lang;
     app.connect();
     const offPreview = on("preview:event", e => app.notePreview(e));
+    const offNav = on("app:navigate", (u: string) => route(u));
+    Node.GuardNavigation().catch(() => {});
     const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadChats(); } }, 20000);
     const asking = setInterval(() => { if (app.conn?.ok) app.watchAsking(); }, 8000);
-    return () => { clearInterval(poll); clearInterval(asking); offPreview(); };
+    return () => { clearInterval(poll); clearInterval(asking); offPreview(); offNav(); };
   });
 
   // Links never take the app's own page away. A page of this Mac (localhost, 127.0.0.1) opens in the
@@ -34,11 +36,23 @@
     const el = e.target as HTMLElement | null;
     const code = el?.closest?.("code.pl") as HTMLElement | null;
     if (code) { e.preventDefault(); app.openArtifact({ name: code.textContent!.split("/").pop()!, path: code.textContent!, base: app.chatCwd() }); return; }
-    const a = el?.closest?.("a[href]") as HTMLAnchorElement | null;
+    const a = el?.closest?.("a") as Element | null; // an SVG link too (xlink:href)
     if (!a) return;
-    const href = a.getAttribute("href") ?? "";
+    const href = a.getAttribute("href") ?? a.getAttribute("xlink:href") ?? "";
+    if (!href) return;
+    if (href.startsWith("#artifact:")) {
+      e.preventDefault();
+      const path = decodeURIComponent(href.slice(10));
+      app.openArtifact({ name: path.split("/").pop() || path, path, base: app.chatCwd() });
+      return;
+    }
     if (href.startsWith("#")) return;
     e.preventDefault();
+    route(href);
+  }
+  // Where an address opens: a page of this Mac in the preview, the web in the browser, a file as
+  // an artifact. Also what the app's page was kept from going to (app:navigate).
+  function route(href: string) {
     let u: URL;
     try { u = new URL(href, "file:///"); } catch { return; }
     if (u.protocol === "http:" || u.protocol === "https:") {
@@ -70,7 +84,7 @@
   }
 </script>
 
-<svelte:window onkeydown={keys} onclickcapture={links} />
+<svelte:window onkeydown={keys} onclickcapture={links} onsubmitcapture={e => e.preventDefault()} />
 
 <div class="shell">
   <Sidebar />
