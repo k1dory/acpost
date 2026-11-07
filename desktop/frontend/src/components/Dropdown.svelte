@@ -26,9 +26,10 @@
     pos = `left:${left}px;top:${top}px`;
   });
   const current = $derived(items.find(i => i.value === value));
+  $effect(() => { if (!items.length) open = false; }); // the list emptied while open
 
   function toggle() {
-    if (!items.length) return; // nothing to choose: no empty menu
+    if (!open && !items.length) return; // nothing to choose: no empty menu (an open one still closes)
     open = !open;
     pos = "visibility:hidden";
     sel = Math.max(0, items.findIndex(i => i.value === value));
