@@ -107,7 +107,7 @@ func (c *Client) hc() *http.Client {
 			return errors.New("too many redirects")
 		}
 		if req.URL.Scheme != "https" {
-			return fmt.Errorf("a redirect to %s, not https", req.URL.Redacted())
+			return fmt.Errorf("a redirect to %s, not https", req.URL.Host) // the host only: a URL may carry anything
 		}
 		if req.URL.Host != via[0].URL.Host {
 			req.Header.Del("Authorization")
@@ -192,10 +192,12 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 		whole := redact(string(b))
 		var e struct{ Message string }
 		msg := ""
+		// The API's own message only (decoded, so masked after): a raw body is not shown, it may say
+		// anything in any encoding.
 		if json.Unmarshal([]byte(whole), &e) == nil && e.Message != "" {
-			msg = redact(e.Message) // decoded: an escaped token is plain now
+			msg = redact(e.Message)
 		} else {
-			msg = strings.TrimSpace(whole)
+			msg = http.StatusText(resp.StatusCode)
 		}
 		if tok != "" && len(b) > int(max) {
 			msg = "(an answer too long to show)" // the token may cross the cut: not shown at all
