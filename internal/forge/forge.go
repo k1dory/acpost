@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,7 +46,7 @@ func ParseRemote(remote string) (Repo, error) {
 	var host, path string
 	if u, err := url.Parse(remote); err == nil && u.Scheme != "" && u.Host != "" {
 		if u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
-			return Repo{}, fmt.Errorf("%q: a remote with a query, fragment or escapes in its path", remote)
+			return Repo{}, fmt.Errorf("%s: a remote with a query, fragment or escapes in its path", safeRemote(remote))
 		}
 		host, path = u.Host, u.Path
 		if u.Scheme == "ssh" || u.Scheme == "git" {
@@ -54,20 +55,20 @@ func ParseRemote(remote string) (Repo, error) {
 	} else if m := scpLike.FindStringSubmatch(remote); m != nil {
 		host, path = m[1], m[2]
 	} else {
-		return Repo{}, fmt.Errorf("%q: not a remote URL", remote)
+		return Repo{}, fmt.Errorf("%s: not a remote URL", safeRemote(remote))
 	}
 	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
 	if strings.Count(path, "/") < 1 || host == "" {
-		return Repo{}, fmt.Errorf("%q: no owner/name in it", remote)
+		return Repo{}, fmt.Errorf("%s: no owner/name in it", safeRemote(remote))
 	}
 	// The path goes into API paths: plain names only (no %, #, ?, .., spaces).
 	for _, seg := range strings.Split(path, "/") {
 		if !repoSegment.MatchString(seg) || seg == "." || seg == ".." {
-			return Repo{}, fmt.Errorf("%q: %q is not a plain owner or repository name", remote, seg)
+			return Repo{}, fmt.Errorf("%s: a part of its path is not a plain owner or repository name", safeRemote(remote))
 		}
 	}
 	if !hostName.MatchString(host) {
-		return Repo{}, fmt.Errorf("%q: %q is not a host name", remote, host)
+		return Repo{}, fmt.Errorf("%s: its host is not a host name", safeRemote(remote))
 	}
 	return Repo{Host: host, Path: path, Web: "https://" + host + "/" + path}, nil
 }
@@ -318,6 +319,18 @@ func transportWhy(err error) string {
 	default:
 		return "the request failed"
 	}
+}
+
+// safeRemote is a remote as an error may quote it: scheme, host and path, no user, password,
+// query or fragment ("the remote" when it does not parse as a URL).
+func safeRemote(remote string) string {
+	if u, err := url.Parse(remote); err == nil && u.Host != "" && !strings.ContainsAny(u.Host, "@") {
+		return strconv.Quote((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String())
+	}
+	if at := strings.LastIndex(remote, "@"); at >= 0 && !strings.Contains(remote, "://") {
+		return strconv.Quote(remote[at+1:]) // scp form, user@host:path: without the user
+	}
+	return "the remote"
 }
 
 // anonymous is the client without tokens.

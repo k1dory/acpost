@@ -337,3 +337,12 @@ func TestErrorsHideTheToken(t *testing.T) {
 		t.Fatalf("a token as the redirect's host: %v", err)
 	}
 }
+
+// A remote refused is quoted without what may be a credential in it.
+func TestParseRemoteHidesCredentials(t *testing.T) {
+	for _, r := range []string{"https://user:SECRETPW@forge.example/o/r?x=1", "https://SECRETPW@bad_host!/o/r", "https://user:SECRETPW@forge.example/o"} {
+		if _, err := ParseRemote(r); err == nil || strings.Contains(err.Error(), "SECRETPW") {
+			t.Fatalf("%s: %v", r, err)
+		}
+	}
+}
