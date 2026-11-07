@@ -111,6 +111,14 @@ func (f *fakeSandboxd) handler(w http.ResponseWriter, r *http.Request) {
 			fr := f.frames[f.next]
 			f.next++
 			f.mu.Unlock()
+			if id, ok := strings.CutPrefix(fr, "STEERME:"); ok { // the runner: what was posted joined the turn
+				f.mu.Lock()
+				text := f.posted[len(f.posted)-1]
+				f.mu.Unlock()
+				var n int64
+				fmt.Sscan(id, &n)
+				fr = frame(n, "r1", "log", `{"type":"acp.notice","severity":"info","text":"the message joined the turn in progress (steering) [input sha256:`+fingerprint(text)+`]"}`, nil)
+			}
 			if id, ok := strings.CutPrefix(fr, "USER:"); ok { // the conversation's turn of what was posted
 				f.mu.Lock()
 				text := f.posted[len(f.posted)-1]
@@ -508,12 +516,34 @@ func TestSandboxSteeredLateOutcome(t *testing.T) {
 		frame(7, "r1", "assistant", "cut short", nil),
 		frame(8, "r1", "log", `{"type":"acp.turn_end","stop_reason":"max_tokens"}`, nil),
 		frame(9, "r1", "user", "another client's message", nil),
-		frame(10, "r1", "log", `{"type":"acp.notice","severity":"info","text":"the message joined the turn in progress (steering)"}`, nil),
+		"STEERME:10",
 	}
 	n := sandboxNode(t, f)
 	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "and this too"})
 	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
 	if err != nil || w.State != store.Failed || w.Reply != "cut short" || !strings.Contains(w.Error, "max_tokens") {
+		t.Fatalf("%+v %v", w, err)
+	}
+}
+
+// A steering notice about another client's later message (no fingerprint: the latest input) does
+// not hand this message the turn before it: it waits for its own.
+func TestSandboxSteerOfAnotherMessage(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
+	f.history = []map[string]any{{"id": 4, "run_id": "r1", "role": "user", "text": "the turn in progress"}}
+	f.frames = []string{
+		"USER:6",
+		frame(7, "r1", "assistant", "the earlier answer", nil),
+		frame(8, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+		frame(9, "r1", "user", "another client's message", nil),
+		frame(10, "r1", "log", `{"type":"acp.notice","severity":"info","text":"the message joined the turn in progress (steering)"}`, nil),
+		frame(11, "r1", "assistant", "this message's answer", nil),
+		frame(12, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "mine"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || w.Reply != "this message's answer" {
 		t.Fatalf("%+v %v", w, err)
 	}
 }

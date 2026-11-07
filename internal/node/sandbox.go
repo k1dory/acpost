@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,15 +95,33 @@ func countTurn(open map[string]int, sm sandboxMessage) {
 // steered says whether a turn of the stream is the runner's notice that the latest input joined
 // the turn in progress (ACP steering): that input gets no turn of its own.
 func steered(sm sandboxMessage) bool {
+	ok, _ := steerOf(sm)
+	return ok
+}
+
+// steerOf reads a steering notice: whether it is one, and the fingerprint of the input it is about
+// ("[input sha256:<16 hex>]", from runners that say it; "" from those that do not).
+func steerOf(sm sandboxMessage) (bool, string) {
 	if sm.Role != "log" || !strings.Contains(sm.Text, `"acp.notice"`) {
-		return false
+		return false, ""
 	}
 	var l struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
 	_ = json.Unmarshal([]byte(sm.Text), &l)
-	return l.Type == "acp.notice" && strings.HasPrefix(l.Text, "the message joined the turn in progress")
+	if l.Type != "acp.notice" || !strings.HasPrefix(l.Text, "the message joined the turn in progress") {
+		return false, ""
+	}
+	_, fp, _ := strings.Cut(l.Text, "[input sha256:")
+	fp, _, _ = strings.Cut(fp, "]")
+	return true, fp
+}
+
+// fingerprint is how a runner names an input in its steering notice.
+func fingerprint(text string) string {
+	h := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(h[:8])
 }
 
 // turnEnd says whether a turn of the stream is a harness's end of a turn.
@@ -414,7 +434,12 @@ type sandboxTurn struct {
 	skippedLen    int
 	prevKept      bool
 	prevEnd       sandboxEnd
-	replaying     bool // the history is being read: requests wait for its end
+	// The run's inputs as seen, by fingerprint: before this message's (true) or after it (false);
+	// lastIn, where the latest one stands (what a notice without a fingerprint is about).
+	inputs    map[string]bool
+	lastIn    int // 0 none, 1 before this message's, 2 this message's, 3 after it
+	mineFP    string
+	replaying bool // the history is being read: requests wait for its end
 	// quiet: the turn is read again from the sandbox's history (an earlier attempt recorded what
 	// it said): nothing is recorded again, and its requests are asked only if still open after it.
 	quiet atomic.Bool
@@ -485,18 +510,70 @@ func (t *sandboxTurn) take(ctx context.Context, sm sandboxMessage) (sandboxEnd, 
 	return t.takeOne(ctx, sm)
 }
 
+// seeUser notes an input of the run: where it stands from this message's.
+func (t *sandboxTurn) seeUser(sm sandboxMessage, mine bool) {
+	if t.inputs == nil {
+		t.inputs = map[string]bool{}
+	}
+	fp := fingerprint(sm.Text)
+	switch {
+	case mine:
+		t.lastIn = 2
+	case t.started:
+		t.lastIn = 3
+		t.inputs[fp] = false
+	default:
+		t.lastIn = 1
+		t.inputs[fp] = true
+	}
+	if mine {
+		t.inputs[fp] = false // this message's own; told apart by mineFP
+		t.mineFP = fp
+	}
+}
+
+// steerTarget says whose input a steering notice is about: 1 before this message's, 2 its own,
+// 3 after it. By the fingerprint when the runner gives one, else the latest input.
+func (t *sandboxTurn) steerTarget(fp string) int {
+	if fp == "" {
+		return t.lastIn
+	}
+	if t.mineFP != "" && fp == t.mineFP {
+		return 2
+	}
+	if before, ok := t.inputs[fp]; ok && !before {
+		return 3
+	}
+	return 1
+}
+
 func (t *sandboxTurn) takeOne(ctx context.Context, sm sandboxMessage) (sandboxEnd, bool) {
 	// The run answers its messages in order: this one's turn begins once the run has answered
 	// those it took before (ahead), and everything until then is theirs.
 	if !t.started || t.ahead > 0 {
 		switch {
 		case !t.started && sm.Role == "user" && strings.Contains(sm.Text, t.mark):
+			t.seeUser(sm, true)
 			t.started, t.ahead = true, t.waiting
 		case sm.Role == "user":
-			t.waiting++
-		case turnEnd(sm), steered(sm):
-			// A turn answered the oldest input; a steered input joined the turn in progress (when
-			// it is this message's, this turn is now its own).
+			t.seeUser(sm, false)
+			if !t.started {
+				t.waiting++
+			}
+		case steered(sm):
+			_, fp := steerOf(sm)
+			switch t.steerTarget(fp) {
+			case 1: // an earlier input joined the turn in progress: one turn fewer before this one's
+				if !t.started && t.waiting > 0 {
+					t.waiting--
+				} else if t.started && t.ahead > 0 {
+					t.ahead--
+				}
+			case 2: // this message joined the turn in progress: from here, that turn is its own
+				t.ahead = 0
+			}
+		case turnEnd(sm):
+			// A turn answered the oldest input.
 			if !t.started && t.waiting > 0 {
 				t.waiting--
 			} else if t.started && t.ahead > 0 {
@@ -526,8 +603,11 @@ func (t *sandboxTurn) takeOne(ctx context.Context, sm sandboxMessage) (sandboxEn
 		}
 		return sandboxEnd{}, false
 	}
+	if sm.Role == "user" {
+		t.seeUser(sm, false)
+	}
 	if t.prevKept {
-		if steered(sm) {
+		if ok, fp := steerOf(sm); ok && t.steerTarget(fp) == 2 {
 			// This message joined the turn that just ended: its answer is this message's.
 			for _, s := range t.prev {
 				if s != "" {

@@ -428,7 +428,9 @@ answered here and handed to the sandbox (asked again if the answer does not reac
 one sandbox go one at a time. A turn is the message's from the conversation's turn that carries
 its id (the preamble names it; with `preamble: false` a last line `[acpost <id>]` does), after the
 turns of the messages the run took before it; a message joined to a run's task takes the run's
-first turn. A message posted again (sandboxd's
+first turn. A message that joins the turn in progress (ACP steering) takes that turn; which
+message the runner's notice is about is told by the input fingerprint it carries
+(`[input sha256:…]`, agent-sandbox runners from 1e17e1e), else taken to be the latest input. A message posted again (sandboxd's
 answer lost, the node restarted) is the same message there (`Idempotency-Key: acpost-<id>`), never a
 second run.
 
