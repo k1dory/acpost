@@ -198,6 +198,42 @@ void apGuardNavigation(void *nswindow) {
 // interface keeps the IDE's box. It is a page like any: keys, clipboard, its storage persist with
 // the app's (WebKit's default store for the bundle).
 
+// The first time VS Code runs in the pane, its settings say to follow the system's light or dark
+// (the pane's appearance is the app's theme): written into its own store only when there is no
+// settings.json yet — what the user sets later stays theirs.
+static NSString *apIDESeed = @"(() => {"
+	"if (sessionStorage.getItem('acpost-seeded')) return;"
+	"const q = indexedDB.open('vscode-web-db');"
+	"q.onupgradeneeded = () => { q.transaction.abort(); };"
+	"q.onsuccess = () => { const db = q.result;"
+	"  if (!db.objectStoreNames.contains('vscode-userdata-store')) { db.close(); return; }"
+	"  const tx = db.transaction('vscode-userdata-store', 'readwrite'); const st = tx.objectStore('vscode-userdata-store');"
+	"  const g = st.get('/User/settings.json');"
+	"  g.onsuccess = () => { if (g.result !== undefined) return;"
+	"    st.put(new TextEncoder().encode(JSON.stringify({'window.autoDetectColorScheme': true, 'workbench.preferredDarkColorTheme': 'Default Dark Modern', 'workbench.preferredLightColorTheme': 'Default Light Modern'}, null, 2)), '/User/settings.json');"
+	"    tx.oncomplete = () => { sessionStorage.setItem('acpost-seeded', '1'); location.reload(); }; };"
+	"};"
+	"})();";
+
+static void apIDELoadURL(NSString *u) {
+	NSURL *nu = [NSURL URLWithString:u];
+	if (!nu) return;
+	// VS Code's server picks the language by the request: English (the web version's other
+	// languages come half translated).
+	NSMutableURLRequest *rq = [NSMutableURLRequest requestWithURL:nu];
+	[rq setValue:@"en-US,en;q=0.9" forHTTPHeaderField:@"Accept-Language"];
+	[apIDE loadRequest:rq];
+}
+
+static int apIDEDark = -1; // the app's theme for the pane (-1: not said yet)
+
+void apIDEAppearance(int dark) {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		apIDEDark = dark;
+		if (apIDE) apIDE.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+	});
+}
+
 void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus) {
 	dispatch_async(dispatch_get_main_queue(), ^{
 		NSWindow *win = (__bridge NSWindow *)nswindow;
@@ -205,12 +241,16 @@ void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus
 		if (!host) return;
 		if (!apIDE) {
 			WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
+			WKUserContentController *uc = [WKUserContentController new];
+			[uc addUserScript:[[WKUserScript alloc] initWithSource:apIDESeed injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES]];
+			cfg.userContentController = uc;
 			apIDE = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:cfg];
+			if (apIDEDark >= 0) apIDE.appearance = [NSAppearance appearanceNamed:apIDEDark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
 			if ([apIDE respondsToSelector:@selector(setInspectable:)]) [apIDE setValue:@YES forKey:@"inspectable"];
 			if (apIDEPending) {
-				NSURL *nu = [NSURL URLWithString:apIDEPending];
+				NSString *u = apIDEPending;
 				apIDEPending = nil;
-				if (nu) [apIDE loadRequest:[NSURLRequest requestWithURL:nu]];
+				apIDELoadURL(u);
 			}
 		}
 		if (apIDE.superview != host) {
@@ -232,8 +272,7 @@ void apIDELoad(const char *url) {
 	NSString *u = [NSString stringWithUTF8String:url];
 	dispatch_async(dispatch_get_main_queue(), ^{
 		if (!apIDE) { apIDEPending = u; return; }
-		NSURL *nu = [NSURL URLWithString:u];
-		if (nu) [apIDE loadRequest:[NSURLRequest requestWithURL:nu]];
+		apIDELoadURL(u);
 	});
 }
 

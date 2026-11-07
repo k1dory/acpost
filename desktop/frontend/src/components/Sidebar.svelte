@@ -4,6 +4,7 @@
   import { ago, screenScale } from "../lib/format";
   import Icon from "./Icon.svelte";
   import AgentMark, { brandOf } from "./AgentMark.svelte";
+  import ViewSwitch from "./ViewSwitch.svelte";
 
   let q = $state("");
   let shown = $state(120);
@@ -104,8 +105,8 @@
   {/if}
 {/snippet}
 
-<aside class="side">
-  <div class="top drag"></div>
+<aside class="side" class:gone={app.view === "ide"}>
+  <div class="top drag"><ViewSwitch /></div>
   <div class="pad">
     <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> {t("New task")} <kbd>⌘N</kbd></button>
     <!-- One field: typing filters the chats; ⌘K (or its key here) searches everything. -->
@@ -114,18 +115,6 @@
       <input placeholder={t("Search chats")} bind:value={q} />
       <button class="k" onclick={e => { e.preventDefault(); app.palette = true; }} title={t("Search everything")}>⌘K</button>
     </label>
-    <!-- Where to go: tasks of every agent, VS Code beside the chat, the repositories' wikis. -->
-    <div class="tiles nodrag">
-      <button class="tile" class:sel={app.view === "board"} onclick={() => (app.view = "board")} title={t("Tasks") + " · ⌘B"}>
-        <Icon name="activity" size={15} /><span>{t("Tasks")}</span>{#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}
-      </button>
-      <button class="tile" class:sel={app.view === "ide"} onclick={() => (app.view = app.view === "ide" ? "chat" : "ide")} title="VS Code · ⇧⌘I">
-        <Icon name="term" size={15} /><span>IDE</span>
-      </button>
-      <button class="tile" class:sel={app.view === "wiki"} onclick={() => (app.view = "wiki")} title={t("Wiki")}>
-        <Icon name="book" size={15} /><span>{t("Wiki")}</span>
-      </button>
-    </div>
   </div>
 
   <nav class="scroll list">
@@ -206,8 +195,9 @@
 </aside>
 
 <style>
+  .side.gone { display: none; }
   .side { width: 260px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; position: relative; }
-  .top { height: 38px; flex: none; }
+  .top { height: 40px; flex: none; display: flex; align-items: center; padding-left: 78px; }
   .pad { padding: 4px 14px 12px; display: grid; gap: 8px; }
   .new { justify-content: center; height: 32px; border-radius: 11px; }
   kbd { font: 11px var(--mono); opacity: .55; margin-left: 4px; }
@@ -218,11 +208,6 @@
   .h.drop, .folder.drop { background: var(--accent-bg); }
   .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
   .search .k:hover { color: var(--ink); }
-  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-  .tile { position: relative; display: grid; justify-items: center; gap: 4px; padding: 9px 4px 7px; border: 1px solid var(--line-soft); background: transparent; border-radius: 12px; color: var(--ink-2); font-size: 11.5px; font-weight: 500; cursor: default; }
-  .tile:hover { background: var(--hover); color: var(--ink); }
-  .tile.sel { background: var(--sel); color: var(--ink); border-color: transparent; }
-  .tile .badge { position: absolute; top: 4px; right: 6px; }
   .badge { min-width: 17px; height: 17px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
   .ic-btn { border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; }
   .ic-btn:hover { background: var(--hover); color: var(--ink); }

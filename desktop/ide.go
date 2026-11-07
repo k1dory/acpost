@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -132,7 +133,15 @@ func (s *ideServer) start(st *ideStart) {
 		fail(werr)
 		return
 	}
-	cmd := exec.Command(cli, "serve-web", "--host", "127.0.0.1", "--port", "0", "--connection-token-file", f.Name(),
+	// A fixed port: VS Code keeps its settings and state in the page's storage, which is the
+	// address's (a new port each run would start it from scratch). Taken: any free one.
+	port := "47823"
+	if l, err := net.Listen("tcp", "127.0.0.1:"+port); err == nil {
+		l.Close()
+	} else {
+		port = "0"
+	}
+	cmd := exec.Command(cli, "serve-web", "--host", "127.0.0.1", "--port", port, "--connection-token-file", f.Name(),
 		"--accept-server-license-terms", "--disable-telemetry")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out, err := cmd.StdoutPipe()
@@ -255,6 +264,9 @@ func (s *ideServer) loaded() string {
 // IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
 // again if it ended, and its answer is checked against what is shown before anything navigates).
 func (n *Node) IDEReload() { preview.IDEReload() }
+
+// IDETheme gives the IDE the app's theme: VS Code follows light or dark.
+func (n *Node) IDETheme(dark bool) { preview.IDEAppearance(dark) }
 
 // IDEHide hides it; VS Code keeps running.
 func (n *Node) IDEHide() { preview.IDEHide() }

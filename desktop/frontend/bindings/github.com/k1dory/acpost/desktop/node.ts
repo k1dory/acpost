@@ -301,6 +301,13 @@ export function IDEStart(folder: string): $CancellablePromise<string> {
     return $Call.ByID(1671962452, folder);
 }
 
+/**
+ * IDETheme gives the IDE the app's theme: VS Code follows light or dark.
+ */
+export function IDETheme(dark: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3936663901, dark);
+}
+
 export function Knowledge(): $CancellablePromise<store$0.Note[]> {
     return $Call.ByID(871242260).then(($result: any) => {
         return $$createType22($result);

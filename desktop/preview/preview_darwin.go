@@ -24,6 +24,7 @@ void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus
 void apIDEHide(void);
 void apIDELoad(const char *url);
 void apIDEReload(void);
+void apIDEAppearance(int dark);
 
 */
 import "C"
@@ -128,6 +129,15 @@ func IDEShow(window unsafe.Pointer, x, y, w, h float64, focus bool) error {
 	}
 	C.apIDEShow(window, C.double(x), C.double(y), C.double(w), C.double(h), C.int(f))
 	return nil
+}
+
+// IDEAppearance sets the IDE pane light or dark (VS Code follows it).
+func IDEAppearance(dark bool) {
+	d := 0
+	if dark {
+		d = 1
+	}
+	C.apIDEAppearance(C.int(d))
 }
 
 // IDEReload loads the IDE's page again.

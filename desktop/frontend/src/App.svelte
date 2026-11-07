@@ -127,8 +127,8 @@
   {:else if app.view === "wiki"}
     <Wiki />
   {:else}
-    <!-- The chat, and in the IDE the same chat as a column on the left (one instance: a draft being
-         typed stays), VS Code taking the rest. -->
+    <!-- The chat, and in the IDE the same chat as a column on the right (one instance: a draft being
+         typed stays), VS Code taking the rest of the window. -->
     <div class="convwrap" class:ide-chat={app.view === "ide"}><Conversation /></div>
     {#if app.view === "ide"}<IDE />{/if}
   {/if}
@@ -145,7 +145,7 @@
 <style>
   .shell { height: 100%; display: flex; min-height: 0; }
   .convwrap { flex: 1; display: flex; min-width: 0; }
-  .convwrap.ide-chat { flex: none; width: 400px; }
+  .convwrap.ide-chat { flex: none; width: 400px; order: 2; border-left: 1px solid var(--line); }
   .ide-chat :global(.conv) { min-width: 0; }
   .down { flex: 1; display: grid; place-items: center; }
   .box { padding: 26px 28px; display: grid; gap: 10px; max-width: 460px; }

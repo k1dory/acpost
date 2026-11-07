@@ -5,6 +5,7 @@
   import { Node, errText } from "../lib/api";
   import { screenScale } from "../lib/format";
   import Icon from "./Icon.svelte";
+  import ViewSwitch from "./ViewSwitch.svelte";
 
   // The IDE: VS Code (the one installed on this Mac, its web server) in a native view over this
   // box, opened in the chat's folder; the chat stays beside it.
@@ -17,7 +18,7 @@
   let alive = true;
   const folder = $derived(app.chatCwd() || app.draft.cwd || app.home);
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
-  const covered = $derived(app.palette || !!app.toast);
+  const covered = $derived(app.palette || app.viewMenu || !!app.toast);
 
   async function open(dir: string) {
     if (!dir) return;
@@ -67,17 +68,28 @@
     requestAnimationFrame(() => place());
     return () => { ro.disconnect(); removeEventListener("resize", onResize); };
   });
+  // VS Code's colours follow the app's theme (light or dark, the system's when it follows it).
+  $effect(() => {
+    app.theme;
+    const send = () => Node.IDETheme(document.documentElement.dataset.theme === "dark").catch(() => {});
+    const later = () => requestAnimationFrame(send); // after the app has set its own theme
+    later();
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    mq.addEventListener("change", later);
+    return () => mq.removeEventListener("change", later);
+  });
   onDestroy(() => { alive = false; gen++; Node.IDEHide().catch(() => {}); });
 </script>
 
 <section class="ide">
-  <div class="bar">
-    <Icon name="term" size={13} />
-    <b>VS Code</b>
+  <!-- The window's title bar in this view: the traffic lights, the view switcher, the folder. -->
+  <div class="bar drag">
+    <ViewSwitch />
+    <span class="muted">·</span>
     <span class="muted mono path" title={folder}>{short(folder)}</span>
     <span class="sp"></span>
-    <button class="btn ghost sm" onclick={reload} title={t("Reload")}><Icon name="refresh" size={13} /></button>
-    <button class="btn ghost sm" onclick={() => Node.IDEOpenApp(folder).catch(e => (err = errText(e)))}>{t("Open in VS Code")}</button>
+    <button class="btn ghost sm nodrag" onclick={reload} title={t("Reload")}><Icon name="refresh" size={13} /></button>
+    <button class="btn ghost sm nodrag" onclick={() => Node.IDEOpenApp(folder).catch(e => (err = errText(e)))}>{t("Open in VS Code")}</button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
   <div class="box" bind:this={box}>
@@ -86,8 +98,8 @@
 </section>
 
 <style>
-  .ide { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--page); border-left: 1px solid var(--line-soft); }
-  .bar { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .ide { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--page); }
+  .bar { height: 40px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 78px; background: var(--side); border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
   .path { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .sp { flex: 1; }
   .box { flex: 1; min-height: 0; display: grid; place-items: center; }

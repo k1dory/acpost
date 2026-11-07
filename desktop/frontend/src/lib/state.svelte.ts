@@ -83,6 +83,7 @@ class App {
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
   palette = $state(false); // ⌘K
+  viewMenu = $state(false); // the title bar's view menu open
   asking = $state<any[]>([]); // approvals waiting
   theme = $state<"light" | "dark" | "system">("light");
   target = $state<string>("");
