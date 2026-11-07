@@ -192,10 +192,14 @@ func (c *Client) CloudAgents(ctx context.Context) ([]CloudAgent, error) {
 func (c *Client) CloudCatalog(ctx context.Context) ([]CloudAgent, bool, error) {
 	var out struct {
 		Items      []CloudAgent `json:"items"`
-		Configured bool         `json:"configured"`
+		Configured *bool        `json:"configured"` // absent from an older node: a catalogue means a cloud
 	}
 	_, err := c.do(ctx, "GET", "/v1/cloud/agents", nil, nil, &out, nil)
-	return out.Items, out.Configured, err
+	configured := len(out.Items) > 0
+	if out.Configured != nil {
+		configured = *out.Configured
+	}
+	return out.Items, configured, err
 }
 
 // CloudHistory reads a cloud sandbox's conversation as events.
