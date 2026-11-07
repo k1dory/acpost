@@ -42,7 +42,7 @@
     (async () => {
       let mermaid: typeof import("mermaid").default;
       try { mermaid = (await import("mermaid")).default; } catch (e) { console.warn("diagrams unavailable:", (e as Error)?.message); return; }
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, flowchart: { htmlLabels: false },
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, htmlLabels: false, flowchart: { htmlLabels: false },
         theme: document.documentElement.dataset.theme === "dark" ? "dark" : "default" });
       for (const b of blocks) {
         b.dataset.done = "1";

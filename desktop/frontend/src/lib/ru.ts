@@ -326,4 +326,13 @@ export const ruPatterns: [RegExp, string][] = [
   [/^check the address, and that the server is up$/, "проверьте адрес и что сервер работает"],
   [/^the host: a name such as github\.com or gitlab\.example\.com:8443$/, "хост: например github.com или gitlab.example.com:8443"],
   [/^node unavailable(.*)$/, "узел недоступен$1"],
+  [/^(.+) is not in a git repository: the cloud starts from a repository's remote$/, "$1 — не git-репозиторий: облако начинает с удалённого репозитория"],
+  [/^the repository has no remote origin: the cloud has nothing to clone$/, "у репозитория нет remote origin: облаку нечего клонировать"],
+  [/^add a remote \(git remote add origin URL\) and push$/, "добавьте remote (git remote add origin URL) и сделайте push"],
+  [/^no commit of this branch is known to be on the remote: what to start from cannot be told$/, "неизвестно, какой коммит этой ветки есть на remote: не с чего начать"],
+  [/^push the branch \((.+)\) or set origin's default \((.+)\)$/, "запушьте ветку ($1) или задайте ветку по умолчанию у origin ($2)"],
+  [/^the remote origin is not a URL acpost can read$/, "remote origin — не адрес, который acpost может прочитать"],
+  [/^(\S+) has no read-only mode: it would ask to run commands while it reads$/, "у $1 нет режима только для чтения: он будет спрашивать разрешение на команды"],
+  [/^choose an agent with a plan or read-only mode \(Claude Code, Codex\)$/, "выберите агента с режимом plan или read-only (Claude Code, Codex)"],
+  [/^the wiki of (.+) is being written already$/, "вики $1 уже пишется"],
 ];
