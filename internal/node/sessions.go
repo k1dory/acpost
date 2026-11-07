@@ -23,6 +23,17 @@ func (n *Node) resolveSession(ctx context.Context, p Principal, to Address, r *S
 				return errh("invalid", "use --session to continue a session", "meta key %q: keys starting with acp_ are set by acpost", k)
 			}
 		}
+	} else {
+		// The session a node forwards is the one its sender named; where it runs is this node's to
+		// say (from the agent's own list), never the forwarding node's.
+		delete(r.Meta, metaSessionCwd)
+		if sid := r.Meta[metaSession]; sid != "" {
+			if cfg := n.agentCfg(to.Name); cfg != nil && cfg.Driver == "acp" {
+				if cwd := n.sessionCwd(ctx, to.Name, sid); cwd != "" {
+					r.Meta[metaSessionCwd] = cwd
+				}
+			}
+		}
 	}
 	if r.Session == "" {
 		return nil
@@ -120,4 +131,25 @@ func (n *Node) checkSelfSend(ctx context.Context, m *store.Message, agent string
 			"this message would need the session of the turn you are sending from (%s), and wait for it forever", k)
 	}
 	return nil
+}
+
+// sessionCwd is an ACP session's directory as its agent lists it ("" when not found).
+func (n *Node) sessionCwd(ctx context.Context, agent, sid string) string {
+	cursor := ""
+	for page := 0; page < maxSessionPages; page++ {
+		list, next, err := n.Sessions(ctx, Principal{Kind: "user", Name: n.login}, agent, "", cursor)
+		if err != nil {
+			return ""
+		}
+		for _, si := range list {
+			if si.ID == sid {
+				return si.Cwd
+			}
+		}
+		if next == "" {
+			return ""
+		}
+		cursor = next
+	}
+	return ""
 }

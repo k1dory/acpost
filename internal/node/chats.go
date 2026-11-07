@@ -73,7 +73,12 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 					sid = root.Meta[metaSession] // a session it continues
 				}
 				if sid == "" {
-					if key := sessionKey(cfg.Session, root); key != "" {
+					// The key this agent's turns of the thread use: the root's session is another agent's.
+					r := root
+					if root.To != a {
+						r.Meta = nil
+					}
+					if key := sessionKey(cfg.Session, r); key != "" {
 						sid, _ = n.st.Session(ctx, a, key)
 					}
 				}
@@ -157,4 +162,29 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 		out.Items = []client.Chat{}
 	}
 	return out, nil
+}
+
+// linkedChats are the chats a thread continues (an agent's session, a cloud sandbox): their folder
+// is the thread's.
+func (n *Node) linkedChats(ctx context.Context, thread string) []string {
+	root, err := n.st.Get(ctx, thread)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	name := strings.TrimPrefix(root.To, "agent:")
+	if sid := root.Meta[metaSession]; sid != "" {
+		out = append(out, "session:"+name+"/"+sid)
+	}
+	if strings.HasPrefix(name, "sb_") {
+		out = append(out, "cloud:"+name)
+	}
+	if cfg := n.agentCfg(name); cfg != nil {
+		if key := sessionKey(cfg.Session, root); key != "" {
+			if sid, _ := n.st.Session(ctx, root.To, key); sid != "" {
+				out = append(out, "session:"+name+"/"+sid)
+			}
+		}
+	}
+	return out
 }

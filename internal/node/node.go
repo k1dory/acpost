@@ -309,6 +309,13 @@ func (n *Node) issueAgentToken(agent string) string {
 	return t
 }
 
+// revokeAgentToken ends a token issued for a process that is gone.
+func (n *Node) revokeAgentToken(token string) {
+	n.tokMu.Lock()
+	delete(n.agentTk, token)
+	n.tokMu.Unlock()
+}
+
 func (n *Node) setCurrent(token, msgID, lease string) {
 	n.tokMu.Lock()
 	at := n.agentTk[token]
@@ -374,7 +381,7 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	}
 	// A cloud sandbox of the tenant is the node's user's (its agents' too): never a client's or
 	// another node's, registered or not. Its agent is added on first use.
-	if to.Node == "" && n.cloud != nil && strings.HasPrefix(to.Name, "sb_") && n.cfg.Agents[to.Name] == nil {
+	if (to.Node == "" || to.Node == n.Name()) && n.cloud != nil && strings.HasPrefix(to.Name, "sb_") && n.cfg.Agents[to.Name] == nil {
 		if !p.local() {
 			return store.Message{}, false, errf("refused", "a cloud sandbox is reached by the node's user")
 		}

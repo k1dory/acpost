@@ -76,6 +76,9 @@ func TestCloud(t *testing.T) {
 	if _, _, err := n.Send(ctx, Principal{Kind: "node", Name: "other"}, SendRequest{To: "agent:" + task.Sandbox, Body: "x"}); code(err) != "refused" {
 		t.Fatalf("a node reached a registered sandbox: %v", err)
 	}
+	if _, _, err := n.Send(ctx, Principal{Kind: "node", Name: "other"}, SendRequest{To: "agent:" + task.Sandbox + "@" + n.Name(), Body: "x", From: "user:alice@other"}); code(err) != "refused" {
+		t.Fatalf("a node reached a sandbox by this node's name: %v", err)
+	}
 	// Not for a client; not a sandbox the tenant has not.
 	if _, _, err := n.Send(ctx, Principal{Kind: "client", Name: "ci"}, SendRequest{To: "agent:sb_other", Body: "x"}); code(err) != "refused" {
 		t.Fatalf("a client reached the cloud: %v", err)

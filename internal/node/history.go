@@ -42,8 +42,8 @@ func (n *Node) SessionHistory(ctx context.Context, p Principal, agent, id, cwd s
 	}
 	// A process of its own: the replay touches no turn, no session another slot holds, and the
 	// session is let go with the process (an agent that cannot close it holds it no longer).
-	slot := a.spare()
-	defer slot.stopProc()
+	slot, done := a.spare()
+	defer done()
 	proc, err := slot.ensureProc(ctx)
 	if err != nil {
 		return nil, errf("unavailable", "agent:%s did not start: %v", agent, err)
@@ -98,9 +98,11 @@ func (c *acpClient) capture(sid acp.SessionId, t *acpTurn) {
 }
 
 // spare is a slot outside the agent's slots, for one job in a process of its own (a replay, asking
-// what the agent offers); its process is the caller's to stop.
-func (a *acpAgent) spare() *acpSlot {
-	return &acpSlot{a: a, idx: -1, token: a.slots[0].token}
+// what the agent offers), with a token of its own and no turn; done stops its process and ends the
+// token.
+func (a *acpAgent) spare() (*acpSlot, func()) {
+	s := &acpSlot{a: a, idx: -1, token: a.n.issueAgentToken(a.name)}
+	return s, func() { s.stopProc(); a.n.revokeAgentToken(s.token) }
 }
 
 func explainACPErr(err error, what string) error {

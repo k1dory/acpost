@@ -163,8 +163,8 @@ func (a *acpAgent) offer(ctx context.Context) (*acpx.SessionState, error) {
 	if st != nil {
 		return st, nil
 	}
-	slot := a.spare()
-	defer slot.stopProc()
+	slot, done := a.spare()
+	defer done()
 	proc, err := slot.ensureProc(ctx)
 	if err != nil {
 		return nil, errf("unavailable", "agent:%s did not start: %v", a.name, err)

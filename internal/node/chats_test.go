@@ -76,4 +76,14 @@ agents:
 			t.Fatalf("the thread lost the folder: %+v", c)
 		}
 	}
+	// Out of the folder: the thread, and the session it continues with it.
+	if err := n.MoveChat(ctx, me, "thread:"+m.Thread, ""); err != nil {
+		t.Fatal(err)
+	}
+	chats, _ = n.Chats(ctx, me)
+	for _, c := range chats.Items {
+		if c.Folder != "" {
+			t.Fatalf("still in a folder: %+v", c)
+		}
+	}
 }

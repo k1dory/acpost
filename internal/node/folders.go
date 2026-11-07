@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/k1dory/acpost/internal/store"
 )
@@ -65,6 +66,14 @@ func (n *Node) DeleteFolder(ctx context.Context, p Principal, id string) error {
 func (n *Node) MoveChat(ctx context.Context, p Principal, chat, folder string) error {
 	if err := userOnly(p, "folders"); err != nil {
 		return err
+	}
+	if thread, ok := strings.CutPrefix(chat, "thread:"); ok {
+		// The chats the thread continues follow it: it is their one chat now.
+		for _, linked := range n.linkedChats(ctx, thread) {
+			if err := n.st.MoveChat(ctx, linked, ""); err != nil {
+				return folderErr(err)
+			}
+		}
 	}
 	return folderErr(n.st.MoveChat(ctx, chat, folder))
 }

@@ -103,11 +103,14 @@ func TestSessionHistory(t *testing.T) {
 // Settings come from the node's user's choice: a node forwarding meta cannot set them.
 func TestSettingsNotFromNodes(t *testing.T) {
 	n := acpNode(t, "session: thread")
-	r := SendRequest{To: "fake", Body: "cwd", Meta: map[string]string{"acp_cwd": "/", "acp_model": "fake-big"}}
+	r := SendRequest{To: "fake", Body: "cwd", Meta: map[string]string{"acp_cwd": "/", "acp_model": "fake-big", "acp_session_cwd": "/etc"}}
+	if err := n.resolveSession(ctx, Principal{Kind: "node", Name: "other"}, Address{Kind: "agent", Name: "fake"}, &r); err != nil {
+		t.Fatal(err)
+	}
 	if err := n.resolveSettings(ctx, Principal{Kind: "node", Name: "other"}, Address{Kind: "agent", Name: "fake"}, &r); err != nil {
 		t.Fatal(err)
 	}
-	if r.Meta["acp_cwd"] != "" || r.Meta["acp_model"] != "" {
+	if r.Meta["acp_cwd"] != "" || r.Meta["acp_model"] != "" || r.Meta["acp_session_cwd"] != "" {
 		t.Fatalf("a node set the settings: %v", r.Meta)
 	}
 }
