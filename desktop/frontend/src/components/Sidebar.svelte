@@ -79,12 +79,12 @@
   // target is what is under the pointer (data-drop); a drag is not also a click.
   let dragging = $state<{ chat: Chat; x: number; y: number } | null>(null);
   let pressed: { chat: Chat; x: number; y: number } | null = null;
-  let dragged = false;
+  let dragEnd = 0; // when a drag ended: the pointer's click right after it is not a click
   function press(e: PointerEvent, c: Chat) {
     if (e.button !== 0) return;
     pressed = { chat: c, x: e.clientX, y: e.clientY };
-    dragged = false;
     addEventListener("pointermove", move);
+    addEventListener("keydown", escape, true);
     addEventListener("pointerup", release, { once: true });
     addEventListener("pointercancel", release, { once: true });
   }
@@ -99,17 +99,27 @@
     dragging = { chat: pressed.chat, x: e.clientX / k, y: e.clientY / k };
     dropOn = targetAt(e.clientX, e.clientY);
   }
-  function release(e: PointerEvent) {
+  function stop() {
     removeEventListener("pointermove", move);
     removeEventListener("pointerup", release);
     removeEventListener("pointercancel", release);
-    const d = dragging, to = dragging && e.type === "pointerup" ? targetAt(e.clientX, e.clientY) : null;
-    dragged = !!d;
+    removeEventListener("keydown", escape, true);
+    if (dragging) dragEnd = Date.now();
     pressed = null; dragging = null; dropOn = null;
+  }
+  // Escape drops nothing: the chat stays where it was.
+  function escape(e: KeyboardEvent) {
+    if (e.key !== "Escape" || !pressed) return;
+    e.preventDefault(); e.stopPropagation();
+    stop();
+  }
+  function release(e: PointerEvent) {
+    const d = dragging, to = dragging && e.type === "pointerup" ? targetAt(e.clientX, e.clientY) : null;
+    stop();
     if (d && to !== null && to !== (d.chat.folder ?? "")) app.moveChat(d.chat.key, to);
   }
-  function clickRow(c: Chat) {
-    if (dragged) { dragged = false; return; } // the end of a drag
+  function clickRow(e: MouseEvent, c: Chat) {
+    if (e.detail > 0 && Date.now() - dragEnd < 400) return; // the pointer's click ending a drag (keys: detail 0)
     app.open(c);
   }
 </script>
@@ -122,7 +132,7 @@
       onkeydown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") renaming = null; }} />
   {:else}
   <button class="row" class:sel={isOpen(c) && app.view === "chat"} class:lifted={dragging?.chat.key === c.key}
-    onpointerdown={e => press(e, c)} onclick={() => clickRow(c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
+    onpointerdown={e => press(e, c)} onclick={e => clickRow(e, c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
     <span class="dot {dotOf(c)}"></span>
     <span class="t">
       <span class="title">{c.title || t("Untitled")}</span>
