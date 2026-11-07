@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 ) WITHOUT ROWID;
 `
 
+// migrateMCP adds the columns added after the table first shipped.
+func migrateMCP(s *Store) error {
+	var n int
+	if err := s.w.QueryRow(`SELECT count(*) FROM pragma_table_info('mcp_servers') WHERE name = 'secret_ver'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err := s.w.Exec(`ALTER TABLE mcp_servers ADD COLUMN secret_ver TEXT NOT NULL DEFAULT ''`)
+		return err
+	}
+	return nil
+}
+
 // MCPServer is an MCP server the agents get.
 type MCPServer struct {
 	Name    string   `json:"name"`
@@ -39,6 +52,9 @@ type MCPServer struct {
 	Headers []string `json:"headers,omitempty"` // names (values: secrets)
 	Agents  []string `json:"agents,omitempty"`  // none: every agent
 	Enabled bool     `json:"enabled"`
+	// SecretVer names the version of its secrets the server uses (they are kept per version: a
+	// change publishes a new one in one step).
+	SecretVer string `json:"-"`
 }
 
 var mcpName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -74,7 +90,7 @@ func (m MCPServer) Check() error {
 
 // MCPServers lists the servers, by name.
 func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT name, kind, command, args, url, env, headers, agents, enabled FROM mcp_servers ORDER BY name`)
+	rows, err := s.r.QueryContext(ctx, `SELECT name, kind, command, args, url, env, headers, agents, enabled, secret_ver FROM mcp_servers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +99,7 @@ func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
 	for rows.Next() {
 		var m MCPServer
 		var args, env, headers, agents string
-		if err := rows.Scan(&m.Name, &m.Kind, &m.Command, &args, &m.URL, &env, &headers, &agents, &m.Enabled); err != nil {
+		if err := rows.Scan(&m.Name, &m.Kind, &m.Command, &args, &m.URL, &env, &headers, &agents, &m.Enabled, &m.SecretVer); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(args), &m.Args)
@@ -107,12 +123,12 @@ func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
 		b, _ := json.Marshal(v)
 		return string(b)
 	}
-	_, err := s.w.ExecContext(ctx, `INSERT INTO mcp_servers (name, kind, command, args, url, env, headers, agents, enabled, ts)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.w.ExecContext(ctx, `INSERT INTO mcp_servers (name, kind, command, args, url, env, headers, agents, enabled, secret_ver, ts)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, command = excluded.command, args = excluded.args,
 			url = excluded.url, env = excluded.env, headers = excluded.headers, agents = excluded.agents,
-			enabled = excluded.enabled, ts = excluded.ts`,
-		m.Name, m.Kind, m.Command, j(m.Args), m.URL, j(m.Env), j(m.Headers), j(m.Agents), m.Enabled, time.Now().UnixMilli())
+			enabled = excluded.enabled, secret_ver = excluded.secret_ver, ts = excluded.ts`,
+		m.Name, m.Kind, m.Command, j(m.Args), m.URL, j(m.Env), j(m.Headers), j(m.Agents), m.Enabled, m.SecretVer, time.Now().UnixMilli())
 	return err
 }
 

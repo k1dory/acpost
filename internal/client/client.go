@@ -274,6 +274,33 @@ func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
+// Playbooks lists the kept prompts.
+func (c *Client) Playbooks(ctx context.Context) ([]store.Playbook, error) {
+	var out struct {
+		Items []store.Playbook `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/playbooks", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// PutPlaybook keeps a prompt under a name.
+func (c *Client) PutPlaybook(ctx context.Context, name, body string) error {
+	_, err := c.do(ctx, "PUT", "/v1/playbooks/"+url.PathEscape(name), nil, map[string]string{"body": body}, nil, nil)
+	return err
+}
+
+// DeletePlaybook forgets a prompt.
+func (c *Client) DeletePlaybook(ctx context.Context, name string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/playbooks/"+url.PathEscape(name), nil, nil, nil, nil)
+	return err
+}
+
+// SetChatTitle names a chat ("" gives it back its own title).
+func (c *Client) SetChatTitle(ctx context.Context, chat, title string) error {
+	_, err := c.do(ctx, "PUT", "/v1/chats/title", nil, map[string]string{"chat": chat, "title": title}, nil, nil)
+	return err
+}
+
 // Folders lists the app's folders of chats, with their chats.
 func (c *Client) Folders(ctx context.Context) ([]store.Folder, error) {
 	var out struct {
@@ -1129,6 +1156,7 @@ func (c *Client) Conversations(ctx context.Context, before string, limit int) ([
 // AskingRequest is a permission request waiting for a person, with its message.
 type AskingRequest struct {
 	Message string `json:"message"`
+	Thread  string `json:"thread,omitempty"`
 	acpx.Request
 }
 

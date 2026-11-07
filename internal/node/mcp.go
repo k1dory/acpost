@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,7 +35,11 @@ func (n *Node) mcpKeychain() *keychain.Store {
 	return n.mcpSec.kc
 }
 
-func mcpAccount(server, where, name string) string { return server + "/" + where + "/" + name }
+// mcpAccount is a secret's account: its server, the version of the server's secrets, where, name.
+// A version no server refers to is dead: a value left there never reaches an agent.
+func mcpAccount(server, ver, where, name string) string {
+	return server + "/" + ver + "/" + where + "/" + name
+}
 
 // MCPServers lists the servers (their secrets' names, never values).
 func (n *Node) MCPServers(ctx context.Context, p Principal) ([]store.MCPServer, error) {
@@ -48,7 +54,9 @@ func (n *Node) MCPServers(ctx context.Context, p Principal) ([]store.MCPServer, 
 }
 
 // PutMCPServer adds or changes a server; secrets are the values of its variables and headers
-// (a name absent keeps the value kept; an empty value forgets it).
+// (a name absent keeps the value kept; an empty value forgets it). The change is one step: its
+// secrets are written as a new version, the server switched to it, the old version forgotten —
+// a failure on the way leaves the server and its secrets as they were.
 func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer, secrets map[string]string) error {
 	if err := userOnly(p, "MCP servers"); err != nil {
 		return err
@@ -59,43 +67,64 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 	kc := n.mcpKeychain()
 	n.mcpSec.mu.Lock()
 	defer n.mcpSec.mu.Unlock()
-	// The names the server no longer has: their values go.
+	var old *store.MCPServer
 	if list, err := n.st.MCPServers(ctx); err == nil {
-		for _, old := range list {
-			if old.Name != m.Name {
-				continue
+		for i := range list {
+			if list[i].Name == m.Name {
+				old = &list[i]
 			}
-			for where, names := range map[string][]string{"env": old.Env, "header": old.Headers} {
-				keep := m.Env
-				if where == "header" {
-					keep = m.Headers
-				}
-				for _, name := range names {
-					if !slices.Contains(keep, name) {
-						_ = kc.Delete(mcpAccount(m.Name, where, name))
-					}
-				}
-			}
+		}
+	} else {
+		return errf("unavailable", "%v", err)
+	}
+	m.SecretVer = newSecretVer()
+	var written []string
+	undo := func() {
+		for _, acct := range written {
+			_ = kc.Delete(acct)
 		}
 	}
 	for where, names := range map[string][]string{"env": m.Env, "header": m.Headers} {
 		for _, name := range names {
 			v, given := secrets[where+"/"+name]
-			if !given {
+			if !given && old != nil {
+				v = kc.Get(mcpAccount(old.Name, old.SecretVer, where, name)) // kept as it was
+			}
+			if v == "" {
 				continue
 			}
-			acct := mcpAccount(m.Name, where, name)
-			if v == "" {
-				_ = kc.Delete(acct)
-			} else if err := kc.Set(acct, v); err != nil {
+			acct := mcpAccount(m.Name, m.SecretVer, where, name)
+			if err := kc.Set(acct, v); err != nil {
+				undo()
 				return errf("unavailable", "%v", err)
 			}
+			written = append(written, acct)
 		}
 	}
 	if err := n.st.PutMCPServer(ctx, m); err != nil {
+		undo()
 		return errf("invalid", "%v", err)
 	}
+	if old != nil {
+		forgetSecrets(kc, *old) // the old version: nothing refers to it any more
+	}
 	return nil
+}
+
+// newSecretVer is a version name nothing else has.
+func newSecretVer() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func forgetSecrets(kc *keychain.Store, m store.MCPServer) {
+	for _, e := range m.Env {
+		_ = kc.Delete(mcpAccount(m.Name, m.SecretVer, "env", e))
+	}
+	for _, h := range m.Headers {
+		_ = kc.Delete(mcpAccount(m.Name, m.SecretVer, "header", h))
+	}
 }
 
 // DeleteMCPServer removes a server and its secrets.
@@ -112,16 +141,9 @@ func (n *Node) DeleteMCPServer(ctx context.Context, p Principal, name string) er
 		}
 		return errf("unavailable", "%v", err)
 	}
-	kc := n.mcpKeychain()
 	for _, m := range list {
-		if m.Name != name {
-			continue
-		}
-		for _, e := range m.Env {
-			_ = kc.Delete(mcpAccount(name, "env", e))
-		}
-		for _, h := range m.Headers {
-			_ = kc.Delete(mcpAccount(name, "header", h))
+		if m.Name == name {
+			forgetSecrets(n.mcpKeychain(), m)
 		}
 	}
 	return nil
@@ -147,7 +169,7 @@ func (a *acpAgent) mcpServers(ctx context.Context, p *acpProc) []acp.McpServer {
 		case "stdio":
 			env := []acp.EnvVariable{}
 			for _, e := range m.Env {
-				env = append(env, acp.EnvVariable{Name: e, Value: kc.Get(mcpAccount(m.Name, "env", e))})
+				env = append(env, acp.EnvVariable{Name: e, Value: kc.Get(mcpAccount(m.Name, m.SecretVer, "env", e))})
 			}
 			args := m.Args
 			if args == nil {
@@ -160,7 +182,7 @@ func (a *acpAgent) mcpServers(ctx context.Context, p *acpProc) []acp.McpServer {
 			}
 			hs := []acp.HttpHeader{}
 			for _, h := range m.Headers {
-				hs = append(hs, acp.HttpHeader{Name: h, Value: kc.Get(mcpAccount(m.Name, "header", h))})
+				hs = append(hs, acp.HttpHeader{Name: h, Value: kc.Get(mcpAccount(m.Name, m.SecretVer, "header", h))})
 			}
 			out = append(out, acp.McpServer{Http: &acp.McpServerHttpInline{Name: m.Name, Type: "http", Url: m.URL, Headers: hs}})
 		}

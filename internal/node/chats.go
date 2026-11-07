@@ -157,6 +157,14 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 		}
 	}
 
+	// The names the user gave chats.
+	if titles, err := n.st.ChatTitles(ctx); err == nil && len(titles) > 0 {
+		for i := range out.Items {
+			if t := titles[out.Items[i].Key]; t != "" {
+				out.Items[i].Title = t
+			}
+		}
+	}
 	sort.SliceStable(out.Items, func(i, j int) bool { return out.Items[i].Updated.After(out.Items[j].Updated) })
 	out.Folders = folders
 	if out.Items == nil {

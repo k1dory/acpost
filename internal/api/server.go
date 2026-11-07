@@ -70,6 +70,10 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/forge/accounts", s.auth(s.forgeAccounts))
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
 	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
+	mux.HandleFunc("GET /v1/playbooks", s.auth(s.playbooks))
+	mux.HandleFunc("PUT /v1/playbooks/{name}", s.auth(s.putPlaybook))
+	mux.HandleFunc("DELETE /v1/playbooks/{name}", s.auth(s.deletePlaybook))
+	mux.HandleFunc("PUT /v1/chats/title", s.auth(s.chatTitle))
 	mux.HandleFunc("GET /v1/mcp", s.auth(s.mcpList))
 	mux.HandleFunc("PUT /v1/mcp/{name}", s.auth(s.mcpPut))
 	mux.HandleFunc("DELETE /v1/mcp/{name}", s.auth(s.mcpDelete))
@@ -559,6 +563,50 @@ func (s *server) mcpPut(w http.ResponseWriter, r *http.Request, p node.Principal
 
 func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	if err := s.n.DeleteMCPServer(r.Context(), p, r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) playbooks(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.Playbooks(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) putPlaybook(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req store.Playbook
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	req.Name = r.PathValue("name")
+	if err := s.n.PutPlaybook(r.Context(), p, req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) deletePlaybook(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.DeletePlaybook(r.Context(), p, r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) chatTitle(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct{ Chat, Title string }
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.n.SetChatTitle(r.Context(), p, req.Chat, req.Title); err != nil {
 		writeErr(w, err)
 		return
 	}

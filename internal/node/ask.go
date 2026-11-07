@@ -173,12 +173,20 @@ func (n *Node) Asking(p Principal) ([]AskingRequest, error) {
 	for _, r := range n.asks.of {
 		out = append(out, AskingRequest{Message: r.msg, Request: r.req})
 	}
+	n.asks.mu.Unlock()
+	for i := range out {
+		if m, err := n.st.Get(n.ctx, out[i].Message); err == nil {
+			out[i].Thread = m.Thread
+		}
+	}
+	n.asks.mu.Lock() // the deferred unlock's
 	return out, nil
 }
 
 // AskingRequest is a permission request waiting, with its message.
 type AskingRequest struct {
 	Message string `json:"message"`
+	Thread  string `json:"thread,omitempty"` // the message's thread
 	acpx.Request
 }
 

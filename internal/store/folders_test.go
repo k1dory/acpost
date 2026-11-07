@@ -62,3 +62,32 @@ func openMem(t *testing.T) *Store {
 	t.Cleanup(func() { s.Close() })
 	return s
 }
+
+func TestPlaybooksAndTitles(t *testing.T) {
+	ctx := context.Background()
+	s := openMem(t)
+	if err := s.PutPlaybook(ctx, Playbook{Name: "review", Body: "Review the diff"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutPlaybook(ctx, Playbook{Name: "bad name", Body: "x"}); err == nil {
+		t.Fatal("a bad name")
+	}
+	if err := s.PutPlaybook(ctx, Playbook{Name: "review", Body: "Review it again"}); err != nil {
+		t.Fatal(err)
+	}
+	pbs, _ := s.Playbooks(ctx)
+	if len(pbs) != 1 || pbs[0].Body != "Review it again" {
+		t.Fatalf("%+v", pbs)
+	}
+	if err := s.DeletePlaybook(ctx, "missing"); !errors.Is(err, ErrNoPlaybook) {
+		t.Fatalf("%v", err)
+	}
+	s.SetChatTitle(ctx, "thread:msg_1", "  Argus triage  ")
+	if ts, _ := s.ChatTitles(ctx); ts["thread:msg_1"] != "Argus triage" {
+		t.Fatalf("%v", ts)
+	}
+	s.SetChatTitle(ctx, "thread:msg_1", "")
+	if ts, _ := s.ChatTitles(ctx); len(ts) != 0 {
+		t.Fatalf("%v", ts)
+	}
+}

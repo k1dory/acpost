@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -41,14 +43,14 @@ func TestMCPServers(t *testing.T) {
 	if err := n.PutMCPServer(ctx, me, store.MCPServer{Name: "wiki", Kind: "stdio", Command: "wiki-mcp", Enabled: true}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if n.mcpKeychain().Get("wiki/env/TOKEN") != "" {
-		t.Fatal("a variable taken out kept its value")
+	if left := keptSecrets(t); strings.Contains(left, "s3cret") {
+		t.Fatalf("a variable taken out kept its value: %s", left)
 	}
 	if err := n.DeleteMCPServer(ctx, me, "wiki"); err != nil {
 		t.Fatal(err)
 	}
-	if n.mcpKeychain().Get("wiki/env/TOKEN") != "" {
-		t.Fatal("the secret outlived its server")
+	if left := keptSecrets(t); strings.Contains(left, "wiki/") {
+		t.Fatalf("the secrets outlived their server: %s", left)
 	}
 }
 
@@ -99,4 +101,10 @@ func TestForgeAccounts(t *testing.T) {
 	if list, _ := n.ForgeAccounts(ctx, me); len(list) != 0 {
 		t.Fatalf("after logout %+v", list)
 	}
+}
+
+// keptSecrets is the file the keychain is in tests.
+func keptSecrets(t *testing.T) string {
+	b, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".config", "acpost", "acpost-mcp.secrets.json"))
+	return string(b)
 }
