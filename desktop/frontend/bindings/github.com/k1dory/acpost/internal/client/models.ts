@@ -295,6 +295,11 @@ export class Chat {
      * the ACP session (a thread's, or the chat itself)
      */
     "session"?: string;
+
+    /**
+     * SessionAgent is the agent whose session Session is (a thread's agents differ).
+     */
+    "session_agent"?: string;
     "sandbox"?: string;
 
     /**

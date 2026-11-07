@@ -9,7 +9,7 @@ export type Msg = {
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
 export type Chat = {
   key: string; kind: "thread" | "session" | "cloud"; agent?: string; title: string; cwd?: string; repo?: string;
-  thread?: string; session?: string; sandbox?: string; status?: string; updated: string;
+  thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;
   messages?: number; running?: number; queued?: number; failed?: number; folder?: string; cloud_agent?: string;
 };
 export type Folder = { id: string; name: string; pos: number; chats: string[] };
@@ -114,6 +114,11 @@ class App {
         this.wasRunning.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
       }
       this.chats = c.items ?? [];
+      // A new task's thread, once listed, is the open chat (its session, to fork, comes with it).
+      if (this.thread && (!this.chat || this.chat.key === "thread:" + this.thread)) {
+        const mine = this.chats.find(x => x.key === "thread:" + this.thread);
+        if (mine) this.chat = mine;
+      }
       this.folders = c.folders ?? [];
       this.partial = c.partial ?? [];
     } catch (e) { this.error = errText(e); }
@@ -276,10 +281,11 @@ class App {
   /** Forks the open chat's agent session into a new chat (the conversation so far, to go on apart). */
   async forkChat() {
     const c = this.chat;
-    const agent = c?.agent ?? this.target;
+    // A thread's session is the agent's that runs it (its directory looked up by the node).
+    const agent = c?.session_agent || c?.agent || this.target;
     if (!c?.session || !agent || c.kind === "cloud") return;
     try {
-      const sid = await Node.ForkSession(agent, c.session, c.cwd ?? "");
+      const sid = await Node.ForkSession(agent, c.session, c.kind === "session" ? c.cwd ?? "" : "");
       const name = agent.replace(/^agent:/, "");
       const key = `session:${name}/${sid}`;
       await Node.SetChatTitle(key, "Fork: " + (c.title || "chat").slice(0, 80)).catch(() => {});

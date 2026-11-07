@@ -45,7 +45,7 @@ agents:
 	if !ok1 || !ok2 {
 		t.Fatalf("%+v", chats.Items)
 	}
-	if chats.Items[th].Session == "" || chats.Items[out].Folder != f.ID || chats.Items[out].Cwd != "/fake" || len(chats.Folders) != 1 {
+	if chats.Items[th].Session == "" || chats.Items[th].SessionAgent != "agent:fake" || chats.Items[out].Folder != f.ID || chats.Items[out].Cwd != "/fake" || len(chats.Folders) != 1 {
 		t.Fatalf("%+v", chats)
 	}
 	if _, err := n.Chats(ctx, Principal{Kind: "client", Name: "ci"}); code(err) != "refused" {

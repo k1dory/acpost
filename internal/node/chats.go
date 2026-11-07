@@ -85,7 +85,9 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 				}
 				if sid != "" {
 					ours[name+"/"+sid] = true
-					chat.Session = cmpOr(chat.Session, sid)
+					if chat.Session == "" {
+						chat.Session, chat.SessionAgent = sid, a
+					}
 					inherit = cmpOr(inherit, folderOf["session:"+name+"/"+sid])
 				}
 			}
