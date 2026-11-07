@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
+  import { onDestroy } from "svelte";
   import Icon from "./Icon.svelte";
 
   // The view switcher in the window's title bar (beside the traffic lights): the chats, VS Code
@@ -14,19 +15,27 @@
   ];
   let root: HTMLDivElement;
   const cur = $derived(views.find(v => v.view === app.view) ?? views[0]);
-  function go(v: V["view"]) { app.view = v; app.viewMenu = false; }
+  // Open here (two of these are mounted: the sidebar's, hidden in the IDE, and the IDE's own); the
+  // app is told, so the native IDE view hides while the menu is over it.
+  let open = $state(false);
+  function set(o: boolean) { open = o; app.viewMenu = o; }
+  // The view changed by a key while open: closed (a hidden one must not keep the IDE covered).
+  let at = app.view;
+  $effect(() => { if (app.view !== at) { at = app.view; if (open) set(false); } });
+  onDestroy(() => { if (open) app.viewMenu = false; });
+  function go(v: V["view"]) { set(false); app.view = v; }
 </script>
 
-<svelte:window onclick={e => { if (app.viewMenu && !root.contains(e.target as Node)) app.viewMenu = false; }}
-  onkeydown={e => { if (app.viewMenu && e.key === "Escape") app.viewMenu = false; }} />
+<svelte:window onclick={e => { if (open && !root.contains(e.target as Node)) set(false); }}
+  onkeydown={e => { if (open && e.key === "Escape") set(false); }} />
 
 <div class="vs nodrag" bind:this={root}>
-  <button class="trig" class:on={app.viewMenu} onclick={() => (app.viewMenu = !app.viewMenu)}>
+  <button class="trig" class:on={open} onclick={() => set(!open)}>
     <span>{t(cur.label)}</span>
     {#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}
     <span class="chev"><Icon name="chev" size={9} /></span>
   </button>
-  {#if app.viewMenu}
+  {#if open}
     <div class="menu card">
       {#each views as v (v.view)}
         <button class="mi" class:sel={v.view === cur.view} onclick={() => go(v.view)}>
