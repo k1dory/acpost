@@ -8,16 +8,10 @@
   const local = $derived(app.localAgents());
   let dirsOpen = $state(false);
   let typed = $state("");
-  function takeTyped(e: KeyboardEvent) {
-    if (e.key === "Enter" && typed.trim()) {
-      let d = typed.trim();
-      if (d.startsWith("~/") && app.home) d = app.home + d.slice(1);
-      app.draft.cwd = d;
-      typed = "";
-      dirsOpen = false;
-    }
-    if (e.key === "Escape") dirsOpen = false;
-  }
+  let found = $state<string[]>([]);
+  let sel = $state(0);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let seq = 0;
 
   function label(addr: string) {
     const n = addr.replace(/^agent:/, "");
@@ -25,6 +19,42 @@
   }
   function short(dir: string) {
     return app.home && dir.startsWith(app.home) ? "~" + dir.slice(app.home.length) : dir;
+  }
+  // What the menu shows: the recent directories that match, then what the search found.
+  const shown = $derived.by(() => {
+    const q = typed.trim().toLowerCase();
+    const recent = app.recentDirs().filter(d => !q || short(d).toLowerCase().includes(q) || d.toLowerCase().includes(q));
+    const seen = new Set(recent);
+    return [...recent, ...found.filter(d => !seen.has(d))].slice(0, 40);
+  });
+  $effect(() => {
+    const q = typed;
+    clearTimeout(timer);
+    sel = 0;
+    if (!q.trim()) { found = []; return; }
+    const my = ++seq;
+    timer = setTimeout(async () => {
+      const r = ((await Node.SearchDirs(q).catch(() => [])) ?? []) as string[];
+      if (my === seq) found = r;
+    }, 120);
+  });
+
+  function take(d: string) {
+    app.draft.cwd = d;
+    typed = "";
+    found = [];
+    dirsOpen = false;
+  }
+  function key(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(sel + 1, shown.length - 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(sel - 1, 0); }
+    else if (e.key === "Tab" && shown[sel]) { e.preventDefault(); typed = short(shown[sel]) + "/"; }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      const t = typed.trim();
+      if (shown[sel]) take(shown[sel]);
+      else if (t.startsWith("/") || t.startsWith("~")) take(t.startsWith("~") && app.home ? app.home + t.slice(1) : t);
+    } else if (e.key === "Escape") dirsOpen = false;
   }
   async function pick() {
     dirsOpen = false;
@@ -36,7 +66,10 @@
     app.draft.model = app.draft.effort = app.draft.mode = "";
     app.loadOptions(a);
   }
+  function focusOnMount(el: HTMLInputElement) { requestAnimationFrame(() => el.focus()); }
 </script>
+
+<svelte:window onclick={e => { if (dirsOpen && !(e.target as HTMLElement).closest(".dir")) dirsOpen = false; }} />
 
 <div class="setup">
   <div class="seg">
@@ -52,15 +85,24 @@
     </div>
     <div class="dir">
       <button class="chip pick" onclick={() => (dirsOpen = !dirsOpen)} title={app.draft.cwd}>
-        <Icon name="file" size={12} /> {short(app.draft.cwd || app.home)} <Icon name="chev" size={10} />
+        <Icon name="file" size={12} /> <span class="cwd">{short(app.draft.cwd || app.home)}</span> <Icon name="chev" size={10} />
       </button>
       {#if dirsOpen}
         <div class="menu card">
-          <input class="input path" placeholder="A path: ~/src/project, then Enter" bind:value={typed} onkeydown={takeTyped} />
-          {#each app.recentDirs() as d}
-            <button class="mi" onclick={() => { app.draft.cwd = d; dirsOpen = false; }}>{short(d)}</button>
-          {/each}
-          <button class="mi strong" onclick={pick}>Choose a directory…</button>
+          <div class="searchrow">
+            <Icon name="search" size={13} />
+            <input class="q" placeholder="Search a directory, or a path: ~/src/…" bind:value={typed} onkeydown={key} use:focusOnMount />
+          </div>
+          <div class="items">
+            {#each shown as d, i (d)}
+              <button class="mi" class:on={i === sel} onmouseenter={() => (sel = i)} onclick={() => take(d)}>
+                <span class="nm">{d.split("/").filter(Boolean).pop() || "/"}</span><span class="pth">{short(d)}</span>
+              </button>
+            {:else}
+              <div class="none muted">{typed.trim() ? "Nothing found" : "No recent directories"}</div>
+            {/each}
+          </div>
+          <button class="mi strong" onclick={pick}>Choose in Finder…</button>
         </div>
       {/if}
     </div>
@@ -73,16 +115,22 @@
 </div>
 
 <style>
-  .setup { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .setup { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; margin-bottom: 12px; }
   .seg button { display: inline-flex; align-items: center; gap: 5px; }
   .seg button:disabled { opacity: .4; }
   .dir { position: relative; }
-  .pick { height: 28px; padding: 0 10px; font-size: 12px; gap: 6px; cursor: default; }
-  .menu { position: absolute; left: 0; bottom: 34px; z-index: 30; min-width: 280px; max-height: 320px; overflow: auto; padding: 6px; display: grid; }
-  .path { height: 28px; font: 12px var(--mono); padding: 0 10px; border-radius: 8px; margin-bottom: 4px; }
-  .mi { border: 0; background: transparent; text-align: left; padding: 7px 10px; border-radius: 8px; font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mi:hover { background: var(--hover); }
+  .pick { height: 28px; padding: 0 10px; font-size: 12px; gap: 6px; cursor: default; max-width: 340px; }
+  .cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .menu { position: absolute; left: 50%; transform: translateX(-50%); top: 34px; z-index: 30; width: 440px; padding: 6px; display: grid; }
+  .searchrow { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; color: var(--muted); border-bottom: 1px solid var(--line-soft); margin-bottom: 4px; }
+  .q { flex: 1; border: 0; outline: 0; background: transparent; font-size: 13px; color: var(--ink); }
+  .items { max-height: 300px; overflow: auto; display: grid; }
+  .mi { display: flex; align-items: baseline; gap: 10px; border: 0; background: transparent; text-align: left; padding: 6px 10px; border-radius: 8px; min-width: 0; }
+  .mi.on { background: var(--hover); }
+  .nm { font-weight: 500; font-size: 12.5px; flex: none; }
+  .pth { font: 11px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mi.strong { font: 500 12.5px var(--sans); border-top: 1px solid var(--line-soft); margin-top: 4px; padding-top: 9px; border-radius: 0 0 8px 8px; }
+  .none { font-size: 12px; padding: 8px 10px; }
   .sel { width: auto; height: 28px; padding: 0 8px; border-radius: 10px; font-size: 12px; max-width: 320px; }
   .repo { width: 260px; height: 28px; padding: 0 10px; border-radius: 10px; font-size: 12px; }
 </style>

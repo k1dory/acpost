@@ -7,7 +7,7 @@
   import ContextMeter from "./ContextMeter.svelte";
   import Icon from "./Icon.svelte";
 
-  let box: HTMLDivElement;
+  let box = $state<HTMLDivElement>();
   let stick = true;
   const title = $derived(app.chat?.title || (app.msgs[0]?.body ?? "").split("\n")[0].slice(0, 80) || "New task");
   const waiting = $derived((app.rev, Object.entries(app.turns).flatMap(([id, t]) => t.waiting().map(r => ({ id, r })))));
@@ -48,20 +48,26 @@
     <button class="btn ghost sm nodrag" title="Right panel (⌘\)" onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={14} /></button>
   </header>
 
-  <div class="scroll body" bind:this={box} onscroll={onScroll}>
-    <div class="col">
-      {#if !app.chat && !app.thread}
+  {#if !app.chat && !app.thread}
+    <!-- A new task: the composer in the middle, with where, who and in which directory. -->
+    <div class="center">
+      <div class="col">
         <div class="hello">
           <div class="big">What should we work on?</div>
-          <div class="muted">Choose where it runs, the agent and its directory below. Type / for the model and effort.</div>
+          <div class="muted">Where it runs, the agent and its directory — then the task. Type / for the model and effort.</div>
         </div>
-      {/if}
-      {#if app.chat && app.chat.kind !== "thread"}<History />{/if}
-      {#each app.msgs as m (m.id)}<Message {m} />{/each}
+        <Composer />
+      </div>
     </div>
-  </div>
-
-  <div class="foot"><div class="col"><Composer /></div></div>
+  {:else}
+    <div class="scroll body" bind:this={box} onscroll={onScroll}>
+      <div class="col">
+        {#if app.chat && app.chat.kind !== "thread"}<History />{/if}
+        {#each app.msgs as m (m.id)}<Message {m} />{/each}
+      </div>
+    </div>
+    <div class="foot"><div class="col"><Composer /></div></div>
+  {/if}
 </section>
 
 <style>
@@ -77,6 +83,8 @@
   .body { flex: 1; min-height: 0; padding: 28px 32px 12px; overflow-x: hidden; }
   .col { max-width: 720px; margin: 0 auto; min-width: 0; }
   .foot { padding: 8px 32px 20px; }
-  .hello { padding: 16vh 0 24px; display: grid; gap: 6px; }
+  .center { flex: 1; min-height: 0; display: grid; align-content: center; padding: 0 32px 8vh; }
+  .center .col { width: 100%; }
+  .hello { padding: 0 0 22px; display: grid; gap: 6px; text-align: center; }
   .big { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
 </style>

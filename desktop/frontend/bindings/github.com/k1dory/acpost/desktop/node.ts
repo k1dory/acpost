@@ -235,6 +235,15 @@ export function RenameFolder(id: string, name: string): $CancellablePromise<void
 }
 
 /**
+ * SearchDirs finds directories for what is typed: a path (/…, ~/…) completes, a word searches home.
+ */
+export function SearchDirs(q: string): $CancellablePromise<string[]> {
+    return $Call.ByID(3291189440, q).then(($result: any) => {
+        return $$createType21($result);
+    });
+}
+
+/**
  * Send sends a message: to an agent, in a thread (a new one when empty).
  */
 export function Send(to: string, body: string, thread: string, files: $models.Upload[]): $CancellablePromise<store$0.Message> {
@@ -266,7 +275,7 @@ export function SessionHistory(agent: string, id: string, cwd: string): $Cancell
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType21($result);
+        return $$createType22($result);
     });
 }
 
@@ -289,7 +298,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType22($result);
+        return $$createType23($result);
     });
 }
 
@@ -305,7 +314,7 @@ export function Unfollow(id: string): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType24($result);
+        return $$createType25($result);
     });
 }
 
@@ -331,7 +340,8 @@ const $$createType17 = client$0.Terminal.createFrom;
 const $$createType18 = client$0.AgentOptions.createFrom;
 const $$createType19 = forge$0.Pull.createFrom;
 const $$createType20 = $Create.Array($$createType19);
-const $$createType21 = $models.Connection.createFrom;
-const $$createType22 = $Create.Array($$createType4);
-const $$createType23 = client$0.UsageReport.createFrom;
-const $$createType24 = $Create.Array($$createType23);
+const $$createType21 = $Create.Array($Create.Any);
+const $$createType22 = $models.Connection.createFrom;
+const $$createType23 = $Create.Array($$createType4);
+const $$createType24 = client$0.UsageReport.createFrom;
+const $$createType25 = $Create.Array($$createType24);

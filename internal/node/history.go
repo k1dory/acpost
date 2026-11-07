@@ -109,3 +109,39 @@ func explainACPErr(err error, what string) error {
 	f := explainACP(err, what, true)
 	return errh(f.Code, HintFor(f.Code), "%s", f.Message)
 }
+
+// sessionCwdApart is a session's directory as the agent lists it, asked of a spare process that is
+// stopped (killed, if it must) after 30 s: an agent that stops reading holds no slot and no turn.
+func (a *acpAgent) sessionCwdApart(ctx context.Context, sid string) string {
+	slot, done := a.spare()
+	defer done()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, slot.stopProc) // a write the agent does not read ends with it
+	defer stop()
+	proc, err := slot.ensureProc(ctx)
+	if err != nil || proc.init.AgentCapabilities.SessionCapabilities.List == nil {
+		return ""
+	}
+	cursor := ""
+	for page := 0; page < maxSessionPages; page++ {
+		req := acp.ListSessionsRequest{}
+		if cursor != "" {
+			req.Cursor = &cursor
+		}
+		resp, err := proc.conn.ListSessions(ctx, req)
+		if err != nil {
+			return ""
+		}
+		for _, si := range resp.Sessions {
+			if string(si.SessionId) == sid {
+				return si.Cwd
+			}
+		}
+		if resp.NextCursor == nil || *resp.NextCursor == "" {
+			return ""
+		}
+		cursor = *resp.NextCursor
+	}
+	return ""
+}
