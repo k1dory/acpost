@@ -5,10 +5,12 @@ package forge
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -107,7 +109,7 @@ func (c *Client) hc() *http.Client {
 			return errors.New("too many redirects")
 		}
 		if req.URL.Scheme != "https" {
-			return fmt.Errorf("a redirect to %s, not https", req.URL.Host) // the host only: a URL may carry anything
+			return redirectRefused{fmt.Sprintf("a redirect to %s, not https", req.URL.Host)} // the host only
 		}
 		if req.URL.Host != via[0].URL.Host {
 			req.Header.Del("Authorization")
@@ -175,23 +177,20 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 	auth(req, srv.Kind, tok)
 	resp, err := c.hc().Do(req)
 	if err != nil {
-		// Without the URL Go puts in: a redirect's may carry credentials (GitHub's log links do).
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			err = ue.Err
-		}
-		return nil, &Error{Message: redact(fmt.Sprintf("%s %s %s: %v", host, method, path, err))}
+		// Said in acpost's own words: Go's errors quote URLs, a redirect's may carry credentials
+		// (GitHub's log links do), a malformed one whole.
+		return nil, &Error{Message: fmt.Sprintf("%s %s %s: %s", host, method, path, transportWhy(err))}
 	}
 	defer resp.Body.Close()
 	if t, ok := out.(*tailText); ok && resp.StatusCode < 400 {
 		if err := t.read(resp.Body, max); err != nil {
-			return resp.Header, &Error{Status: resp.StatusCode, Message: redact(fmt.Sprintf("%s: %v", host, err))}
+			return resp.Header, &Error{Status: resp.StatusCode, Message: fmt.Sprintf("%s %s: the answer broke off (%s)", host, path, transportWhy(err))}
 		}
 		return resp.Header, nil
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	if err != nil {
-		return resp.Header, &Error{Status: resp.StatusCode, Message: redact(fmt.Sprintf("%s: %v", host, err))}
+		return resp.Header, &Error{Status: resp.StatusCode, Message: fmt.Sprintf("%s %s: the answer broke off (%s)", host, path, transportWhy(err))}
 	}
 	if resp.StatusCode >= 400 {
 		whole := redact(string(b))
@@ -289,6 +288,36 @@ func (c *Client) Probe(ctx context.Context, host string) (Server, error) {
 		errs = append(errs, err)
 	}
 	return Server{}, fmt.Errorf("%s: not a forge acpost knows (GitHub, GitLab, Forgejo/Gitea): %w", host, errors.Join(errs...))
+}
+
+// redirectRefused is a redirect hc does not follow, said without its URL.
+type redirectRefused struct{ why string }
+
+func (r redirectRefused) Error() string { return r.why }
+
+// transportWhy says why a request got no answer, in words that hold nothing of the request.
+func transportWhy(err error) string {
+	var rr redirectRefused
+	var cv *tls.CertificateVerificationError
+	var ue *url.Error
+	var ne net.Error
+	var op *net.OpError
+	switch {
+	case errors.As(err, &rr):
+		return rr.why
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
+		return "no answer in time"
+	case errors.As(err, &cv):
+		return "its certificate is not trusted"
+	case errors.As(err, &op):
+		return "cannot connect (" + op.Op + ")"
+	case errors.As(err, &ue) && strings.Contains(ue.Err.Error(), "redirect"):
+		return "a redirect it could not follow"
+	default:
+		return "the request failed"
+	}
 }
 
 // anonymous is the client without tokens.
