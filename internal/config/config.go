@@ -31,6 +31,64 @@ type Config struct {
 	Agents    map[string]*Agent `yaml:"agents" json:"agents"`
 	// Prices per model, for turns whose agent does not say what they cost: what usage estimates.
 	Prices map[string]Price `yaml:"prices" json:"prices"`
+	// Cloud is the agent-sandbox tenant whose sandboxes are the node user's cloud chats.
+	Cloud *Cloud `yaml:"cloud" json:"cloud,omitempty"`
+}
+
+// Cloud is a tenant of agent-sandbox (sandboxd): its URL and token from an env file (SANDBOXD_URL,
+// SANDBOXD_TOKEN, as sandboxctl reads them), or url and token_env. The token is never written out.
+type Cloud struct {
+	EnvFile  string `yaml:"env_file" json:"env_file,omitempty"`
+	URL      string `yaml:"url" json:"url,omitempty"`
+	TokenEnv string `yaml:"token_env" json:"token_env,omitempty"`
+	CA       string `yaml:"ca" json:"ca,omitempty"`
+	Token    string `yaml:"-" json:"-"`
+}
+
+// readEnvFile reads KEY=VALUE lines (export allowed, quotes taken off).
+func readEnvFile(path string) (map[string]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "export "))
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || strings.HasPrefix(line, "#") {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
+			v = v[1 : len(v)-1]
+		}
+		out[strings.TrimSpace(k)] = v
+	}
+	return out, nil
+}
+
+func (c *Cloud) fill() error {
+	if c.EnvFile != "" {
+		c.EnvFile = expand(c.EnvFile)
+		env, err := readEnvFile(c.EnvFile)
+		if err != nil {
+			return fmt.Errorf("cloud.env_file: %w", err)
+		}
+		if c.URL == "" {
+			c.URL = env["SANDBOXD_URL"]
+		}
+		c.Token = env["SANDBOXD_TOKEN"]
+	}
+	if c.TokenEnv != "" {
+		c.Token = os.Getenv(c.TokenEnv)
+	}
+	u, err := url.Parse(c.URL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("cloud.url %q: http(s)://host[:port] (or SANDBOXD_URL in env_file)", c.URL)
+	}
+	c.URL = strings.TrimRight(c.URL, "/")
+	c.CA = expand(c.CA)
+	return nil
 }
 
 // Price is a model's price per million tokens, in Currency (default USD).
@@ -314,6 +372,11 @@ func (c *Config) fill() error {
 			return fmt.Errorf("tokens[%d]: sha256 or token_env", i)
 		}
 	}
+	if c.Cloud != nil {
+		if err := c.Cloud.fill(); err != nil {
+			return err
+		}
+	}
 	for name, a := range c.Agents {
 		if !ValidName(name) {
 			return fmt.Errorf("agents.%s: the name may have letters, digits, . _ -", name)
@@ -326,6 +389,19 @@ func (c *Config) fill() error {
 		}
 	}
 	return nil
+}
+
+// CloudAgent is the agent of a cloud sandbox: driver sandbox over the cloud's URL and token, with
+// the defaults of any agent.
+func (c *Cloud) CloudAgent(sandbox string) (*Agent, error) {
+	if c.Token == "" {
+		return nil, errors.New("cloud: no token (SANDBOXD_TOKEN in env_file, or token_env)")
+	}
+	a := &Agent{Driver: "sandbox", Sandbox: &Sandbox{URL: c.URL, ID: sandbox, CA: c.CA, Token: c.Token}}
+	if err := a.fill(); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func (a *Agent) fill() error {
@@ -349,10 +425,12 @@ func (a *Agent) fill() error {
 		if !sandboxID.MatchString(sb.ID) {
 			return fmt.Errorf("sandbox.id %q: the sandbox's id", sb.ID)
 		}
-		if sb.TokenEnv == "" {
+		if sb.TokenEnv == "" && sb.Token == "" {
 			return errors.New("sandbox.token_env: the variable holding sandboxd's API token")
 		}
-		sb.Token = os.Getenv(sb.TokenEnv)
+		if sb.TokenEnv != "" {
+			sb.Token = os.Getenv(sb.TokenEnv)
+		}
 		sb.CA = expand(sb.CA)
 		// One sandbox is one conversation: its turns go one at a time.
 		a.Concurrency = 1

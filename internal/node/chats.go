@@ -59,6 +59,9 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 			}
 			for _, a := range c.Agents {
 				name := strings.TrimPrefix(a, "agent:")
+				if strings.HasPrefix(name, "sb_") {
+					ours["cloud/"+name] = true // a cloud sandbox this thread talks to: the thread is its chat
+				}
 				if strings.Contains(name, "@") {
 					continue
 				}
@@ -131,6 +134,9 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 		out.Partial = append(out.Partial, "cloud: "+err.Error())
 	} else {
 		for _, c := range cl {
+			if ours["cloud/"+c.Sandbox] {
+				continue
+			}
 			c.Folder = folderOf[c.Key]
 			out.Items = append(out.Items, c)
 		}

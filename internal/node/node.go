@@ -90,7 +90,11 @@ type Node struct {
 	agentTk map[string]*agentToken // token → agent process
 
 	acp       map[string]*acpAgent
-	sandboxes map[string]*sandboxAgent // driver: sandbox, cloud agents
+	sandboxes map[string]*sandboxAgent // driver: sandbox, cloud agents (the cloud's added as used: sbMu)
+	sbMu      sync.Mutex
+	dynCfg    map[string]*config.Agent // the cloud's sandboxes, as agents
+	cloud     *cloudAPI
+	started   bool // the drivers run (sbMu): a cloud sandbox's agent starts when added
 
 	maintainEvery atomic.Int64
 	wake          chan struct{}
@@ -126,7 +130,7 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	n := &Node{cfg: cfg, st: st, log: log, changed: make(chan struct{}), evChanged: make(chan struct{}), agentTk: map[string]*agentToken{},
-		acp: map[string]*acpAgent{}, sandboxes: map[string]*sandboxAgent{}, wake: make(chan struct{}, 1), remote: newRegistry(),
+		acp: map[string]*acpAgent{}, sandboxes: map[string]*sandboxAgent{}, dynCfg: map[string]*config.Agent{}, wake: make(chan struct{}, 1), remote: newRegistry(),
 		following: map[string]bool{}, followWake: make(chan struct{}, 1)}
 	n.maintainEvery.Store(int64(30 * time.Second))
 	n.login = "user"
@@ -144,6 +148,13 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 			}
 			n.sandboxes[name] = sa
 		}
+	}
+	if cfg.Cloud != nil {
+		c, err := newCloudAPI(cfg.Cloud)
+		if err != nil {
+			return nil, err
+		}
+		n.cloud = c
 	}
 	if j := cfg.Node.Join; j != nil {
 		if j.Token == "" {
@@ -179,6 +190,20 @@ func (n *Node) Start(ctx context.Context) error {
 	for name := range n.sandboxes {
 		mine = append(mine, "agent:"+name)
 	}
+	// The cloud's sandboxes with messages: their agents again, before their turns are requeued.
+	if n.cloud != nil {
+		names, err := n.st.ActiveRecipients(ctx, "agent:sb_")
+		if err != nil {
+			return err
+		}
+		for _, to := range names {
+			if name := strings.TrimPrefix(to, "agent:"); config.ValidName(name) {
+				if _, err := n.cloudAgent(name, false); err == nil {
+					mine = append(mine, to)
+				}
+			}
+		}
+	}
 	if k, err := n.st.RequeueRunning(ctx, mine, n.cfg.Limits.MaxAttempts); err != nil {
 		return err
 	} else if k > 0 {
@@ -187,9 +212,12 @@ func (n *Node) Start(ctx context.Context) error {
 	for _, a := range n.acp {
 		a.start()
 	}
+	n.sbMu.Lock()
 	for _, a := range n.sandboxes {
 		a.start()
 	}
+	n.started = true
+	n.sbMu.Unlock()
 	n.goLoop(n.maintainLoop)
 	if n.hub != nil {
 		n.startJoin()
@@ -324,7 +352,14 @@ func (n *Node) turnOf(p Principal) turnRef {
 	return at.current.Load().(turnRef)
 }
 
-func (n *Node) agentCfg(name string) *config.Agent { return n.cfg.Agents[name] }
+func (n *Node) agentCfg(name string) *config.Agent {
+	if a := n.cfg.Agents[name]; a != nil {
+		return a
+	}
+	n.sbMu.Lock()
+	defer n.sbMu.Unlock()
+	return n.dynCfg[name]
+}
 
 // Send stores a message for an agent of this node, or hands it to the hub for an agent elsewhere.
 func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Message, bool, error) {
@@ -334,6 +369,15 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	}
 	if to.Kind != "agent" {
 		return store.Message{}, false, errf("invalid", "%s: messages go to agents (agent:name)", r.To)
+	}
+	// A cloud sandbox of the tenant: its agent, added on first use (by the node's user).
+	if to.Node == "" && n.cloud != nil && strings.HasPrefix(to.Name, "sb_") && n.agentCfg(to.Name) == nil {
+		if !p.local() {
+			return store.Message{}, false, errf("refused", "a cloud sandbox is reached by the node's user")
+		}
+		if _, err := n.cloudAgent(to.Name, true); err != nil {
+			return store.Message{}, false, err
+		}
 	}
 	if r.Body == "" && len(r.Files) == 0 {
 		return store.Message{}, false, errf("invalid", "the body is empty")
@@ -739,7 +783,10 @@ func (n *Node) Agents(ctx context.Context) []client.AgentInfo {
 		if d := n.acp[name]; d != nil {
 			info.Process = d.running()
 		}
-		if d := n.sandboxes[name]; d != nil {
+		n.sbMu.Lock()
+		d := n.sandboxes[name]
+		n.sbMu.Unlock()
+		if d != nil {
 			info.Process = d.busy.Load() // a turn of its sandbox's conversation runs
 		}
 		out = append(out, info)

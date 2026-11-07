@@ -67,6 +67,9 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/agents/{name}/options", s.auth(s.options))
 	mux.HandleFunc("GET /v1/agents/{name}/sessions/{id}/history", s.auth(s.sessionHistory))
 	mux.HandleFunc("GET /v1/chats", s.auth(s.chats))
+	mux.HandleFunc("GET /v1/cloud/agents", s.auth(s.cloudAgents))
+	mux.HandleFunc("POST /v1/cloud/tasks", s.auth(s.cloudTask))
+	mux.HandleFunc("GET /v1/cloud/sandboxes/{id}/history", s.auth(s.cloudHistory))
 	mux.HandleFunc("GET /v1/folders", s.auth(s.folders))
 	mux.HandleFunc("POST /v1/folders", s.auth(s.createFolder))
 	mux.HandleFunc("PATCH /v1/folders/{id}", s.auth(s.updateFolder))
@@ -460,6 +463,38 @@ func (s *server) chats(w http.ResponseWriter, r *http.Request, p node.Principal)
 		return
 	}
 	writeJSON(w, 200, out)
+}
+
+func (s *server) cloudAgents(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.CloudAgents(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) cloudTask(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req client.CloudTask
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := s.n.CreateCloudTask(r.Context(), p, req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, out)
+}
+
+func (s *server) cloudHistory(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	evs, err := s.n.CloudHistory(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": evs})
 }
 
 func (s *server) folders(w http.ResponseWriter, r *http.Request, p node.Principal) {

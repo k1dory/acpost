@@ -254,6 +254,7 @@ func (a *sandboxAgent) call(ctx context.Context, method, p string, hdr http.Head
 
 // sandboxMessage is one turn of the sandbox's conversation.
 type sandboxMessage struct {
+	At    time.Time       `json:"at"`
 	ID    int64           `json:"id"`
 	RunID string          `json:"run_id"`
 	Role  string          `json:"role"`

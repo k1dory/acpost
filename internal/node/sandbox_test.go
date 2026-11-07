@@ -30,6 +30,8 @@ type fakeSandboxd struct {
 	frames   []string
 	next     int
 	history  []map[string]any // what GET /messages lists (up to event 5); text "POSTED": what was posted
+	id       string           // the sandbox's id (sb1)
+	created  []map[string]any // POST /v1/sandboxes bodies
 	runTask  bool             // the run's task is the posted text (text mode, a new run), queued
 	failPost int              // POSTs that take the message and answer 503
 }
@@ -39,7 +41,29 @@ func (f *fakeSandboxd) handler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
 		return
 	}
+	id := f.id
+	if id == "" {
+		id = "sb1"
+	}
+	// The sandbox's own paths, whatever its id.
+	r.URL.Path = strings.Replace(r.URL.Path, "/v1/sandboxes/"+id+"/", "/v1/sandboxes/sb1/", 1)
 	switch {
+	case r.Method == "GET" && r.URL.Path == "/v1/agents":
+		w.Write([]byte(`[{"name":"assistant","revision":2,"description":"Claude Code","tenant":"genomed"},{"name":"reviewer","revision":1}]`))
+	case r.Method == "GET" && r.URL.Path == "/v1/sandboxes":
+		fmt.Fprintf(w, `[{"id":%q,"name":"pilot","status":"sleeping","agent_ref":"assistant","last_activity":"2026-11-01T10:00:00Z"}]`, id)
+	case r.Method == "GET" && r.URL.Path == "/v1/sandboxes/"+id:
+		fmt.Fprintf(w, `{"id":%q,"name":"pilot","status":"sleeping"}`, id)
+	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/sandboxes/sb_") && strings.Count(r.URL.Path, "/") == 3:
+		w.WriteHeader(404)
+	case r.Method == "POST" && r.URL.Path == "/v1/sandboxes":
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.created = append(f.created, body)
+		f.mu.Unlock()
+		w.WriteHeader(201)
+		fmt.Fprintf(w, `{"id":%q,"name":%q,"status":"creating","agent_ref":%q}`, id, body["name"], body["agent_ref"])
 	case r.Method == "GET" && r.URL.Path == "/v1/sandboxes/sb1/messages":
 		// Where the stream stands: event 5.
 		cur := "5"

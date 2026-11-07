@@ -157,6 +157,48 @@ type Chat struct {
 	Queued   int       `json:"queued,omitempty"`
 	Failed   int       `json:"failed,omitempty"`
 	Folder   string    `json:"folder,omitempty"`
+	// CloudAgent is the catalogue agent a sandbox was made from.
+	CloudAgent string `json:"cloud_agent,omitempty"`
+}
+
+// CloudAgent is an agent of the cloud tenant's catalogue.
+type CloudAgent struct {
+	Ref         string `json:"ref"` // as a sandbox is made from it: name, or shared/name
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Revision    int    `json:"revision"`
+}
+
+// CloudTask starts a cloud task: a sandbox of a catalogue agent, on a repository if one is named.
+type CloudTask struct {
+	Agent string `json:"agent"`
+	Repo  string `json:"repo,omitempty"`
+	Name  string `json:"name,omitempty"`
+}
+
+// CloudAgents lists the cloud tenant's catalogue.
+func (c *Client) CloudAgents(ctx context.Context) ([]CloudAgent, error) {
+	var out struct {
+		Items []CloudAgent `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/cloud/agents", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// CloudHistory reads a cloud sandbox's conversation as events.
+func (c *Client) CloudHistory(ctx context.Context, id string) ([]store.Event, error) {
+	var out struct {
+		Items []store.Event `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/cloud/sandboxes/"+url.PathEscape(id)+"/history", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// CreateCloudTask makes the sandbox of a new cloud task; its messages go to agent:<sandbox id>.
+func (c *Client) CreateCloudTask(ctx context.Context, t CloudTask) (Chat, error) {
+	var out Chat
+	_, err := c.do(ctx, "POST", "/v1/cloud/tasks", nil, t, &out, nil)
+	return out, err
 }
 
 // Chats is the list, the folders, and what could not be listed (an agent that did not answer).
