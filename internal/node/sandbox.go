@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,10 +58,11 @@ type sandboxAgent struct {
 	// cursor is the last event of the sandbox's stream seen (0: not known yet).
 	cursor atomic.Int64
 	busy   atomic.Bool
-	// open counts, per run, the messages the run has taken and not yet answered (a turn's end
-	// answers the oldest), as the stream up to observed says.
+	// open is, per run, the fingerprints of the inputs the run has taken and not yet answered, in
+	// order (a turn's end answers the oldest; a steered input joins the turn in progress), as the
+	// stream up to observed says.
 	mu       sync.Mutex
-	open     map[string]int
+	open     map[string][]string
 	observed int64
 }
 
@@ -73,19 +75,29 @@ func (a *sandboxAgent) observe(sm sandboxMessage) {
 	}
 	a.observed = sm.ID
 	if a.open == nil {
-		a.open = map[string]int{}
+		a.open = map[string][]string{}
 	}
 	countTurn(a.open, sm)
 }
 
-// countTurn moves a run's count of messages waiting for an answer.
-func countTurn(open map[string]int, sm sandboxMessage) {
+// countTurn moves a run's inputs waiting for an answer.
+func countTurn(open map[string][]string, sm sandboxMessage) {
+	q := open[sm.RunID]
 	switch {
 	case sm.Role == "user":
-		open[sm.RunID]++
-	case turnEnd(sm), steered(sm):
-		if open[sm.RunID] > 0 {
-			open[sm.RunID]--
+		open[sm.RunID] = append(q, fingerprint(sm.Text))
+	case turnEnd(sm):
+		if len(q) > 0 {
+			open[sm.RunID] = q[1:]
+		}
+	case steered(sm):
+		_, fp := steerOf(sm)
+		i := len(q) - 1 // without a fingerprint: the latest input
+		if fp != "" {
+			i = slices.Index(q, fp) // the first of that text: they are steered in order
+		}
+		if i >= 0 {
+			open[sm.RunID] = slices.Delete(slices.Clone(q), i, i+1)
 		}
 	case sm.Role == "system" && strings.HasPrefix(sm.Text, "run "):
 		delete(open, sm.RunID) // the run is over
@@ -136,11 +148,11 @@ func turnEnd(sm sandboxMessage) bool {
 	return l.Type == "acp.turn_end" || l.Type == "turn.completed" || l.Type == "result"
 }
 
-// openOf is how many messages a run had waiting for an answer, as far as the stream was read.
-func (a *sandboxAgent) openOf(run string) int {
+// openOf is the inputs a run had waiting for an answer, as far as the stream was read.
+func (a *sandboxAgent) openOf(run string) []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.open[run]
+	return slices.Clone(a.open[run])
 }
 
 func newSandboxAgent(n *Node, name string, cfg *config.Agent) (*sandboxAgent, error) {
@@ -434,11 +446,10 @@ type sandboxTurn struct {
 	skippedLen    int
 	prevKept      bool
 	prevEnd       sandboxEnd
-	// The run's inputs as seen, by fingerprint: before this message's (true) or after it (false);
+	// The run's inputs as seen, by fingerprint, in order: where each stands from this message's;
 	// lastIn, where the latest one stands (what a notice without a fingerprint is about).
-	inputs    map[string]bool
-	lastIn    int // 0 none, 1 before this message's, 2 this message's, 3 after it
-	mineFP    string
+	inputs    []turnInput
+	lastIn    int  // 0 none, 1 before this message's, 2 this message's, 3 after it
 	replaying bool // the history is being read: requests wait for its end
 	// quiet: the turn is read again from the sandbox's history (an earlier attempt recorded what
 	// it said): nothing is recorded again, and its requests are asked only if still open after it.
@@ -512,39 +523,49 @@ func (t *sandboxTurn) take(ctx context.Context, sm sandboxMessage) (sandboxEnd, 
 
 // seeUser notes an input of the run: where it stands from this message's.
 func (t *sandboxTurn) seeUser(sm sandboxMessage, mine bool) {
-	if t.inputs == nil {
-		t.inputs = map[string]bool{}
-	}
 	fp := fingerprint(sm.Text)
 	switch {
 	case mine:
 		t.lastIn = 2
 	case t.started:
 		t.lastIn = 3
-		t.inputs[fp] = false
 	default:
 		t.lastIn = 1
-		t.inputs[fp] = true
 	}
-	if mine {
-		t.inputs[fp] = false // this message's own; told apart by mineFP
-		t.mineFP = fp
+	// In order: a turn's end answers the oldest; inputs of the same text are steered (and
+	// noticed) in the order they came.
+	t.inputs = append(t.inputs, turnInput{fp, t.lastIn})
+}
+
+// turnInput is an input of the run waiting for an answer: its fingerprint, where it stands.
+type turnInput struct {
+	fp  string
+	pos int
+}
+
+// answered takes the oldest waiting input off (a turn's end answered it).
+func (t *sandboxTurn) answered() {
+	if len(t.inputs) > 0 {
+		t.inputs = t.inputs[1:]
 	}
 }
 
 // steerTarget says whose input a steering notice is about: 1 before this message's, 2 its own,
 // 3 after it. By the fingerprint when the runner gives one, else the latest input.
 func (t *sandboxTurn) steerTarget(fp string) int {
-	if fp == "" {
-		return t.lastIn
+	i := len(t.inputs) - 1 // without a fingerprint: the latest input
+	if fp != "" {
+		i = slices.IndexFunc(t.inputs, func(in turnInput) bool { return in.fp == fp })
 	}
-	if t.mineFP != "" && fp == t.mineFP {
-		return 2
+	if i < 0 {
+		if fp == "" {
+			return t.lastIn
+		}
+		return 1 // an input from before what this turn read
 	}
-	if before, ok := t.inputs[fp]; ok && !before {
-		return 3
-	}
-	return 1
+	pos := t.inputs[i].pos
+	t.inputs = slices.Delete(t.inputs, i, i+1)
+	return pos
 }
 
 func (t *sandboxTurn) takeOne(ctx context.Context, sm sandboxMessage) (sandboxEnd, bool) {
@@ -574,6 +595,7 @@ func (t *sandboxTurn) takeOne(ctx context.Context, sm sandboxMessage) (sandboxEn
 			}
 		case turnEnd(sm):
 			// A turn answered the oldest input.
+			t.answered()
 			if !t.started && t.waiting > 0 {
 				t.waiting--
 			} else if t.started && t.ahead > 0 {
@@ -1133,7 +1155,11 @@ func (a *sandboxAgent) handle(m store.Message) {
 	// message there), or the run that carries it is under way. Its history is read again, quietly.
 	again := m.Attempts > 1 || (inTask && run.Status != "queued")
 	if !again {
-		t.waiting = a.openOf(run.ID) // what the run had taken and not answered when the cursor stood here
+		// What the run had taken and not answered when the cursor stood here: inputs before this one.
+		for _, fp := range a.openOf(run.ID) {
+			t.inputs = append(t.inputs, turnInput{fp, 1})
+			t.waiting++
+		}
 	} else if m.Attempts > 1 {
 		t.cutoff, t.asked = recordedOf(n, m.ID)
 	}

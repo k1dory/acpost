@@ -547,3 +547,28 @@ func TestSandboxSteerOfAnotherMessage(t *testing.T) {
 		t.Fatalf("%+v %v", w, err)
 	}
 }
+
+// Inputs of the same text are told apart by their order: a notice about the earlier one (before
+// this message) is not taken for the later one (after it).
+func TestSandboxSteerSameText(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
+	same := `{"type":"acp.notice","severity":"info","text":"the message joined the turn in progress (steering) [input sha256:` + fingerprint("continue") + `]"}`
+	f.history = []map[string]any{{"id": 3, "run_id": "r1", "role": "user", "text": "the turn in progress"}, {"id": 4, "run_id": "r1", "role": "user", "text": "continue"}}
+	f.frames = []string{
+		"USER:6",
+		frame(7, "r1", "user", "continue", nil),
+		frame(8, "r1", "log", same, nil), // the first "continue" joined the turn in progress
+		frame(9, "r1", "assistant", "the turn in progress, answered", nil),
+		frame(10, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+		frame(11, "r1", "assistant", "this message's answer", nil),
+		frame(12, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+		frame(13, "r1", "assistant", "the second continue's answer", nil),
+		frame(14, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "mine"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || w.Reply != "this message's answer" {
+		t.Fatalf("%+v %v", w, err)
+	}
+}
