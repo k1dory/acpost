@@ -1,0 +1,220 @@
+package main
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
+	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/forge"
+)
+
+func forgeStore() *forge.Store {
+	home, _ := os.UserHomeDir()
+	return &forge.Store{Dir: filepath.Join(home, ".config", "acpost")}
+}
+
+func forgeCmd(g *globals) *cobra.Command {
+	var q client.ForgeQuery
+	cmd := &cobra.Command{
+		Use:   "forge",
+		Short: "Pull requests, CI runs and logs of a repository's forge (GitHub, GitLab, Forgejo/Gitea)",
+	}
+	cmd.PersistentFlags().StringVar(&q.Agent, "agent", "", "the repository an agent works in")
+	cmd.PersistentFlags().StringVar(&q.Dir, "dir", "", "the repository in this directory (default: here)")
+	query := func() client.ForgeQuery {
+		if q.Agent == "" && q.Dir == "" {
+			q.Dir, _ = os.Getwd()
+		} else if q.Dir != "" {
+			q.Dir, _ = filepath.Abs(q.Dir)
+		}
+		return q
+	}
+
+	var kind string
+	login := &cobra.Command{
+		Use:   "login HOST",
+		Short: "Keep a token for a forge host (macOS: in the keychain); it is read from the terminal or stdin",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var token string
+			if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+				fmt.Fprintf(os.Stderr, "token for %s: ", args[0])
+				b, err := term.ReadPassword(fd)
+				fmt.Fprintln(os.Stderr)
+				if err != nil {
+					return err
+				}
+				token = string(b)
+			} else {
+				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				token = line
+			}
+			if strings.TrimSpace(token) == "" {
+				return usageErr(errors.New("no token given"))
+			}
+			if err := forgeStore().Login(args[0], kind, token); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "· kept for %s\n", args[0])
+			return nil
+		},
+	}
+	login.Flags().StringVar(&kind, "kind", "", "github, gitlab or forgejo (default: ask the host)")
+	logout := &cobra.Command{
+		Use:   "logout HOST",
+		Short: "Forget a forge host's token",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return forgeStore().Logout(args[0])
+		},
+	}
+
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "The repository's forge: host, kind, version, branch, whether a token is kept",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			info, err := c.Forge(cmd.Context(), query())
+			if err != nil {
+				return err
+			}
+			if g.json {
+				printJSON(info)
+				return nil
+			}
+			fmt.Printf("%s %s (%s %s), branch %s, token %v\n", info.Repo.Host, info.Repo.Path, info.Server.Kind, info.Server.Version, info.Branch, info.Authed)
+			return nil
+		},
+	}
+
+	var state string
+	prs := &cobra.Command{
+		Use:   "prs",
+		Short: "Pull (merge) requests",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			items, err := c.Pulls(cmd.Context(), query(), state)
+			if err != nil {
+				return err
+			}
+			if g.json {
+				printJSON(items)
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			for _, p := range items {
+				fmt.Fprintf(w, "#%d\t%s\t%s → %s\t%s\t%s\n", p.Number, p.State, p.Head, p.Base, p.Author, p.Title)
+			}
+			return w.Flush()
+		},
+	}
+	prs.Flags().StringVar(&state, "state", "open", "open, closed, merged (GitLab) or all")
+
+	var ref string
+	checks := &cobra.Command{
+		Use:   "checks",
+		Short: "CI runs of a branch or commit (default: the repository's branch), with their jobs",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			items, err := c.Checks(cmd.Context(), query(), ref)
+			if err != nil {
+				return err
+			}
+			if g.json {
+				printJSON(items)
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			for _, ch := range items {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ch.ID, ch.Status, ch.Name, took(ch.Started, ch.Finished))
+				for _, j := range ch.Jobs {
+					fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", j.ID, j.Status, j.Name, took(j.Started, j.Finished))
+				}
+			}
+			return w.Flush()
+		},
+	}
+	checks.Flags().StringVar(&ref, "ref", "", "a branch or commit")
+
+	var target string
+	logCmd := &cobra.Command{
+		Use:   "log JOB",
+		Short: "A CI job's log (its secrets masked)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			text, err := c.CILog(cmd.Context(), query(), args[0], target)
+			if err != nil {
+				return err
+			}
+			fmt.Print(text)
+			return nil
+		},
+	}
+	logCmd.Flags().StringVar(&target, "target", "", "the check's URL (Forgejo/Gitea)")
+
+	var pr forge.PullRequest
+	open := &cobra.Command{
+		Use:   "open",
+		Short: "Open a pull request from the repository's branch (or --head)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			p, err := c.OpenPull(cmd.Context(), query(), pr)
+			if err != nil {
+				return err
+			}
+			if g.json {
+				printJSON(p)
+				return nil
+			}
+			fmt.Println(p.URL)
+			return nil
+		},
+	}
+	open.Flags().StringVar(&pr.Title, "title", "", "its title")
+	open.Flags().StringVar(&pr.Base, "base", "main", "the branch it goes into")
+	open.Flags().StringVar(&pr.Head, "head", "", "the branch it comes from (default: the repository's)")
+	open.Flags().StringVar(&pr.Body, "body", "", "its description")
+	open.Flags().BoolVar(&pr.Draft, "draft", false, "a draft")
+
+	cmd.AddCommand(login, logout, status, prs, checks, logCmd, open)
+	return cmd
+}
+
+func took(start, end time.Time) string {
+	if start.IsZero() {
+		return ""
+	}
+	if end.IsZero() {
+		return "running " + time.Since(start).Round(time.Second).String()
+	}
+	return end.Sub(start).Round(time.Second).String()
+}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/forge"
 	"github.com/k1dory/acpost/internal/node"
 	"github.com/k1dory/acpost/internal/store"
 )
@@ -39,6 +40,11 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
 	mux.HandleFunc("GET /v1/usage", s.auth(s.usage))
 	mux.HandleFunc("GET /v1/messages/{id}/changes", s.auth(s.changes))
+	mux.HandleFunc("GET /v1/forge", s.auth(s.forgeInfo))
+	mux.HandleFunc("GET /v1/forge/pulls", s.auth(s.forgePulls))
+	mux.HandleFunc("POST /v1/forge/pulls", s.auth(s.forgeOpenPull))
+	mux.HandleFunc("GET /v1/forge/checks", s.auth(s.forgeChecks))
+	mux.HandleFunc("GET /v1/forge/log", s.auth(s.forgeLog))
 	mux.HandleFunc("POST /v1/terminals", s.auth(s.termOpen))
 	mux.HandleFunc("GET /v1/terminals", s.auth(s.termList))
 	mux.HandleFunc("GET /v1/terminals/{id}/output", s.auth(s.termOutput))
@@ -660,4 +666,70 @@ func (s *server) termOutput(w http.ResponseWriter, r *http.Request, p node.Princ
 	b, _ := json.Marshal(t)
 	fmt.Fprintf(w, "event: end\ndata: %s\n\n", b)
 	fl.Flush()
+}
+
+func forgeQuery(r *http.Request) node.ForgeQuery {
+	return node.ForgeQuery{Agent: r.URL.Query().Get("agent"), Dir: r.URL.Query().Get("dir")}
+}
+
+func (s *server) forgeInfo(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	info, err := s.n.Forge(r.Context(), p, forgeQuery(r))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, info)
+}
+
+func (s *server) forgePulls(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	items, err := s.n.Pulls(r.Context(), p, forgeQuery(r), r.URL.Query().Get("state"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items)})
+}
+
+func (s *server) forgeChecks(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	items, err := s.n.Checks(r.Context(), p, forgeQuery(r), r.URL.Query().Get("ref"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items)})
+}
+
+func (s *server) forgeLog(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	q := r.URL.Query()
+	text, err := s.n.CILog(r.Context(), p, forgeQuery(r), q.Get("job"), q.Get("target"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = io.WriteString(w, text)
+}
+
+func (s *server) forgeOpenPull(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		node.ForgeQuery
+		forge.PullRequest
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	pull, err := s.n.OpenPull(r.Context(), p, req.ForgeQuery, req.PullRequest)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, pull)
+}
+
+func nonNilSlice[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k1dory/acpost/internal/forge"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -775,4 +776,95 @@ func (c *Client) TermOutput(ctx context.Context, id string, from int64, fn func(
 			data += strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
 		}
 	}
+}
+
+// ForgeQuery names a repository: an agent's working directory, or a directory of the node's.
+type ForgeQuery struct {
+	Agent string `json:"agent,omitempty"`
+	Dir   string `json:"dir,omitempty"`
+}
+
+func (q ForgeQuery) values() url.Values {
+	v := url.Values{}
+	if q.Agent != "" {
+		v.Set("agent", q.Agent)
+	}
+	if q.Dir != "" {
+		v.Set("dir", q.Dir)
+	}
+	return v
+}
+
+// ForgeInfo is a repository's forge as the node sees it.
+type ForgeInfo struct {
+	Repo   forge.Repo   `json:"repo"`
+	Server forge.Server `json:"server"`
+	Branch string       `json:"branch,omitempty"`
+	Authed bool         `json:"authed"`
+}
+
+func (c *Client) Forge(ctx context.Context, q ForgeQuery) (ForgeInfo, error) {
+	var out ForgeInfo
+	_, err := c.do(ctx, "GET", "/v1/forge", q.values(), nil, &out, nil)
+	return out, err
+}
+
+func (c *Client) Pulls(ctx context.Context, q ForgeQuery, state string) ([]forge.Pull, error) {
+	v := q.values()
+	if state != "" {
+		v.Set("state", state)
+	}
+	var out struct {
+		Items []forge.Pull `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/forge/pulls", v, nil, &out, nil)
+	return out.Items, err
+}
+
+func (c *Client) Checks(ctx context.Context, q ForgeQuery, ref string) ([]forge.Check, error) {
+	v := q.values()
+	if ref != "" {
+		v.Set("ref", ref)
+	}
+	var out struct {
+		Items []forge.Check `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/forge/checks", v, nil, &out, nil)
+	return out.Items, err
+}
+
+// CILog is a CI job's log, its secrets masked.
+func (c *Client) CILog(ctx context.Context, q ForgeQuery, job, target string) (string, error) {
+	v := q.values()
+	v.Set("job", job)
+	if target != "" {
+		v.Set("target", target)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", c.base+"/v1/forge/log?"+v.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", respErr("GET", "/v1/forge/log", resp)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	return string(b), err
+}
+
+func (c *Client) OpenPull(ctx context.Context, q ForgeQuery, p forge.PullRequest) (forge.Pull, error) {
+	body := struct {
+		ForgeQuery
+		forge.PullRequest
+	}{q, p}
+	var out forge.Pull
+	_, err := c.do(ctx, "POST", "/v1/forge/pulls", nil, body, &out, nil)
+	return out, err
 }

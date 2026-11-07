@@ -148,6 +148,8 @@ acpost serve   [--config FILE] [--join URL]
 acpost status
 acpost changes ID [--tree] [--stat]         # what its turns changed in their git repository
 acpost term    [--agent A | --cwd DIR] [--id T] [--list] [--keep]   # a shell on the node's machine
+acpost forge   login HOST [--kind K] | logout HOST | status | prs | checks [--ref R] | log JOB | open --title T [--base B]
+               [--agent A | --dir DIR]      # pull requests and CI of a repository's forge
 acpost usage   [--since 30d | --from DAY [--to DAY]] [--by agent|model|day|session|""] [--agent A]
 ```
 
@@ -184,6 +186,18 @@ Server-Sent Events (`GET /v1/terminals/{id}/output?from=N`: `event: data`, base6
 offset after it; `event: end` with the exit code) and the last 256 KiB are kept, so a reader comes
 back where it was (`--id`); input is `POST …/input` (raw bytes), size `POST …/resize`. A terminal
 goes when closed, or ten minutes after its shell ends.
+
+**Pull requests and CI.** `acpost forge` (and `/v1/forge…`) reads the forge a repository's
+`origin` names (an agent's working directory, or a directory): GitHub (github.com and
+Enterprise), GitLab (gitlab.com and self-managed), Forgejo and Gitea. What a self-hosted host is,
+and its version, it asks the host (`/api/v1/version`, `/api/v4/version`,
+`X-GitHub-Enterprise-Version`), unless `login --kind` says. It lists pull requests, CI runs of a
+branch with their jobs (GitHub Actions runs, GitLab pipelines, Forgejo/Gitea commit statuses),
+reads a job's log (secrets masked; Forgejo and Gitea before 1.24 give none over their API, and
+the error says so) and opens a pull request from the repository's branch. Tokens are kept by
+`acpost forge login HOST` (read from the terminal or stdin): in the macOS keychain (service
+`acpost-forge`, given to `security` on its stdin), elsewhere in `~/.config/acpost/forge-tokens.json`
+(0600). For the node's user and its agents.
 
 **Watching an answer being written.** An ACP agent's text and thinking are kept as `text` and
 `thought` events while its turn runs (gathered to a few a second, at most 4 KiB each), in order
@@ -394,6 +408,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
 | `GET /v1/messages/{id}/changes?tree=1&diff=1` | what its turns changed, per turn and per repository |
 | `POST /v1/terminals` · `GET /v1/terminals` · `GET /v1/terminals/{id}/output?from=` · `POST /v1/terminals/{id}/input` · `POST /v1/terminals/{id}/resize` · `DELETE /v1/terminals/{id}` | a shell on the node's machine (the node's user) |
+| `GET /v1/forge?agent=&dir=` · `GET /v1/forge/pulls?state=` · `POST /v1/forge/pulls` · `GET /v1/forge/checks?ref=` · `GET /v1/forge/log?job=` | the repository's forge: pull requests, CI, logs |
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
