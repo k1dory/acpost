@@ -27,8 +27,8 @@ func TestSchedules(t *testing.T) {
 	if err := n.st.PutSchedule(ctx, sc); err != nil {
 		t.Fatal(err)
 	}
-	n.runSchedules(ctx, time.Now())
-	n.runSchedules(ctx, time.Now())
+	tick(t, n)
+	tick(t, n)
 	list, _ := n.Schedules(ctx, me)
 	if len(list) != 1 || list[0].LastMsg == "" || list[0].LastErr != "" || !list[0].NextRun.After(time.Now()) {
 		t.Fatalf("%+v", list)
@@ -41,11 +41,49 @@ func TestSchedules(t *testing.T) {
 	if len(page) != 1 {
 		t.Fatalf("sent %d times", len(page))
 	}
-	// Run now, then delete.
+	// A crash after the claim and before the send leaves it pending: the next pass sends it; and
+	// one already sent (the crash after the send) is not sent again.
+	occ := list[0].NextRun
+	if ok, err := n.st.TakeDue(ctx, sc.ID, occ, occ.Add(24*time.Hour)); !ok || err != nil {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	tick(t, n)
+	list, _ = n.Schedules(ctx, me)
+	again, err := n.sendScheduled(ctx, list[0], occ)
+	if err != nil || again.ID != list[0].LastMsg {
+		t.Fatalf("a resent occurrence: %s, first %s (%v)", again.ID, list[0].LastMsg, err)
+	}
+	if page, _, _ := n.st.List(ctx, store.Filter{To: "agent:fake", Limit: 10}); len(page) != 2 {
+		t.Fatalf("a pending occurrence: sent %d times in all", len(page))
+	}
+	if list, _ = n.Schedules(ctx, me); !list[0].Pending.IsZero() {
+		t.Fatalf("still pending: %+v", list[0])
+	}
+	// A date that never comes is refused.
+	if _, err := n.PutSchedule(ctx, me, store.Schedule{Name: "x", Cron: "0 9 31 2 *", Agent: "fake", Body: "x", Enabled: true}); code(err) != "invalid" {
+		t.Fatalf("31 February: %v", err)
+	}
+	// Run now notes when, the next run unchanged; then delete.
+	before := list[0]
+	time.Sleep(5 * time.Millisecond)
 	if m, err := n.RunSchedule(ctx, me, sc.ID); err != nil || m.ID == "" {
 		t.Fatalf("%+v %v", m, err)
 	}
+	if list, _ = n.Schedules(ctx, me); !list[0].LastRun.After(before.LastRun) || !list[0].NextRun.Equal(before.NextRun) {
+		t.Fatalf("run now: %+v, before %+v", list[0], before)
+	}
 	if err := n.DeleteSchedule(ctx, me, sc.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// tick runs a schedules pass and waits for it.
+func tick(t *testing.T, n *Node) {
+	t.Helper()
+	n.runSchedules(ctx, time.Now())
+	for deadline := time.Now().Add(30 * time.Second); n.schedBusy.Load(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a schedules pass did not end")
+		}
 	}
 }

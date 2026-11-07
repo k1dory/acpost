@@ -340,6 +340,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(schedulesSchema); err != nil {
 		return err
 	}
+	if err := migrateSchedules(s); err != nil {
+		return fmt.Errorf("migrate schedules: %w", err)
+	}
 	// Columns added after the first release.
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},

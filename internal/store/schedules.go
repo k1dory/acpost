@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS schedules (
 	next_run INTEGER NOT NULL DEFAULT 0,
 	last_run INTEGER NOT NULL DEFAULT 0,
 	last_msg TEXT    NOT NULL DEFAULT '',
-	last_err TEXT    NOT NULL DEFAULT ''
+	last_err TEXT    NOT NULL DEFAULT '',
+	pending  INTEGER NOT NULL DEFAULT 0 -- an occurrence claimed and not yet sent (ms of its due time)
 ) WITHOUT ROWID;
 `
 
@@ -42,13 +43,26 @@ type Schedule struct {
 	LastRun time.Time `json:"last_run,omitzero"`
 	LastMsg string    `json:"last_msg,omitempty"` // the thread of the last run
 	LastErr string    `json:"last_err,omitempty"`
+	Pending time.Time `json:"-"` // an occurrence claimed and not yet sent
+}
+
+func migrateSchedules(s *Store) error {
+	var n int
+	if err := s.w.QueryRow(`SELECT count(*) FROM pragma_table_info('schedules') WHERE name = 'pending'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err := s.w.Exec(`ALTER TABLE schedules ADD COLUMN pending INTEGER NOT NULL DEFAULT 0`)
+		return err
+	}
+	return nil
 }
 
 // ErrNoSchedule: no such schedule.
 var ErrNoSchedule = errors.New("no such schedule")
 
 func (s *Store) Schedules(ctx context.Context) ([]Schedule, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT id, name, cron, agent, body, cwd, model, effort, enabled, next_run, last_run, last_msg, last_err
+	rows, err := s.r.QueryContext(ctx, `SELECT id, name, cron, agent, body, cwd, model, effort, enabled, next_run, last_run, last_msg, last_err, pending
 		FROM schedules ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -57,11 +71,11 @@ func (s *Store) Schedules(ctx context.Context) ([]Schedule, error) {
 	out := []Schedule{}
 	for rows.Next() {
 		var sc Schedule
-		var next, last int64
-		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Cron, &sc.Agent, &sc.Body, &sc.Cwd, &sc.Model, &sc.Effort, &sc.Enabled, &next, &last, &sc.LastMsg, &sc.LastErr); err != nil {
+		var next, last, pending int64
+		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Cron, &sc.Agent, &sc.Body, &sc.Cwd, &sc.Model, &sc.Effort, &sc.Enabled, &next, &last, &sc.LastMsg, &sc.LastErr, &pending); err != nil {
 			return nil, err
 		}
-		sc.NextRun, sc.LastRun = fromMS(next), fromMS(last)
+		sc.NextRun, sc.LastRun, sc.Pending = fromMS(next), fromMS(last), fromMS(pending)
 		out = append(out, sc)
 	}
 	return out, rows.Err()
@@ -88,11 +102,12 @@ func (s *Store) DeleteSchedule(ctx context.Context, id string) error {
 	return nil
 }
 
-// TakeDue claims a schedule due at now: its next run moved to next in the same step (two nodes on
-// one store, or a slow tick, never run it twice). False when it was not due any more.
+// TakeDue claims an occurrence due at due: in one step its next run moves to next and the
+// occurrence is noted pending (two ticks, or two nodes on one store, never claim it twice; a crash
+// before it is sent leaves it to send again). False when it was not due any more.
 func (s *Store) TakeDue(ctx context.Context, id string, due, next time.Time) (bool, error) {
-	res, err := s.w.ExecContext(ctx, `UPDATE schedules SET next_run = ?, last_run = ? WHERE id = ? AND enabled = 1 AND next_run = ?`,
-		ms(next), time.Now().UnixMilli(), id, ms(due))
+	res, err := s.w.ExecContext(ctx, `UPDATE schedules SET next_run = ?, pending = ? WHERE id = ? AND enabled = 1 AND next_run = ? AND pending = 0`,
+		ms(next), ms(due), id, ms(due))
 	if err != nil {
 		return false, err
 	}
@@ -100,8 +115,15 @@ func (s *Store) TakeDue(ctx context.Context, id string, due, next time.Time) (bo
 	return k == 1, nil
 }
 
-// RanSchedule notes a run's outcome: the message it sent, or why it could not.
-func (s *Store) RanSchedule(ctx context.Context, id, msg, errText string) error {
-	_, err := s.w.ExecContext(ctx, `UPDATE schedules SET last_msg = ?, last_err = ? WHERE id = ?`, msg, errText, id)
+// RanSchedule notes a run's outcome (the message it sent, or why it could not) and when; a pending
+// occurrence it was is done.
+func (s *Store) RanSchedule(ctx context.Context, id string, occurrence time.Time, msg, errText string) error {
+	q := `UPDATE schedules SET last_run = ?, last_msg = ?, last_err = ? WHERE id = ?`
+	args := []any{time.Now().UnixMilli(), msg, errText, id}
+	if !occurrence.IsZero() {
+		q = `UPDATE schedules SET last_run = ?, last_msg = ?, last_err = ?, pending = 0 WHERE id = ? AND pending = ?`
+		args = append(args, ms(occurrence))
+	}
+	_, err := s.w.ExecContext(ctx, q, args...)
 	return err
 }

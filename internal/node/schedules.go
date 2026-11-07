@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,7 +23,11 @@ func nextRun(spec string, after time.Time) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	return sch.Next(after).UTC(), nil
+	next := sch.Next(after)
+	if next.IsZero() {
+		return next, errors.New("it never comes (no such date)")
+	}
+	return next.UTC(), nil
 }
 
 // Schedules lists the schedules.
@@ -97,42 +102,65 @@ func (n *Node) RunSchedule(ctx context.Context, p Principal, id string) (store.M
 	}
 	for _, sc := range list {
 		if sc.ID == id {
-			return n.sendScheduled(ctx, sc)
+			return n.sendScheduled(ctx, sc, time.Time{})
 		}
 	}
 	return store.Message{}, errf("not_found", "no schedule %s", id)
 }
 
-func (n *Node) sendScheduled(ctx context.Context, sc store.Schedule) (store.Message, error) {
-	m, _, err := n.Send(ctx, Principal{Kind: "user", Name: n.login}, SendRequest{To: sc.Agent, Body: sc.Body,
-		Cwd: sc.Cwd, Model: sc.Model, Effort: sc.Effort, Meta: map[string]string{"schedule": sc.ID}})
-	msg, errText := m.ID, ""
+// sendScheduled sends a schedule's task: an occurrence (claimed by a tick) once, under a key of its
+// own, so a resend after a crash returns the first; a manual run (zero occurrence) each time.
+func (n *Node) sendScheduled(ctx context.Context, sc store.Schedule, occurrence time.Time) (store.Message, error) {
+	req := SendRequest{To: sc.Agent, Body: sc.Body, Cwd: sc.Cwd, Model: sc.Model, Effort: sc.Effort,
+		Meta: map[string]string{"schedule": sc.ID}}
+	if !occurrence.IsZero() {
+		req.IdemKey = fmt.Sprintf("sch:%s:%d", sc.ID, occurrence.UnixMilli())
+	}
+	m, _, err := n.Send(ctx, Principal{Kind: "user", Name: n.login}, req)
+	errText := ""
 	if err != nil {
+		if ctx.Err() != nil && n.ctx.Err() != nil {
+			return m, err // shutting down: the occurrence stays pending, sent when the node is up
+		}
 		errText = err.Error()
 	}
-	_ = n.st.RanSchedule(n.ctx, sc.ID, msg, errText)
+	_ = n.st.RanSchedule(n.ctx, sc.ID, occurrence, m.ID, errText)
 	return m, err
 }
 
-// runSchedules sends what is due (the maintenance loop's tick).
+// runSchedules claims what is due and sends it apart from the maintenance loop (a slow hub must
+// not hold up expiry and recovery), one pass at a time, each send with a deadline. Occurrences
+// claimed earlier and not sent (a crash, a shutdown) go first.
 func (n *Node) runSchedules(ctx context.Context, now time.Time) {
-	list, err := n.st.Schedules(ctx)
-	if err != nil {
+	if !n.schedBusy.CompareAndSwap(false, true) {
 		return
 	}
-	for _, sc := range list {
-		if !sc.Enabled || sc.NextRun.IsZero() || sc.NextRun.After(now) {
-			continue
-		}
-		next, err := nextRun(sc.Cron, now)
+	go func() {
+		defer n.schedBusy.Store(false)
+		list, err := n.st.Schedules(ctx)
 		if err != nil {
-			continue
+			return
 		}
-		if ok, err := n.st.TakeDue(ctx, sc.ID, sc.NextRun, next); err != nil || !ok {
-			continue
+		for _, sc := range list {
+			occ := sc.Pending
+			if occ.IsZero() {
+				if !sc.Enabled || sc.NextRun.IsZero() || sc.NextRun.After(now) {
+					continue
+				}
+				next, err := nextRun(sc.Cron, now)
+				if err != nil {
+					continue
+				}
+				if ok, err := n.st.TakeDue(ctx, sc.ID, sc.NextRun, next); err != nil || !ok {
+					continue
+				}
+				occ = sc.NextRun
+			}
+			sctx, cancel := context.WithTimeout(ctx, time.Minute)
+			if _, err := n.sendScheduled(sctx, sc, occ); err != nil {
+				n.log.Warn("schedule", "id", sc.ID, "err", err)
+			}
+			cancel()
 		}
-		if _, err := n.sendScheduled(ctx, sc); err != nil {
-			n.log.Warn("schedule", "id", sc.ID, "err", err)
-		}
-	}
+	}()
 }
