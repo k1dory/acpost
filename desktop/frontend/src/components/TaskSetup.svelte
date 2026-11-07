@@ -80,7 +80,7 @@
       <button class:on={!cloud} onclick={() => (app.draft.where = "mac")}><Icon name="bot" size={13} /> {t("This Mac")}</button>
       <!-- Configured but not answering: still here, marked, the reason in its title. -->
       <button class:on={cloud} class:down={app.cloudState === "down"} onclick={() => { app.draft.where = "cloud"; app.loadCloudAgents(); }}
-        title={app.cloudState === "down" ? t("The cloud is not answering") + "\n" + app.cloudError : ""}>
+        title={app.cloudState === "down" ? t("Cloud is down") + "\n" + app.cloudError : ""}>
         <Icon name="cloud" size={13} /> {t("Cloud")}{#if app.cloudState === "down"}<span class="warn-dot"></span>{/if}
       </button>
     </div>
@@ -116,8 +116,13 @@
       {/if}
     </div>
   {:else}
-    {#if app.cloudState === "down"}<span class="cloud-down" title={app.cloudError}>{t("The cloud is not answering")}</span>{/if}
-    <Dropdown bind:value={app.draft.cloudAgent} icon="cloud" items={app.cloudAgents.map(a => ({ value: a.ref, label: a.name }))} />
+    <!-- No catalogue to choose from: the status, not an empty menu. -->
+    {#if !app.cloudAgents.length}
+      <span class="cloud-down" title={app.cloudError}>{app.cloudState === "down" ? t("unavailable") : t("No cloud agents")}</span>
+    {:else}
+      {#if app.cloudState === "down"}<span class="cloud-down" title={app.cloudError}>{t("unavailable")}</span>{/if}
+      <Dropdown bind:value={app.draft.cloudAgent} icon="cloud" items={app.cloudAgents.map(a => ({ value: a.ref, label: a.name }))} />
+    {/if}
     <input class="input repo" placeholder={t("Repository (optional)")} bind:value={app.draft.repo} />
   {/if}
 </div>

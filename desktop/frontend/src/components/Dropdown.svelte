@@ -28,6 +28,7 @@
   const current = $derived(items.find(i => i.value === value));
 
   function toggle() {
+    if (!items.length) return; // nothing to choose: no empty menu
     open = !open;
     pos = "visibility:hidden";
     sel = Math.max(0, items.findIndex(i => i.value === value));

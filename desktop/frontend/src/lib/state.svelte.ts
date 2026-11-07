@@ -1,5 +1,5 @@
-import { t } from "./i18n.svelte";
-import { Node, on, errText } from "./api";
+import { t, tr } from "./i18n.svelte";
+import { Node, on, errText, errInfo } from "./api";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -144,7 +144,7 @@ class App {
     } catch (e) {
       // A node with no cloud answers without an error: an error is the configured cloud failing.
       this.cloudState = "down";
-      this.cloudError = errText(e);
+      this.cloudError = tr(errInfo(e).message); // the reason only: "down" is said by the app
       if (!this.cloudAgents.length) try { this.cloudAgents = JSON.parse(localStorage.getItem("cloud-agents") ?? "[]"); } catch {}
     }
   }
