@@ -100,7 +100,7 @@
     <div class="center">
       <div class="col">
         <div class="hello">
-          <div class="mark"><Logo size={44} draw /></div>
+          <div class="mark"><Logo size={84} draw /></div>
           <div class="big">{t("What should we work on?")}</div>
         </div>
         <Composer />
