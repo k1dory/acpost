@@ -19,7 +19,8 @@ const wikiMaxPages = 40
 
 var (
 	wikiPage = regexp.MustCompile(`(?s)<<<PAGE\s+slug="([a-z0-9][a-z0-9-]{0,63})"\s+title="([^"\n]{1,120})"(?:\s+parent="([a-z0-9-]{0,64})")?\s*>>>\n(.*?)\n<<<END>>>`)
-	readOnly = regexp.MustCompile(`(?i)plan|read`)
+	// The modes that read and change nothing: Claude Code's plan, Codex's read-only.
+	readOnly = regexp.MustCompile(`(?i)^(plan|plan mode|read[-_ ]?only)$`)
 )
 
 func wikiPrompt(lang string) string {
@@ -55,8 +56,15 @@ func parseWiki(reply string) []store.WikiPage {
 		seen[m[1]] = true
 		out = append(out, store.WikiPage{Slug: m[1], Title: strings.TrimSpace(m[2]), Parent: m[3], Body: strings.TrimSpace(m[4])})
 	}
-	for i := range out { // a parent that is not a page: none
-		if out[i].Parent != "" && (!seen[out[i].Parent] || out[i].Parent == out[i].Slug) {
+	// Two levels: a parent is a page at the top (not one, or a page with a parent of its own —
+	// which also breaks cycles — makes the page a top one).
+	parentOf := map[string]string{}
+	for _, p := range out {
+		parentOf[p.Slug] = p.Parent
+	}
+	for i := range out {
+		par := out[i].Parent
+		if par != "" && (!seen[par] || par == out[i].Slug || parentOf[par] != "") {
 			out[i].Parent = ""
 		}
 	}
@@ -115,7 +123,8 @@ func (n *Node) WriteWiki(ctx context.Context, p Principal, repo, agent, lang str
 	if lang != "ru" {
 		lang = "en"
 	}
-	// Its read-only mode, when it has one: reading a repository then asks nobody.
+	// Its read-only mode: reading a repository then asks nobody and changes nothing. No such mode,
+	// no wiki (a turn that cannot set it fails before it reads anything).
 	mode := ""
 	if opts, err := n.AgentOptions(ctx, p, to.Name); err == nil {
 		for _, o := range opts.Options {
@@ -130,18 +139,27 @@ func (n *Node) WriteWiki(ctx context.Context, p Principal, repo, agent, lang str
 			}
 		}
 	}
-	m, _, err := n.Send(ctx, p, SendRequest{To: to.String(), Body: wikiPrompt(lang), Cwd: dir, Mode: mode,
+	if mode == "" {
+		return store.Message{}, errh("unsupported", "choose an agent with a plan or read-only mode (Claude Code, Codex)",
+			"%s has no read-only mode: it would ask to run commands while it reads", to)
+	}
+	// The wiki is taken first (one writer at a time), then the task is sent.
+	pending := "pending-" + store.NewID()
+	ok, err := n.st.StartWiki(ctx, dir, to.String(), lang, pending)
+	if err != nil {
+		return store.Message{}, errf("unavailable", "%v", err)
+	}
+	if !ok {
+		return store.Message{}, errf("conflict", "the wiki of %s is being written already", dir)
+	}
+	m, _, err := n.Send(ctx, p, SendRequest{To: to.String(), Body: wikiPrompt(lang), Cwd: dir, Mode: mode, ModeStrict: true,
 		Meta: map[string]string{"wiki": "1"}}) // a mark (meta is small): the wiki keeps the task, not the task the wiki
 	if err != nil {
+		_ = n.st.FinishWiki(context.WithoutCancel(ctx), dir, pending, nil, "the task could not be sent: "+err.Error())
 		return m, err
 	}
-	ok, err := n.st.StartWiki(ctx, dir, to.String(), lang, m.ID)
-	if err != nil || !ok {
-		_, _ = n.Cancel(context.WithoutCancel(ctx), p, m.ID)
-		if err != nil {
-			return m, errf("unavailable", "%v", err)
-		}
-		return m, errf("conflict", "the wiki of %s is being written already", dir)
+	if err := n.st.SetWikiMsg(context.WithoutCancel(ctx), dir, pending, m.ID); err != nil {
+		return m, errf("unavailable", "%v", err)
 	}
 	w := store.Wiki{Repo: dir, Msg: m.ID, Status: "writing"}
 	n.goWork(func() { n.followWiki(w) })
@@ -176,6 +194,14 @@ func (n *Node) followWiki(w store.Wiki) {
 
 // takeWiki takes in the pages of a wiki's task once it ended: true when it did (or failed).
 func (n *Node) takeWiki(ctx context.Context, w store.Wiki) bool {
+	if strings.HasPrefix(w.Msg, "pending-") {
+		// Taken, and the node stopped before its task was sent (or noted): after a minute, over.
+		if time.Since(w.Updated) > time.Minute {
+			_ = n.st.FinishWiki(ctx, w.Repo, w.Msg, nil, "the task writing it was never sent")
+			return true
+		}
+		return false
+	}
 	m, err := n.st.Get(ctx, w.Msg)
 	switch {
 	case errors.Is(err, store.ErrNotFound):

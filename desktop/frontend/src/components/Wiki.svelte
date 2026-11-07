@@ -48,8 +48,13 @@
     if (!repo && wikis?.length) pick(wikis[0].repo);
     else if (repo && cur?.status === "ready" && !pages.length) loadPages();
   }
+  // Pages for the repository shown: an answer for another (asked before a switch) is dropped.
   async function loadPages() {
-    try { pages = ((await Node.WikiPages(repo)) ?? []) as any; } catch (e) { err = errText(e); pages = []; }
+    const want = repo;
+    try {
+      const got = ((await Node.WikiPages(want)) ?? []) as any;
+      if (want === repo) pages = got;
+    } catch (e) { if (want === repo) { err = errText(e); pages = []; } }
   }
   function pick(r: string) { repo = r; page = ""; pages = []; err = ""; adding = false; loadPages(); }
   $effect(() => { load(); });
@@ -69,7 +74,7 @@
     try {
       await Node.WriteWiki(dir, agent, i18n.lang);
       adding = false;
-      repo = dir;
+      if (repo !== dir) { repo = dir; page = ""; pages = []; }
       await load();
     } catch (e) { err = errText(e); }
   }
@@ -94,7 +99,12 @@
     app.draft.where = "mac";
     app.draft.cwd = cur.repo;
     if (cur.agent) app.draft.agent = cur.agent;
-    if (shown) app.quote = t("About “{title}” in the wiki of {repo}:", { title: shown.title, repo: base(cur.repo) }) + "\n\n";
+    // The page goes with the question (the agent does not read the node's wiki): quoted, cut.
+    if (shown) {
+      const body = (shown.body ?? "").slice(0, 6000);
+      app.quote = t("About “{title}” in the wiki of {repo}:", { title: shown.title, repo: base(cur.repo) }) + "\n\n" +
+        body.split("\n").map(l => "> " + l).join("\n") + "\n\n";
+    }
     app.view = "chat";
   }
   function startNew() {

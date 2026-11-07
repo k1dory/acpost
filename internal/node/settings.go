@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"context"
 	"os"
 	"path/filepath"
@@ -20,6 +21,9 @@ const (
 	metaModel  = "acp_model"
 	metaEffort = "acp_thought_level"
 	metaMode   = "acp_mode"
+	// metaModeStrict: the mode is a condition, not a wish — a turn that cannot set it does not run
+	// (the wiki's read-only mode).
+	metaModeStrict = "acp_mode_strict"
 )
 
 // taskCwd is the directory a message's session runs in: the session it continues, else the one its
@@ -35,7 +39,7 @@ func taskCwd(m store.Message) string {
 // node's user and its agents choose them; a message in a thread inherits the thread's directory.
 func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *SendRequest) error {
 	// A node forwards acp_ keys its node set; these are this node's to set, from its user's choice.
-	for _, k := range []string{metaCwd, metaModel, metaEffort, metaMode} {
+	for _, k := range []string{metaCwd, metaModel, metaEffort, metaMode, metaModeStrict} {
 		delete(r.Meta, k)
 	}
 	asked := r.Cwd != "" || r.Model != "" || r.Effort != "" || r.Mode != ""
@@ -66,6 +70,9 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 			return errf("invalid", "%s: up to 128 printable characters", strings.TrimPrefix(k, "acp_"))
 		}
 		set(k, v)
+	}
+	if r.ModeStrict && r.Mode != "" {
+		set(metaModeStrict, "1")
 	}
 	switch {
 	case r.Cwd != "":
@@ -109,7 +116,9 @@ func checkDir(dir string) (string, error) {
 
 // applySettings selects what the message asks for in its session, before its prompt. What the
 // agent does not offer is said in a notice; the turn goes on with the session as it is.
-func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.SessionId, m store.Message) {
+// applySettings sets the message's mode, model and effort in the session; an error when a strict
+// mode could not be set (the turn must not run).
+func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.SessionId, m store.Message) error {
 	st := p.states[sid]
 	changed := false
 	for _, set := range []struct {
@@ -120,6 +129,9 @@ func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.Session
 			continue
 		}
 		next, err := acpx.Configure(ctx, p.conn, sid, st, set.s, set.want)
+		if err != nil && set.s.Name == acpx.ModeSetting.Name && m.Meta[metaModeStrict] == "1" {
+			return fmt.Errorf("the mode %s could not be set: %v", set.want, err)
+		}
 		if err != nil {
 			if eventErr := s.a.n.addEvent(s.a.n.ctx, m.ID, "notice", eventJSON(map[string]string{"severity": "warning",
 				"text": set.s.Name + " " + set.want + ": " + err.Error()}), true); eventErr != nil {
@@ -132,6 +144,7 @@ func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.Session
 	if changed {
 		s.a.noteState(p, sid, st)
 	}
+	return nil
 }
 
 // noteState keeps a session's state: its model for usage, the agent's offer for the app.

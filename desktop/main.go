@@ -35,7 +35,7 @@ func main() {
 		Mac:         application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 	})
 	node.app = app
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	node.win = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "acpost",
 		Width:     1440,
 		Height:    900,

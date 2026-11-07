@@ -629,7 +629,10 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
-	s.applySettings(ctx, p, sid, m)
+	if err := s.applySettings(ctx, p, sid, m); err != nil {
+		complete(store.Failed, "", failf("agent_error", "%v", err))
+		return
+	}
 	// Knowledge: in a new session's first prompt, for a message of this node's own user or agents.
 	fresh := p.fresh[sid]
 	if fresh && knowledgeSender(m) {

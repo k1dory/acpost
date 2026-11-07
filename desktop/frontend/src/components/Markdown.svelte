@@ -42,13 +42,15 @@
     (async () => {
       let mermaid: typeof import("mermaid").default;
       try { mermaid = (await import("mermaid")).default; } catch (e) { console.warn("diagrams unavailable:", (e as Error)?.message); return; }
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", flowchart: { htmlLabels: false },
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, flowchart: { htmlLabels: false },
         theme: document.documentElement.dataset.theme === "dark" ? "dark" : "default" });
       for (const b of blocks) {
         b.dataset.done = "1";
         try {
           const src = b.querySelector("code")?.textContent ?? "";
-          const { svg } = await mermaid.render("mm-" + Date.now().toString(36) + "-" + seq++, src);
+          const id = "mm-" + Date.now().toString(36) + "-" + seq++;
+          let svg = "";
+          try { svg = (await mermaid.render(id, src)).svg; } finally { document.getElementById("d" + id)?.remove(); document.getElementById(id)?.remove(); }
           b.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
           b.classList.add("drawn");
         } catch (e) { console.warn("diagram not drawn:", (e as Error)?.message?.slice(0, 200)); /* the text stays */ }

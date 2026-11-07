@@ -27,6 +27,7 @@ import (
 // streams it follows (events "events:<message id>", "term:<terminal id>").
 type Node struct {
 	app *application.App
+	win *application.WebviewWindow // the app's window (the preview is laid over it)
 
 	mu       sync.Mutex
 	c        *client.Client

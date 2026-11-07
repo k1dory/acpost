@@ -58,6 +58,8 @@ type SendRequest struct {
 	Session string
 	// Cwd, Model, Effort, Mode: a new task's directory and the session's settings for the message.
 	Cwd, Model, Effort, Mode string
+	// ModeStrict: the turn runs only in Mode (it fails if the agent cannot set it).
+	ModeStrict bool
 	// Files go with the message (checked against limits.max_files and max_files_size).
 	Files   []store.File
 	TTL     time.Duration

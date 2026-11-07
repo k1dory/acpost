@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { app, applyTheme } from "./lib/state.svelte";
+  import { on } from "./lib/api";
   import Sidebar from "./components/Sidebar.svelte";
   import Conversation from "./components/Conversation.svelte";
   import RightPanel from "./components/RightPanel.svelte";
@@ -18,9 +19,10 @@
     app.setTextSize(app.textSize);
     document.documentElement.lang = i18n.lang;
     app.connect();
+    const offPreview = on("preview:event", e => app.notePreview(e));
     const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadChats(); } }, 20000);
     const asking = setInterval(() => { if (app.conn?.ok) app.watchAsking(); }, 8000);
-    return () => { clearInterval(poll); clearInterval(asking); };
+    return () => { clearInterval(poll); clearInterval(asking); offPreview(); };
   });
 
   function keys(e: KeyboardEvent) {

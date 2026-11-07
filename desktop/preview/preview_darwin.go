@@ -1,0 +1,145 @@
+//go:build darwin
+
+// Package preview is the app's preview pane: a WKWebView of its own laid over the app's window
+// (Wails gives a window one webview), showing a page — the agent's dev server — and reporting
+// what goes wrong in it: exceptions with their stacks, rejected promises, console errors and
+// warnings, resources and requests that failed, CSP violations, pages that did not load. A script
+// the pane puts into every page (and frame) of it, and only there, collects them and hands them
+// over a native channel, not the network.
+package preview
+
+/*
+#cgo CFLAGS: -fobjc-arc
+#cgo LDFLAGS: -framework Cocoa -framework WebKit
+#include <stdlib.h>
+
+void apInit(const char *script);
+void apShow(void *nswindow, double x, double y, double w, double h);
+void apHide(void);
+void apLoad(const char *url);
+void apReload(void);
+void apBack(void);
+
+*/
+import "C"
+
+import (
+	"encoding/json"
+	"errors"
+	"net/url"
+	"sync"
+	"unsafe"
+)
+
+// Event is what the pane saw: a page loaded (kind "nav"), or something that went wrong.
+type Event struct {
+	Kind      string  `json:"kind"` // nav, load, exception, rejection, console.error, console.warn, resource, fetch, xhr, csp
+	Message   string  `json:"message,omitempty"`
+	Source    string  `json:"source,omitempty"`
+	Line      float64 `json:"line,omitempty"`
+	Col       float64 `json:"col,omitempty"`
+	Stack     string  `json:"stack,omitempty"`
+	URL       string  `json:"url,omitempty"`
+	Title     string  `json:"title,omitempty"`
+	At        float64 `json:"at,omitempty"`
+	MainFrame bool    `json:"main_frame,omitempty"`
+}
+
+var (
+	mu      sync.Mutex
+	inited  bool
+	handler func(Event)
+)
+
+// OnEvent sets what is told of each event (from the main thread: quick).
+func OnEvent(f func(Event)) {
+	mu.Lock()
+	handler = f
+	mu.Unlock()
+}
+
+func setup() {
+	mu.Lock()
+	defer mu.Unlock()
+	if inited {
+		return
+	}
+	inited = true
+	cs := C.CString(collector)
+	C.apInit(cs)
+	C.free(unsafe.Pointer(cs))
+}
+
+// Show lays the pane over window at x, y (from the top left of its content), w × h points.
+func Show(window unsafe.Pointer, x, y, w, h float64) error {
+	if window == nil {
+		return errors.New("the preview needs the app's window (not the browser)")
+	}
+	setup()
+	C.apShow(window, C.double(x), C.double(y), C.double(w), C.double(h))
+	return nil
+}
+
+// Hide hides the pane (its page stays).
+func Hide() { C.apHide() }
+
+// Load opens a page: http or https only (a dev server, a staging site).
+func Load(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errors.New("an http or https address, such as http://localhost:3000")
+	}
+	cs := C.CString(u.String())
+	C.apLoad(cs)
+	C.free(unsafe.Pointer(cs))
+	return nil
+}
+
+func Reload() { C.apReload() }
+func Back()   { C.apBack() }
+
+//export goPreviewEvent
+func goPreviewEvent(s *C.char) {
+	var e Event
+	if json.Unmarshal([]byte(C.GoString(s)), &e) != nil {
+		return
+	}
+	mu.Lock()
+	f := handler
+	mu.Unlock()
+	if f != nil {
+		go f(e) // off the main thread
+	}
+}
+
+// collector runs in each document of the pane, before the page's own scripts. It keeps nothing
+// global and sends only what went wrong (cut to a few KiB each).
+const collector = `(() => {
+  const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.acpostPreview;
+  if (!h) return;
+  const cut = (s) => String(s == null ? "" : s).slice(0, 4000);
+  const str = (v) => { try { if (v instanceof Error) return v.name + ": " + v.message + (v.stack ? "\n" + v.stack : ""); if (typeof v === "string") return v; return JSON.stringify(v); } catch (_) { return String(v); } };
+  const post = (d) => { try { d.url = location.href; d.at = Date.now(); for (const k in d) if (typeof d[k] === "string") d[k] = cut(d[k]); h.postMessage(d); } catch (_) {} };
+  addEventListener("error", (e) => {
+    if (e instanceof ErrorEvent) post({ kind: "exception", message: e.message, source: e.filename, line: e.lineno, col: e.colno, stack: (e.error && e.error.stack) || "" });
+    else { const t = e.target; if (t && t !== window && (t.src || t.href)) post({ kind: "resource", message: "failed to load " + String(t.tagName || "").toLowerCase(), source: t.src || t.href }); }
+  }, true);
+  addEventListener("unhandledrejection", (e) => post({ kind: "rejection", message: str(e.reason) }));
+  addEventListener("securitypolicyviolation", (e) => post({ kind: "csp", message: e.violatedDirective + " blocked " + e.blockedURI, source: e.sourceFile, line: e.lineNumber }));
+  for (const lvl of ["error", "warn"]) {
+    const orig = console[lvl];
+    console[lvl] = function (...a) { post({ kind: "console." + lvl, message: a.map(str).join(" ") }); return orig.apply(this, a); };
+  }
+  const of = window.fetch;
+  if (of) window.fetch = function (...a) {
+    const src = String((a[0] && a[0].url) || a[0]);
+    return of.apply(this, a).then((r) => { if (!r.ok) post({ kind: "fetch", message: r.status + " " + r.statusText, source: r.url || src }); return r; },
+      (err) => { post({ kind: "fetch", message: str(err), source: src }); throw err; });
+  };
+  const XO = XMLHttpRequest.prototype.open, XS = XMLHttpRequest.prototype.send, url = new WeakMap();
+  XMLHttpRequest.prototype.open = function (m, u) { url.set(this, String(u)); return XO.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function () {
+    this.addEventListener("loadend", () => { if (this.status === 0 || this.status >= 400) post({ kind: "xhr", message: this.status + " " + this.statusText, source: url.get(this) }); });
+    return XS.apply(this, arguments);
+  };
+})();`

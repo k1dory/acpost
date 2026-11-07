@@ -25,6 +25,7 @@ export const final = (s: string) => s === "done" || s === "failed" || s === "can
 /** Where a new task runs, which agent, in which directory, with which settings. */
 export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string; cwd: string; repo: string; model: string; effort: string; mode: string };
 
+export type PreviewEvent = { kind: string; message?: string; source?: string; line?: number; col?: number; stack?: string; url?: string; title?: string; main_frame?: boolean };
 export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview";
 const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "preview"];
 function savedTab(): PanelTab {
@@ -382,6 +383,13 @@ class App {
     const c = this.chats.find(x => x.key === chat);
     if (c) c.folder = folder || undefined; // at once; the list follows
     try { await Node.MoveChat(chat, folder); await this.loadChats(); } catch (e) { this.error = errText(e); }
+  }
+
+  /** The preview: what its page did (problems, its address), kept across tabs. */
+  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean }>({ events: [], url: "", title: "", loaded: false });
+  notePreview(e: PreviewEvent) {
+    if (e.kind === "nav") { if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; } return; }
+    this.preview.events = [...this.preview.events.slice(-299), e];
   }
 
   /** The size of everything, as a factor (the app's zoom): 0.85 to 1.5. */

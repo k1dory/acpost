@@ -305,6 +305,35 @@ export function Playbooks(): $CancellablePromise<store$0.Playbook[]> {
     });
 }
 
+export function PreviewBack(): $CancellablePromise<void> {
+    return $Call.ByID(3940350479);
+}
+
+/**
+ * PreviewHide hides it (its page stays loaded).
+ */
+export function PreviewHide(): $CancellablePromise<void> {
+    return $Call.ByID(2433779492);
+}
+
+/**
+ * PreviewLoad opens a page (http or https).
+ */
+export function PreviewLoad(url: string): $CancellablePromise<void> {
+    return $Call.ByID(1297488488, url);
+}
+
+export function PreviewReload(): $CancellablePromise<void> {
+    return $Call.ByID(2477072809);
+}
+
+/**
+ * PreviewShow lays the pane at x, y (points from the top left of the window's content), w × h.
+ */
+export function PreviewShow(x: number, y: number, w: number, h: number): $CancellablePromise<void> {
+    return $Call.ByID(3267547261, x, y, w, h);
+}
+
 /**
  * Pulls lists the pull requests of an agent's repository.
  */

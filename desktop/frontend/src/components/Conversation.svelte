@@ -7,6 +7,8 @@
   import Composer from "./Composer.svelte";
   import ContextMeter from "./ContextMeter.svelte";
   import Icon from "./Icon.svelte";
+  import Dropdown from "./Dropdown.svelte";
+  import { Node, errText } from "../lib/api";
 
   let box = $state<HTMLDivElement>();
   let stick = true;
@@ -27,8 +29,31 @@
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
 
   function onScroll() { if (box) stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80; }
+  // Handoff: this chat (on the Mac) goes on in the cloud.
+  const canHand = $derived(!!app.cloudAgents.length && !!cwd && !!app.chat && app.chat.kind !== "cloud" && !(app.chat.agent ?? "").startsWith("agent:sb_"));
+  let handing = $state(false);
+  let toCloud = $state("");
+  let note = $state("");
+  let handErr = $state("");
+  let sending = $state(false);
+  function openHand() { handing = !handing; handErr = ""; toCloud = toCloud || app.cloudAgents[0]?.ref || ""; }
+  async function hand() {
+    const c = app.chat;
+    if (!c || sending) return;
+    sending = true; handErr = "";
+    try {
+      const res: any = await Node.Handoff({ thread: c.kind === "thread" ? c.thread : "", agent: c.kind === "session" ? c.agent : "",
+        session: c.kind === "session" ? c.session : "", cwd, cloud_agent: toCloud, note } as any);
+      handing = false; note = "";
+      await app.loadChats();
+      app.open(app.chats.find(x => x.key === res.chat.key) ?? res.chat);
+    } catch (e) { handErr = errText(e); }
+    sending = false;
+  }
   $effect(() => { app.rev; app.msgs.length; app.history.length; if (stick) tick().then(() => box && (box.scrollTop = box.scrollHeight)); });
 </script>
+
+<svelte:window onclick={e => { if (handing && !(e.target as HTMLElement).closest(".hand, .menu")) handing = false; }} />
 
 <section class="conv">
   <header class="drag">
@@ -46,6 +71,24 @@
     <span class="sp"></span>
     {#if waiting.length}<span class="chip ask nodrag">{waiting.length} needs approval</span>{/if}
     {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
+    {#if canHand}
+      <div class="hand nodrag">
+        <button class="btn ghost sm" class:on={handing} title={t("Continue in the cloud")} onclick={openHand}><Icon name="cloud" size={14} /></button>
+        {#if handing}
+          <div class="pop card">
+            <div class="ph">{t("Continue in the cloud")}</div>
+            <div class="muted small">{t("A sandbox starts on this repository's remote and gets the conversation, the base commit and, as a patch, the work not pushed yet. Secrets (.env, keys) stay here.")}</div>
+            <Dropdown bind:value={toCloud} icon="cloud" items={app.cloudAgents.map(a => ({ value: a.ref, label: a.name }))} />
+            <textarea class="input" rows="3" placeholder={t("What it should do next (optional)")} bind:value={note}></textarea>
+            {#if handErr}<div class="err selectable">{handErr}</div>{/if}
+            <div class="acts">
+              <button class="btn sm" onclick={() => (handing = false)}>{t("Cancel")}</button>
+              <button class="btn primary sm" disabled={!toCloud || sending} onclick={hand}>{sending ? t("Handing off…") : t("Hand off")}</button>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
     {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost sm nodrag" title={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={14} /></button>{/if}
     <button class="btn ghost sm nodrag" title={t("Right panel (⌘\\)")} onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={14} /></button>
   </header>
@@ -82,6 +125,14 @@
   .src { font-weight: 500; color: var(--ink-2); }
   .sp { flex: 1; }
   .meter { flex: none; }
+  .hand { position: relative; }
+  .hand .on { background: var(--hover); }
+  .pop { position: absolute; right: 0; top: 34px; z-index: 40; width: 340px; padding: 14px; display: grid; gap: 10px; }
+  .ph { font-weight: 600; font-size: 13px; }
+  .pop .small { font-size: 12px; line-height: 1.45; }
+  .pop textarea { height: auto; resize: vertical; font-size: 12.5px; }
+  .pop .acts { display: flex; gap: 6px; justify-content: flex-end; }
+  .pop .err { padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }
   .body { flex: 1; min-height: 0; padding: 28px 32px 12px; overflow-x: hidden; }
   .col { max-width: 720px; margin: 0 auto; min-width: 0; }
   .foot { padding: 8px 32px 20px; }

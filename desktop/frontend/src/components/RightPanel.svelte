@@ -7,6 +7,7 @@
   import Changes from "./Changes.svelte";
   import Terminal from "./Terminal.svelte";
   import Forge from "./Forge.svelte";
+  import Preview from "./Preview.svelte";
 
   // Hidden (another view, or the panel closed) it stays mounted: the terminal's shell goes on.
   let { hidden = false }: { hidden?: boolean } = $props();
@@ -79,7 +80,7 @@
     {:else if app.tab === "activity"}<Activity />
     {:else if app.tab === "changes"}<Changes />
     {:else if app.tab === "prs"}<Forge />
-    {:else if app.tab === "preview"}<div class="empty">{t("The preview opens the agent's dev server in a native view beside the conversation, and hands its errors to the agent.")}<span class="chip">{t("next")}</span></div>{/if}
+    {:else if app.tab === "preview"}<Preview covered={adding} />{/if}
     <!-- The terminal, while its tab is open, stays mounted (hidden behind the others): its shell
          and what it printed survive switching tabs, other views, the panel closed. -->
     {#if app.tabs.includes("terminal")}<div class="pane" class:off={app.tab !== "terminal" || !app.tabs.length}><Terminal active={!hidden && app.tab === "terminal"} /></div>{/if}

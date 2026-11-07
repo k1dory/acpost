@@ -68,10 +68,15 @@ func (a *fakeAgent) options(sid acp.SessionId) []acp.SessionConfigOption {
 		o.Select.Id, o.Select.Name, o.Select.Category = acp.SessionConfigId(id), name, &cat
 		return o
 	}
-	return []acp.SessionConfigOption{
+	out := []acp.SessionConfigOption{
 		opt("model", "Model", acp.SessionConfigOptionCategoryModel, "fake-small", "fake-big"),
 		opt("effort", "Reasoning", acp.SessionConfigOptionCategoryThoughtLevel, "low", "high"),
 	}
+	// FAKE_MODES: modes as Claude Code has them (FAKE_MODES=broken: setting one fails).
+	if os.Getenv("FAKE_MODES") != "" {
+		out = append(out, opt("mode", "Mode", acp.SessionConfigOptionCategoryMode, "default", "plan"))
+	}
+	return out
 }
 
 // Run serves the scripted agent on stdin/stdout until the client goes, then exits.
@@ -477,7 +482,10 @@ func (a *fakeAgent) SetSessionConfigOption(ctx context.Context, p acp.SetSession
 	if v == nil {
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("a value")
 	}
-	if v.ConfigId != "model" && v.ConfigId != "effort" {
+	if v.ConfigId == "mode" && os.Getenv("FAKE_MODES") == "broken" {
+		return acp.SetSessionConfigOptionResponse{}, acp.NewInternalError(map[string]any{"why": "no modes today"})
+	}
+	if v.ConfigId != "model" && v.ConfigId != "effort" && (v.ConfigId != "mode" || os.Getenv("FAKE_MODES") == "") {
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("no such option")
 	}
 	a.mu.Lock()

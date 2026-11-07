@@ -130,6 +130,12 @@ func (s *Store) FinishWiki(ctx context.Context, repo, msg string, pages []WikiPa
 	})
 }
 
+// SetWikiMsg puts the task's message in place of the reservation it was sent under.
+func (s *Store) SetWikiMsg(ctx context.Context, repo, from, to string) error {
+	_, err := s.w.ExecContext(ctx, `UPDATE wikis SET msg = ? WHERE repo = ? AND msg = ? AND status = 'writing'`, to, repo, from)
+	return err
+}
+
 // WikiPages lists a wiki's pages in order, with their text when full.
 func (s *Store) WikiPages(ctx context.Context, repo string, full bool) ([]WikiPage, error) {
 	col := "''"
