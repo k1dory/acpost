@@ -89,6 +89,10 @@
   $effect(() => { slash.length; slashSel = 0; });
 </script>
 
+<svelte:window
+  onclick={e => { if (pickerFor && !(e.target as HTMLElement).closest(".menu, .opt")) pickerFor = ""; }}
+  onkeydown={e => { if (e.key === "Escape") pickerFor = ""; }} />
+
 {#if isNew}<TaskSetup />{/if}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -105,7 +109,7 @@
   {#if pickerFor}
     {@const o = pickerFor === "model" ? model : pickerFor === "effort" ? effort : mode}
     {#if o}
-      <div class="menu card">
+      <div class="menu card pick">
         <div class="mh">{o.name}</div>
         {#each o.values as v (v.value)}
           <button class="mi" class:sel={(app.draft[pickerFor] || o.current) === v.value} onclick={() => setDraft(pickerFor as any, v.value)}>
@@ -150,6 +154,7 @@
   .files { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px; }
   .x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 2px; display: grid; }
   .menu { position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 30; padding: 6px; display: grid; max-height: 300px; overflow: auto; }
+  .menu.pick { right: auto; min-width: 200px; max-width: 280px; }
   .mh { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; padding: 4px 10px 6px; }
   .mi { display: flex; gap: 12px; align-items: baseline; border: 0; background: transparent; text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; }
   .mi.sel, .mi:hover { background: var(--hover); }
