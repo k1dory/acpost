@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from "../lib/i18n.svelte";
+  import { t, plural } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import { splitDiff } from "../lib/turn";
@@ -45,7 +45,7 @@
 <div class="ch">
   <div class="tools">
     <Dropdown bind:value={agent} items={[{ value: "", label: t("All agents") }, ...agents.map(a => ({ value: a, label: who(a).name }))]} />
-    <span class="muted num">{stats.size} files</span>
+    <span class="muted num">{plural(stats.size, "file", "files")}</span>
     <span class="sp"></span>
     <button class="btn sm" onclick={() => load(root)}>{t("Refresh")}</button>
   </div>

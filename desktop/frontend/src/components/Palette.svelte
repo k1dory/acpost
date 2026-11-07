@@ -12,7 +12,7 @@
     { kind: "Action", label: "Agents board", icon: "activity", run: () => (app.view = "board") },
     { kind: "Action", label: "Settings", icon: "sun", run: () => (app.view = "settings") },
     { kind: "Action", label: "Usage", icon: "chart", run: () => (app.view = "usage") },
-    { kind: "Action", label: "Terminal", icon: "term", run: () => { app.panel = true; app.tab = "terminal"; } },
+    { kind: "Action", label: "Terminal", icon: "term", run: () => { app.openTab("terminal"); } },
   ];
   const items = $derived.by(() => {
     const ql = q.trim().toLowerCase();

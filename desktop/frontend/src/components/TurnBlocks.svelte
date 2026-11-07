@@ -29,7 +29,7 @@
   {:else if b.t === "notice"}
     <div class="notice" class:warnn={b.severity === "warning" || b.severity === "error"}>{b.text}</div>
   {:else if b.t === "changes"}
-    <button class="btn sm" onclick={() => { app.focus = msg; app.tab = "changes"; app.panel = true; }}><Icon name="diff" size={13} /> {t("Changed files")}</button>
+    <button class="btn sm" onclick={() => { app.focus = msg; app.openTab("changes"); }}><Icon name="diff" size={13} /> {t("Changed files")}</button>
   {/if}
 {/each}
 

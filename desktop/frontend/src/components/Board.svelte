@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from "../lib/i18n.svelte";
+  import { t, plural } from "../lib/i18n.svelte";
   import { app, type Chat } from "../lib/state.svelte";
   import { ago, who } from "../lib/format";
   import Icon from "./Icon.svelte";
@@ -34,7 +34,7 @@
 <section class="board">
   <header class="drag">
     <h1>{t("Agents")}</h1>
-    <span class="muted">{threads.length} tasks</span>
+    <span class="muted">{plural(threads.length, "task", "tasks")}</span>
     <span class="sp"></span>
     <button class="btn primary sm nodrag" onclick={() => app.newTask()}><Icon name="plus" size={12} /> {t("New task")}</button>
   </header>

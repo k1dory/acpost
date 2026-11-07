@@ -25,6 +25,16 @@ export const final = (s: string) => s === "done" || s === "failed" || s === "can
 /** Where a new task runs, which agent, in which directory, with which settings. */
 export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string; cwd: string; repo: string; model: string; effort: string; mode: string };
 
+export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview";
+const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "preview"];
+function savedTabs(): PanelTab[] {
+  try {
+    const v = JSON.parse(localStorage.getItem("panel-tabs") ?? "null");
+    if (Array.isArray(v)) return v.filter((x): x is PanelTab => panelTabs.includes(x));
+  } catch {}
+  return ["activity"];
+}
+
 class App {
   conn = $state<{ ok: boolean; error?: string; url?: string; node?: string; you?: string } | null>(null);
   agents = $state<Agent[]>([]);
@@ -40,7 +50,22 @@ class App {
   turns = $state<Record<string, Turn>>({});
   rev = $state(0);
   focus = $state<string>("");
-  tab = $state<"activity" | "changes" | "terminal" | "prs" | "usage" | "preview">("activity");
+  tab = $state<PanelTab>(savedTabs()[0] ?? "activity");
+  /** The right panel's open tabs, in order (the + adds one, × closes it); kept between launches. */
+  tabs = $state<PanelTab[]>(savedTabs());
+  openTab(k: PanelTab) {
+    if (!this.tabs.includes(k)) { this.tabs = [...this.tabs, k]; this.saveTabs(); }
+    this.tab = k;
+    this.panel = true;
+  }
+  closeTab(k: PanelTab) {
+    const i = this.tabs.indexOf(k);
+    if (i < 0) return;
+    this.tabs = this.tabs.filter(x => x !== k);
+    if (this.tab === k) this.tab = this.tabs[Math.min(i, this.tabs.length - 1)] ?? "activity";
+    this.saveTabs();
+  }
+  private saveTabs() { try { localStorage.setItem("panel-tabs", JSON.stringify(this.tabs)); } catch {} }
   panel = $state(true);
   view = $state<"chat" | "usage" | "settings" | "board">("chat");
   playbooks = $state<{ name: string; body: string }[]>([]);

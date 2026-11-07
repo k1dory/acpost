@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { tokens, money } from "../lib/format";
   import type { Usage } from "../lib/turn";
   let { u }: { u: Usage } = $props();
@@ -7,7 +8,7 @@
 
 <div class="meter">
   {#if u.context_size}
-    <span class="num">{tokens(u.context_used ?? 0)} / {tokens(u.context_size)} tokens</span>
+    <span class="num">{tokens(u.context_used ?? 0)} / {tokens(u.context_size)} {t("tokens")}</span>
     <span class="bar" class:hi={pct > 80}><span style="width:{pct}%"></span></span>
   {/if}
   {#if u.input || u.output}

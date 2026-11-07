@@ -264,6 +264,16 @@ export const ru: Record<string, string> = {
   "Header": "Заголовок",
   "Environment": "Переменные окружения",
   "Headers": "Заголовки",
+  "Close": "Закрыть",
+  "file": "файл",
+  "files": "файлов",
+  "#file": "файл|файла|файлов",
+  "running": "работает",
+  "task": "задача",
+  "tasks": "задач",
+  "#task": "задача|задачи|задач",
+  "Open a view": "Открыть вкладку",
+  "Nothing open here. The + opens activity, changes, a terminal, pull requests or the preview.": "Здесь ничего не открыто. Через + откройте активность, изменения, терминал, пулл-реквесты или превью.",
 };
 
 // The node's messages (English) that have a known form, in Russian.

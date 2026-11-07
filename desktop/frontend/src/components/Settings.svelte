@@ -361,8 +361,8 @@
             <div class="row">
               <Icon name={a.driver === "sandbox" ? "cloud" : "bot"} size={14} />
               <div class="t"><b>{agentName(a.address)}</b><span class="muted small">{a.driver}{a.node ? " · " + a.node : ""}</span></div>
-              {#if a.running}<span class="chip">running {a.running}</span>{/if}
-              {#if a.queued}<span class="chip warn">{a.queued} queued</span>{/if}
+              {#if a.running}<span class="chip">{t("running")} {a.running}</span>{/if}
+              {#if a.queued}<span class="chip warn">{a.queued} {t("queued")}</span>{/if}
             </div>
           {/each}
           <div class="row">
