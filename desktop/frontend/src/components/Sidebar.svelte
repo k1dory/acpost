@@ -145,6 +145,7 @@
 
   <div class="foot">
     <button class="row" class:sel={app.view === "usage"} onclick={() => (app.view = "usage")}><span class="ic"><Icon name="chart" size={14} /></span><span class="t"><span class="title">Usage</span></span></button>
+    <button class="row" class:sel={app.view === "settings"} onclick={() => (app.view = "settings")}><span class="ic"><Icon name="sun" size={14} /></span><span class="t"><span class="title">Settings</span></span><kbd>⌘,</kbd></button>
     <div class="theme">
       <div class="seg">
         <button class:on={app.theme === "light"} onclick={() => app.setTheme("light")} title="Light"><Icon name="sun" size={14} /></button>

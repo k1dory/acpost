@@ -7,6 +7,7 @@ export {
     Event,
     File,
     Folder,
+    MCPServer,
     Message,
     ModelTokens,
     RepoDiff,

@@ -149,6 +149,10 @@ export function DeleteFolder(id: string): $CancellablePromise<void> {
     return $Call.ByID(1055176159, id);
 }
 
+export function DeleteMCPServer(name: string): $CancellablePromise<void> {
+    return $Call.ByID(3232873566, name);
+}
+
 /**
  * Events reads a message's events (no stream).
  */
@@ -175,11 +179,33 @@ export function Forge(agent: string): $CancellablePromise<client$0.ForgeInfo> {
     });
 }
 
+export function ForgeAccounts(): $CancellablePromise<client$0.ForgeAccount[]> {
+    return $Call.ByID(2024987971).then(($result: any) => {
+        return $$createType18($result);
+    });
+}
+
+export function ForgeLogin(host: string, kind: string, token: string): $CancellablePromise<client$0.ForgeAccount> {
+    return $Call.ByID(976311564, host, kind, token).then(($result: any) => {
+        return $$createType17($result);
+    });
+}
+
+export function ForgeLogout(host: string): $CancellablePromise<void> {
+    return $Call.ByID(2083806457, host);
+}
+
 /**
  * Home is the user's home directory (the default task directory).
  */
 export function Home(): $CancellablePromise<string> {
     return $Call.ByID(752005655);
+}
+
+export function MCPServers(): $CancellablePromise<store$0.MCPServer[]> {
+    return $Call.ByID(3433588060).then(($result: any) => {
+        return $$createType20($result);
+    });
 }
 
 /**
@@ -196,12 +222,19 @@ export function MoveChat(chat: string, folder: string): $CancellablePromise<void
 }
 
 /**
+ * Notify shows a notification of the system (asked for once; nothing when refused or unavailable).
+ */
+export function Notify(title: string, body: string): $CancellablePromise<void> {
+    return $Call.ByID(1005772201, title, body);
+}
+
+/**
  * OpenTerminal opens a shell (in the agent's working directory when one is named) and streams
  * its output as "term:<id>" (base64 chunks).
  */
 export function OpenTerminal(agent: string, cols: number, rows: number): $CancellablePromise<client$0.Terminal> {
     return $Call.ByID(2110126032, agent, cols, rows).then(($result: any) => {
-        return $$createType17($result);
+        return $$createType21($result);
     });
 }
 
@@ -210,7 +243,7 @@ export function OpenTerminal(agent: string, cols: number, rows: number): $Cancel
  */
 export function Options(agent: string): $CancellablePromise<client$0.AgentOptions> {
     return $Call.ByID(3215550814, agent).then(($result: any) => {
-        return $$createType18($result);
+        return $$createType22($result);
     });
 }
 
@@ -226,8 +259,16 @@ export function PickDirectory(start: string): $CancellablePromise<string> {
  */
 export function Pulls(agent: string, state: string): $CancellablePromise<forge$0.Pull[]> {
     return $Call.ByID(2911689412, agent, state).then(($result: any) => {
-        return $$createType20($result);
+        return $$createType24($result);
     });
+}
+
+/**
+ * PutMCPServer adds or changes an MCP server; secrets: "env/NAME" or "header/NAME" → value
+ * (absent: kept as is; empty: forgotten).
+ */
+export function PutMCPServer(m: store$0.MCPServer, secrets: { [_ in string]?: string }): $CancellablePromise<void> {
+    return $Call.ByID(2386249428, m, secrets);
 }
 
 export function RenameFolder(id: string, name: string): $CancellablePromise<void> {
@@ -239,7 +280,7 @@ export function RenameFolder(id: string, name: string): $CancellablePromise<void
  */
 export function SearchDirs(q: string): $CancellablePromise<string[]> {
     return $Call.ByID(3291189440, q).then(($result: any) => {
-        return $$createType21($result);
+        return $$createType25($result);
     });
 }
 
@@ -275,7 +316,7 @@ export function SessionHistory(agent: string, id: string, cwd: string): $Cancell
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType22($result);
+        return $$createType26($result);
     });
 }
 
@@ -298,7 +339,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType23($result);
+        return $$createType27($result);
     });
 }
 
@@ -314,7 +355,7 @@ export function Unfollow(id: string): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType25($result);
+        return $$createType29($result);
     });
 }
 
@@ -336,12 +377,16 @@ const $$createType13 = $models.ConversationPage.createFrom;
 const $$createType14 = client$0.Chat.createFrom;
 const $$createType15 = store$0.Folder.createFrom;
 const $$createType16 = client$0.ForgeInfo.createFrom;
-const $$createType17 = client$0.Terminal.createFrom;
-const $$createType18 = client$0.AgentOptions.createFrom;
-const $$createType19 = forge$0.Pull.createFrom;
+const $$createType17 = client$0.ForgeAccount.createFrom;
+const $$createType18 = $Create.Array($$createType17);
+const $$createType19 = store$0.MCPServer.createFrom;
 const $$createType20 = $Create.Array($$createType19);
-const $$createType21 = $Create.Array($Create.Any);
-const $$createType22 = $models.Connection.createFrom;
-const $$createType23 = $Create.Array($$createType4);
-const $$createType24 = client$0.UsageReport.createFrom;
-const $$createType25 = $Create.Array($$createType24);
+const $$createType21 = client$0.Terminal.createFrom;
+const $$createType22 = client$0.AgentOptions.createFrom;
+const $$createType23 = forge$0.Pull.createFrom;
+const $$createType24 = $Create.Array($$createType23);
+const $$createType25 = $Create.Array($Create.Any);
+const $$createType26 = $models.Connection.createFrom;
+const $$createType27 = $Create.Array($$createType4);
+const $$createType28 = client$0.UsageReport.createFrom;
+const $$createType29 = $Create.Array($$createType28);

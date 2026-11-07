@@ -255,6 +255,76 @@ export class Folder {
 }
 
 /**
+ * MCPServer is an MCP server the agents get.
+ */
+export class MCPServer {
+    "name": string;
+
+    /**
+     * stdio, http
+     */
+    "kind": string;
+    "command"?: string;
+    "args"?: string[];
+    "url"?: string;
+
+    /**
+     * names (values: secrets)
+     */
+    "env"?: string[];
+
+    /**
+     * names (values: secrets)
+     */
+    "headers"?: string[];
+
+    /**
+     * none: every agent
+     */
+    "agents"?: string[];
+    "enabled": boolean;
+
+    /** Creates a new MCPServer instance. */
+    constructor($$source: Partial<MCPServer> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("kind" in $$source)) {
+            this["kind"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            this["enabled"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new MCPServer instance from a string or object.
+     */
+    static createFrom($$source: any = {}): MCPServer {
+        const $$createField3_0 = $$createType0;
+        const $$createField5_0 = $$createType0;
+        const $$createField6_0 = $$createType0;
+        const $$createField7_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("args" in $$parsedSource) {
+            $$parsedSource["args"] = $$createField3_0($$parsedSource["args"]);
+        }
+        if ("env" in $$parsedSource) {
+            $$parsedSource["env"] = $$createField5_0($$parsedSource["env"]);
+        }
+        if ("headers" in $$parsedSource) {
+            $$parsedSource["headers"] = $$createField6_0($$parsedSource["headers"]);
+        }
+        if ("agents" in $$parsedSource) {
+            $$parsedSource["agents"] = $$createField7_0($$parsedSource["agents"]);
+        }
+        return new MCPServer($$parsedSource as Partial<MCPServer>);
+    }
+}
+
+/**
  * Message is a message as stored. Lists leave Body and Reply empty (BodySize and ReplySize say how
  * big they are).
  */

@@ -417,6 +417,42 @@ export class CloudAgent {
 }
 
 /**
+ * ForgeAccount is a forge host logged in to.
+ */
+export class ForgeAccount {
+    "host": string;
+    "kind"?: string;
+    "version"?: string;
+    "authed": boolean;
+
+    /**
+     * whose the token is
+     */
+    "login"?: string;
+    "error"?: string;
+
+    /** Creates a new ForgeAccount instance. */
+    constructor($$source: Partial<ForgeAccount> = {}) {
+        if (!("host" in $$source)) {
+            this["host"] = "";
+        }
+        if (!("authed" in $$source)) {
+            this["authed"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ForgeAccount instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ForgeAccount {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ForgeAccount($$parsedSource as Partial<ForgeAccount>);
+    }
+}
+
+/**
  * ForgeInfo is a repository's forge as the node sees it.
  */
 export class ForgeInfo {

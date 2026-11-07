@@ -41,7 +41,7 @@ class App {
   focus = $state<string>("");
   tab = $state<"activity" | "changes" | "terminal" | "prs" | "usage" | "preview">("activity");
   panel = $state(true);
-  view = $state<"chat" | "usage">("chat");
+  view = $state<"chat" | "usage" | "settings">("chat");
   theme = $state<"light" | "dark" | "system">("light");
   target = $state<string>("");
   draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "", model: "", effort: "", mode: "" });
@@ -76,10 +76,38 @@ class App {
     } catch { this.cloudAgents = []; }
   }
 
+  private wasRunning = new Map<string, number>();
+  private asked = new Set<string>();
+
+  /** A notification of the system, when the app is not in front (and the user wants them). */
+  notify(title: string, body: string) {
+    let on = true;
+    try { on = localStorage.getItem("notify") !== "0"; } catch {}
+    if (on && !document.hasFocus()) Node.Notify(title, body).catch(() => {});
+  }
+
+  /** What waits for the user: approvals asked (notified once each). */
+  async watchAsking() {
+    try {
+      const reqs = ((await Node.Asking()) ?? []) as any[];
+      for (const r of reqs) {
+        const id = r.request_id ?? r.id;
+        if (id && !this.asked.has(id)) { this.asked.add(id); this.notify("Needs approval", r.title || "An agent asks"); }
+      }
+    } catch {}
+  }
+
   async loadChats() {
     this.loadingChats = true;
     try {
       const c: any = await Node.Chats();
+      // A thread that ran and does not now: its turn ended.
+      for (const ch of (c.items ?? []) as Chat[]) {
+        if (ch.kind !== "thread") continue;
+        const was = this.wasRunning.get(ch.key) ?? 0;
+        if (was > 0 && !ch.running && !ch.queued) this.notify(ch.failed ? "Failed" : "Done", ch.title);
+        this.wasRunning.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
+      }
       this.chats = c.items ?? [];
       this.folders = c.folders ?? [];
       this.partial = c.partial ?? [];

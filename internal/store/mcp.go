@@ -130,4 +130,3 @@ func (s *Store) DeleteMCPServer(ctx context.Context, name string) error {
 	}
 	return nil
 }
-

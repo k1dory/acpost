@@ -11,6 +11,7 @@ export {
     Chat,
     Chats,
     CloudAgent,
+    ForgeAccount,
     ForgeInfo,
     Limits,
     OptionValue,

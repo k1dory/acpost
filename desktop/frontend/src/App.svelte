@@ -5,13 +5,15 @@
   import Conversation from "./components/Conversation.svelte";
   import RightPanel from "./components/RightPanel.svelte";
   import Usage from "./components/Usage.svelte";
+  import Settings from "./components/Settings.svelte";
 
   onMount(() => {
     try { app.theme = (localStorage.getItem("theme") as any) || "light"; } catch {}
     applyTheme(app.theme);
     app.connect();
-    const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadChats(); } }, 30000);
-    return () => clearInterval(poll);
+    const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadChats(); } }, 20000);
+    const asking = setInterval(() => { if (app.conn?.ok) app.watchAsking(); }, 8000);
+    return () => { clearInterval(poll); clearInterval(asking); };
   });
 
   function keys(e: KeyboardEvent) {
@@ -19,6 +21,7 @@
     if (e.key === "n") { e.preventDefault(); app.newTask(); }
     else if (e.key === "\\") { e.preventDefault(); app.panel = !app.panel; }
     else if (e.key === "j") { e.preventDefault(); app.panel = true; app.tab = "terminal"; }
+    else if (e.key === ",") { e.preventDefault(); app.view = "settings"; }
   }
 </script>
 
@@ -36,6 +39,8 @@
     </div>
   {:else if app.view === "usage"}
     <Usage />
+  {:else if app.view === "settings"}
+    <Settings />
   {:else}
     <Conversation />
     {#if app.panel}<RightPanel />{/if}

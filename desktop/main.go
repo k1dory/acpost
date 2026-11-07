@@ -11,17 +11,19 @@ import (
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
-	node := &Node{}
+	notes := notifications.New()
+	node := &Node{notes: notes}
 	app := application.New(application.Options{
 		Name:        "acpost",
 		Description: "Conversations with agents",
-		Services:    []application.Service{application.NewService(node)},
+		Services:    []application.Service{application.NewService(node), application.NewService(notes)},
 		Assets:      application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		Mac:         application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 	})

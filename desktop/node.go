@@ -19,6 +19,7 @@ import (
 	"github.com/k1dory/acpost/internal/store"
 	"github.com/k1dory/acpx"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 // Node is the app's link to the local acpost node: what the interface calls (bindings) and the
@@ -32,6 +33,8 @@ type Node struct {
 	follows  map[string]context.CancelFunc
 	terms    map[string]context.CancelFunc
 	stopNode context.CancelFunc // the node the app runs itself, if it does
+	notes    *notifications.NotificationService
+	noteOK   int // 0 not asked, 1 allowed, -1 refused
 	startErr string
 }
 
