@@ -680,6 +680,39 @@ func (n *Node) Cancel(ctx context.Context, p Principal, id string) (store.Messag
 	return hideLease(got), nil
 }
 
+// EditQueued changes what a queued message asks, before its agent takes it: the node's own user or
+// agents, of a message sent here (one gone through the hub, or come from it, is the hub's).
+func (n *Node) EditQueued(ctx context.Context, p Principal, id, body string) (store.Message, error) {
+	if !p.local() {
+		return store.Message{}, errf("refused", "only this node's own may edit a queued message")
+	}
+	m, err := n.Get(ctx, p, id)
+	if err != nil {
+		return m, err
+	}
+	if p.Kind != "user" && m.From != p.Address() {
+		return m, errf("refused", "only the sender may edit %s", id)
+	}
+	if m.Origin != "" {
+		return m, errf("unsupported", "%s went through the hub: cancel it and send again", id)
+	}
+	switch {
+	case strings.TrimSpace(body) == "":
+		return m, errf("invalid", "an empty body")
+	case len(body) > int(n.cfg.Limits.MaxBody):
+		return m, errf("refused", "the body is %d bytes, over limits.max_body (%d)", len(body), n.cfg.Limits.MaxBody)
+	}
+	got, err := n.st.EditQueued(ctx, id, body)
+	if errors.Is(err, store.ErrFinal) {
+		return hideLease(got), errf("conflict", "%s is already %s", id, got.State)
+	}
+	if err != nil {
+		return got, errf("unavailable", "%v", err)
+	}
+	n.notify()
+	return hideLease(got), nil
+}
+
 // Claim takes the next message for an inbox agent, waiting up to wait for one.
 func (n *Node) Claim(ctx context.Context, p Principal, agent string, wait, lease time.Duration) (store.Message, bool, error) {
 	a := n.agentCfg(agent)

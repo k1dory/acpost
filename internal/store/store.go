@@ -963,6 +963,32 @@ func (s *Store) Cancel(ctx context.Context, id string) (Message, error) {
 	return m, err
 }
 
+// EditQueued changes the body of a message no one has taken yet; ErrFinal (with the message as it
+// is) once it is running or over.
+func (s *Store) EditQueued(ctx context.Context, id, body string) (Message, error) {
+	var m Message
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		res, err := t.ExecContext(ctx, `UPDATE messages SET body_size = ?, updated_at = ? WHERE id = ? AND state = 'queued'`, len(body), ms(time.Now()), id)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 1 {
+			if _, err := t.ExecContext(ctx, `UPDATE contents SET body = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)`, body, id); err != nil {
+				return err
+			}
+		}
+		if m, err = s.get(ctx, t, id); err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrFinal
+		}
+		return nil
+	})
+	return m, err
+}
+
 // Counts says how many messages for recipient are queued and running.
 func (s *Store) Counts(ctx context.Context, recipient string) (queued, running int, err error) {
 	err = s.r.QueryRowContext(ctx, `SELECT

@@ -5,6 +5,7 @@
   import Markdown from "./Markdown.svelte";
   import TurnBlocks from "./TurnBlocks.svelte";
   import Icon from "./Icon.svelte";
+  import { Node, errText } from "../lib/api";
 
   let { m }: { m: Msg } = $props();
   const turn = $derived.by(() => { app.rev; return app.turns[m.id]?.view(); });
@@ -13,13 +14,31 @@
   const sender = $derived(who(m.from));
   const agent = $derived(who(m.to));
   // The reply is the authoritative text once the turn is over: shown when the stream differs.
+  // A queued message: its text can still change, or it can be taken back.
+  let editing = $state<string | null>(null);
+  async function saveEdit() {
+    if (editing === null || !editing.trim()) return;
+    try { await Node.EditQueued(m.id, editing); m.body = editing; editing = null; } catch (e) { app.error = errText(e); editing = null; }
+  }
+  async function takeBack() {
+    try { await Node.Cancel(m.id); } catch (e) { app.error = errText(e); }
+  }
   const replyDiffers = $derived(done && !!m.reply && m.reply.trim() !== streamed.trim() && !streamed.trim().endsWith(m.reply.trim()));
 </script>
 
 <div class="pair" class:focus={app.focus === m.id}>
   <div class="user">
     <div class="meta"><Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span><span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">subagent</span>{/if}</div>
-    <div class="ubody selectable">{m.body}</div>
+    {#if editing !== null}
+      <textarea class="ubody edit" bind:value={editing} rows="3"
+        onkeydown={e => { if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); saveEdit(); } else if (e.key === "Escape") editing = null; }}></textarea>
+      <div class="eacts"><button class="btn sm" onclick={() => (editing = null)}>Cancel</button><button class="btn primary sm" onclick={saveEdit}>Save</button></div>
+    {:else}
+      <div class="ubody selectable">{m.body}</div>
+      {#if m.state === "queued"}
+        <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body)}>Edit</button><button class="btn ghost sm" onclick={takeBack}>Take back</button></div>
+      {/if}
+    {/if}
     {#if m.files?.filter(f => !f.reply).length}
       <div class="files">{#each m.files.filter(f => !f.reply) as f}<span class="chip"><Icon name="file" size={12} /> {f.name}</span>{/each}</div>
     {/if}
@@ -57,6 +76,8 @@
   .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; flex-wrap: wrap; }
   .nm { font-weight: 600; }
   .user { justify-self: end; max-width: 85%; }
+  .edit { width: 100%; min-width: 360px; resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
+  .eacts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
   .user .meta { justify-content: flex-end; }
   .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }

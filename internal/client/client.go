@@ -201,6 +201,13 @@ func (c *Client) CreateCloudTask(ctx context.Context, t CloudTask) (Chat, error)
 	return out, err
 }
 
+// EditQueued changes the body of a queued message.
+func (c *Client) EditQueued(ctx context.Context, id, body string) (store.Message, error) {
+	var out store.Message
+	_, err := c.do(ctx, "PATCH", "/v1/messages/"+url.PathEscape(id), nil, map[string]string{"body": body}, &out, nil)
+	return out, err
+}
+
 // ForkSession forks an agent's session (into cwd, or the session's own directory): the new one.
 func (c *Client) ForkSession(ctx context.Context, agent, id, cwd string) (string, error) {
 	var out struct {

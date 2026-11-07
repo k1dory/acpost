@@ -59,6 +59,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/messages/{id}/files", s.auth(s.files))
 	mux.HandleFunc("POST /v1/attach", s.auth(s.attach))
 	mux.HandleFunc("POST /v1/messages/{id}/cancel", s.auth(s.cancel))
+	mux.HandleFunc("PATCH /v1/messages/{id}", s.auth(s.editQueued))
 	mux.HandleFunc("POST /v1/messages/{id}/reply", s.auth(s.reply))
 	mux.HandleFunc("POST /v1/messages/{id}/lease", s.auth(s.extend))
 	mux.HandleFunc("GET /v1/agents", s.auth(s.agents))
@@ -302,6 +303,22 @@ func (s *server) events(w http.ResponseWriter, r *http.Request, p node.Principal
 
 func (s *server) cancel(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	m, err := s.n.Cancel(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, m)
+}
+
+func (s *server) editQueued(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		Body string `json:"body"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	m, err := s.n.EditQueued(r.Context(), p, r.PathValue("id"), req.Body)
 	if err != nil {
 		writeErr(w, err)
 		return

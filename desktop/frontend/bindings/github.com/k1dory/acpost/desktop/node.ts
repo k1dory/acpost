@@ -162,6 +162,13 @@ export function DeleteSchedule(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * EditQueued changes what a queued message asks.
+ */
+export function EditQueued(id: string, body: string): $CancellablePromise<void> {
+    return $Call.ByID(1545353885, id, body);
+}
+
+/**
  * Events reads a message's events (no stream).
  */
 export function Events(id: string, after: number): $CancellablePromise<store$0.Event[]> {

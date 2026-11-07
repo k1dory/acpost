@@ -351,3 +351,27 @@ func TestAgentCannotWaitForItself(t *testing.T) {
 		t.Fatalf("self-send with spare slots: %v", err)
 	}
 }
+
+// A queued message can be edited by its own until its agent takes it; a remote principal, an
+// empty body, a taken message are refused.
+func TestEditQueued(t *testing.T) {
+	n := newNode(t, inboxCfg)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "bot", Body: "first"})
+	got, err := n.EditQueued(ctx, me, m.ID, "second")
+	if err != nil || got.Body != "second" || got.State != store.Queued {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := n.EditQueued(ctx, Principal{Kind: "node", Name: "other"}, m.ID, "x"); code(err) != "refused" {
+		t.Fatalf("a remote node edited: %v", err)
+	}
+	if _, err := n.EditQueued(ctx, me, m.ID, "  "); code(err) != "invalid" {
+		t.Fatalf("an empty body: %v", err)
+	}
+	c, ok, err := n.Claim(ctx, Principal{Kind: "agent", Name: "bot"}, "bot", 0, time.Minute)
+	if err != nil || !ok || c.Body != "second" {
+		t.Fatalf("claimed %+v %v %v", c, ok, err)
+	}
+	if _, err := n.EditQueued(ctx, me, m.ID, "third"); code(err) != "conflict" {
+		t.Fatalf("edited a taken message: %v", err)
+	}
+}
