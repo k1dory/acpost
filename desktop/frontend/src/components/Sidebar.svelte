@@ -240,7 +240,7 @@
     </div>
   {/if}
   {#if dragging}
-    <div class="ghost card" style="left:{dragging.x + 12}px;top:{dragging.y + 8}px">{dragging.chat.title || t("Untitled")}</div>
+    <div class="drag-ghost card" style="left:{dragging.x + 12}px;top:{dragging.y + 8}px">{dragging.chat.title || t("Untitled")}</div>
   {/if}
 </aside>
 
@@ -255,7 +255,7 @@
   .search input { border: 0; outline: 0; background: transparent; flex: 1; color: var(--ink); min-width: 0; }
   .list { flex: 1; padding: 0 10px 10px; min-height: 0; }
   .h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 8px 6px; letter-spacing: .02em; text-transform: uppercase; border-radius: 8px; }
-  .ghost { position: fixed; z-index: 90; pointer-events: none; padding: 6px 10px; font-size: 12.5px; font-weight: 500; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); }
+  .drag-ghost { position: fixed; z-index: 90; pointer-events: none; padding: 6px 10px; font-size: 12.5px; font-weight: 500; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); }
   .row.lifted { opacity: .45; }
   .h.drop, .folder.drop { background: var(--accent-bg); }
   .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
