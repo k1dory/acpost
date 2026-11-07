@@ -88,6 +88,8 @@
     <span class="muted">·</span>
     <span class="muted mono path" title={folder}>{short(folder)}</span>
     <span class="sp"></span>
+    <!-- Agents waiting for an answer (the sidebar, which shows them, is hidden here). -->
+    {#if app.asking.length}<button class="btn ghost sm nodrag ask" onclick={() => (app.view = "board")}>{t("{n} waiting for an answer", { n: app.asking.length })}</button>{/if}
     <button class="btn ghost sm nodrag" onclick={reload} title={t("Reload")}><Icon name="refresh" size={13} /></button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
@@ -101,6 +103,7 @@
   .bar { height: 50px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 80px; background: var(--side); border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
   .path { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .sp { flex: 1; }
+  .ask { color: var(--warn); font-weight: 600; }
   .box { flex: 1; min-height: 0; display: grid; place-items: center; }
   .hint { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
   .err { margin: 8px; padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }

@@ -267,6 +267,7 @@ export const ru: Record<string, string> = {
   "Wiki": "Вики",
   "Agents view": "Чаты",
   "IDE view": "IDE",
+  "{n} waiting for an answer": "Ждут ответа: {n}",
   "Tasks": "Задания",
   "Search chats": "Поиск по чатам",
   "Search everything": "Поиск по всему",
