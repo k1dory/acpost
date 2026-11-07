@@ -72,6 +72,9 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/forge/accounts", s.auth(s.forgeAccounts))
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
 	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
+	mux.HandleFunc("GET /v1/knowledge", s.auth(s.knowledge))
+	mux.HandleFunc("PUT /v1/knowledge", s.auth(s.putNote))
+	mux.HandleFunc("DELETE /v1/knowledge/{name}", s.auth(s.deleteNote))
 	mux.HandleFunc("GET /v1/schedules", s.auth(s.schedules))
 	mux.HandleFunc("PUT /v1/schedules", s.auth(s.putSchedule))
 	mux.HandleFunc("DELETE /v1/schedules/{id}", s.auth(s.deleteSchedule))
@@ -603,6 +606,36 @@ func (s *server) mcpPut(w http.ResponseWriter, r *http.Request, p node.Principal
 
 func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	if err := s.n.DeleteMCPServer(r.Context(), p, r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) knowledge(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.Knowledge(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) putNote(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req store.Note
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.n.PutNote(r.Context(), p, req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) deleteNote(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.DeleteNote(r.Context(), p, r.PathValue("name")); err != nil {
 		writeErr(w, err)
 		return
 	}

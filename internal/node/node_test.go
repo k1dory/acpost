@@ -374,4 +374,14 @@ func TestEditQueued(t *testing.T) {
 	if _, err := n.EditQueued(ctx, me, m.ID, "third"); code(err) != "conflict" {
 		t.Fatalf("edited a taken message: %v", err)
 	}
+	// Given back (its lease out, released): still taken once, a worker had the body.
+	if st, err := n.st.Release(ctx, c.ID, c.LeaseID, "", "test", 5); err != nil || st != store.Queued {
+		t.Fatal(st, err)
+	}
+	if again, _ := n.Get(ctx, me, m.ID); again.State != store.Queued {
+		t.Fatalf("released: %s", again.State)
+	}
+	if _, err := n.EditQueued(ctx, me, m.ID, "third"); code(err) != "conflict" {
+		t.Fatalf("edited a message given back: %v", err)
+	}
 }

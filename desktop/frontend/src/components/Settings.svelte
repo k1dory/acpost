@@ -7,7 +7,27 @@
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
   type MCP = { name: string; kind: "stdio" | "http"; command?: string; args?: string[]; url?: string; env?: string[]; headers?: string[]; agents?: string[]; enabled: boolean };
 
-  let section = $state<"git" | "mcp" | "playbooks" | "schedules" | "agents" | "general">("git");
+  let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "general">("git");
+  type Note = { name: string; body: string; scope?: string; enabled: boolean; isNew?: boolean };
+  let notes = $state<Note[] | null>(null);
+  let note = $state<Note | null>(null);
+  async function loadNotes() {
+    try { notes = ((await Node.Knowledge()) ?? []) as any; } catch (e) { err = errText(e); notes = []; }
+  }
+  async function saveNote(k: Note) {
+    err = ""; busy = true;
+    try { await Node.PutNote({ name: k.name.trim(), body: k.body, scope: k.scope ?? "", enabled: k.enabled } as any); note = null; await loadNotes(); } catch (e) { err = errText(e); }
+    busy = false;
+  }
+  async function deleteNote(name: string) {
+    try { await Node.DeleteNote(name); note = null; await loadNotes(); } catch (e) { err = errText(e); }
+  }
+  async function pickNoteDir() {
+    if (!note) return;
+    const d = await Node.PickDirectory(note.scope || app.home).catch(() => "");
+    if (d) note.scope = d;
+  }
+  const tilde = (d?: string) => (!d ? "" : app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
   type Sched = { id?: string; name: string; cron: string; agent: string; body: string; cwd?: string; model?: string; effort?: string; enabled: boolean; next_run?: string; last_run?: string; last_msg?: string; last_err?: string };
   let scheds = $state<Sched[] | null>(null);
   let sc = $state<Sched | null>(null);
@@ -67,7 +87,7 @@
   async function loadServers() {
     try { servers = ((await Node.MCPServers()) ?? []) as any; } catch (e) { err = errText(e); servers = []; }
   }
-  $effect(() => { if (section === "git" && accounts === null) loadAccounts(); if (section === "mcp" && servers === null) loadServers(); if (section === "schedules" && scheds === null) loadScheds(); });
+  $effect(() => { if (section === "git" && accounts === null) loadAccounts(); if (section === "mcp" && servers === null) loadServers(); if (section === "schedules" && scheds === null) loadScheds(); if (section === "knowledge" && notes === null) loadNotes(); });
 
   async function connect() {
     err = ""; busy = true;
@@ -126,7 +146,7 @@
   <header class="drag"><h1>Settings</h1></header>
   <div class="cols">
     <nav class="nav">
-      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
+      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["knowledge", "Knowledge", "brain"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
         <button class:on={section === k} onclick={() => { section = k as any; err = ""; }}><Icon name={ic} size={14} /> {l}</button>
       {/each}
     </nav>
@@ -247,6 +267,38 @@
               <span class="sp"></span>
               <button class="btn" onclick={() => (pb = null)}>Cancel</button>
               <button class="btn primary" disabled={busy || !pb.name.trim() || !pb.body.trim()} onclick={savePlaybook}>Save</button>
+            </div>
+          </div>
+        {/if}
+
+      {:else if section === "knowledge"}
+        <h2>Knowledge</h2>
+        <p class="muted">Notes an agent gets at the start of every new session: everywhere, or only in a directory.</p>
+        {#if !note}
+          <div class="card panel"><div class="inner">
+            {#each notes ?? [] as k (k.name)}
+              <div class="row">
+                <Icon name="brain" size={14} />
+                <div class="t"><b>{k.name}</b><span class="muted small one">{k.scope ? tilde(k.scope) : "Everywhere"} · {k.body.split("\n")[0]}</span></div>
+                <button class="btn ghost sm" onclick={() => (note = { ...k })}>Edit</button>
+                <button class="sw" class:on={k.enabled} onclick={() => saveNote({ ...k, enabled: !k.enabled })} aria-label="Enabled"><span></span></button>
+              </div>
+            {:else}<div class="row muted">{notes === null ? "Loading…" : "No notes yet"}</div>{/each}
+          </div></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (note = { isNew: true, name: "", body: "", scope: "", enabled: true })}><Icon name="plus" size={13} /> New note</button></div>
+        {:else}
+          <div class="form card">
+            {#if note.isNew}<input class="input" placeholder="Name: how argus builds" bind:value={note.name} />{:else}<div class="fh">{note.name}</div>{/if}
+            <div class="frow">
+              <button class="chip pickc" class:on={!note.scope} onclick={() => (note!.scope = "")}>Everywhere</button>
+              <button class="chip pickc" class:on={!!note.scope} onclick={pickNoteDir} title={note.scope}><Icon name="file" size={12} /> {note.scope ? tilde(note.scope) : "In a directory…"}</button>
+            </div>
+            <textarea class="input" rows="12" placeholder="What the agent should know: how to build and test, conventions, what not to touch" bind:value={note.body}></textarea>
+            <div class="acts">
+              {#if !note.isNew}<button class="btn ghost danger" onclick={() => deleteNote(note!.name)}>Delete</button>{/if}
+              <span class="sp"></span>
+              <button class="btn" onclick={() => (note = null)}>Cancel</button>
+              <button class="btn primary" disabled={busy || !note.name.trim() || !note.body.trim()} onclick={() => saveNote(note!)}>Save</button>
             </div>
           </div>
         {/if}

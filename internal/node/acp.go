@@ -90,6 +90,7 @@ type acpProc struct {
 	// costBase is where a session's cost stood when this process took it up: 0 for one it created,
 	// what the agent said while loading one (absent: not known).
 	costBase map[acp.SessionId]float64
+	fresh    map[acp.SessionId]bool // sessions opened new, not yet prompted (knowledge goes first)
 	done     chan struct{}
 	exitErr  error
 }
@@ -275,7 +276,7 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", a.cfg.Command[0], err)
 	}
-	p := &acpProc{cmd: cmd, stdin: stdin, sessions: map[string]acp.SessionId{}, models: map[acp.SessionId]string{}, states: map[acp.SessionId]acpx.SessionState{}, costBase: map[acp.SessionId]float64{}, done: make(chan struct{})}
+	p := &acpProc{cmd: cmd, stdin: stdin, sessions: map[string]acp.SessionId{}, models: map[acp.SessionId]string{}, states: map[acp.SessionId]acpx.SessionState{}, costBase: map[acp.SessionId]float64{}, fresh: map[acp.SessionId]bool{}, done: make(chan struct{})}
 	go func() {
 		sc := bufio.NewScanner(stderr)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -448,6 +449,7 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 		}
 		sid, st = r.SessionId, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
 		p.costBase[sid] = 0 // a new session: its cost starts here
+		p.fresh[sid] = true
 	}
 	for _, set := range []struct {
 		s    acpx.Setting
@@ -628,6 +630,14 @@ func (s *acpSlot) handle(m store.Message) {
 		return
 	}
 	s.applySettings(ctx, p, sid, m)
+	if p.fresh[sid] {
+		delete(p.fresh, sid)
+		dir := cwd
+		if dir == "" {
+			dir = s.cwd()
+		}
+		m.Body = n.knowledgeFor(ctx, dir) + m.Body
+	}
 	blocks, tfiles, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
 	tf = tfiles
 	defer cleanup()

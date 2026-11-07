@@ -114,3 +114,19 @@ func (n *Node) RunSchedule(id string) (string, error) {
 	m, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) { return c.RunSchedule(ctx, id) })
 	return m.ID, err
 }
+
+func (n *Node) Knowledge() ([]store.Note, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]store.Note, error) { return c.Knowledge(ctx) })
+}
+
+func (n *Node) PutNote(k store.Note) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.PutNote(ctx, k) })
+	return err
+}
+
+func (n *Node) DeleteNote(name string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.DeleteNote(ctx, name)
+	})
+	return err
+}

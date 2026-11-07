@@ -693,8 +693,10 @@ func (n *Node) EditQueued(ctx context.Context, p Principal, id, body string) (st
 	if p.Kind != "user" && m.From != p.Address() {
 		return m, errf("refused", "only the sender may edit %s", id)
 	}
-	if m.Origin != "" {
-		return m, errf("unsupported", "%s went through the hub: cancel it and send again", id)
+	// A message gone through the hub, come from it, or sent from another node keeps its body where
+	// its sender reads it: only one sent here, to be run here, changes.
+	if from, err := ParseAddress(m.From); m.Origin != "" || err != nil || from.Node != "" {
+		return m, errf("unsupported", "%s is not only this node's: cancel it and send again", id)
 	}
 	switch {
 	case strings.TrimSpace(body) == "":
@@ -704,7 +706,7 @@ func (n *Node) EditQueued(ctx context.Context, p Principal, id, body string) (st
 	}
 	got, err := n.st.EditQueued(ctx, id, body)
 	if errors.Is(err, store.ErrFinal) {
-		return hideLease(got), errf("conflict", "%s is already %s", id, got.State)
+		return hideLease(got), errf("conflict", "%s was already taken (%s)", id, got.State)
 	}
 	if err != nil {
 		return got, errf("unavailable", "%v", err)

@@ -337,6 +337,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(playbooksSchema); err != nil {
 		return err
 	}
+	if _, err := s.w.Exec(knowledgeSchema); err != nil {
+		return err
+	}
 	if _, err := s.w.Exec(schedulesSchema); err != nil {
 		return err
 	}
@@ -963,12 +966,12 @@ func (s *Store) Cancel(ctx context.Context, id string) (Message, error) {
 	return m, err
 }
 
-// EditQueued changes the body of a message no one has taken yet; ErrFinal (with the message as it
-// is) once it is running or over.
+// EditQueued changes the body of a message no one has taken yet (queued again after a lease ran
+// out is taken: a worker had its body); ErrFinal (with the message as it is) otherwise.
 func (s *Store) EditQueued(ctx context.Context, id, body string) (Message, error) {
 	var m Message
 	err := s.tx(ctx, func(t *sql.Tx) error {
-		res, err := t.ExecContext(ctx, `UPDATE messages SET body_size = ?, updated_at = ? WHERE id = ? AND state = 'queued'`, len(body), ms(time.Now()), id)
+		res, err := t.ExecContext(ctx, `UPDATE messages SET body_size = ?, updated_at = ? WHERE id = ? AND state = 'queued' AND attempts = 0`, len(body), ms(time.Now()), id)
 		if err != nil {
 			return err
 		}

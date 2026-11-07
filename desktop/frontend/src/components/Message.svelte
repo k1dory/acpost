@@ -16,9 +16,13 @@
   // The reply is the authoritative text once the turn is over: shown when the stream differs.
   // A queued message: its text can still change, or it can be taken back.
   let editing = $state<string | null>(null);
+  let saving = $state(false);
   async function saveEdit() {
-    if (editing === null || !editing.trim()) return;
-    try { await Node.EditQueued(m.id, editing); m.body = editing; editing = null; } catch (e) { app.error = errText(e); editing = null; }
+    const text = editing;
+    if (saving || text === null || !text.trim()) return;
+    saving = true;
+    try { m.body = await Node.EditQueued(m.id, text); editing = null; } catch (e) { app.error = errText(e); editing = null; }
+    saving = false;
   }
   async function takeBack() {
     try { await Node.Cancel(m.id); } catch (e) { app.error = errText(e); }
@@ -30,9 +34,9 @@
   <div class="user">
     <div class="meta"><Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span><span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">subagent</span>{/if}</div>
     {#if editing !== null}
-      <textarea class="ubody edit" bind:value={editing} rows="3"
-        onkeydown={e => { if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); saveEdit(); } else if (e.key === "Escape") editing = null; }}></textarea>
-      <div class="eacts"><button class="btn sm" onclick={() => (editing = null)}>Cancel</button><button class="btn primary sm" onclick={saveEdit}>Save</button></div>
+      <textarea class="ubody edit" bind:value={editing} readonly={saving} rows="3"
+        onkeydown={e => { if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); saveEdit(); } else if (e.key === "Escape" && !saving) editing = null; }}></textarea>
+      <div class="eacts"><button class="btn sm" disabled={saving} onclick={() => (editing = null)}>Cancel</button><button class="btn primary sm" disabled={saving} onclick={saveEdit}>Save</button></div>
     {:else}
       <div class="ubody selectable">{m.body}</div>
       {#if m.state === "queued"}

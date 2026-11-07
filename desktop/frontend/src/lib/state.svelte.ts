@@ -285,7 +285,10 @@ class App {
     const agent = c?.session_agent || c?.agent || this.target;
     if (!c?.session || !agent || c.kind === "cloud") return;
     try {
-      const sid = await Node.ForkSession(agent, c.session, c.kind === "session" ? c.cwd ?? "" : "");
+      // The directory: a session chat's own; a thread's when the session is its first agent's (whose
+      // directory it is), else looked up by the node.
+      const dir = c.kind === "session" || agent === c.agent ? c.cwd ?? "" : "";
+      const sid = await Node.ForkSession(agent, c.session, dir);
       const name = agent.replace(/^agent:/, "");
       const key = `session:${name}/${sid}`;
       await Node.SetChatTitle(key, "Fork: " + (c.title || "chat").slice(0, 80)).catch(() => {});

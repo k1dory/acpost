@@ -293,6 +293,27 @@ func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
+// Knowledge lists the notes agents are given at a new session.
+func (c *Client) Knowledge(ctx context.Context) ([]store.Note, error) {
+	var out struct {
+		Items []store.Note `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/knowledge", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// PutNote adds or changes a note.
+func (c *Client) PutNote(ctx context.Context, k store.Note) error {
+	_, err := c.do(ctx, "PUT", "/v1/knowledge", nil, k, nil, nil)
+	return err
+}
+
+// DeleteNote removes a note.
+func (c *Client) DeleteNote(ctx context.Context, name string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/knowledge/"+url.PathEscape(name), nil, nil, nil, nil)
+	return err
+}
+
 // Schedules lists the scheduled tasks.
 func (c *Client) Schedules(ctx context.Context) ([]store.Schedule, error) {
 	var out struct {

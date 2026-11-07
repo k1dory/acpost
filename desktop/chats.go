@@ -234,7 +234,7 @@ func (n *Node) ForkSession(agent, id, cwd string) (string, error) {
 }
 
 // EditQueued changes what a queued message asks.
-func (n *Node) EditQueued(id, body string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) { return c.EditQueued(ctx, id, body) })
-	return err
+func (n *Node) EditQueued(id, body string) (string, error) {
+	m, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) { return c.EditQueued(ctx, id, body) })
+	return m.Body, err
 }

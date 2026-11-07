@@ -468,6 +468,43 @@ export class ModelTokens {
 }
 
 /**
+ * Note is a piece of knowledge.
+ */
+export class Note {
+    "name": string;
+    "body": string;
+    "scope"?: string;
+    "enabled": boolean;
+    "updated": string;
+
+    /** Creates a new Note instance. */
+    constructor($$source: Partial<Note> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("body" in $$source)) {
+            this["body"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            this["enabled"] = false;
+        }
+        if (!("updated" in $$source)) {
+            this["updated"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Note instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Note {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Note($$parsedSource as Partial<Note>);
+    }
+}
+
+/**
  * Playbook is a kept prompt.
  */
 export class Playbook {
