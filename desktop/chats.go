@@ -187,7 +187,9 @@ func (n *Node) RenameFolder(id, name string) error {
 }
 
 func (n *Node) DeleteFolder(id string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.DeleteFolder(ctx, id) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.DeleteFolder(ctx, id)
+	})
 	return err
 }
 

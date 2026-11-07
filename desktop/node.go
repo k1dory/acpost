@@ -27,9 +27,9 @@ import (
 type Node struct {
 	app *application.App
 
-	mu      sync.Mutex
-	c       *client.Client
-	url     string
+	mu       sync.Mutex
+	c        *client.Client
+	url      string
 	follows  map[string]context.CancelFunc
 	terms    map[string]context.CancelFunc
 	stopNode context.CancelFunc // the node the app runs itself, if it does

@@ -15,7 +15,9 @@ import (
 // Settings: forge accounts, MCP servers; and the system's notifications.
 
 func (n *Node) ForgeAccounts() ([]client.ForgeAccount, error) {
-	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) ([]client.ForgeAccount, error) { return c.ForgeAccounts(ctx) })
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) ([]client.ForgeAccount, error) {
+		return c.ForgeAccounts(ctx)
+	})
 }
 
 func (n *Node) ForgeLogin(host, kind, token string) (client.ForgeAccount, error) {
@@ -25,7 +27,9 @@ func (n *Node) ForgeLogin(host, kind, token string) (client.ForgeAccount, error)
 }
 
 func (n *Node) ForgeLogout(host string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.ForgeLogout(ctx, host) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.ForgeLogout(ctx, host)
+	})
 	return err
 }
 
@@ -43,7 +47,9 @@ func (n *Node) PutMCPServer(m store.MCPServer, secrets map[string]string) error 
 }
 
 func (n *Node) DeleteMCPServer(name string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.DeleteMCPServer(ctx, name) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.DeleteMCPServer(ctx, name)
+	})
 	return err
 }
 
@@ -69,17 +75,23 @@ func (n *Node) Playbooks() ([]store.Playbook, error) {
 }
 
 func (n *Node) PutPlaybook(name, body string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.PutPlaybook(ctx, name, body) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.PutPlaybook(ctx, name, body)
+	})
 	return err
 }
 
 func (n *Node) DeletePlaybook(name string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.DeletePlaybook(ctx, name) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.DeletePlaybook(ctx, name)
+	})
 	return err
 }
 
 func (n *Node) SetChatTitle(chat, title string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.SetChatTitle(ctx, chat, title) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.SetChatTitle(ctx, chat, title)
+	})
 	return err
 }
 
@@ -92,7 +104,9 @@ func (n *Node) PutSchedule(sc store.Schedule) (store.Schedule, error) {
 }
 
 func (n *Node) DeleteSchedule(id string) error {
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.DeleteSchedule(ctx, id) })
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.DeleteSchedule(ctx, id)
+	})
 	return err
 }
 
