@@ -198,7 +198,7 @@ void apGuardNavigation(void *nswindow) {
 // interface keeps the IDE's box. It is a page like any: keys, clipboard, its storage persist with
 // the app's (WebKit's default store for the bundle).
 
-void apIDEShow(void *nswindow, double x, double y, double w, double h) {
+void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus) {
 	dispatch_async(dispatch_get_main_queue(), ^{
 		NSWindow *win = (__bridge NSWindow *)nswindow;
 		NSView *host = win.contentView;
@@ -220,7 +220,7 @@ void apIDEShow(void *nswindow, double x, double y, double w, double h) {
 		CGFloat H = host.bounds.size.height;
 		apIDE.frame = NSMakeRect(x, host.isFlipped ? y : H - y - h, w, h);
 		apIDE.hidden = NO;
-		[win makeFirstResponder:apIDE];
+		if (focus) [win makeFirstResponder:apIDE]; // only when opened, not each time it is placed
 	});
 }
 

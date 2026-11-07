@@ -20,7 +20,7 @@ void apLoad(const char *url);
 void apReload(void);
 void apBack(void);
 void apGuardNavigation(void *nswindow);
-void apIDEShow(void *nswindow, double x, double y, double w, double h);
+void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus);
 void apIDEHide(void);
 void apIDELoad(const char *url);
 
@@ -117,11 +117,15 @@ func Reload() { C.apReload() }
 func Back()   { C.apBack() }
 
 // IDEShow lays the IDE pane over window (as Show does the preview).
-func IDEShow(window unsafe.Pointer, x, y, w, h float64) error {
+func IDEShow(window unsafe.Pointer, x, y, w, h float64, focus bool) error {
 	if window == nil {
 		return errors.New("the IDE needs the app's window (not the browser)")
 	}
-	C.apIDEShow(window, C.double(x), C.double(y), C.double(w), C.double(h))
+	f := 0
+	if focus {
+		f = 1
+	}
+	C.apIDEShow(window, C.double(x), C.double(y), C.double(w), C.double(h), C.int(f))
 	return nil
 }
 

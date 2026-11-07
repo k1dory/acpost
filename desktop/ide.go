@@ -4,7 +4,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -26,102 +25,163 @@ import (
 // as in VS Code; its server and data stay where VS Code keeps them.
 
 type ideServer struct {
-	mu   sync.Mutex
-	cmd  *exec.Cmd
-	base string // http://127.0.0.1:PORT/?tkn=…
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	done    chan struct{} // closed when the server process has ended
+	ready   chan struct{} // closed when a start has finished (base or err set)
+	base    string        // http://127.0.0.1:PORT/?tkn=…
+	err     error
+	tokFile string
+	app     string // the VS Code app the CLI belongs to (to open folders in it)
+	shown   string // the address the pane has open
 }
 
 var ide ideServer
 
 var ideURL = regexp.MustCompile(`https?://(?:127\.0\.0\.1|localhost):\d+/?\S*`)
 
-// vscodeCLI finds VS Code's command line: the app's code-tunnel (serve-web), or code on PATH.
-func vscodeCLI() (string, error) {
+// vscodeCLI finds VS Code's command line (the app's code-tunnel, for serve-web) and its app; or
+// code on PATH.
+func vscodeCLI() (cli, app string, err error) {
 	home, _ := os.UserHomeDir()
-	for _, app := range []string{"/Applications/Visual Studio Code.app", filepath.Join(home, "Applications/Visual Studio Code.app"),
-		"/Applications/Visual Studio Code - Insiders.app"} {
+	for _, a := range []string{"/Applications/Visual Studio Code.app", filepath.Join(home, "Applications/Visual Studio Code.app"),
+		"/Applications/Visual Studio Code - Insiders.app", filepath.Join(home, "Applications/Visual Studio Code - Insiders.app")} {
 		for _, bin := range []string{"code-tunnel", "code-tunnel-insiders"} {
-			p := filepath.Join(app, "Contents/Resources/app/bin", bin)
+			p := filepath.Join(a, "Contents/Resources/app/bin", bin)
 			if st, err := os.Stat(p); err == nil && !st.IsDir() {
-				return p, nil
+				return p, a, nil
 			}
 		}
 	}
 	if p, err := exec.LookPath("code"); err == nil {
-		return p, nil
+		return p, "Visual Studio Code", nil
 	}
-	return "", errors.New("VS Code is not installed (Visual Studio Code.app in Applications)")
+	return "", "", errors.New("VS Code is not installed (Visual Studio Code.app in Applications)")
 }
 
-// IDEStart starts VS Code's server once (the first start fetches the server: a minute or so) and
-// gives the address to open folder in.
+// IDEStart gives the address to open folder in, starting VS Code's server once (the first start
+// fetches it: a minute or two). Calls meanwhile wait for that start; a server that ended is
+// started again.
 func (n *Node) IDEStart(folder string) (string, error) {
 	ide.mu.Lock()
+	running := ide.done != nil && !closed(ide.done) && ide.base != ""
+	if running {
+		u := ide.open(folder)
+		ide.mu.Unlock()
+		return u, nil
+	}
+	ready := ide.ready
+	if ready == nil || (closed(ready) && (ide.base == "" || closed(ide.done))) {
+		ready = make(chan struct{})
+		ide.ready, ide.base, ide.err = ready, "", nil
+		go ide.start(ready)
+	}
+	ide.mu.Unlock()
+	select {
+	case <-ready:
+	case <-time.After(4 * time.Minute):
+		return "", errors.New("VS Code's server did not start in time")
+	}
+	ide.mu.Lock()
 	defer ide.mu.Unlock()
-	if ide.base == "" || ide.cmd == nil || ide.cmd.ProcessState != nil {
-		if err := ide.start(); err != nil {
-			return "", err
-		}
+	if ide.err != nil {
+		return "", ide.err
 	}
 	return ide.open(folder), nil
 }
 
-func (s *ideServer) start() error {
-	cli, err := vscodeCLI()
+func closed(c chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
+}
+
+// start runs the server and waits — not holding the lock — for its address, its end, or 3 min.
+func (s *ideServer) start(ready chan struct{}) {
+	fail := func(err error) {
+		s.mu.Lock()
+		s.err = err
+		s.mu.Unlock()
+		close(ready)
+	}
+	cli, app, err := vscodeCLI()
 	if err != nil {
-		return err
+		fail(err)
+		return
 	}
 	b := make([]byte, 24)
 	_, _ = rand.Read(b)
 	token := hex.EncodeToString(b)
-	tokFile := filepath.Join(os.TempDir(), "acpost-vscode-token")
-	if err := os.WriteFile(tokFile, []byte(token), 0o600); err != nil {
-		return err
+	// A token file of this server's own: created new (never another's, never a link), 0600, removed
+	// when the server stops.
+	f, err := os.CreateTemp("", "acpost-vscode-token-*")
+	if err != nil {
+		fail(err)
+		return
 	}
-	args := []string{"serve-web", "--host", "127.0.0.1", "--port", "0", "--connection-token-file", tokFile,
-		"--accept-server-license-terms", "--disable-telemetry"}
-	if filepath.Base(cli) == "code" {
-		args = append([]string{}, args...) // `code serve-web` takes the same
+	_, werr := f.WriteString(token)
+	f.Close()
+	if werr != nil {
+		os.Remove(f.Name())
+		fail(werr)
+		return
 	}
-	cmd := exec.Command(cli, args...)
+	cmd := exec.Command(cli, "serve-web", "--host", "127.0.0.1", "--port", "0", "--connection-token-file", f.Name(),
+		"--accept-server-license-terms", "--disable-telemetry")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		os.Remove(f.Name())
+		fail(err)
+		return
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
-		return err
+		os.Remove(f.Name())
+		fail(err)
+		return
 	}
+	done := make(chan struct{})
 	found := make(chan string, 1)
 	go func() {
 		sc := bufio.NewScanner(out)
-		sent := false
 		for sc.Scan() {
-			if m := ideURL.FindString(sc.Text()); m != "" && !sent {
-				sent = true
-				found <- m
+			if m := ideURL.FindString(sc.Text()); m != "" {
+				select {
+				case found <- m:
+				default:
+				}
 			}
 		}
 		_ = cmd.Wait()
+		close(done)
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute) // the first start downloads the server
-	defer cancel()
+	s.mu.Lock()
+	s.cmd, s.done, s.tokFile, s.app = cmd, done, f.Name(), app
+	s.mu.Unlock()
 	select {
 	case u := <-found:
 		pu, err := url.Parse(u)
 		if err != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-			return err
+			s.stop()
+			fail(err)
+			return
 		}
 		q := pu.Query()
 		q.Set("tkn", token)
+		s.mu.Lock()
 		s.base = pu.Scheme + "://" + pu.Host + "/?" + q.Encode()
-		s.cmd = cmd
-		return nil
-	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		return errors.New("VS Code's server did not start in 3 minutes")
+		s.mu.Unlock()
+		close(ready)
+	case <-done:
+		os.Remove(f.Name())
+		fail(errors.New("VS Code's server stopped as it started"))
+	case <-time.After(3 * time.Minute):
+		s.stop()
+		fail(errors.New("VS Code's server did not start in 3 minutes"))
 	}
 }
 
@@ -135,12 +195,16 @@ func (s *ideServer) open(folder string) string {
 	return u.String()
 }
 
-// stop ends VS Code's server with the app.
+// stop ends VS Code's server (with the app) and removes its token file.
 func (s *ideServer) stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
+	cmd, tok := s.cmd, s.tokFile
+	s.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	if tok != "" {
+		_ = os.Remove(tok)
 	}
 }
 
@@ -149,13 +213,26 @@ func (n *Node) IDEShow(url string, x, y, w, h float64) error {
 	if n.win == nil {
 		return errPreview
 	}
-	if err := preview.IDEShow(n.win.NativeWindow(), x, y, w, h); err != nil {
+	// Focus goes into VS Code when it is opened (a url), not each time the pane is placed.
+	if err := preview.IDEShow(n.win.NativeWindow(), x, y, w, h, strings.TrimSpace(url) != "" && strings.TrimSpace(url) != ide.loaded()); err != nil {
 		return err
 	}
-	if strings.TrimSpace(url) != "" {
-		return preview.IDELoad(url)
+	// The same address again (the IDE shown once more): VS Code stays as it is, not reloaded.
+	if u := strings.TrimSpace(url); u != "" && u != ide.loaded() {
+		if err := preview.IDELoad(u); err != nil {
+			return err
+		}
+		ide.mu.Lock()
+		ide.shown = u
+		ide.mu.Unlock()
 	}
 	return nil
+}
+
+func (s *ideServer) loaded() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shown
 }
 
 // IDEHide hides it; VS Code keeps running.
@@ -166,5 +243,13 @@ func (n *Node) IDEOpenApp(folder string) error {
 	if !filepath.IsAbs(folder) {
 		return errors.New("an absolute folder")
 	}
-	return exec.Command("/usr/bin/open", "-a", "Visual Studio Code", "--", folder).Run()
+	ide.mu.Lock()
+	app := ide.app
+	ide.mu.Unlock()
+	if app == "" {
+		if _, a, err := vscodeCLI(); err == nil {
+			app = a
+		}
+	}
+	return exec.Command("/usr/bin/open", "-a", cmpOr(app, "Visual Studio Code"), "--", folder).Run()
 }

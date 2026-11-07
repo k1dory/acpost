@@ -11,26 +11,39 @@
   let box = $state<HTMLDivElement>();
   let err = $state("");
   let starting = $state(false);
-  let url = $state(""); // what the pane has open
+  let url = $state("");   // the server's address for the folder
+  let pending = "";        // an address not loaded yet (the pane was covered, or not placed)
+  let gen = 0;             // the folder asked for last: an older answer is dropped
+  let alive = true;
   const folder = $derived(app.chatCwd() || app.draft.cwd || app.home);
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
   const covered = $derived(app.palette || !!app.toast);
 
   async function open(dir: string) {
     if (!dir) return;
+    const my = ++gen;
     starting = true; err = "";
-    try { url = await Node.IDEStart(dir); place(url); } catch (e) { err = errText(e); }
-    starting = false;
+    try {
+      const u = await Node.IDEStart(dir);
+      if (!alive || my !== gen) return;
+      url = u; pending = u; place();
+    } catch (e) { if (alive && my === gen) err = errText(e); }
+    if (alive && my === gen) starting = false;
   }
   // The box in window points (the text size zoom taken into account, as the preview does).
-  function place(load = "") {
+  function place() {
+    if (!alive) return;
     if (!box || covered || !url) { Node.IDEHide().catch(() => {}); return; }
     const r = box.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) { Node.IDEHide().catch(() => {}); return; }
     const z = app.textSize, k = screenScale();
     const f = Math.abs(k - z) < 0.01 ? 1 : z;
-    Node.IDEShow(load, r.left * f, r.top * f, r.width * f, r.height * f).catch(e => (err = errText(e)));
+    const load = pending; // loaded once shown; kept while covered
+    Node.IDEShow(load, r.left * f, r.top * f, r.width * f, r.height * f)
+      .then(() => { if (pending === load) pending = ""; })
+      .catch(e => (err = errText(e)));
   }
+  const onResize = () => place();
   let opened = "";
   $effect(() => { const d = folder; if (d && d !== opened) { opened = d; open(d); } });
   $effect(() => {
@@ -38,11 +51,11 @@
     if (!box) return;
     const ro = new ResizeObserver(() => place());
     ro.observe(box);
-    addEventListener("resize", place as any);
+    addEventListener("resize", onResize);
     requestAnimationFrame(() => place());
-    return () => { ro.disconnect(); removeEventListener("resize", place as any); };
+    return () => { ro.disconnect(); removeEventListener("resize", onResize); };
   });
-  onDestroy(() => { Node.IDEHide().catch(() => {}); });
+  onDestroy(() => { alive = false; gen++; Node.IDEHide().catch(() => {}); });
 </script>
 
 <section class="ide">

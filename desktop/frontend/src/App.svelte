@@ -97,7 +97,7 @@
     else if (e.key === ",") { e.preventDefault(); app.view = "settings"; }
     else if (e.key === "k") { e.preventDefault(); app.palette = !app.palette; }
     else if (e.key === "b") { e.preventDefault(); app.view = "board"; }
-    else if (e.key === "i" && e.shiftKey) { e.preventDefault(); app.view = app.view === "ide" ? "chat" : "ide"; }
+    else if (e.code === "KeyI" && e.shiftKey) { e.preventDefault(); app.view = app.view === "ide" ? "chat" : "ide"; }
     else if (e.key === "l") {
       // The selected text, quoted into the composer.
       const t = window.getSelection()?.toString().trim();
@@ -126,12 +126,11 @@
     <Board />
   {:else if app.view === "wiki"}
     <Wiki />
-  {:else if app.view === "ide"}
-    <!-- The IDE: the chat that was open moves to a column on the left, VS Code takes the rest. -->
-    <div class="ide-chat"><Conversation /></div>
-    <IDE />
   {:else}
-    <Conversation />
+    <!-- The chat, and in the IDE the same chat as a column on the left (one instance: a draft being
+         typed stays), VS Code taking the rest. -->
+    <div class="convwrap" class:ide-chat={app.view === "ide"}><Conversation /></div>
+    {#if app.view === "ide"}<IDE />{/if}
   {/if}
   {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
   {#if app.palette}<Palette />{/if}
@@ -145,7 +144,8 @@
 
 <style>
   .shell { height: 100%; display: flex; min-height: 0; }
-  .ide-chat { width: 400px; flex: none; display: flex; min-width: 0; }
+  .convwrap { flex: 1; display: flex; min-width: 0; }
+  .convwrap.ide-chat { flex: none; width: 400px; }
   .ide-chat :global(.conv) { min-width: 0; }
   .down { flex: 1; display: grid; place-items: center; }
   .box { padding: 26px 28px; display: grid; gap: 10px; max-width: 460px; }
