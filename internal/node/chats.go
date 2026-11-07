@@ -16,9 +16,10 @@ import (
 // editor), cloud sandboxes — the most recently active first, each with its folder.
 
 const (
-	chatSessionsPerAgent = 300              // newest sessions of an agent listed
-	chatThreads          = 500              // newest threads listed
-	chatListWait         = 20 * time.Second // for an agent to list its sessions
+	chatSessionsPerAgent = 300                      // newest sessions of an agent shown (not counting acpost's own threads')
+	chatSessionsListed   = 2 * chatSessionsPerAgent // asked of an agent: its threads' sessions are among them
+	chatThreads          = 500                      // newest threads listed
+	chatListWait         = 20 * time.Second         // for an agent to list its sessions
 )
 
 // Chats lists the node's user's chats.
@@ -104,11 +105,15 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	// Sessions and sandboxes elsewhere: from the cache, refreshed apart once stale.
 	ext, partial := n.externalChats(ctx)
 	out.Partial = append(out.Partial, partial...)
+	shown := map[string]int{} // sessions shown per agent
 	for _, c := range ext {
-		switch {
-		case c.Kind == "session" && ours[strings.TrimPrefix(c.Agent, "agent:")+"/"+c.Session]:
-			continue
-		case c.Kind == "cloud" && ours["cloud/"+c.Sandbox]:
+		if c.Kind == "session" {
+			if shown[c.Agent] >= chatSessionsPerAgent || ours[strings.TrimPrefix(c.Agent, "agent:")+"/"+c.Session] {
+				continue
+			}
+			shown[c.Agent]++
+		}
+		if c.Kind == "cloud" && ours["cloud/"+c.Sandbox] {
 			continue
 		}
 		c.Folder = folderOf[c.Key]
@@ -161,10 +166,10 @@ func (n *Node) externalChats(ctx context.Context) ([]client.Chat, []string) {
 		return items, partial
 	}
 	items, partial := append([]client.Chat(nil), c.items...), append([]string(nil), c.partial...)
-	if time.Since(c.at) > chatCacheFresh && !c.refreshing && !n.closed.Load() {
+	if time.Since(c.at) > chatCacheFresh && !c.refreshing {
 		c.refreshing = true
 		gen := c.gen
-		n.goLoop(func() {
+		started := n.goWork(func() {
 			got, gotPartial := n.listExternal(n.ctx)
 			c.mu.Lock()
 			defer c.mu.Unlock()
@@ -179,6 +184,9 @@ func (n *Node) externalChats(ctx context.Context) ([]client.Chat, []string) {
 				c.at = time.Now().Add(-2 * chatCacheFresh) // forgotten meanwhile: stale again
 			}
 		})
+		if !started {
+			c.refreshing = false
+		}
 	}
 	c.mu.Unlock()
 	return items, partial
@@ -210,7 +218,7 @@ func (n *Node) listExternal(ctx context.Context) ([]client.Chat, []string) {
 			defer cancel()
 			var got []client.Chat
 			cursor := ""
-			for len(got) < chatSessionsPerAgent {
+			for len(got) < chatSessionsListed {
 				list, next, err := n.Sessions(lctx, p, name, "", cursor)
 				if err != nil {
 					if CodeOf(err) != "unsupported" {

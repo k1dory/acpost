@@ -93,6 +93,7 @@ type Node struct {
 	sandboxes map[string]*sandboxAgent // driver: sandbox, cloud agents (the cloud's added as used: sbMu)
 	sbMu      sync.Mutex
 	schedBusy atomic.Bool              // a schedules pass is running
+	workMu    sync.RWMutex             // goWork against Close
 	chatList  chatCache                // sessions and sandboxes listed elsewhere, cached
 	dynCfg    map[string]*config.Agent // the cloud's sandboxes, as agents
 	cloud     *cloudAPI
@@ -235,10 +236,25 @@ func (n *Node) goLoop(fn func()) {
 	go func() { defer n.wg.Done(); fn() }()
 }
 
+// goWork starts fn as a loop Close waits for, unless the node is closing: false then. Unlike
+// goLoop it may be called from anywhere (a request), not only from a loop Close already waits for.
+func (n *Node) goWork(fn func()) bool {
+	n.workMu.RLock()
+	defer n.workMu.RUnlock()
+	if n.closed.Load() {
+		return false
+	}
+	n.goLoop(fn)
+	return true
+}
+
 // Close stops the drivers (their agent processes too) and the loops. Messages in flight stay
 // running in the store and are requeued by the next start. The store is the caller's to close.
 func (n *Node) Close() {
-	if !n.closed.CompareAndSwap(false, true) || n.cancel == nil {
+	n.workMu.Lock() // no goWork begins past this point
+	first := n.closed.CompareAndSwap(false, true)
+	n.workMu.Unlock()
+	if !first || n.cancel == nil {
 		return
 	}
 	n.cancel()

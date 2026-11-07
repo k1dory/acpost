@@ -4,7 +4,10 @@
 
   // What a running agent is doing, in a word that changes, as Claude Code and Codex show it: the
   // tool it runs, else that it thinks — and, while nothing new comes, the words turn.
-  let { agent, view, since }: { agent: string; view?: { blocks: Block[]; tools: Map<string, any> }; since?: string } = $props();
+  let { agent, view }: { agent: string; view?: { blocks: Block[]; tools: Map<string, any> } } = $props();
+  // Since the turn was seen running (a message's times say when it was sent or last changed, not
+  // when its agent took it).
+  const since = Date.now();
   const brand = $derived(brandOf(agent));
 
   const words: Record<string, string[]> = {
@@ -30,7 +33,7 @@
     if (last?.t === "thought") return list[tick % 2 === 0 ? 0 : 1];
     return list[tick % list.length];
   });
-  const secs = $derived(since ? Math.max(0, Math.round((now - Date.parse(since)) / 1000)) : 0);
+  const secs = $derived(Math.max(0, Math.round((now - since) / 1000)));
   const took = $derived(secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`);
 </script>
 

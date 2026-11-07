@@ -55,15 +55,20 @@ class App {
   error = $state("");
   private unsub = new Map<string, () => void>();
 
+  /** Where this node's chat list is kept between launches: by node, address and who. */
+  chatsKey() {
+    return "chats:" + [this.conn?.node, this.conn?.url, this.conn?.you].map(v => v ?? "").join("|");
+  }
+
   async connect() {
-    // The list as it was last time, at once; the node's answer replaces it.
-    try {
-      const saved = JSON.parse(localStorage.getItem("chats") ?? "null");
-      if (saved?.items && !this.chats.length) { this.chats = saved.items; this.folders = saved.folders ?? []; }
-    } catch {}
     const c: any = await Node.Status();
     this.conn = { ok: c.ok, error: c.error, url: c.url, node: c.status?.node, you: c.status?.you };
     if (!c.ok) return;
+    // This node's list as it was last time, at once; its answer replaces it.
+    try {
+      const saved = JSON.parse(localStorage.getItem(this.chatsKey()) ?? "null");
+      if (saved?.items && !this.chats.length) { this.chats = saved.items; this.folders = saved.folders ?? []; }
+    } catch {}
     this.home = await Node.Home();
     if (!this.draft.cwd) this.draft.cwd = this.home;
     await Promise.all([this.loadAgents(), this.loadChats(), this.loadCloudAgents(), this.loadPlaybooks(), this.watchAsking()]);
@@ -119,7 +124,7 @@ class App {
         this.wasRunning.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
       }
       this.chats = c.items ?? [];
-      try { localStorage.setItem("chats", JSON.stringify({ items: this.chats, folders: c.folders ?? [] })); } catch {}
+      try { localStorage.setItem(this.chatsKey(), JSON.stringify({ items: this.chats, folders: c.folders ?? [] })); } catch {}
       // A new task's thread, once listed, is the open chat (its session, to fork, comes with it).
       if (this.thread && (!this.chat || this.chat.key === "thread:" + this.thread)) {
         const mine = this.chats.find(x => x.key === "thread:" + this.thread);
