@@ -328,7 +328,7 @@ func (c *Client) Log(ctx context.Context, srv Server, r Repo, job string, target
 		// A job of an Actions run (Gitea 1.24+) has its log over the API; a commit status
 		// (Forgejo, older Gitea) has none: the error says where to look.
 		noLogs := &Error{Status: 404, Message: fmt.Sprintf("%s (version %s) gives no job logs over its API: open %s",
-			r.Host, c.shown(r.Host, srv.Version, 40), plainURL(target))}
+			r.Host, c.shown(r.Host, srv.Version, 40), c.shown(r.Host, plainURL(target), 300))}
 		if strings.HasPrefix(job, "status:") {
 			err = noLogs
 			break
