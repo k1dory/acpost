@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"os/exec"
@@ -233,7 +234,9 @@ func (s *ideServer) start(st *ideStart) {
 // ideServing waits until the server at base serves VS Code (not its "downloading" page), the
 // server ends, or deadline.
 func ideServing(base string, done chan struct{}, deadline time.Time) error {
-	c := &http.Client{Timeout: 10 * time.Second}
+	// VS Code answers the token with a cookie and a redirect to /: kept, as the page keeps it.
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Timeout: 10 * time.Second, Jar: jar}
 	for {
 		if r, err := c.Get(base); err == nil {
 			b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))

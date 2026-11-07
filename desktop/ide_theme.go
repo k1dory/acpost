@@ -91,7 +91,8 @@ func ideSettings() map[string]any {
 // The script, made once: it writes the settings into VS Code's store (its IndexedDB, made by VS
 // Code a bit after the page loads on a fresh profile: tried each second for a minute, never made
 // here), merged over what is there, then loads the page once more to take them. Done once per
-// version of them (marked in the page's own storage); a settings file VS Code cannot read as
+// version of them (marked in the page's own storage; a mark that cannot be kept: written, not
+// reloaded, so it never loops); a settings file VS Code cannot read as
 // plain JSON (the user's, with comments) is left as it is.
 var ideSeedOnce sync.Once
 
@@ -105,7 +106,7 @@ const V = ` + string(ver) + `, ours = ` + string(b) + `, K = 'acpost-ide-setting
 try { if (localStorage.getItem(K) === V) return; } catch (e) { return; }
 let left = 60;
 const again = () => { if (--left > 0) setTimeout(tryIt, 1000); };
-const done = () => { try { localStorage.setItem(K, V); } catch (e) {} };
+const done = () => { try { localStorage.setItem(K, V); return localStorage.getItem(K) === V; } catch (e) { return false; } };
 function tryIt() {
   const q = indexedDB.open('vscode-web-db');
   q.onupgradeneeded = () => { q.transaction.abort(); };
@@ -122,7 +123,7 @@ function tryIt() {
         if (!cur || typeof cur !== 'object' || Array.isArray(cur)) { done(); return; }
       }
       st.put(new TextEncoder().encode(JSON.stringify(Object.assign(cur, ours), null, 2)), '/User/settings.json');
-      tx.oncomplete = () => { db.close(); done(); location.reload(); };
+      tx.oncomplete = () => { db.close(); if (done()) location.reload(); }; // unmarked: no reload (it would come again on every load)
     };
   };
 }
