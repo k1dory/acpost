@@ -182,6 +182,9 @@ func (n *Node) cloudAgent(name string, verify bool) (*sandboxAgent, error) {
 	return created, nil
 }
 
+// CloudConfigured says whether the node has a cloud (an empty catalogue is not "no cloud").
+func (n *Node) CloudConfigured() bool { return n.cloud != nil }
+
 // CloudAgents lists the agents of the tenant's catalogue a cloud task can start from.
 func (n *Node) CloudAgents(ctx context.Context, p Principal) ([]client.CloudAgent, error) {
 	if err := userOnly(p, "the cloud"); err != nil {

@@ -535,7 +535,7 @@ func (s *server) cloudAgents(w http.ResponseWriter, r *http.Request, p node.Prin
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	writeJSON(w, 200, map[string]any{"items": out, "configured": s.n.CloudConfigured()})
 }
 
 func (s *server) cloudTask(w http.ResponseWriter, r *http.Request, p node.Principal) {

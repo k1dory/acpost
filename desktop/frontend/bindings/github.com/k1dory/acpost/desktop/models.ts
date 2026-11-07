@@ -54,6 +54,39 @@ export class Artifact {
 }
 
 /**
+ * CloudAgents lists the cloud tenant's catalogue.
+ * CloudCatalog is the cloud's catalogue, and whether there is a cloud at all.
+ */
+export class CloudCatalog {
+    "items": client$0.CloudAgent[];
+    "configured": boolean;
+
+    /** Creates a new CloudCatalog instance. */
+    constructor($$source: Partial<CloudCatalog> = {}) {
+        if (!("items" in $$source)) {
+            this["items"] = [];
+        }
+        if (!("configured" in $$source)) {
+            this["configured"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudCatalog instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudCatalog {
+        const $$createField0_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("items" in $$parsedSource) {
+            $$parsedSource["items"] = $$createField0_0($$parsedSource["items"]);
+        }
+        return new CloudCatalog($$parsedSource as Partial<CloudCatalog>);
+    }
+}
+
+/**
  * Connection is the node as the app sees it.
  */
 export class Connection {
@@ -81,7 +114,7 @@ export class Connection {
      * Creates a new Connection instance from a string or object.
      */
     static createFrom($$source: any = {}): Connection {
-        const $$createField3_0 = $$createType0;
+        const $$createField3_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("status" in $$parsedSource) {
             $$parsedSource["status"] = $$createField3_0($$parsedSource["status"]);
@@ -110,7 +143,7 @@ export class ConversationPage {
      * Creates a new ConversationPage instance from a string or object.
      */
     static createFrom($$source: any = {}): ConversationPage {
-        const $$createField0_0 = $$createType2;
+        const $$createField0_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("items" in $$parsedSource) {
             $$parsedSource["items"] = $$createField0_0($$parsedSource["items"]);
@@ -153,7 +186,7 @@ export class Task {
      * Creates a new Task instance from a string or object.
      */
     static createFrom($$source: any = {}): Task {
-        const $$createField8_0 = $$createType4;
+        const $$createField8_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("files" in $$parsedSource) {
             $$parsedSource["files"] = $$createField8_0($$parsedSource["files"]);
@@ -199,8 +232,10 @@ export class Upload {
 }
 
 // Private type creation functions
-const $$createType0 = client$0.Status.createFrom;
-const $$createType1 = store$0.Conversation.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = Upload.createFrom;
+const $$createType0 = client$0.CloudAgent.createFrom;
+const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = client$0.Status.createFrom;
+const $$createType3 = store$0.Conversation.createFrom;
 const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = Upload.createFrom;
+const $$createType6 = $Create.Array($$createType5);

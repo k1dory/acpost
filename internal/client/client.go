@@ -187,6 +187,17 @@ func (c *Client) CloudAgents(ctx context.Context) ([]CloudAgent, error) {
 	return out.Items, err
 }
 
+// CloudCatalog is the catalogue and whether a cloud is configured at all (an error, from a node
+// that has one, is that cloud failing).
+func (c *Client) CloudCatalog(ctx context.Context) ([]CloudAgent, bool, error) {
+	var out struct {
+		Items      []CloudAgent `json:"items"`
+		Configured bool         `json:"configured"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/cloud/agents", nil, nil, &out, nil)
+	return out.Items, out.Configured, err
+}
+
 // CloudHistory reads a cloud sandbox's conversation as events.
 func (c *Client) CloudHistory(ctx context.Context, id string) ([]store.Event, error) {
 	var out struct {

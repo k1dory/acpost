@@ -131,8 +131,17 @@ func (n *Node) SessionHistory(agent, id, cwd string) ([]store.Event, error) {
 }
 
 // CloudAgents lists the cloud tenant's catalogue.
-func (n *Node) CloudAgents() ([]client.CloudAgent, error) {
-	return call(n, func(ctx context.Context, c *client.Client) ([]client.CloudAgent, error) { return c.CloudAgents(ctx) })
+// CloudCatalog is the cloud's catalogue, and whether there is a cloud at all.
+type CloudCatalog struct {
+	Items      []client.CloudAgent `json:"items"`
+	Configured bool                `json:"configured"`
+}
+
+func (n *Node) CloudAgents() (CloudCatalog, error) {
+	return call(n, func(ctx context.Context, c *client.Client) (CloudCatalog, error) {
+		items, configured, err := c.CloudCatalog(ctx)
+		return CloudCatalog{Items: items, Configured: configured}, err
+	})
 }
 
 // CloudHistory reads a cloud sandbox's conversation.

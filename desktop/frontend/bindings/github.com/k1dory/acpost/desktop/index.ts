@@ -8,6 +8,7 @@ export {
 
 export {
     Artifact,
+    CloudCatalog,
     Connection,
     ConversationPage,
     Task,

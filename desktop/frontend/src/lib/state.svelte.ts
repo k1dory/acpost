@@ -1,5 +1,5 @@
 import { t } from "./i18n.svelte";
-import { Node, on, errText, errInfo } from "./api";
+import { Node, on, errText } from "./api";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -135,13 +135,14 @@ class App {
   cloudError = $state("");
   async loadCloudAgents() {
     try {
-      this.cloudAgents = ((await Node.CloudAgents()) ?? []) as any;
+      const cat: any = await Node.CloudAgents();
+      if (!cat?.configured) { this.cloudState = ""; this.cloudAgents = []; if (this.draft.where === "cloud") this.draft.where = "mac"; return; }
+      this.cloudAgents = cat.items ?? [];
       this.cloudState = "ok"; this.cloudError = "";
       try { localStorage.setItem("cloud-agents", JSON.stringify(this.cloudAgents)); } catch {}
       if (!this.draft.cloudAgent && this.cloudAgents[0]) this.draft.cloudAgent = this.cloudAgents[0].ref;
     } catch (e) {
-      const x = errInfo(e);
-      if (x.code === "not_found") { this.cloudState = ""; this.cloudAgents = []; return; } // no cloud configured
+      // A node with no cloud answers without an error: an error is the configured cloud failing.
       this.cloudState = "down";
       this.cloudError = errText(e);
       if (!this.cloudAgents.length) try { this.cloudAgents = JSON.parse(localStorage.getItem("cloud-agents") ?? "[]"); } catch {}
