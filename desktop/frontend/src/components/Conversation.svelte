@@ -25,7 +25,7 @@
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
 
-  function onScroll() { stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80; }
+  function onScroll() { if (box) stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80; }
   $effect(() => { app.rev; app.msgs.length; app.history.length; if (stick) tick().then(() => box && (box.scrollTop = box.scrollHeight)); });
 </script>
 
