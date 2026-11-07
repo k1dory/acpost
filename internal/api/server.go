@@ -73,6 +73,8 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
 	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
 	mux.HandleFunc("POST /v1/handoff", s.auth(s.handoff))
+	mux.HandleFunc("GET /v1/messages/{id}/tree", s.auth(s.tree))
+	mux.HandleFunc("GET /v1/file-at", s.auth(s.fileAt))
 	mux.HandleFunc("GET /v1/wiki", s.auth(s.wikis))
 	mux.HandleFunc("GET /v1/wiki/pages", s.auth(s.wikiPages))
 	mux.HandleFunc("POST /v1/wiki", s.auth(s.writeWiki))
@@ -615,6 +617,25 @@ func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Princi
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (s *server) tree(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.Tree(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) fileAt(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	q := r.URL.Query()
+	text, err := s.n.FileAt(r.Context(), p, q.Get("repo"), q.Get("tree"), q.Get("path"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"text": text})
 }
 
 func (s *server) handoff(w http.ResponseWriter, r *http.Request, p node.Principal) {

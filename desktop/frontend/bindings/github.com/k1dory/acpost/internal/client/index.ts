@@ -19,5 +19,6 @@ export {
     OptionValue,
     Status,
     Terminal,
+    TreeNode,
     UsageReport
 } from "./models.js";

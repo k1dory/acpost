@@ -293,6 +293,38 @@ func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
+// TreeNode is a message an agent sent while working on another.
+type TreeNode struct {
+	ID     string      `json:"id"`
+	Parent string      `json:"parent"`
+	Depth  int         `json:"depth"`
+	From   string      `json:"from"`
+	To     string      `json:"to"`
+	Thread string      `json:"thread"`
+	State  store.State `json:"state"`
+	Body   string      `json:"body"`
+	Reply  string      `json:"reply"`
+	At     time.Time   `json:"at"`
+}
+
+// Tree is what was asked under a message (subagents), in order.
+func (c *Client) Tree(ctx context.Context, id string) ([]TreeNode, error) {
+	var out struct {
+		Items []TreeNode `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id)+"/tree", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// FileAt is a file as a turn left it.
+func (c *Client) FileAt(ctx context.Context, repo, tree, path string) (string, error) {
+	var out struct {
+		Text string `json:"text"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/file-at", url.Values{"repo": {repo}, "tree": {tree}, "path": {path}}, nil, &out, nil)
+	return out.Text, err
+}
+
 // HandoffRequest is a local chat to go on in the cloud.
 type HandoffRequest struct {
 	Thread     string `json:"thread,omitempty"`

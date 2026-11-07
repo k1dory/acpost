@@ -3,7 +3,7 @@
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import { splitDiff } from "../lib/turn";
-  import { who } from "../lib/format";
+  import { who, clock } from "../lib/format";
   import DiffLines from "./DiffLines.svelte";
   import Dropdown from "./Dropdown.svelte";
 
@@ -40,6 +40,23 @@
     return m;
   });
   const shown = $derived(files.find((f: any) => f.path === pick) ?? files[0]);
+
+  // A file's versions: the turns that changed it, in order — each with its own diff of the file
+  // and, on request, the whole file as that turn left it.
+  let version = $state<number>(-1); // -1: the whole diff
+  let at = $state<{ text?: string; err?: string } | null>(null);
+  const versions = $derived.by(() => {
+    if (!shown) return [];
+    return ((data?.turns ?? []) as any[])
+      .filter(t => (t.files ?? []).some((f: any) => f.path === shown.path))
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+      .map(t => ({ turn: t, file: (t.files as any[]).find(f => f.path === shown.path), lines: splitDiff(t.diff ?? "").find(f => f.path === shown.path)?.lines ?? [] }));
+  });
+  $effect(() => { shown?.path; version = -1; at = null; });
+  async function fileAt(v: (typeof versions)[number]) {
+    at = { text: "" };
+    try { at = { text: await Node.FileAt(v.turn.repo, v.turn.after, shown!.path) }; } catch (e) { at = { err: errText(e) }; }
+  }
 </script>
 
 <div class="ch">
@@ -67,7 +84,32 @@
         {/each}
       </div>
       <div class="view scroll">
-        {#if shown}<div class="vh mono">{shown.path}</div><DiffLines lines={shown.lines} />{/if}
+        {#if shown}
+          <div class="vh">
+            <span class="mono">{shown.path}</span>
+            {#if versions.length > 1 || (versions.length === 1 && agent === "")}
+              <span class="vers">
+                <button class="vb" class:on={version === -1} onclick={() => { version = -1; at = null; }}>{t("The whole diff")}</button>
+                {#each versions as v, i}
+                  <button class="vb" class:on={version === i} onclick={() => { version = i; at = null; }} title={who(v.turn.agent).name + " · " + clock(v.turn.at)}>
+                    v{i + 1} <span class="muted">{who(v.turn.agent).name} {clock(v.turn.at)}</span>
+                  </button>
+                {/each}
+              </span>
+            {/if}
+          </div>
+          {#if version >= 0 && versions[version]}
+            {@const v = versions[version]}
+            <div class="vbar">
+              <span class="mono n"><span class="plus">+{Math.max(0, v.file?.added ?? 0)}</span> <span class="minus">−{Math.max(0, v.file?.removed ?? 0)}</span></span>
+              <span class="sp"></span>
+              {#if v.file?.status !== "D"}<button class="btn ghost sm" onclick={() => (at ? (at = null) : fileAt(v))}>{at ? t("This version") : t("File at this version")}</button>{/if}
+            </div>
+            {#if at}
+              {#if at.err}<div class="empty">{at.err}</div>{:else}<pre class="whole selectable">{at.text}</pre>{/if}
+            {:else}<DiffLines lines={v.lines} />{/if}
+          {:else}<DiffLines lines={shown.lines} />{/if}
+        {/if}
       </div>
     </div>
   {/if}
@@ -87,5 +129,10 @@
   .dir { font-size: 11.5px; }
   .stt { width: 14px; font-weight: 600; } .st-A { color: var(--add-ink); } .st-D { color: var(--del-ink); } .st-M { color: var(--warn); }
   .n { font-size: 11.5px; } .plus { color: var(--add-ink); } .minus { color: var(--del-ink); }
-  .vh { font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; background: var(--card); }
+  .vers { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .vb { border: 1px solid var(--line-soft); background: transparent; border-radius: 7px; font: 500 11px var(--sans); padding: 2px 7px; color: var(--ink-2); }
+  .vb.on { background: var(--sel); color: var(--ink); border-color: transparent; }
+  .vbar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); }
+  .whole { margin: 0; padding: 10px 12px; font: 11.5px/1.5 var(--mono); white-space: pre; overflow: auto; }
+  .vh { display: grid; font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; background: var(--card); }
 </style>

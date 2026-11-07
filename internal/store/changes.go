@@ -137,3 +137,10 @@ func (s *Store) Descendants(ctx context.Context, id string, limit int) ([]string
 	}
 	return out, rows.Err()
 }
+
+// ChangedRepo says whether a turn's snapshot recorded tree (before or after it) in repo.
+func (s *Store) ChangedRepo(ctx context.Context, repo, tree string) (bool, error) {
+	var n int
+	err := s.r.QueryRowContext(ctx, `SELECT count(*) FROM turn_changes WHERE repo = ? AND (before = ? OR after = ?)`, repo, tree, tree).Scan(&n)
+	return n > 0, err
+}

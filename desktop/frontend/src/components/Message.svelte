@@ -20,6 +20,7 @@
   import { who, clock } from "../lib/format";
   import Avatar from "./Avatar.svelte";
   import Working from "./Working.svelte";
+  import Subtasks from "./Subtasks.svelte";
   import Markdown from "./Markdown.svelte";
   import TurnBlocks from "./TurnBlocks.svelte";
   import Icon from "./Icon.svelte";
@@ -77,6 +78,7 @@
     </div>
 
     {#if turn}<TurnBlocks view={turn} msg={m.id} {done} agent={m.to} />{/if}
+    <Subtasks msg={m.id} running={m.state === "running"} />
 
     {#if replyDiffers || (done && !streamed && m.reply)}
       <Markdown text={m.reply ?? ""} />

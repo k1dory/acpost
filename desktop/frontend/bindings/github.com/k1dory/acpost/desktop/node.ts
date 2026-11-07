@@ -186,6 +186,13 @@ export function Events(id: string, after: number): $CancellablePromise<store$0.E
 }
 
 /**
+ * FileAt is a file as a turn left it.
+ */
+export function FileAt(repo: string, tree: string, path: string): $CancellablePromise<string> {
+    return $Call.ByID(3622828243, repo, tree, path);
+}
+
+/**
  * Follow streams a message's events after seq `after` as "events:<id>" until it is final (or
  * Unfollow). Following it again restarts the stream.
  */
@@ -452,6 +459,15 @@ export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
 }
 
 /**
+ * Tree is what agents asked other agents under a message.
+ */
+export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
+    return $Call.ByID(3080916840, id).then(($result: any) => {
+        return $$createType36($result);
+    });
+}
+
+/**
  * Unfollow stops a message's stream.
  */
 export function Unfollow(id: string): $CancellablePromise<void> {
@@ -463,19 +479,19 @@ export function Unfollow(id: string): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType36($result);
+        return $$createType38($result);
     });
 }
 
 export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
     return $Call.ByID(3522603132, repo).then(($result: any) => {
-        return $$createType38($result);
+        return $$createType40($result);
     });
 }
 
 export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
     return $Call.ByID(52380493).then(($result: any) => {
-        return $$createType40($result);
+        return $$createType42($result);
     });
 }
 
@@ -522,9 +538,11 @@ const $$createType31 = $Create.Array($$createType30);
 const $$createType32 = $Create.Array($Create.Any);
 const $$createType33 = $models.Connection.createFrom;
 const $$createType34 = $Create.Array($$createType4);
-const $$createType35 = client$0.UsageReport.createFrom;
+const $$createType35 = client$0.TreeNode.createFrom;
 const $$createType36 = $Create.Array($$createType35);
-const $$createType37 = store$0.WikiPage.createFrom;
+const $$createType37 = client$0.UsageReport.createFrom;
 const $$createType38 = $Create.Array($$createType37);
-const $$createType39 = store$0.Wiki.createFrom;
+const $$createType39 = store$0.WikiPage.createFrom;
 const $$createType40 = $Create.Array($$createType39);
+const $$createType41 = store$0.Wiki.createFrom;
+const $$createType42 = $Create.Array($$createType41);

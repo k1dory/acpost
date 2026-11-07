@@ -723,6 +723,66 @@ export class Terminal {
 }
 
 /**
+ * TreeNode is a message an agent sent while working on another.
+ */
+export class TreeNode {
+    "id": string;
+    "parent": string;
+    "depth": number;
+    "from": string;
+    "to": string;
+    "thread": string;
+    "state": store$0.State;
+    "body": string;
+    "reply": string;
+    "at": string;
+
+    /** Creates a new TreeNode instance. */
+    constructor($$source: Partial<TreeNode> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("parent" in $$source)) {
+            this["parent"] = "";
+        }
+        if (!("depth" in $$source)) {
+            this["depth"] = 0;
+        }
+        if (!("from" in $$source)) {
+            this["from"] = "";
+        }
+        if (!("to" in $$source)) {
+            this["to"] = "";
+        }
+        if (!("thread" in $$source)) {
+            this["thread"] = "";
+        }
+        if (!("state" in $$source)) {
+            this["state"] = store$0.State.$zero;
+        }
+        if (!("body" in $$source)) {
+            this["body"] = "";
+        }
+        if (!("reply" in $$source)) {
+            this["reply"] = "";
+        }
+        if (!("at" in $$source)) {
+            this["at"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TreeNode instance from a string or object.
+     */
+    static createFrom($$source: any = {}): TreeNode {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TreeNode($$parsedSource as Partial<TreeNode>);
+    }
+}
+
+/**
  * UsageReport is a group of turns' usage, with what the node adds: the cache's share of what was
  * read, and an estimate (by the node's prices) for turns whose agent gave no cost.
  */

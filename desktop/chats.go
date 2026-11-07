@@ -246,3 +246,13 @@ func (n *Node) Handoff(r client.HandoffRequest) (client.HandoffResult, error) {
 		return c.Handoff(ctx, r)
 	})
 }
+
+// Tree is what agents asked other agents under a message.
+func (n *Node) Tree(id string) ([]client.TreeNode, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]client.TreeNode, error) { return c.Tree(ctx, id) })
+}
+
+// FileAt is a file as a turn left it.
+func (n *Node) FileAt(repo, tree, path string) (string, error) {
+	return call(n, func(ctx context.Context, c *client.Client) (string, error) { return c.FileAt(ctx, repo, tree, path) })
+}
