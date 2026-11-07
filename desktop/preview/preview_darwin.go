@@ -23,6 +23,7 @@ void apGuardNavigation(void *nswindow);
 void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus);
 void apIDEHide(void);
 void apIDELoad(const char *url);
+void apIDEReload(void);
 
 */
 import "C"
@@ -128,6 +129,9 @@ func IDEShow(window unsafe.Pointer, x, y, w, h float64, focus bool) error {
 	C.apIDEShow(window, C.double(x), C.double(y), C.double(w), C.double(h), C.int(f))
 	return nil
 }
+
+// IDEReload loads the IDE's page again.
+func IDEReload() { C.apIDEReload() }
 
 // IDEHide hides it (VS Code stays loaded).
 func IDEHide() { C.apIDEHide() }

@@ -278,6 +278,13 @@ export function IDEOpenApp(folder: string): $CancellablePromise<void> {
 }
 
 /**
+ * IDEReload loads VS Code again (the Reload button: after a failed load, or to start over).
+ */
+export function IDEReload(): $CancellablePromise<void> {
+    return $Call.ByID(3178862189);
+}
+
+/**
  * IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.
  */
 export function IDEShow(url: string, x: number, y: number, w: number, h: number): $CancellablePromise<void> {
@@ -285,8 +292,9 @@ export function IDEShow(url: string, x: number, y: number, w: number, h: number)
 }
 
 /**
- * IDEStart starts VS Code's server once (the first start fetches the server: a minute or so) and
- * gives the address to open folder in.
+ * IDEStart gives the address to open folder in, starting VS Code's server once (the first start
+ * fetches it: a minute or two). Calls meanwhile wait for that same start and read its result; a
+ * server that ended, or a start that failed, is started again.
  */
 export function IDEStart(folder: string): $CancellablePromise<string> {
     return $Call.ByID(1671962452, folder);

@@ -64,7 +64,7 @@
     <b>VS Code</b>
     <span class="muted mono path" title={folder}>{short(folder)}</span>
     <span class="sp"></span>
-    <button class="btn ghost sm" onclick={() => open(folder)} title={t("Reload")}><Icon name="refresh" size={13} /></button>
+    <button class="btn ghost sm" onclick={() => (url ? Node.IDEReload() : open(folder))} title={t("Reload")}><Icon name="refresh" size={13} /></button>
     <button class="btn ghost sm" onclick={() => Node.IDEOpenApp(folder).catch(e => (err = errText(e)))}>{t("Open in VS Code")}</button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}

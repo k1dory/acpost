@@ -236,3 +236,5 @@ void apIDELoad(const char *url) {
 		if (nu) [apIDE loadRequest:[NSURLRequest requestWithURL:nu]];
 	});
 }
+
+void apIDEReload(void) { dispatch_async(dispatch_get_main_queue(), ^{ if (apIDE) [apIDE reload]; }); }

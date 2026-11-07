@@ -24,16 +24,22 @@ import (
 // 127.0.0.1, behind a token of this run, shown in a native pane of the window. Extensions install
 // as in VS Code; its server and data stay where VS Code keeps them.
 
+// ideStart is one start of the server: its result, ready once it is known.
+type ideStart struct {
+	ready chan struct{}
+	base  string // http://127.0.0.1:PORT/?tkn=… (set before ready is closed)
+	err   error
+}
+
 type ideServer struct {
 	mu      sync.Mutex
-	cmd     *exec.Cmd
-	done    chan struct{} // closed when the server process has ended
-	ready   chan struct{} // closed when a start has finished (base or err set)
-	base    string        // http://127.0.0.1:PORT/?tkn=…
-	err     error
+	cur     *ideStart     // the latest start
+	cmd     *exec.Cmd     // the running server
+	done    chan struct{} // closed when it has ended
 	tokFile string
 	app     string // the VS Code app the CLI belongs to (to open folders in it)
 	shown   string // the address the pane has open
+	stopped bool   // the app is quitting: nothing starts, a start under way is ended
 }
 
 var ide ideServer
@@ -59,38 +65,10 @@ func vscodeCLI() (cli, app string, err error) {
 	return "", "", errors.New("VS Code is not installed (Visual Studio Code.app in Applications)")
 }
 
-// IDEStart gives the address to open folder in, starting VS Code's server once (the first start
-// fetches it: a minute or two). Calls meanwhile wait for that start; a server that ended is
-// started again.
-func (n *Node) IDEStart(folder string) (string, error) {
-	ide.mu.Lock()
-	running := ide.done != nil && !closed(ide.done) && ide.base != ""
-	if running {
-		u := ide.open(folder)
-		ide.mu.Unlock()
-		return u, nil
-	}
-	ready := ide.ready
-	if ready == nil || (closed(ready) && (ide.base == "" || closed(ide.done))) {
-		ready = make(chan struct{})
-		ide.ready, ide.base, ide.err = ready, "", nil
-		go ide.start(ready)
-	}
-	ide.mu.Unlock()
-	select {
-	case <-ready:
-	case <-time.After(4 * time.Minute):
-		return "", errors.New("VS Code's server did not start in time")
-	}
-	ide.mu.Lock()
-	defer ide.mu.Unlock()
-	if ide.err != nil {
-		return "", ide.err
-	}
-	return ide.open(folder), nil
-}
-
 func closed(c chan struct{}) bool {
+	if c == nil {
+		return false
+	}
 	select {
 	case <-c:
 		return true
@@ -99,13 +77,38 @@ func closed(c chan struct{}) bool {
 	}
 }
 
+// IDEStart gives the address to open folder in, starting VS Code's server once (the first start
+// fetches it: a minute or two). Calls meanwhile wait for that same start and read its result; a
+// server that ended, or a start that failed, is started again.
+func (n *Node) IDEStart(folder string) (string, error) {
+	ide.mu.Lock()
+	if ide.stopped {
+		ide.mu.Unlock()
+		return "", errors.New("the app is quitting")
+	}
+	st := ide.cur
+	if st == nil || (closed(st.ready) && (st.err != nil || closed(ide.done))) {
+		st = &ideStart{ready: make(chan struct{})}
+		ide.cur = st
+		go ide.start(st)
+	}
+	ide.mu.Unlock()
+	select {
+	case <-st.ready:
+	case <-time.After(4 * time.Minute):
+		return "", errors.New("VS Code's server did not start in time")
+	}
+	if st.err != nil { // written before ready was closed
+		return "", st.err
+	}
+	return withFolder(st.base, folder), nil
+}
+
 // start runs the server and waits — not holding the lock — for its address, its end, or 3 min.
-func (s *ideServer) start(ready chan struct{}) {
+func (s *ideServer) start(st *ideStart) {
 	fail := func(err error) {
-		s.mu.Lock()
-		s.err = err
-		s.mu.Unlock()
-		close(ready)
+		st.err = err
+		close(st.ready)
 	}
 	cli, app, err := vscodeCLI()
 	if err != nil {
@@ -159,34 +162,44 @@ func (s *ideServer) start(ready chan struct{}) {
 		_ = cmd.Wait()
 		close(done)
 	}()
+	kill := func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		os.Remove(f.Name())
+	}
+	// Published under the lock — unless the app quits meanwhile: then it ends here.
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		kill()
+		fail(errors.New("the app is quitting"))
+		return
+	}
 	s.cmd, s.done, s.tokFile, s.app = cmd, done, f.Name(), app
 	s.mu.Unlock()
 	select {
 	case u := <-found:
 		pu, err := url.Parse(u)
 		if err != nil {
-			s.stop()
+			kill()
 			fail(err)
 			return
 		}
 		q := pu.Query()
 		q.Set("tkn", token)
-		s.mu.Lock()
-		s.base = pu.Scheme + "://" + pu.Host + "/?" + q.Encode()
-		s.mu.Unlock()
-		close(ready)
+		st.base = pu.Scheme + "://" + pu.Host + "/?" + q.Encode()
+		close(st.ready)
 	case <-done:
 		os.Remove(f.Name())
 		fail(errors.New("VS Code's server stopped as it started"))
 	case <-time.After(3 * time.Minute):
-		s.stop()
+		kill()
 		fail(errors.New("VS Code's server did not start in 3 minutes"))
 	}
 }
 
-func (s *ideServer) open(folder string) string {
-	u, _ := url.Parse(s.base)
+// withFolder is base with folder to open.
+func withFolder(base, folder string) string {
+	u, _ := url.Parse(base)
 	q := u.Query()
 	if folder != "" && filepath.IsAbs(folder) {
 		q.Set("folder", folder)
@@ -195,9 +208,11 @@ func (s *ideServer) open(folder string) string {
 	return u.String()
 }
 
-// stop ends VS Code's server (with the app) and removes its token file.
+// stop ends VS Code's server (with the app) and removes its token file; a start under way ends
+// as soon as it has its process.
 func (s *ideServer) stop() {
 	s.mu.Lock()
+	s.stopped = true
 	cmd, tok := s.cmd, s.tokFile
 	s.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
@@ -234,6 +249,9 @@ func (s *ideServer) loaded() string {
 	defer s.mu.Unlock()
 	return s.shown
 }
+
+// IDEReload loads VS Code again (the Reload button: after a failed load, or to start over).
+func (n *Node) IDEReload() { preview.IDEReload() }
 
 // IDEHide hides it; VS Code keeps running.
 func (n *Node) IDEHide() { preview.IDEHide() }
