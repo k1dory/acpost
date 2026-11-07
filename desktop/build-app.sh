@@ -14,4 +14,7 @@ cp build/darwin/Info.plist "$app/Contents/"
 xattr -cr "$app"
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
+# A new icon is not shown while macOS has the bundle's old one cached: the bundle registered anew.
+touch "$app"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app" 2>/dev/null || true
 echo "$app"
