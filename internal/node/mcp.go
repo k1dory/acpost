@@ -82,11 +82,7 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 	}
 	m.SecretVer = newSecretVer()
 	var written []string
-	undo := func() {
-		for _, acct := range written {
-			_ = kc.Delete(acct)
-		}
-	}
+	undo := func() { n.forgetAccounts(written) }
 	for where, names := range map[string][]string{"env": m.Env, "header": m.Headers} {
 		for _, name := range names {
 			v, given := secrets[where+"/"+name]
@@ -103,19 +99,29 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 				continue
 			}
 			acct := mcpAccount(m.Name, m.SecretVer, where, name)
-			if err := kc.Set(acct, v); err != nil {
+			// Noted before it is written: a value of a version never published is forgotten
+			// later even if this process stops here.
+			if err := n.st.SetMCPOrphan(n.ctx, acct, false); err != nil {
 				undo()
 				return errf("unavailable", "%v", err)
 			}
 			written = append(written, acct)
+			if err := kc.Set(acct, v); err != nil {
+				undo()
+				return errf("unavailable", "%v", err)
+			}
 		}
 	}
 	if err := n.st.PutMCPServer(ctx, m); err != nil {
 		undo()
 		return errf("invalid", "%v", err)
 	}
+	// Published: the old version is what nothing refers to now (the new one's notes go at the
+	// next sweep, which spares the versions in use).
 	if old != nil {
-		n.forgetSecrets(ctx, *old) // the old version: nothing refers to it any more
+		n.forgetSecrets(*old)
+	} else {
+		n.forgetAccounts(nil)
 	}
 	return nil
 }
@@ -127,20 +133,52 @@ func newSecretVer() string {
 	return hex.EncodeToString(b)
 }
 
-// forgetSecrets forgets a version's secrets (and those that could not be forgotten before); what it
-// cannot forget now is noted, to be forgotten at the next change.
-func (n *Node) forgetSecrets(ctx context.Context, m store.MCPServer) {
-	kc := n.mcpKeychain()
-	accts, _ := n.st.MCPOrphans(ctx)
+// forgetSecrets forgets a version's secrets.
+func (n *Node) forgetSecrets(m store.MCPServer) {
+	var accts []string
 	for _, e := range m.Env {
 		accts = append(accts, mcpAccount(m.Name, m.SecretVer, "env", e))
 	}
 	for _, h := range m.Headers {
 		accts = append(accts, mcpAccount(m.Name, m.SecretVer, "header", h))
 	}
+	n.forgetAccounts(accts)
+}
+
+// forgetAccounts forgets secrets, and those noted to forget before, but for those of the versions
+// servers use now. Each is noted first and the note dropped once it is gone, in the node's own
+// context: a request that ends meanwhile leaves the note, and the next change forgets it.
+func (n *Node) forgetAccounts(accts []string) {
+	ctx := n.ctx
 	for _, a := range accts {
-		err := kc.Delete(a)
-		_ = n.st.SetMCPOrphan(ctx, a, err == nil)
+		_ = n.st.SetMCPOrphan(ctx, a, false)
+	}
+	pending, err := n.st.MCPOrphans(ctx)
+	if err != nil {
+		return
+	}
+	live := map[string]bool{}
+	if list, err := n.st.MCPServers(ctx); err == nil {
+		for _, m := range list {
+			for _, e := range m.Env {
+				live[mcpAccount(m.Name, m.SecretVer, "env", e)] = true
+			}
+			for _, h := range m.Headers {
+				live[mcpAccount(m.Name, m.SecretVer, "header", h)] = true
+			}
+		}
+	} else {
+		return // what is in use is not known: nothing is forgotten
+	}
+	kc := n.mcpKeychain()
+	for _, a := range pending {
+		if live[a] {
+			_ = n.st.SetMCPOrphan(ctx, a, true) // in use: not an orphan
+			continue
+		}
+		if err := kc.Delete(a); err == nil {
+			_ = n.st.SetMCPOrphan(ctx, a, true)
+		}
 	}
 }
 
@@ -160,7 +198,7 @@ func (n *Node) DeleteMCPServer(ctx context.Context, p Principal, name string) er
 	}
 	for _, m := range list {
 		if m.Name == name {
-			n.forgetSecrets(ctx, m)
+			n.forgetSecrets(m)
 		}
 	}
 	return nil
