@@ -81,13 +81,34 @@ func (s *Store) Schedules(ctx context.Context) ([]Schedule, error) {
 	return out, rows.Err()
 }
 
-// PutSchedule adds or replaces a schedule (its last run kept).
+// PutSchedule adds or replaces a schedule (its last run kept; disabled, an occurrence pending is dropped).
 func (s *Store) PutSchedule(ctx context.Context, sc Schedule) error {
 	_, err := s.w.ExecContext(ctx, `INSERT INTO schedules (id, name, cron, agent, body, cwd, model, effort, enabled, next_run)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET name = excluded.name, cron = excluded.cron, agent = excluded.agent, body = excluded.body,
-			cwd = excluded.cwd, model = excluded.model, effort = excluded.effort, enabled = excluded.enabled, next_run = excluded.next_run`,
+			cwd = excluded.cwd, model = excluded.model, effort = excluded.effort, enabled = excluded.enabled, next_run = excluded.next_run,
+			pending = CASE WHEN excluded.enabled = 0 THEN 0 ELSE schedules.pending END`,
 		sc.ID, sc.Name, sc.Cron, sc.Agent, sc.Body, sc.Cwd, sc.Model, sc.Effort, sc.Enabled, ms(sc.NextRun))
+	return err
+}
+
+// Schedule is one schedule.
+func (s *Store) Schedule(ctx context.Context, id string) (Schedule, error) {
+	list, err := s.Schedules(ctx)
+	if err != nil {
+		return Schedule{}, err
+	}
+	for _, sc := range list {
+		if sc.ID == id {
+			return sc, nil
+		}
+	}
+	return Schedule{}, ErrNoSchedule
+}
+
+// FailedSchedule notes why a pending occurrence could not be sent yet; it stays pending.
+func (s *Store) FailedSchedule(ctx context.Context, id string, occurrence time.Time, errText string) error {
+	_, err := s.w.ExecContext(ctx, `UPDATE schedules SET last_err = ? WHERE id = ? AND pending = ?`, errText, id, ms(occurrence))
 	return err
 }
 

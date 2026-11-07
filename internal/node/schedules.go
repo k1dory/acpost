@@ -108,8 +108,13 @@ func (n *Node) RunSchedule(ctx context.Context, p Principal, id string) (store.M
 	return store.Message{}, errf("not_found", "no schedule %s", id)
 }
 
+// pendingFor: how long an occurrence that cannot be sent (the agent's node unreachable) is tried
+// again before it is given up.
+const pendingFor = 24 * time.Hour
+
 // sendScheduled sends a schedule's task: an occurrence (claimed by a tick) once, under a key of its
-// own, so a resend after a crash returns the first; a manual run (zero occurrence) each time.
+// own, so a resend after a crash returns the first; a manual run (zero occurrence) each time. An
+// occurrence that fails for a reason that may pass (unavailable, a timeout) stays pending.
 func (n *Node) sendScheduled(ctx context.Context, sc store.Schedule, occurrence time.Time) (store.Message, error) {
 	req := SendRequest{To: sc.Agent, Body: sc.Body, Cwd: sc.Cwd, Model: sc.Model, Effort: sc.Effort,
 		Meta: map[string]string{"schedule": sc.ID}}
@@ -119,29 +124,49 @@ func (n *Node) sendScheduled(ctx context.Context, sc store.Schedule, occurrence 
 	m, _, err := n.Send(ctx, Principal{Kind: "user", Name: n.login}, req)
 	errText := ""
 	if err != nil {
-		if ctx.Err() != nil && n.ctx.Err() != nil {
+		if n.ctx.Err() != nil {
 			return m, err // shutting down: the occurrence stays pending, sent when the node is up
 		}
 		errText = err.Error()
+		if !occurrence.IsZero() && passing(ctx, err) && time.Since(occurrence) < pendingFor {
+			_ = n.st.FailedSchedule(n.ctx, sc.ID, occurrence, errText)
+			return m, err
+		}
 	}
 	_ = n.st.RanSchedule(n.ctx, sc.ID, occurrence, m.ID, errText)
 	return m, err
 }
 
+// passing: an error a later try may not meet.
+func passing(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Code == "unavailable" || e.Code == "timeout"
+	}
+	return true // not the node's own refusal: the store, the network
+}
+
 // runSchedules claims what is due and sends it apart from the maintenance loop (a slow hub must
-// not hold up expiry and recovery), one pass at a time, each send with a deadline. Occurrences
-// claimed earlier and not sent (a crash, a shutdown) go first.
+// not hold up expiry and recovery), one pass at a time, each send with a deadline, the pass joined
+// by Close. Occurrences claimed earlier and not sent (a crash, a shutdown, the agent's node down)
+// go first, if their schedule is still there and enabled.
 func (n *Node) runSchedules(ctx context.Context, now time.Time) {
-	if !n.schedBusy.CompareAndSwap(false, true) {
+	if n.closed.Load() || !n.schedBusy.CompareAndSwap(false, true) {
 		return
 	}
-	go func() {
+	n.goLoop(func() {
 		defer n.schedBusy.Store(false)
 		list, err := n.st.Schedules(ctx)
 		if err != nil {
 			return
 		}
 		for _, sc := range list {
+			if ctx.Err() != nil {
+				return
+			}
 			occ := sc.Pending
 			if occ.IsZero() {
 				if !sc.Enabled || sc.NextRun.IsZero() || sc.NextRun.After(now) {
@@ -156,11 +181,16 @@ func (n *Node) runSchedules(ctx context.Context, now time.Time) {
 				}
 				occ = sc.NextRun
 			}
+			// As it is now: deleted or disabled while the pass ran, it is not sent.
+			cur, err := n.st.Schedule(ctx, sc.ID)
+			if err != nil || !cur.Enabled || !cur.Pending.Equal(occ) {
+				continue
+			}
 			sctx, cancel := context.WithTimeout(ctx, time.Minute)
-			if _, err := n.sendScheduled(sctx, sc, occ); err != nil {
+			if _, err := n.sendScheduled(sctx, cur, occ); err != nil {
 				n.log.Warn("schedule", "id", sc.ID, "err", err)
 			}
 			cancel()
 		}
-	}()
+	})
 }

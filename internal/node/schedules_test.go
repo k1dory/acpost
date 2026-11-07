@@ -59,11 +59,30 @@ func TestSchedules(t *testing.T) {
 	if list, _ = n.Schedules(ctx, me); !list[0].Pending.IsZero() {
 		t.Fatalf("still pending: %+v", list[0])
 	}
+	// Disabled with an occurrence pending: it is not sent.
+	list, _ = n.Schedules(ctx, me)
+	if ok, err := n.st.TakeDue(ctx, sc.ID, list[0].NextRun, list[0].NextRun.Add(24*time.Hour)); !ok || err != nil {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	off := list[0]
+	off.Enabled = false
+	if _, err := n.PutSchedule(ctx, me, off); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, n)
+	if page, _, _ := n.st.List(ctx, store.Filter{To: "agent:fake", Limit: 10}); len(page) != 2 {
+		t.Fatalf("disabled, yet sent: %d in all", len(page))
+	}
+	off.Enabled = true
+	if _, err := n.PutSchedule(ctx, me, off); err != nil {
+		t.Fatal(err)
+	}
 	// A date that never comes is refused.
 	if _, err := n.PutSchedule(ctx, me, store.Schedule{Name: "x", Cron: "0 9 31 2 *", Agent: "fake", Body: "x", Enabled: true}); code(err) != "invalid" {
 		t.Fatalf("31 February: %v", err)
 	}
 	// Run now notes when, the next run unchanged; then delete.
+	list, _ = n.Schedules(ctx, me)
 	before := list[0]
 	time.Sleep(5 * time.Millisecond)
 	if m, err := n.RunSchedule(ctx, me, sc.ID); err != nil || m.ID == "" {
