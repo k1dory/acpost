@@ -22,6 +22,7 @@
   const order = Object.keys(views) as PanelTab[];
   let adding = $state(false);
   let plusEl = $state<HTMLButtonElement>();
+  let addEl = $state<HTMLDivElement>();
   let menuEl = $state<HTMLDivElement>();
   let menuPos = $state("visibility:hidden");
   // Under the +, kept inside the window (in the page's coordinates: the text size zoom out).
@@ -42,7 +43,7 @@
   }
 </script>
 
-<svelte:window onclick={e => { if (adding && !(e.target as HTMLElement).closest(".add")) adding = false; }}
+<svelte:window onclick={e => { if (adding && !addEl?.contains(e.target as Node)) adding = false; }}
   onkeydown={e => { if (e.key === "Escape") adding = false; }} onresize={() => (adding = false)} />
 
 <aside class="rp" style="width:{width}px">
@@ -56,7 +57,7 @@
         <button class="x" onclick={() => app.closeTab(k)} aria-label={t("Close")} title={t("Close")}><Icon name="x" size={10} /></button>
       </div>
     {/each}
-    <div class="add nodrag">
+    <div class="add nodrag" bind:this={addEl}>
       <button class="plus" bind:this={plusEl} class:on={adding} onclick={e => { e.stopPropagation(); adding = !adding; }} title={t("Open a view")} aria-label={t("Open a view")}><Icon name="plus" size={14} /></button>
       {#if adding}
         <div class="menu card" bind:this={menuEl} style={menuPos}>

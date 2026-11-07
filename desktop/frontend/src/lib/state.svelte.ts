@@ -30,7 +30,7 @@ const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "previe
 function savedTabs(): PanelTab[] {
   try {
     const v = JSON.parse(localStorage.getItem("panel-tabs") ?? "null");
-    if (Array.isArray(v)) return v.filter((x): x is PanelTab => panelTabs.includes(x));
+    if (Array.isArray(v)) return [...new Set(v.filter((x): x is PanelTab => panelTabs.includes(x)))];
   } catch {}
   return ["activity"];
 }
