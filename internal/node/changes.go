@@ -93,6 +93,12 @@ func snapshot(ctx context.Context, dir string) *gitSnap {
 	// The repository's index as a start: files unchanged since it are not read again.
 	if b, err := os.ReadFile(strings.TrimSpace(string(index))); err == nil {
 		_ = os.WriteFile(tmp.Name(), b, 0o600)
+		// The copy keeps the index's time: git takes an entry as clean by its stat only when the
+		// file is older than the index ("racy git"). A copy written now would make a file changed
+		// in the index's second, at the same size, look unchanged.
+		if fi, err := os.Stat(strings.TrimSpace(string(index))); err == nil {
+			_ = os.Chtimes(tmp.Name(), fi.ModTime(), fi.ModTime())
+		}
 	} else {
 		os.Remove(tmp.Name())
 	}

@@ -376,10 +376,80 @@ func TestSandboxRetryReadsHistory(t *testing.T) {
 	if len(keys) != 2 || keys[0] != keys[1] {
 		t.Fatalf("keys %v: the retry is the same message", keys)
 	}
+	// The first attempt recorded nothing (its POST failed): the history is recorded, once.
 	evs, _ := n.Events(ctx, me, m.ID, 0, 100)
+	seen := 0
 	for _, e := range evs {
 		if e.Kind == "text" && strings.Contains(e.Data, "said before") {
-			t.Fatalf("history recorded again: %s", e.Data)
+			seen++
 		}
+	}
+	if seen != 1 {
+		t.Fatalf("history recorded %d times", seen)
+	}
+}
+
+// What an earlier attempt recorded (labelled with the sandbox's events) is not recorded again; the
+// rest of the turn is.
+func TestSandboxRetryCutoff(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{}), failPost: 1}
+	f.history = []map[string]any{
+		{"id": 4, "run_id": "r1", "role": "user", "text": "POSTED"},
+		{"id": 5, "run_id": "r1", "role": "assistant", "text": "recorded before"},
+	}
+	f.frames = []string{
+		frame(6, "r1", "assistant", "not recorded yet", nil),
+		frame(7, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+	}
+	n := sandboxNodeWith(t, f, "limits: {max_attempts: 3}\n")
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "go"})
+	// The first attempt's POST fails; before the retry, the store holds what it had recorded.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		f.mu.Lock()
+		k := len(f.posted)
+		f.mu.Unlock()
+		if k > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("nothing posted")
+		}
+	}
+	if err := n.addEvent(ctx, m.ID, "text", `{"sandbox_event":6,"text":"recorded before"}`, true); err != nil {
+		t.Fatal(err)
+	}
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || !strings.Contains(w.Reply, "not recorded yet") {
+		t.Fatalf("%+v %v", w, err)
+	}
+	evs, _ := n.Events(ctx, me, m.ID, 0, 100)
+	var texts []string
+	for _, e := range evs {
+		if e.Kind == "text" {
+			texts = append(texts, e.Data)
+		}
+	}
+	all := strings.Join(texts, "|")
+	if strings.Count(all, "recorded before") != 1 || !strings.Contains(all, "not recorded yet") {
+		t.Fatalf("texts %s", all)
+	}
+}
+
+// A message that joins the turn in progress (ACP steering) gets that turn's answer: it has no
+// turn of its own.
+func TestSandboxSteered(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
+	f.history = []map[string]any{{"id": 4, "run_id": "r1", "role": "user", "text": "the turn in progress"}}
+	f.frames = []string{
+		"USER:6",
+		frame(7, "r1", "log", `{"type":"acp.notice","severity":"info","text":"the message joined the turn in progress (steering)"}`, nil),
+		frame(8, "r1", "assistant", "both answered", nil),
+		frame(9, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "and this too"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || w.Reply != "both answered" {
+		t.Fatalf("%+v %v", w, err)
 	}
 }
