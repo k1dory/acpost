@@ -88,6 +88,9 @@ func (n *Node) StartBacklogItem(ctx context.Context, p Principal, id, agent stri
 	if to == "" {
 		return store.Message{}, errf("invalid", "the agent to give it to")
 	}
+	if a, err := ParseAddress(to); err == nil {
+		to = a.String() // "bot" and "agent:bot" are one recipient, and one key
+	}
 	body := b.Title
 	if strings.TrimSpace(b.Body) != "" {
 		body += "\n\n" + b.Body
