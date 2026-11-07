@@ -16,10 +16,9 @@ import (
 // editor), cloud sandboxes — the most recently active first, each with its folder.
 
 const (
-	chatSessionsPerAgent = 300                      // newest sessions of an agent shown (not counting acpost's own threads')
-	chatSessionsListed   = 2 * chatSessionsPerAgent // asked of an agent: its threads' sessions are among them
-	chatThreads          = 500                      // newest threads listed
-	chatListWait         = 20 * time.Second         // for an agent to list its sessions
+	chatSessionsPerAgent = 300              // newest sessions of an agent shown (not counting acpost's own threads')
+	chatThreads          = 500              // newest threads listed
+	chatListWait         = 20 * time.Second // for an agent to list its sessions
 )
 
 // Chats lists the node's user's chats.
@@ -103,7 +102,7 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	}
 
 	// Sessions and sandboxes elsewhere: from the cache, refreshed apart once stale.
-	ext, partial := n.externalChats(ctx)
+	ext, partial := n.externalChats(ctx, ours)
 	out.Partial = append(out.Partial, partial...)
 	shown := map[string]int{} // sessions shown per agent
 	for _, c := range ext {
@@ -147,17 +146,22 @@ type chatCache struct {
 	items      []client.Chat
 	partial    []string
 	refreshing bool
-	gen        int // bumped by forget: a refresh begun before it does not count as fresh
+	gen        int             // bumped by forget: a refresh begun before it does not count as fresh
+	ours       map[string]bool // the threads' sessions the last caller gave
 }
 
 // externalChats: the ACP sessions of this node's agents and the cloud's sandboxes — the cached
 // list (refreshed apart if stale), or, the first time, listed now.
-func (n *Node) externalChats(ctx context.Context) ([]client.Chat, []string) {
+//
+// ours are the sessions acpost's threads run (agent name + "/" + id), as the caller found them:
+// they are listed on top of the agent's limit, not in it (the refresh uses the latest given).
+func (n *Node) externalChats(ctx context.Context, ours map[string]bool) ([]client.Chat, []string) {
 	c := &n.chatList
 	c.mu.Lock()
+	c.ours = ours
 	if c.at.IsZero() {
 		c.mu.Unlock()
-		items, partial := n.listExternal(ctx)
+		items, partial := n.listExternal(ctx, ours)
 		c.mu.Lock()
 		if c.at.IsZero() {
 			c.items, c.partial, c.at = items, partial, time.Now()
@@ -168,9 +172,9 @@ func (n *Node) externalChats(ctx context.Context) ([]client.Chat, []string) {
 	items, partial := append([]client.Chat(nil), c.items...), append([]string(nil), c.partial...)
 	if time.Since(c.at) > chatCacheFresh && !c.refreshing {
 		c.refreshing = true
-		gen := c.gen
+		gen, owned := c.gen, c.ours
 		started := n.goWork(func() {
-			got, gotPartial := n.listExternal(n.ctx)
+			got, gotPartial := n.listExternal(n.ctx, owned)
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			c.refreshing = false
@@ -203,8 +207,9 @@ func (n *Node) forgetChats() {
 	n.chatList.mu.Unlock()
 }
 
-// listExternal asks each ACP agent for its sessions, at once, and the cloud for its sandboxes.
-func (n *Node) listExternal(ctx context.Context) ([]client.Chat, []string) {
+// listExternal asks each ACP agent for its sessions, at once — up to chatSessionsPerAgent not among
+// ours, and those of ours met on the way — and the cloud for its sandboxes.
+func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client.Chat, []string) {
 	p := Principal{Kind: "user", Name: n.login}
 	var out []client.Chat
 	var partial []string
@@ -217,8 +222,8 @@ func (n *Node) listExternal(ctx context.Context) ([]client.Chat, []string) {
 			lctx, cancel := context.WithTimeout(ctx, chatListWait)
 			defer cancel()
 			var got []client.Chat
-			cursor := ""
-			for len(got) < chatSessionsListed {
+			cursor, others := "", 0
+			for others < chatSessionsPerAgent {
 				list, next, err := n.Sessions(lctx, p, name, "", cursor)
 				if err != nil {
 					if CodeOf(err) != "unsupported" {
@@ -233,6 +238,9 @@ func (n *Node) listExternal(ctx context.Context) ([]client.Chat, []string) {
 						Title: si.Title, Cwd: si.Cwd}
 					if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {
 						c.Updated = t
+					}
+					if !ours[name+"/"+si.ID] {
+						others++
 					}
 					got = append(got, c)
 				}

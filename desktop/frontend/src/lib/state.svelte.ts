@@ -55,6 +55,14 @@ class App {
   error = $state("");
   private unsub = new Map<string, () => void>();
 
+  /** When the app first saw each message running (its own times say when it was sent or changed). */
+  runningSince = new Map<string, number>();
+  seenRunning(id: string): number {
+    let t = this.runningSince.get(id);
+    if (t === undefined) { t = Date.now(); this.runningSince.set(id, t); }
+    return t;
+  }
+
   /** Where this node's chat list is kept between launches: by node, address and who. */
   chatsKey() {
     return "chats:" + [this.conn?.node, this.conn?.url, this.conn?.you].map(v => v ?? "").join("|");

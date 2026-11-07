@@ -1,13 +1,13 @@
 <script lang="ts">
   import AgentMark, { brandOf } from "./AgentMark.svelte";
   import type { Block } from "../lib/turn";
+  import { app } from "../lib/state.svelte";
 
   // What a running agent is doing, in a word that changes, as Claude Code and Codex show it: the
   // tool it runs, else that it thinks — and, while nothing new comes, the words turn.
-  let { agent, view }: { agent: string; view?: { blocks: Block[]; tools: Map<string, any> } } = $props();
-  // Since the turn was seen running (a message's times say when it was sent or last changed, not
-  // when its agent took it).
-  const since = Date.now();
+  let { agent, view, msg }: { agent: string; view?: { blocks: Block[]; tools: Map<string, any> }; msg: string } = $props();
+  // Since the app first saw the turn running, kept across views.
+  const since = $derived(app.seenRunning(msg));
   const brand = $derived(brandOf(agent));
 
   const words: Record<string, string[]> = {

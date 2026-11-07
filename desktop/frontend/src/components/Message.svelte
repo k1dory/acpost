@@ -53,7 +53,7 @@
   <div class="agent" onclick={() => (app.focus = m.id)}>
     <div class="meta">
       <Avatar addr={m.to} size={20} busy={m.state === "running"} brand={m.to.startsWith("agent:sb_") ? app.chat?.cloud_agent ?? "" : ""} /><span class="nm">{agent.name}</span>{#if agent.node}<span class="muted">@{agent.node}</span>{/if}
-      {#if m.state === "running"}<Working agent={m.to} view={turn} />
+      {#if m.state === "running"}<Working agent={m.to} view={turn} msg={m.id} />
       {:else if m.state === "queued"}<span class="chip warn">queued</span>
       {:else if m.state === "failed"}<span class="chip crit">failed</span>
       {:else if m.state === "cancelled"}<span class="chip">cancelled</span>{/if}
