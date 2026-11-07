@@ -283,6 +283,15 @@ class App {
     try { await Node.Answer(msg, req, option); } catch (e) { this.error = errText(e); }
   }
 
+  /** The open chat's turns that run now. */
+  runningHere() {
+    return this.msgs.filter(m => m.state === "running");
+  }
+  /** Stops what runs in the open chat (what waits in the queue goes on after). */
+  async stopHere() {
+    await Promise.all(this.runningHere().map(m => this.cancel(m.id)));
+  }
+
   async cancel(id: string) {
     try { this.replace((await Node.Cancel(id)) as any); } catch (e) { this.error = errText(e); }
   }

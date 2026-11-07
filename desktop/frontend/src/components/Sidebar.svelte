@@ -33,7 +33,7 @@
   function dotOf(c: Chat) {
     if (c.kind === "cloud") return c.status === "running" ? "running" : "";
     if (c.kind === "session") return ""; // a session started elsewhere: no state known here
-    return c.running ? "running" : c.queued ? "queued" : c.failed ? "failed" : "done";
+    return c.running ? "running" : c.queued ? "queued" : c.failed ? "failed" : ""; // idle: no colour
   }
   // The name field takes the keys as soon as it shows.
   function focusOnMount(el: HTMLInputElement) { requestAnimationFrame(() => { el.focus(); el.select(); }); }

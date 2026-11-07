@@ -66,6 +66,10 @@
     ta?.focus();
   }
 
+  // While a turn runs and nothing is typed, the send button stops it (and ⌃C does, anywhere).
+  const running = $derived(!isNew && app.runningHere().length > 0);
+  const stopMode = $derived(running && !text.trim() && !files.length);
+
   async function send() {
     const body = text.trim();
     if (!body || busy) return;
@@ -100,7 +104,10 @@
 
 <svelte:window
   onclick={e => { if (pickerFor && !(e.target as HTMLElement).closest(".menu, .opt")) pickerFor = ""; }}
-  onkeydown={e => { if (e.key === "Escape") pickerFor = ""; }} />
+  onkeydown={e => {
+    if (e.key === "Escape") pickerFor = "";
+    if (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "c" && running) { e.preventDefault(); app.stopHere(); }
+  }} />
 
 {#if isNew}<TaskSetup />{/if}
 
@@ -146,8 +153,12 @@
     {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title="Mode">{current(mode, app.draft.mode)}</button>{/if}
     {#if cloud}<span class="chip muted" title="A cloud agent runs without asking; opening or merging a pull request waits for you">runs without asking</span>{/if}
     <span class="sp"></span>
-    <span class="hint muted">⌘↵</span>
-    <button class="btn primary send" disabled={!text.trim() || busy} onclick={send}><Icon name="send" size={14} /></button>
+    <span class="hint muted">{stopMode ? "⌃C" : "⌘↵"}</span>
+    {#if stopMode}
+      <button class="btn primary send stop" title="Stop (⌃C)" onclick={() => app.stopHere()}><span class="sq"></span></button>
+    {:else}
+      <button class="btn primary send" disabled={!text.trim() || busy} onclick={send} title={running ? "Queue after the running turn" : "Send"}><Icon name="send" size={14} /></button>
+    {/if}
   </div>
 </div>
 
@@ -157,6 +168,7 @@
   .bar { display: flex; align-items: center; gap: 6px; }
   .sp { flex: 1; }
   .hint { font: 11px var(--mono); }
+  .stop .sq { width: 10px; height: 10px; border-radius: 2.5px; background: currentColor; display: block; }
   .send { width: 30px; height: 30px; padding: 0; justify-content: center; border-radius: 10px; }
   .opt { height: 24px; cursor: default; }
   .opt:hover { background: var(--hover); }

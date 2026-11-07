@@ -27,6 +27,7 @@ connects nodes on several machines. A hub is a node with a different configurati
 - [Storage and limits](#storage-and-limits)
 - [Security](#security)
 - [How ACP is used](#how-acp-is-used)
+- [Desktop app (macOS)](#desktop-app-macos)
 - [Status](#status)
 
 ## Concepts
@@ -568,6 +569,29 @@ since July 2026). Node-to-node and client-to-node traffic is therefore acpost's 
 ACP. Exposing a node's agents to remote ACP clients (an editor attaching to `agent:reviewer@server`)
 fits that RFD and can come once it settles.
 
+## Desktop app (macOS)
+
+`desktop/` is a native macOS app (Go, [Wails v3](https://v3.wails.io), Svelte; the system's WebKit,
+no Chromium) for the node: every chat in one list — acpost's threads and the Claude Code and Codex
+sessions started anywhere on the Mac — folders, a new task in a chosen agent and directory, the
+model and effort, the turn as it runs, approvals, changes, a terminal, pull requests and CI,
+usage. Also playbooks, scheduled tasks, knowledge (notes an agent gets at each new session), MCP
+servers and git accounts (secrets in the Keychain), forking a chat.
+
+```sh
+cd desktop && ./build-app.sh     # needs Go, Node.js and the wails3 CLI; makes bin/acpost.app
+open bin/acpost.app
+```
+
+The app talks to the node on `~/.local/state/acpost/acpost.sock`; when none answers it writes a
+default configuration (the `claude-agent-acp` and `codex-acp` it finds on `PATH`) and runs the node
+in its own process.
+
+**Everything works on the Mac alone.** The cloud is optional: with an
+[agent-sandbox](https://github.com/k1dory/cluster-agent-k8s) tenant (Kubernetes sandboxes for coding
+agents) configured as `cloud:` above, the app also lists the tenant's sandboxes and can start a
+task in one. Without it the app shows no cloud at all.
+
 ## Status
 
 | | |
@@ -576,6 +600,7 @@ fits that RFD and can come once it settles.
 | `--join` and hub routing | v0.1 |
 | Postgres store for a hub | planned |
 | ACP transport for remote ACP clients | after the RFD |
+| Desktop app, macOS | preview |
 
 ## License
 

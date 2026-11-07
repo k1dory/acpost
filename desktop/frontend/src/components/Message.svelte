@@ -70,9 +70,6 @@
     {#if m.state === "failed" && m.error}
       <div class="err selectable"><b>{m.error_code ?? "error"}</b> — {m.error}{#if m.hint}<div class="muted">{m.hint}</div>{/if}</div>
     {/if}
-    {#if !done}
-      <div class="acts"><button class="btn ghost sm" onclick={() => app.cancel(m.id)}><Icon name="stop" size={12} /> Stop</button></div>
-    {/if}
   </div>
 </div>
 
@@ -90,5 +87,4 @@
   .agent > .meta { margin-bottom: 2px; }
   .err { padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
   .wait { display: grid; gap: 8px; } .wait .sk { height: 12px; }
-  .acts { margin-top: 2px; }
 </style>

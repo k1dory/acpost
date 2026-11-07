@@ -10,13 +10,14 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "@wailsio/runtime": "3.1.0",
     "@fontsource-variable/onest": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
-    "@xterm/xterm": "^5.5.0",
+    "@wailsio/runtime": "3.1.0",
     "@xterm/addon-fit": "^0.10.0",
-    "marked": "^16.4.1",
-    "dompurify": "^3.3.0"
+    "@xterm/xterm": "^5.5.0",
+    "dompurify": "^3.3.0",
+    "highlight.js": "11.11.1",
+    "marked": "^16.4.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",

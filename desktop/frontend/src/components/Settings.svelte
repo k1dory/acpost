@@ -366,7 +366,7 @@
           {/each}
           <div class="row">
             <Icon name="cloud" size={14} />
-            <div class="t"><b>Cloud</b><span class="muted small">{app.cloudAgents.length ? app.cloudAgents.length + " agents in the catalogue" : "not configured"}</span></div>
+            <div class="t"><b>Cloud</b><span class="muted small">{app.cloudAgents.length ? app.cloudAgents.length + " agents in the catalogue" : "optional — an agent-sandbox tenant as cloud: in ~/.config/acpost/config.yaml"}</span></div>
           </div>
         </div></div>
 

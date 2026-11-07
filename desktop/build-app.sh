@@ -9,7 +9,6 @@ app=bin/acpost.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp build/darwin/icons.icns "$app/Contents/Resources/"
-[ -f build/darwin/Assets.car ] && cp build/darwin/Assets.car "$app/Contents/Resources/"
 cp bin/acpost "$app/Contents/MacOS/acpost"
 cp build/darwin/Info.plist "$app/Contents/"
 xattr -cr "$app"

@@ -49,7 +49,7 @@ func (f *fakeSandboxd) handler(w http.ResponseWriter, r *http.Request) {
 	r.URL.Path = strings.Replace(r.URL.Path, "/v1/sandboxes/"+id+"/", "/v1/sandboxes/sb1/", 1)
 	switch {
 	case r.Method == "GET" && r.URL.Path == "/v1/agents":
-		w.Write([]byte(`[{"name":"assistant","revision":2,"description":"Claude Code","tenant":"genomed"},{"name":"reviewer","revision":1}]`))
+		w.Write([]byte(`[{"name":"assistant","revision":2,"description":"Claude Code","tenant":"example"},{"name":"reviewer","revision":1}]`))
 	case r.Method == "GET" && r.URL.Path == "/v1/sandboxes":
 		fmt.Fprintf(w, `[{"id":%q,"name":"pilot","status":"sleeping","agent_ref":"assistant","last_activity":"2026-11-01T10:00:00Z"}]`, id)
 	case r.Method == "GET" && r.URL.Path == "/v1/sandboxes/"+id:

@@ -73,10 +73,13 @@
 <svelte:window onclick={e => { if (dirsOpen && !(e.target as HTMLElement).closest(".dir")) dirsOpen = false; }} />
 
 <div class="setup">
-  <div class="seg">
-    <button class:on={!cloud} onclick={() => (app.draft.where = "mac")}><Icon name="bot" size={13} /> This Mac</button>
-    <button class:on={cloud} disabled={!app.cloudAgents.length} title={app.cloudAgents.length ? "" : "No cloud configured"} onclick={() => (app.draft.where = "cloud")}><Icon name="cloud" size={13} /> Cloud</button>
-  </div>
+  <!-- Where: only when a cloud is configured (optional: without one, everything is this Mac). -->
+  {#if app.cloudAgents.length}
+    <div class="seg">
+      <button class:on={!cloud} onclick={() => (app.draft.where = "mac")}><Icon name="bot" size={13} /> This Mac</button>
+      <button class:on={cloud} onclick={() => (app.draft.where = "cloud")}><Icon name="cloud" size={13} /> Cloud</button>
+    </div>
+  {/if}
 
   {#if !cloud}
     <div class="seg">
