@@ -112,6 +112,16 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 			}
 		}
 	}
+	// The old version's secrets are noted to forget before the server leaves it: a note that
+	// cannot be written stops the change (the sweep spares what is in use, so an early note is safe).
+	if old != nil {
+		for _, a := range versionAccounts(*old) {
+			if err := n.st.SetMCPOrphan(n.ctx, a, false); err != nil {
+				undo()
+				return errf("unavailable", "%v", err)
+			}
+		}
+	}
 	if err := n.st.PutMCPServer(ctx, m); err != nil {
 		undo()
 		return errf("invalid", "%v", err)
@@ -133,8 +143,8 @@ func newSecretVer() string {
 	return hex.EncodeToString(b)
 }
 
-// forgetSecrets forgets a version's secrets.
-func (n *Node) forgetSecrets(m store.MCPServer) {
+// versionAccounts are the accounts of a version's secrets.
+func versionAccounts(m store.MCPServer) []string {
 	var accts []string
 	for _, e := range m.Env {
 		accts = append(accts, mcpAccount(m.Name, m.SecretVer, "env", e))
@@ -142,8 +152,11 @@ func (n *Node) forgetSecrets(m store.MCPServer) {
 	for _, h := range m.Headers {
 		accts = append(accts, mcpAccount(m.Name, m.SecretVer, "header", h))
 	}
-	n.forgetAccounts(accts)
+	return accts
 }
+
+// forgetSecrets forgets a version's secrets.
+func (n *Node) forgetSecrets(m store.MCPServer) { n.forgetAccounts(versionAccounts(m)) }
 
 // forgetAccounts forgets secrets, and those noted to forget before, but for those of the versions
 // servers use now. Each is noted first and the note dropped once it is gone, in the node's own
@@ -153,9 +166,16 @@ func (n *Node) forgetAccounts(accts []string) {
 	for _, a := range accts {
 		_ = n.st.SetMCPOrphan(ctx, a, false)
 	}
-	pending, err := n.st.MCPOrphans(ctx)
-	if err != nil {
-		return
+	pending, _ := n.st.MCPOrphans(ctx)
+	// Those given are tried whether or not their notes were written.
+	seen := map[string]bool{}
+	for _, a := range pending {
+		seen[a] = true
+	}
+	for _, a := range accts {
+		if !seen[a] {
+			pending = append(pending, a)
+		}
 	}
 	live := map[string]bool{}
 	if list, err := n.st.MCPServers(ctx); err == nil {
@@ -189,7 +209,19 @@ func (n *Node) DeleteMCPServer(ctx context.Context, p Principal, name string) er
 	}
 	n.mcpSec.mu.Lock()
 	defer n.mcpSec.mu.Unlock()
-	list, _ := n.st.MCPServers(ctx)
+	list, err := n.st.MCPServers(ctx)
+	if err != nil {
+		return errf("unavailable", "%v", err)
+	}
+	for _, m := range list {
+		if m.Name == name {
+			for _, a := range versionAccounts(m) {
+				if err := n.st.SetMCPOrphan(n.ctx, a, false); err != nil {
+					return errf("unavailable", "%v", err)
+				}
+			}
+		}
+	}
 	if err := n.st.DeleteMCPServer(ctx, name); err != nil {
 		if errors.Is(err, store.ErrNoMCPServer) {
 			return errf("not_found", "%v", err)
