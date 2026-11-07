@@ -3,6 +3,8 @@
 package main
 
 import (
+	"bytes"
+	_ "embed"
 	"encoding/json"
 	"net/url"
 	"path/filepath"
@@ -50,6 +52,12 @@ func ideSettings() map[string]any {
 	}
 }
 
+// ideOldColors are the colours the app once wrote into VS Code's settings (before its themes):
+// taken out of them again where they are still the app's.
+//
+//go:embed ide/old-colors.json
+var ideOldColors []byte
+
 var ideScriptsOnce sync.Once
 
 // ideScripts hands the pane its two scripts (before it is made; once):
@@ -91,7 +99,7 @@ const l = document.createElement('link'); l.id = 'acpost'; l.rel = 'stylesheet';
 		b, _ := json.Marshal(ideSettings())
 		ver := js(extHash[:16] + ":" + shortHash(b))
 		seed = `(() => {
-const V = ` + ver + `, ours = ` + string(b) + `, K = 'acpost-ide-settings';
+const V = ` + ver + `, ours = ` + string(b) + `, OLD = ` + string(bytes.TrimSpace(ideOldColors)) + `, K = 'acpost-ide-settings';
 try { if (localStorage.getItem(K) === V) return; } catch (e) { return; }
 let left = 60;
 const again = () => { if (--left > 0) setTimeout(tryIt, 1000); };
@@ -111,8 +119,18 @@ function tryIt() {
         try { cur = JSON.parse(typeof g.result === 'string' ? g.result : new TextDecoder().decode(g.result)); } catch (e) { done(); return; }
         if (!cur || typeof cur !== 'object' || Array.isArray(cur)) { done(); return; }
       }
-      const cc = cur['workbench.colorCustomizations']; // the app's older way of its colours (now its themes)
-      if (cc && typeof cc === 'object') { delete cc['[Default Dark Modern]']; delete cc['[Default Light Modern]']; if (!Object.keys(cc).length) delete cur['workbench.colorCustomizations']; }
+      // The app's older way of its colours (now its themes): only the values it wrote go; what the
+      // user set or changed there stays.
+      const cc = cur['workbench.colorCustomizations'];
+      if (cc && typeof cc === 'object' && !Array.isArray(cc)) {
+        for (const [t, old] of Object.entries(OLD)) {
+          const b = cc[t];
+          if (!b || typeof b !== 'object') continue;
+          for (const [k, v] of Object.entries(old)) if (b[k] === v) delete b[k];
+          if (!Object.keys(b).length) delete cc[t];
+        }
+        if (!Object.keys(cc).length) delete cur['workbench.colorCustomizations'];
+      }
       st.put(new TextEncoder().encode(JSON.stringify(Object.assign(cur, ours), null, 2)), '/User/settings.json');
       tx.oncomplete = () => { db.close(); if (done()) location.reload(); }; // unmarked: no reload (it would come again on every load)
     };

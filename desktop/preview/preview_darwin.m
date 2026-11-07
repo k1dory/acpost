@@ -214,7 +214,14 @@ static void apIDELoadURL(NSString *u) {
 	// languages come half translated).
 	NSMutableURLRequest *rq = [NSMutableURLRequest requestWithURL:nu];
 	[rq setValue:@"en-US,en;q=0.9" forHTTPHeaderField:@"Accept-Language"];
-	[apIDE loadRequest:rq];
+	// VS Code's server takes its language cookie first (one it set for another language would
+	// win over the header): set to English before the page is asked for.
+	NSHTTPCookie *c = [NSHTTPCookie cookieWithProperties:@{
+		NSHTTPCookieName: @"vscode.nls.locale", NSHTTPCookieValue: @"en", NSHTTPCookiePath: @"/",
+		NSHTTPCookieDomain: nu.host ?: @"127.0.0.1", NSHTTPCookieExpires: [NSDate dateWithTimeIntervalSinceNow:400 * 24 * 3600]}];
+	WKWebView *v = apIDE;
+	if (!c) { [v loadRequest:rq]; return; }
+	[v.configuration.websiteDataStore.httpCookieStore setCookie:c completionHandler:^{ [v loadRequest:rq]; }];
 }
 
 static int apIDEDark = -1; // the app's theme for the pane (-1: not said yet)
