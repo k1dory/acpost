@@ -41,7 +41,11 @@ class App {
   focus = $state<string>("");
   tab = $state<"activity" | "changes" | "terminal" | "prs" | "usage" | "preview">("activity");
   panel = $state(true);
-  view = $state<"chat" | "usage" | "settings">("chat");
+  view = $state<"chat" | "usage" | "settings" | "board">("chat");
+  playbooks = $state<{ name: string; body: string }[]>([]);
+  quote = $state("");     // text to put in the composer (⌘L)
+  palette = $state(false); // ⌘K
+  asking = $state<any[]>([]); // approvals waiting
   theme = $state<"light" | "dark" | "system">("light");
   target = $state<string>("");
   draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "", model: "", effort: "", mode: "" });
@@ -57,7 +61,7 @@ class App {
     if (!c.ok) return;
     this.home = await Node.Home();
     if (!this.draft.cwd) this.draft.cwd = this.home;
-    await Promise.all([this.loadAgents(), this.loadChats(), this.loadCloudAgents()]);
+    await Promise.all([this.loadAgents(), this.loadChats(), this.loadCloudAgents(), this.loadPlaybooks(), this.watchAsking()]);
     const local = this.localAgents();
     if (!local.some(a => a.address === this.draft.agent) && local[0]) this.draft.agent = local[0].address;
     this.loadOptions(this.draft.agent);
@@ -90,6 +94,7 @@ class App {
   async watchAsking() {
     try {
       const reqs = ((await Node.Asking()) ?? []) as any[];
+      this.asking = reqs;
       for (const r of reqs) {
         const id = r.request_id ?? r.id;
         if (id && !this.asked.has(id)) { this.asked.add(id); this.notify("Needs approval", r.title || "An agent asks"); }
@@ -256,6 +261,22 @@ class App {
 
   async cancel(id: string) {
     try { this.replace((await Node.Cancel(id)) as any); } catch (e) { this.error = errText(e); }
+  }
+
+  async loadPlaybooks() {
+    try { this.playbooks = ((await Node.Playbooks()) ?? []) as any; } catch { this.playbooks = []; }
+  }
+
+  async renameChat(chat: string, title: string) {
+    const c = this.chats.find(x => x.key === chat);
+    if (c && title.trim()) c.title = title.trim();
+    try { await Node.SetChatTitle(chat, title); await this.loadChats(); } catch (e) { this.error = errText(e); }
+  }
+
+  /** Opens a chat by its thread (the board's cards, the palette). */
+  openKey(key: string) {
+    const c = this.chats.find(x => x.key === key);
+    if (c) this.open(c);
   }
 
   // Folders.

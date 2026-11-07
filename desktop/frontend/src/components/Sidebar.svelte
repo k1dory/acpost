@@ -11,6 +11,13 @@
   let menu = $state<{ x: number; y: number; chat?: Chat; folder?: string } | null>(null);
   let dropOn = $state<string | null>(null);
   let moveAfter = $state<string | null>(null); // a chat to put in the folder being made
+  let renaming = $state<string | null>(null);   // a chat being renamed
+  let renameText = $state("");
+  async function commitRename() {
+    const key = renaming;
+    renaming = null;
+    if (key) await app.renameChat(key, renameText);
+  }
 
   try { collapsed = JSON.parse(localStorage.getItem("folders-collapsed") ?? "{}"); } catch {}
   function toggle(id: string) {
@@ -78,6 +85,10 @@
 <svelte:window onclick={() => (menu = null)} />
 
 {#snippet row(c: Chat)}
+  {#if renaming === c.key}
+    <input class="input fname" bind:value={renameText} use:focusOnMount onblur={commitRename}
+      onkeydown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") renaming = null; }} />
+  {:else}
   <button class="row" class:sel={isOpen(c) && app.view === "chat"} draggable="true" ondragstart={e => drag(e, c)}
     onclick={() => app.open(c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
     <span class="dot {dotOf(c)}"></span>
@@ -87,15 +98,20 @@
     </span>
     <span class="when muted num">{ago(c.updated)}</span>
   </button>
+  {/if}
 {/snippet}
 
 <aside class="side">
   <div class="top drag"></div>
   <div class="pad">
     <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> New task <kbd>⌘N</kbd></button>
+    <div class="quick">
+      <button class="row qk" class:sel={app.view === "board"} onclick={() => (app.view = "board")}><span class="ic"><Icon name="activity" size={14} /></span><span class="t"><span class="title">Agents</span></span>{#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}<kbd>⌘B</kbd></button>
+      <button class="row qk" onclick={() => (app.palette = true)}><span class="ic"><Icon name="search" size={14} /></span><span class="t"><span class="title">Search</span></span><kbd>⌘K</kbd></button>
+    </div>
     <label class="search">
       <Icon name="search" />
-      <input placeholder="Search chats" bind:value={q} />
+      <input placeholder="Filter chats" bind:value={q} />
     </label>
   </div>
 
@@ -160,6 +176,7 @@
     <div class="ctx card" style="left:{menu.x}px; top:{menu.y}px">
       {#if menu.chat}
         {@const c = menu.chat}
+        <button class="mi" onclick={() => { renaming = c.key; renameText = c.title; }}><Icon name="file" size={12} /> Rename</button>
         <div class="mh">Move to</div>
         {#each app.folders as f (f.id)}
           <button class="mi" disabled={c.folder === f.id} onclick={() => app.moveChat(c.key, f.id)}><Icon name="book" size={12} /> {f.name}</button>
@@ -186,6 +203,10 @@
   .list { flex: 1; padding: 0 10px 10px; min-height: 0; }
   .h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 8px 6px; letter-spacing: .02em; text-transform: uppercase; border-radius: 8px; }
   .h.drop, .folder.drop { background: var(--accent-bg); }
+  .quick { display: grid; gap: 1px; }
+  .qk { min-height: 30px; padding: 4px 8px; }
+  .qk kbd { margin-left: auto; }
+  .badge { min-width: 17px; height: 17px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
   .ic-btn { border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; }
   .ic-btn:hover { background: var(--hover); color: var(--ink); }
   .folder { border-radius: 10px; margin-bottom: 2px; }

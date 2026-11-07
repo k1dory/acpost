@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 	enabled INTEGER NOT NULL DEFAULT 1,
 	ts      INTEGER NOT NULL
 ) WITHOUT ROWID;
+-- Secrets a change or a deletion could not forget: forgotten again at the next one.
+CREATE TABLE IF NOT EXISTS mcp_orphans (
+	account TEXT PRIMARY KEY
+) WITHOUT ROWID;
 `
 
 // migrateMCP adds the columns added after the table first shipped.
@@ -145,4 +149,32 @@ func (s *Store) DeleteMCPServer(ctx context.Context, name string) error {
 		return ErrNoMCPServer
 	}
 	return nil
+}
+
+// MCPOrphans lists the secrets to forget still.
+func (s *Store) MCPOrphans(ctx context.Context) ([]string, error) {
+	rows, err := s.r.QueryContext(ctx, `SELECT account FROM mcp_orphans`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// SetMCPOrphan notes a secret to forget (gone: forgotten).
+func (s *Store) SetMCPOrphan(ctx context.Context, account string, gone bool) error {
+	if gone {
+		_, err := s.w.ExecContext(ctx, `DELETE FROM mcp_orphans WHERE account = ?`, account)
+		return err
+	}
+	_, err := s.w.ExecContext(ctx, `INSERT OR IGNORE INTO mcp_orphans (account) VALUES (?)`, account)
+	return err
 }

@@ -468,6 +468,38 @@ export class ModelTokens {
 }
 
 /**
+ * Playbook is a kept prompt.
+ */
+export class Playbook {
+    "name": string;
+    "body": string;
+    "updated": string;
+
+    /** Creates a new Playbook instance. */
+    constructor($$source: Partial<Playbook> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("body" in $$source)) {
+            this["body"] = "";
+        }
+        if (!("updated" in $$source)) {
+            this["updated"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Playbook instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Playbook {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Playbook($$parsedSource as Partial<Playbook>);
+    }
+}
+
+/**
  * RepoDiff is what changed in a repository over several turns.
  */
 export class RepoDiff {

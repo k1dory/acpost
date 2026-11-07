@@ -6,6 +6,8 @@
   import RightPanel from "./components/RightPanel.svelte";
   import Usage from "./components/Usage.svelte";
   import Settings from "./components/Settings.svelte";
+  import Board from "./components/Board.svelte";
+  import Palette from "./components/Palette.svelte";
 
   onMount(() => {
     try { app.theme = (localStorage.getItem("theme") as any) || "light"; } catch {}
@@ -22,6 +24,13 @@
     else if (e.key === "\\") { e.preventDefault(); app.panel = !app.panel; }
     else if (e.key === "j") { e.preventDefault(); app.panel = true; app.tab = "terminal"; }
     else if (e.key === ",") { e.preventDefault(); app.view = "settings"; }
+    else if (e.key === "k") { e.preventDefault(); app.palette = !app.palette; }
+    else if (e.key === "b") { e.preventDefault(); app.view = "board"; }
+    else if (e.key === "l") {
+      // The selected text, quoted into the composer.
+      const t = window.getSelection()?.toString().trim();
+      if (t) { e.preventDefault(); app.quote = t.split("\n").map(l => "> " + l).join("\n") + "\n\n"; if (app.view !== "chat") app.view = "chat"; }
+    }
   }
 </script>
 
@@ -41,10 +50,13 @@
     <Usage />
   {:else if app.view === "settings"}
     <Settings />
+  {:else if app.view === "board"}
+    <Board />
   {:else}
     <Conversation />
     {#if app.panel}<RightPanel />{/if}
   {/if}
+  {#if app.palette}<Palette />{/if}
   {#if app.error}
     <button class="toast card" onclick={() => (app.error = "")}>{app.error}</button>
   {/if}

@@ -63,3 +63,22 @@ func (n *Node) Notify(title, body string) error {
 	return n.notes.SendNotification(notifications.NotificationOptions{
 		ID: fmt.Sprintf("acpost-%d", time.Now().UnixNano()), Title: title, Body: body})
 }
+
+func (n *Node) Playbooks() ([]store.Playbook, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]store.Playbook, error) { return c.Playbooks(ctx) })
+}
+
+func (n *Node) PutPlaybook(name, body string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.PutPlaybook(ctx, name, body) })
+	return err
+}
+
+func (n *Node) DeletePlaybook(name string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.DeletePlaybook(ctx, name) })
+	return err
+}
+
+func (n *Node) SetChatTitle(chat, title string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.SetChatTitle(ctx, chat, title) })
+	return err
+}

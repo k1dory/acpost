@@ -54,6 +54,28 @@ func TestMCPServers(t *testing.T) {
 	}
 }
 
+// A server kept before secrets had versions keeps its values: they are read under the old names
+// and carried into the first version.
+func TestMCPLegacySecrets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ACPOST_SECRETS_FILE", "1")
+	n := acpNode(t, "")
+	// As an older node left it: no version, the value under server/env/NAME.
+	if err := n.st.PutMCPServer(ctx, store.MCPServer{Name: "old", Kind: "stdio", Command: "old-mcp", Env: []string{"KEY"}, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	n.mcpKeychain().Set("old/env/KEY", "legacy")
+	if m := ask(t, n, SendRequest{Body: "mcp"}); m.Reply != "old:old-mcp:KEY=legacy" {
+		t.Fatalf("got %q", m.Reply)
+	}
+	if err := n.PutMCPServer(ctx, me, store.MCPServer{Name: "old", Kind: "stdio", Command: "old-mcp2", Env: []string{"KEY"}, Enabled: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if m := ask(t, n, SendRequest{Body: "mcp"}); m.Reply != "old:old-mcp2:KEY=legacy" {
+		t.Fatalf("after the change %q", m.Reply)
+	}
+}
+
 // A forge account is kept once the forge says whose the token is; a token it refuses is not.
 func TestForgeAccounts(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

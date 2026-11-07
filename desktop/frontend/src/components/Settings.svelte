@@ -7,7 +7,17 @@
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
   type MCP = { name: string; kind: "stdio" | "http"; command?: string; args?: string[]; url?: string; env?: string[]; headers?: string[]; agents?: string[]; enabled: boolean };
 
-  let section = $state<"git" | "mcp" | "agents" | "general">("git");
+  let section = $state<"git" | "mcp" | "playbooks" | "agents" | "general">("git");
+  let pb = $state<{ isNew: boolean; name: string; body: string } | null>(null);
+  async function savePlaybook() {
+    if (!pb) return;
+    err = ""; busy = true;
+    try { await Node.PutPlaybook(pb.name.trim(), pb.body); pb = null; await app.loadPlaybooks(); } catch (e) { err = errText(e); }
+    busy = false;
+  }
+  async function deletePlaybook(name: string) {
+    try { await Node.DeletePlaybook(name); pb = null; await app.loadPlaybooks(); } catch (e) { err = errText(e); }
+  }
   let accounts = $state<Account[] | null>(null);
   let servers = $state<MCP[] | null>(null);
   let err = $state("");
@@ -87,7 +97,7 @@
   <header class="drag"><h1>Settings</h1></header>
   <div class="cols">
     <nav class="nav">
-      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
+      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
         <button class:on={section === k} onclick={() => { section = k as any; err = ""; }}><Icon name={ic} size={14} /> {l}</button>
       {/each}
     </nav>
@@ -185,6 +195,33 @@
           </div>
         {/if}
 
+      {:else if section === "playbooks"}
+        <h2>Playbooks</h2>
+        <p class="muted">Prompts for tasks you give again. Type / and the name in a new task.</p>
+        {#if !pb}
+          <div class="card panel"><div class="inner">
+            {#each app.playbooks as p (p.name)}
+              <div class="row">
+                <Icon name="book" size={14} />
+                <div class="t"><b class="mono">/{p.name}</b><span class="muted small one">{p.body.split("\n")[0]}</span></div>
+                <button class="btn ghost sm" onclick={() => (pb = { isNew: false, name: p.name, body: p.body })}>Edit</button>
+              </div>
+            {:else}<div class="row muted">No playbooks yet</div>{/each}
+          </div></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (pb = { isNew: true, name: "", body: "" })}><Icon name="plus" size={13} /> New playbook</button></div>
+        {:else}
+          <div class="form card">
+            {#if pb.isNew}<input class="input mono" placeholder="Name: review, release-notes" bind:value={pb.name} />{:else}<div class="fh mono">/{pb.name}</div>{/if}
+            <textarea class="input" rows="12" placeholder="What the agent should do, step by step" bind:value={pb.body}></textarea>
+            <div class="acts">
+              {#if !pb.isNew}<button class="btn ghost danger" onclick={() => deletePlaybook(pb!.name)}>Delete</button>{/if}
+              <span class="sp"></span>
+              <button class="btn" onclick={() => (pb = null)}>Cancel</button>
+              <button class="btn primary" disabled={busy || !pb.name.trim() || !pb.body.trim()} onclick={savePlaybook}>Save</button>
+            </div>
+          </div>
+        {/if}
+
       {:else if section === "agents"}
         <h2>Agents</h2>
         <p class="muted">The agents of this Mac (in ~/.config/acpost/config.yaml), of other nodes and of the cloud.</p>
@@ -243,6 +280,7 @@
   .row:last-child { border-bottom: 0; }
   .t { flex: 1; min-width: 0; display: grid; }
   .small { font-size: 11.5px; }
+  .one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bad { color: var(--crit); }
   .form { padding: 16px; display: grid; gap: 10px; }
   .fh { font-weight: 600; }

@@ -127,12 +127,42 @@ func (s *Store) Get(account string) string {
 	return m[account]
 }
 
+// Lookup is a secret, whether one is kept, and an error when the store could not be read (Get
+// says "" for both).
+func (s *Store) Lookup(account string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.File {
+		cmd := exec.Command("security", "find-generic-password", "-s", s.Service, "-a", account, "-w")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		out, err := cmd.Output()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 44 { // errSecItemNotFound
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("keychain: %v", err)
+		}
+		return strings.TrimRight(string(out), "\n"), true, nil
+	}
+	m, err := s.read()
+	if err != nil {
+		return "", false, err
+	}
+	v, ok := m[account]
+	return v, ok, nil
+}
+
 // Delete forgets a secret.
 func (s *Store) Delete(account string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.File {
-		_, _ = security("", "delete-generic-password", "-s", s.Service, "-a", account)
+		out, err := security("", "delete-generic-password", "-s", s.Service, "-a", account)
+		var ee *exec.ExitError
+		if err != nil && !(errors.As(err, &ee) && ee.ExitCode() == 44) {
+			return fmt.Errorf("keychain: %v %s", err, bytes.TrimSpace(out))
+		}
 		return nil
 	}
 	return s.locked(func() error {

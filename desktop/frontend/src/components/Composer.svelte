@@ -22,6 +22,10 @@
   const cloud = $derived(isNew ? app.draft.where === "cloud" : agent.startsWith("agent:sb_"));
 
   $effect(() => { if (agent) app.loadOptions(agent); });
+  // ⌘L and playbooks put text here.
+  $effect(() => {
+    if (app.quote) { text = (text ? text + "\n" : "") + app.quote; app.quote = ""; requestAnimationFrame(() => ta?.focus()); }
+  });
 
   // The slash menu: the settings, then the agent's own commands.
   const slash = $derived.by(() => {
@@ -31,8 +35,12 @@
     if (model) items.push({ name: "model", description: "Choose the model", pick: "model" });
     if (effort) items.push({ name: "effort", description: "Choose the reasoning effort", pick: "effort" });
     if (mode) items.push({ name: "mode", description: "Choose the mode", pick: "mode" });
-    // The agent's own commands, but for the settings above (Claude Code has its /model too).
+    // Playbooks: the prompts kept, then the agent's own commands (but for the settings above:
+    // Claude Code has its /model too).
     const seen = new Set(items.map(i => i.name));
+    for (const p of app.playbooks) {
+      if (!seen.has(p.name)) { seen.add(p.name); items.push({ name: p.name, description: "", playbook: p.body } as any); }
+    }
     for (const c of opts?.commands ?? []) {
       if (c.name && !seen.has(c.name)) { seen.add(c.name); items.push({ name: c.name, description: c.description ?? "" }); }
     }
@@ -53,6 +61,7 @@
     const it = slash[i];
     if (!it) return;
     if (it.pick) { text = ""; pickerFor = it.pick; return; }
+    if ((it as any).playbook) { text = (it as any).playbook; ta?.focus(); return; }
     text = "/" + it.name + " ";
     ta?.focus();
   }
@@ -101,7 +110,7 @@
     <div class="menu card">
       {#each slash as it, i (it.name)}
         <button class="mi" class:sel={i === slashSel} onmouseenter={() => (slashSel = i)} onclick={() => takeSlash(i)}>
-          <span class="mono">/{it.name}</span>
+          <span class="mono">/{it.name}</span>{#if (it as any).playbook}<span class="pb">playbook</span>{/if}
         </button>
       {/each}
     </div>
@@ -155,6 +164,7 @@
   .x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 2px; display: grid; }
   .menu { position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 30; padding: 6px; display: grid; max-height: 300px; overflow: auto; }
   .menu.pick { right: auto; min-width: 200px; max-width: 280px; }
+  .pb { font-size: 10.5px; color: var(--accent); }
   .mh { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; padding: 4px 10px 6px; }
   .mi { display: flex; gap: 12px; align-items: baseline; border: 0; background: transparent; text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; }
   .mi.sel, .mi:hover { background: var(--hover); }

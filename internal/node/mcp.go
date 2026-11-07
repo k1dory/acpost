@@ -38,6 +38,9 @@ func (n *Node) mcpKeychain() *keychain.Store {
 // mcpAccount is a secret's account: its server, the version of the server's secrets, where, name.
 // A version no server refers to is dead: a value left there never reaches an agent.
 func mcpAccount(server, ver, where, name string) string {
+	if ver == "" {
+		return server + "/" + where + "/" + name // kept before secrets had versions
+	}
 	return server + "/" + ver + "/" + where + "/" + name
 }
 
@@ -88,7 +91,13 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 		for _, name := range names {
 			v, given := secrets[where+"/"+name]
 			if !given && old != nil {
-				v = kc.Get(mcpAccount(old.Name, old.SecretVer, where, name)) // kept as it was
+				// Kept as it was: a store that cannot be read stops the change (nothing lost).
+				kept, _, err := kc.Lookup(mcpAccount(old.Name, old.SecretVer, where, name))
+				if err != nil {
+					undo()
+					return errf("unavailable", "%v", err)
+				}
+				v = kept
 			}
 			if v == "" {
 				continue
@@ -106,7 +115,7 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 		return errf("invalid", "%v", err)
 	}
 	if old != nil {
-		forgetSecrets(kc, *old) // the old version: nothing refers to it any more
+		n.forgetSecrets(ctx, *old) // the old version: nothing refers to it any more
 	}
 	return nil
 }
@@ -118,12 +127,20 @@ func newSecretVer() string {
 	return hex.EncodeToString(b)
 }
 
-func forgetSecrets(kc *keychain.Store, m store.MCPServer) {
+// forgetSecrets forgets a version's secrets (and those that could not be forgotten before); what it
+// cannot forget now is noted, to be forgotten at the next change.
+func (n *Node) forgetSecrets(ctx context.Context, m store.MCPServer) {
+	kc := n.mcpKeychain()
+	accts, _ := n.st.MCPOrphans(ctx)
 	for _, e := range m.Env {
-		_ = kc.Delete(mcpAccount(m.Name, m.SecretVer, "env", e))
+		accts = append(accts, mcpAccount(m.Name, m.SecretVer, "env", e))
 	}
 	for _, h := range m.Headers {
-		_ = kc.Delete(mcpAccount(m.Name, m.SecretVer, "header", h))
+		accts = append(accts, mcpAccount(m.Name, m.SecretVer, "header", h))
+	}
+	for _, a := range accts {
+		err := kc.Delete(a)
+		_ = n.st.SetMCPOrphan(ctx, a, err == nil)
 	}
 }
 
@@ -143,7 +160,7 @@ func (n *Node) DeleteMCPServer(ctx context.Context, p Principal, name string) er
 	}
 	for _, m := range list {
 		if m.Name == name {
-			forgetSecrets(n.mcpKeychain(), m)
+			n.forgetSecrets(ctx, m)
 		}
 	}
 	return nil

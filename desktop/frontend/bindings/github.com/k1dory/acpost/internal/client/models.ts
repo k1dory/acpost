@@ -174,6 +174,7 @@ export class AgentOptions {
  */
 export class AskingRequest {
     "message": string;
+    "thread"?: string;
     "request_id": string;
     "kind": string;
 
@@ -227,10 +228,10 @@ export class AskingRequest {
      * Creates a new AskingRequest instance from a string or object.
      */
     static createFrom($$source: any = {}): AskingRequest {
-        const $$createField5_0 = $$createType7;
+        const $$createField6_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("options" in $$parsedSource) {
-            $$parsedSource["options"] = $$createField5_0($$parsedSource["options"]);
+            $$parsedSource["options"] = $$createField6_0($$parsedSource["options"]);
         }
         return new AskingRequest($$parsedSource as Partial<AskingRequest>);
     }
