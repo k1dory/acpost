@@ -157,6 +157,10 @@ export function DeletePlaybook(name: string): $CancellablePromise<void> {
     return $Call.ByID(828378724, name);
 }
 
+export function DeleteSchedule(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1747447074, id);
+}
+
 /**
  * Events reads a message's events (no stream).
  */
@@ -285,8 +289,24 @@ export function PutPlaybook(name: string, body: string): $CancellablePromise<voi
     return $Call.ByID(3029226546, name, body);
 }
 
+export function PutSchedule(sc: store$0.Schedule): $CancellablePromise<store$0.Schedule> {
+    return $Call.ByID(2968062976, sc).then(($result: any) => {
+        return $$createType27($result);
+    });
+}
+
 export function RenameFolder(id: string, name: string): $CancellablePromise<void> {
     return $Call.ByID(3968049898, id, name);
+}
+
+export function RunSchedule(id: string): $CancellablePromise<string> {
+    return $Call.ByID(3920942684, id);
+}
+
+export function Schedules(): $CancellablePromise<store$0.Schedule[]> {
+    return $Call.ByID(1407160058).then(($result: any) => {
+        return $$createType28($result);
+    });
 }
 
 /**
@@ -294,7 +314,7 @@ export function RenameFolder(id: string, name: string): $CancellablePromise<void
  */
 export function SearchDirs(q: string): $CancellablePromise<string[]> {
     return $Call.ByID(3291189440, q).then(($result: any) => {
-        return $$createType27($result);
+        return $$createType29($result);
     });
 }
 
@@ -334,7 +354,7 @@ export function SetChatTitle(chat: string, title: string): $CancellablePromise<v
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType28($result);
+        return $$createType30($result);
     });
 }
 
@@ -357,7 +377,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType29($result);
+        return $$createType31($result);
     });
 }
 
@@ -373,7 +393,7 @@ export function Unfollow(id: string): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType31($result);
+        return $$createType33($result);
     });
 }
 
@@ -405,8 +425,10 @@ const $$createType23 = store$0.Playbook.createFrom;
 const $$createType24 = $Create.Array($$createType23);
 const $$createType25 = forge$0.Pull.createFrom;
 const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = $Create.Array($Create.Any);
-const $$createType28 = $models.Connection.createFrom;
-const $$createType29 = $Create.Array($$createType4);
-const $$createType30 = client$0.UsageReport.createFrom;
-const $$createType31 = $Create.Array($$createType30);
+const $$createType27 = store$0.Schedule.createFrom;
+const $$createType28 = $Create.Array($$createType27);
+const $$createType29 = $Create.Array($Create.Any);
+const $$createType30 = $models.Connection.createFrom;
+const $$createType31 = $Create.Array($$createType4);
+const $$createType32 = client$0.UsageReport.createFrom;
+const $$createType33 = $Create.Array($$createType32);

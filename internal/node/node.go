@@ -854,6 +854,7 @@ func (n *Node) maintainLoop() {
 			continue
 		}
 		ctx, now := n.ctx, time.Now()
+		n.runSchedules(ctx, now)
 		changed := 0
 		if k, err := n.st.Expire(ctx, now); err == nil {
 			changed += k

@@ -274,6 +274,35 @@ func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
+// Schedules lists the scheduled tasks.
+func (c *Client) Schedules(ctx context.Context) ([]store.Schedule, error) {
+	var out struct {
+		Items []store.Schedule `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/schedules", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// PutSchedule adds (no id) or changes a scheduled task.
+func (c *Client) PutSchedule(ctx context.Context, sc store.Schedule) (store.Schedule, error) {
+	var out store.Schedule
+	_, err := c.do(ctx, "PUT", "/v1/schedules", nil, sc, &out, nil)
+	return out, err
+}
+
+// DeleteSchedule removes a scheduled task.
+func (c *Client) DeleteSchedule(ctx context.Context, id string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/schedules/"+url.PathEscape(id), nil, nil, nil, nil)
+	return err
+}
+
+// RunSchedule sends a scheduled task now.
+func (c *Client) RunSchedule(ctx context.Context, id string) (store.Message, error) {
+	var out store.Message
+	_, err := c.do(ctx, "POST", "/v1/schedules/"+url.PathEscape(id)+"/run", nil, nil, &out, nil)
+	return out, err
+}
+
 // Playbooks lists the kept prompts.
 func (c *Client) Playbooks(ctx context.Context) ([]store.Playbook, error) {
 	var out struct {

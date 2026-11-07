@@ -543,6 +543,65 @@ export class RepoDiff {
 }
 
 /**
+ * Schedule is a task sent on a cron schedule.
+ */
+export class Schedule {
+    "id": string;
+    "name": string;
+
+    /**
+     * 5 fields, or @daily, @hourly…
+     */
+    "cron": string;
+    "agent": string;
+    "body": string;
+    "cwd"?: string;
+    "model"?: string;
+    "effort"?: string;
+    "enabled": boolean;
+    "next_run"?: string;
+    "last_run"?: string;
+
+    /**
+     * the thread of the last run
+     */
+    "last_msg"?: string;
+    "last_err"?: string;
+
+    /** Creates a new Schedule instance. */
+    constructor($$source: Partial<Schedule> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("cron" in $$source)) {
+            this["cron"] = "";
+        }
+        if (!("agent" in $$source)) {
+            this["agent"] = "";
+        }
+        if (!("body" in $$source)) {
+            this["body"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            this["enabled"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Schedule instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Schedule {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Schedule($$parsedSource as Partial<Schedule>);
+    }
+}
+
+/**
  * State of a message.
  */
 export enum State {

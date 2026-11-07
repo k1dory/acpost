@@ -337,6 +337,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(playbooksSchema); err != nil {
 		return err
 	}
+	if _, err := s.w.Exec(schedulesSchema); err != nil {
+		return err
+	}
 	// Columns added after the first release.
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},

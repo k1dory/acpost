@@ -7,7 +7,36 @@
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
   type MCP = { name: string; kind: "stdio" | "http"; command?: string; args?: string[]; url?: string; env?: string[]; headers?: string[]; agents?: string[]; enabled: boolean };
 
-  let section = $state<"git" | "mcp" | "playbooks" | "agents" | "general">("git");
+  let section = $state<"git" | "mcp" | "playbooks" | "schedules" | "agents" | "general">("git");
+  type Sched = { id?: string; name: string; cron: string; agent: string; body: string; cwd?: string; model?: string; effort?: string; enabled: boolean; next_run?: string; last_run?: string; last_msg?: string; last_err?: string };
+  let scheds = $state<Sched[] | null>(null);
+  let sc = $state<Sched | null>(null);
+  const presets = [["Every hour", "@hourly"], ["Every day at 9", "0 9 * * *"], ["Weekdays at 9", "0 9 * * 1-5"], ["Every Monday", "0 9 * * 1"]];
+  async function loadScheds() {
+    try { scheds = ((await Node.Schedules()) ?? []) as any; } catch (e) { err = errText(e); scheds = []; }
+  }
+  async function saveSched(s: Sched) {
+    err = ""; busy = true;
+    try { await Node.PutSchedule(s as any); sc = null; await loadScheds(); } catch (e) { err = errText(e); }
+    busy = false;
+  }
+  async function runSched(id: string) {
+    err = "";
+    try { await Node.RunSchedule(id); await Promise.all([loadScheds(), app.loadChats()]); } catch (e) { err = errText(e); }
+  }
+  async function deleteSched(id: string) {
+    try { await Node.DeleteSchedule(id); sc = null; await loadScheds(); } catch (e) { err = errText(e); }
+  }
+  async function pickSchedDir() {
+    if (!sc) return;
+    const d = await Node.PickDirectory(sc.cwd || app.home).catch(() => "");
+    if (d) sc.cwd = d;
+  }
+  function when(t?: string) {
+    if (!t) return "";
+    const d = new Date(t);
+    return d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  }
   let pb = $state<{ isNew: boolean; name: string; body: string } | null>(null);
   async function savePlaybook() {
     if (!pb) return;
@@ -38,7 +67,7 @@
   async function loadServers() {
     try { servers = ((await Node.MCPServers()) ?? []) as any; } catch (e) { err = errText(e); servers = []; }
   }
-  $effect(() => { if (section === "git" && accounts === null) loadAccounts(); if (section === "mcp" && servers === null) loadServers(); });
+  $effect(() => { if (section === "git" && accounts === null) loadAccounts(); if (section === "mcp" && servers === null) loadServers(); if (section === "schedules" && scheds === null) loadScheds(); });
 
   async function connect() {
     err = ""; busy = true;
@@ -97,7 +126,7 @@
   <header class="drag"><h1>Settings</h1></header>
   <div class="cols">
     <nav class="nav">
-      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
+      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
         <button class:on={section === k} onclick={() => { section = k as any; err = ""; }}><Icon name={ic} size={14} /> {l}</button>
       {/each}
     </nav>
@@ -218,6 +247,55 @@
               <span class="sp"></span>
               <button class="btn" onclick={() => (pb = null)}>Cancel</button>
               <button class="btn primary" disabled={busy || !pb.name.trim() || !pb.body.trim()} onclick={savePlaybook}>Save</button>
+            </div>
+          </div>
+        {/if}
+
+      {:else if section === "schedules"}
+        <h2>Schedules</h2>
+        <p class="muted">Tasks the node sends on a schedule. Each run is a new chat.</p>
+        {#if !sc}
+          <div class="card panel"><div class="inner">
+            {#each scheds ?? [] as s (s.id)}
+              <div class="row">
+                <Icon name="clock" size={14} />
+                <div class="t">
+                  <b>{s.name}</b>
+                  <span class="muted small one">{agentName(s.agent)} · <span class="mono">{s.cron}</span>{#if s.enabled && s.next_run} · next {when(s.next_run)}{/if}{#if s.last_run} · last {when(s.last_run)}{/if}</span>
+                  {#if s.last_err}<span class="small bad one">{s.last_err}</span>{/if}
+                </div>
+                <button class="btn ghost sm" onclick={() => runSched(s.id!)}>Run now</button>
+                <button class="btn ghost sm" onclick={() => (sc = { ...s })}>Edit</button>
+                <button class="sw" class:on={s.enabled} onclick={() => saveSched({ ...s, enabled: !s.enabled })} aria-label="Enabled"><span></span></button>
+              </div>
+            {:else}<div class="row muted">{scheds === null ? "Loading…" : "No schedules yet"}</div>{/each}
+          </div></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (sc = { name: "", cron: "0 9 * * 1-5", agent: app.localAgents()[0]?.address ?? "", body: "", cwd: app.home, enabled: true })}><Icon name="plus" size={13} /> New schedule</button></div>
+        {:else}
+          <div class="form card">
+            <input class="input" placeholder="Name: morning review" bind:value={sc.name} />
+            <div class="lbl">When</div>
+            <div class="frow wrap">
+              {#each presets as [l, c]}<button class="chip pickc" class:on={sc.cron === c} onclick={() => (sc!.cron = c)}>{l}</button>{/each}
+            </div>
+            <input class="input mono" placeholder="cron: min hour day month weekday" bind:value={sc.cron} />
+            <div class="lbl">Agent and directory</div>
+            <div class="frow">
+              <Dropdown bind:value={sc.agent} icon="bot" items={app.localAgents().map(a => ({ value: a.address, label: agentName(a.address) }))} />
+              <button class="chip pickc" onclick={pickSchedDir} title={sc.cwd}><Icon name="file" size={12} /> {sc.cwd && app.home && sc.cwd.startsWith(app.home) ? "~" + sc.cwd.slice(app.home.length) : sc.cwd || "~"}</button>
+            </div>
+            <div class="lbl">Task</div>
+            {#if app.playbooks.length}
+              <div class="frow wrap">
+                {#each app.playbooks as p (p.name)}<button class="chip pickc" class:on={sc.body === p.body} onclick={() => (sc!.body = p.body)}>/{p.name}</button>{/each}
+              </div>
+            {/if}
+            <textarea class="input" rows="8" placeholder="What the agent should do" bind:value={sc.body}></textarea>
+            <div class="acts">
+              {#if sc.id}<button class="btn ghost danger" onclick={() => deleteSched(sc!.id!)}>Delete</button>{/if}
+              <span class="sp"></span>
+              <button class="btn" onclick={() => (sc = null)}>Cancel</button>
+              <button class="btn primary" disabled={busy || !sc.name.trim() || !sc.cron.trim() || !sc.agent || !sc.body.trim()} onclick={() => saveSched(sc!)}>Save</button>
             </div>
           </div>
         {/if}

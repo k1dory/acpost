@@ -82,3 +82,21 @@ func (n *Node) SetChatTitle(chat, title string) error {
 	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.SetChatTitle(ctx, chat, title) })
 	return err
 }
+
+func (n *Node) Schedules() ([]store.Schedule, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]store.Schedule, error) { return c.Schedules(ctx) })
+}
+
+func (n *Node) PutSchedule(sc store.Schedule) (store.Schedule, error) {
+	return call(n, func(ctx context.Context, c *client.Client) (store.Schedule, error) { return c.PutSchedule(ctx, sc) })
+}
+
+func (n *Node) DeleteSchedule(id string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.DeleteSchedule(ctx, id) })
+	return err
+}
+
+func (n *Node) RunSchedule(id string) (string, error) {
+	m, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) { return c.RunSchedule(ctx, id) })
+	return m.ID, err
+}

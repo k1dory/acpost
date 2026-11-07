@@ -70,6 +70,10 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/forge/accounts", s.auth(s.forgeAccounts))
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
 	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
+	mux.HandleFunc("GET /v1/schedules", s.auth(s.schedules))
+	mux.HandleFunc("PUT /v1/schedules", s.auth(s.putSchedule))
+	mux.HandleFunc("DELETE /v1/schedules/{id}", s.auth(s.deleteSchedule))
+	mux.HandleFunc("POST /v1/schedules/{id}/run", s.auth(s.runSchedule))
 	mux.HandleFunc("GET /v1/playbooks", s.auth(s.playbooks))
 	mux.HandleFunc("PUT /v1/playbooks/{name}", s.auth(s.putPlaybook))
 	mux.HandleFunc("DELETE /v1/playbooks/{name}", s.auth(s.deletePlaybook))
@@ -567,6 +571,46 @@ func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Princi
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (s *server) schedules(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.Schedules(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) putSchedule(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req store.Schedule
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := s.n.PutSchedule(r.Context(), p, req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *server) deleteSchedule(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.DeleteSchedule(r.Context(), p, r.PathValue("id")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) runSchedule(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	m, err := s.n.RunSchedule(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, m)
 }
 
 func (s *server) playbooks(w http.ResponseWriter, r *http.Request, p node.Principal) {

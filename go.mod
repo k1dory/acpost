@@ -17,6 +17,7 @@ require (
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 )
 
 require (
