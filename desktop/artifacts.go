@@ -34,6 +34,9 @@ type Artifact struct {
 
 const artifactMax = 20 << 20
 
+// oNoFollowAny is macOS's O_NOFOLLOW_ANY (sys/fcntl.h): no symlink in any part of the path.
+const oNoFollowAny = 0x20000000
+
 var errArtifact = errors.New("not a file the app shows: a file of this Mac, outside hidden folders, up to 20 MiB")
 
 // MessageFile is a file of a message (a reply's attachment).
@@ -58,9 +61,10 @@ func (n *Node) LocalFile(path, base string) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
-	// Opened as checked: no symlink at the end (O_NOFOLLOW), a FIFO does not block (O_NONBLOCK), the
-	// open file itself regular, read up to the limit.
-	fd, err := syscall.Open(p, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	// Opened as checked: no symlink anywhere on the resolved path (macOS's O_NOFOLLOW_ANY: a folder
+	// swapped for a link meanwhile fails), a FIFO does not block (O_NONBLOCK), the open file itself
+	// regular, read up to the limit.
+	fd, err := syscall.Open(p, syscall.O_RDONLY|oNoFollowAny|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return Artifact{}, errArtifact
 	}

@@ -18,8 +18,12 @@
       // must not navigate).
       link(token) {
         if (!/^file:/i.test(token.href)) return false;
-        let path = token.href.replace(/^file:\/\//i, "");
-        try { path = decodeURI(path); } catch {}
+        let path = "";
+        try {
+          const u = new URL(token.href);
+          if (u.host && u.host !== "localhost") return this.parser.parseInline(token.tokens); // another machine's: text
+          path = decodeURIComponent(u.pathname);
+        } catch { return this.parser.parseInline(token.tokens); }
         return `<a href="#artifact:${encodeURIComponent(path)}">${this.parser.parseInline(token.tokens)}</a>`;
       },
       codespan({ text: code }) {
@@ -39,7 +43,7 @@
         }
         if (!out) out = esc(code);
         const label = name ? esc(hljs.getLanguage(name)?.name ?? name) : "text";
-        return `<div class="code"><div class="ch"><span class="lang">${label}</span><button class="cp" type="button">${t("Copy")}</button></div>` +
+        return `<div class="code"><div class="ch"><span class="lang">${label}</span><span class="cp" role="button" tabindex="0">${t("Copy")}</span></div>` +
           `<pre><code class="hljs">${out}</code></pre></div>`;
       },
     },
@@ -104,7 +108,7 @@
   .md :global(.code) { border: 1px solid var(--line-soft); border-radius: 14px; margin: 0 0 .8em; overflow: hidden; background: var(--page); }
   .md :global(.ch) { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px 5px 14px; border-bottom: 1px solid var(--line-soft); background: var(--sel); }
   .md :global(.lang) { font: 500 11px var(--mono); color: var(--muted); text-transform: lowercase; }
-  .md :global(.cp) { border: 0; background: transparent; color: var(--muted); font-size: 11.5px; padding: 3px 8px; border-radius: 7px; cursor: default; }
+  .md :global(.cp) { display: inline-block; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; padding: 3px 8px; border-radius: 7px; cursor: default; }
   .md :global(.cp:hover) { background: var(--hover); color: var(--ink); }
   .md :global(pre) { padding: 12px 14px; overflow: auto; margin: 0; }
   .md :global(pre code) { background: none; padding: 0; font-size: 12px; line-height: 1.55; overflow-wrap: normal; white-space: pre; }
