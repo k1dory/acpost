@@ -3,3 +3,4 @@ bin
 frontend/node_modules
 frontend/dist/*
 !frontend/dist/.keep
+ide/node_modules

@@ -1,0 +1,40 @@
+{
+  "name": "acpost-ide",
+  "displayName": "acpost",
+  "description": "The acpost app's look for its IDE: its colours, icons, fonts and shape.",
+  "publisher": "acpost",
+  "version": "1.0.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Themes",
+    "Other"
+  ],
+  "contributes": {
+    "themes": [
+      {
+        "label": "acpost Light",
+        "uiTheme": "vs",
+        "path": "./themes/acpost-light.json"
+      },
+      {
+        "label": "acpost Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/acpost-dark.json"
+      }
+    ],
+    "productIconThemes": [
+      {
+        "id": "acpost",
+        "label": "acpost",
+        "path": "./icons/acpost-product-icons.json"
+      }
+    ]
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ]
+}

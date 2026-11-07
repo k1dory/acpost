@@ -198,13 +198,13 @@ void apGuardNavigation(void *nswindow) {
 // interface keeps the IDE's box. It is a page like any: keys, clipboard, its storage persist with
 // the app's (WebKit's default store for the bundle).
 
-// A script put into VS Code's page (the app's settings for it: colours, fonts, the theme
-// following the pane's appearance); written by the Go side (ide_theme.go).
-static NSString *apIDESeed = nil; // set by the Go side (apIDESetSeed) before the pane is made
+// Scripts put into VS Code's page — at its start (English, the app's look linked in) and at its
+// end (the app's settings for it) — written by the Go side (ide_theme.go).
+static NSString *apIDEStart = nil, *apIDESeed = nil; // set by the Go side before the pane is made
 
-void apIDESetSeed(const char *script) {
-	NSString *js = [NSString stringWithUTF8String:script];
-	dispatch_async(dispatch_get_main_queue(), ^{ apIDESeed = js; });
+void apIDESetScripts(const char *start, const char *end) {
+	NSString *a = [NSString stringWithUTF8String:start], *b = [NSString stringWithUTF8String:end];
+	dispatch_async(dispatch_get_main_queue(), ^{ apIDEStart = a; apIDESeed = b; });
 }
 
 static void apIDELoadURL(NSString *u) {
@@ -234,6 +234,7 @@ void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus
 		if (!apIDE) {
 			WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
 			WKUserContentController *uc = [WKUserContentController new];
+			if (apIDEStart) [uc addUserScript:[[WKUserScript alloc] initWithSource:apIDEStart injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
 			if (apIDESeed) [uc addUserScript:[[WKUserScript alloc] initWithSource:apIDESeed injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES]];
 			cfg.userContentController = uc;
 			apIDE = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:cfg];

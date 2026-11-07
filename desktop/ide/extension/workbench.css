@@ -1,0 +1,66 @@
+/* The IDE in the app's shape: its fonts, radii, rows and quiet chrome. Linked into VS Code's page by
+   the app (ide_ext.go) from this extension, after @font-face rules for the fonts in fonts/. Selectors are VS Code's
+   stable part and widget classes only; checked against the pinned VS Code (ideCommit). */
+
+.monaco-workbench, .monaco-workbench .monaco-menu, .quick-input-widget, .monaco-hover, .notifications-toasts,
+.monaco-workbench .part > .title > .title-label h2, .monaco-workbench .pane-header {
+  font-family: "Onest", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif !important;
+}
+.monaco-workbench { font-size: 13px; }
+
+/* Panel and section titles: sentence case, as the app writes them. */
+.monaco-workbench .part > .title > .title-label h2,
+.monaco-workbench .pane-header h3.title,
+.monaco-workbench .part.panel .composite-bar .action-label {
+  text-transform: none !important; letter-spacing: 0 !important; font-weight: 600 !important; font-size: 12.5px !important;
+}
+
+/* Rows: the app's height and rounded selection, inset from the edges. */
+.monaco-workbench .part.sidebar .monaco-list-row { border-radius: 8px; }
+.monaco-workbench .part.sidebar .monaco-list .monaco-scrollable-element { padding: 0 6px; box-sizing: border-box; }
+.monaco-workbench .part.sidebar .monaco-list:focus .monaco-list-row.focused.selected { outline: none !important; }
+
+/* Tabs: no borders; the open one is the page's colour, rounded at the top. */
+.monaco-workbench .part.editor > .content .editor-group-container > .title .tabs-container > .tab {
+  border-radius: 8px 8px 0 0; border-right: 0 !important; margin-top: 4px; height: 31px !important;
+}
+.monaco-workbench .part.editor > .content .editor-group-container > .title .tabs-container > .tab:first-child { margin-left: 6px; }
+.monaco-workbench .part.editor > .content .editor-group-container > .title .tabs-container > .tab .label-name { font-weight: 500; }
+
+/* Inputs, buttons, dropdowns: the app's radii. */
+.monaco-workbench .monaco-inputbox, .monaco-workbench .monaco-select-box, .monaco-workbench select,
+.quick-input-widget .monaco-inputbox { border-radius: 10px !important; }
+.monaco-workbench .monaco-inputbox > .ibwrapper > .input { padding-left: 8px; }
+.monaco-workbench .monaco-button, .monaco-workbench .monaco-text-button { border-radius: 10px !important; font-weight: 600; }
+.monaco-workbench .monaco-button-dropdown > .monaco-button:first-child { border-radius: 10px 0 0 10px !important; }
+.monaco-workbench .monaco-button-dropdown > .monaco-button:last-child { border-radius: 0 10px 10px 0 !important; }
+
+/* Menus, quick open, hovers, suggestions, notifications: cards of the app. */
+.monaco-workbench .monaco-menu-container, .monaco-workbench .context-view .monaco-menu,
+.monaco-menu .monaco-action-bar.vertical { border-radius: 12px !important; }
+.monaco-menu .monaco-action-bar.vertical { padding: 5px 0 !important; }
+.monaco-menu .monaco-action-bar.vertical .action-menu-item { border-radius: 7px; margin: 0 5px; height: 28px !important; }
+.monaco-menu .monaco-action-bar.vertical .action-label:not(.separator), .monaco-menu .monaco-action-bar.vertical .keybinding { font-size: 12.5px; }
+.monaco-menu-container { box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 14px 30px -12px rgba(0,0,0,.35) !important; }
+.quick-input-widget { border-radius: 14px !important; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 18px 40px -16px rgba(0,0,0,.4) !important; }
+.quick-input-widget .monaco-list-row { border-radius: 8px; }
+.quick-input-widget .quick-input-list .monaco-scrollable-element { padding: 0 6px; box-sizing: border-box; }
+.monaco-editor .suggest-widget, .monaco-hover, .monaco-editor .monaco-hover, .monaco-editor .find-widget,
+.monaco-editor .parameter-hints-widget { border-radius: 10px !important; overflow: hidden; }
+.notifications-toasts .notification-toast-container, .notifications-center { border-radius: 12px !important; overflow: hidden; }
+.monaco-workbench .notifications-toasts .notification-toast { border-radius: 12px; }
+
+/* Scrollbars: thin, rounded. */
+.monaco-scrollable-element > .scrollbar > .slider { border-radius: 6px; }
+.monaco-scrollable-element > .scrollbar.vertical > .slider { width: 6px !important; left: 4px !important; }
+.monaco-scrollable-element > .scrollbar.horizontal > .slider { height: 6px !important; top: 4px !important; }
+
+/* Badges: pills. */
+.monaco-workbench .badge-content, .monaco-count-badge { border-radius: 9px !important; font-weight: 600; }
+
+/* VS Code's own chrome the app already has, or does not use: its accounts, the remote button, the
+   AI chat's entries, the "manage" gear's update dot. */
+.monaco-workbench .activitybar .monaco-action-bar .action-item:has(.codicon-accounts-view-bar-icon),
+.monaco-workbench .part.statusbar .statusbar-item#status\.host,
+.monaco-workbench .part.statusbar .statusbar-item[id^="chat."],
+.monaco-workbench .part.statusbar .statusbar-item[id*="copilot"] { display: none !important; }

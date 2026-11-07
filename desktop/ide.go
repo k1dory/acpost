@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -156,7 +157,8 @@ func (s *ideServer) start(st *ideStart) {
 	}
 	cmd := exec.Command(cli, "serve-web", "--host", "127.0.0.1", "--port", port, "--connection-token-file", f.Name(),
 		"--accept-server-license-terms", "--disable-telemetry",
-		"--server-data-dir", filepath.Join(data, "server"), "--cli-data-dir", filepath.Join(data, "cli"))
+		"--server-data-dir", filepath.Join(data, "server"), "--cli-data-dir", filepath.Join(data, "cli"),
+		"--commit-id", ideCommit)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -219,6 +221,11 @@ func (s *ideServer) start(st *ideStart) {
 			kill()
 			fail(err)
 			return
+		}
+		// The app's look for it, installed (or brought up to date) now that VS Code's server is
+		// there; without it VS Code is plain, not broken.
+		if err := ideInstall(data); err != nil {
+			fmt.Fprintln(os.Stderr, "acpost: IDE:", err)
 		}
 		st.base = base
 		close(st.ready)
@@ -287,7 +294,11 @@ func (n *Node) IDEShow(url string, x, y, w, h float64) error {
 	if n.win == nil {
 		return errPreview
 	}
-	ideSeed() // before the pane is made
+	if data, err := ideDataDir(); err == nil { // the scripts, before the pane is made
+		if p := ideExtension(); p.err == nil {
+			ideScripts(ideExtDir(data, p.version), p.hash)
+		}
+	}
 	// Focus goes into VS Code when it is opened (a url), not each time the pane is placed.
 	if err := preview.IDEShow(n.win.NativeWindow(), x, y, w, h, strings.TrimSpace(url) != "" && strings.TrimSpace(url) != ide.loaded()); err != nil {
 		return err

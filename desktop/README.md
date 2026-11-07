@@ -15,3 +15,9 @@ wails3 task dev                     # live reload while working on the interface
 `go build -tags server` builds the same app as a local HTTP server (http://localhost:8080) for
 looking at the interface in a browser. Bindings in `frontend/bindings` are generated:
 `wails3 generate bindings -ts -d frontend/bindings ./`.
+
+The IDE view is VS Code (the one installed on the Mac runs `serve-web`, pinned to `ideCommit` in
+`ide.go`; its server, settings and extensions live in `~/Library/Application Support/acpost/vscode`)
+dressed as the app by the extension in `ide/extension`: colour themes made from the app's tokens,
+Lucide icons in place of VS Code's, the app's fonts and `workbench.css`. Its generated files are
+committed; after changing the tokens or the icon map: `cd ide && npm install && npm run build`.

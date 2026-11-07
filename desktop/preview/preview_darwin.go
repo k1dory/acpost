@@ -25,7 +25,7 @@ void apIDEHide(void);
 void apIDELoad(const char *url);
 void apIDEReload(void);
 void apIDEAppearance(int dark);
-void apIDESetSeed(const char *script);
+void apIDESetScripts(const char *start, const char *end);
 int apPopup(void *nswindow, double x, double y, const char **titles, const char **keys, int n, int checked);
 
 */
@@ -255,9 +255,11 @@ func Popup(window unsafe.Pointer, x, y float64, titles, keys []string, checked i
 	return int(C.apPopup(window, C.double(x), C.double(y), (**C.char)(ct), (**C.char)(ck), C.int(n), C.int(checked)))
 }
 
-// IDESeed is a script put into VS Code's page when the pane is made (call it before IDEShow).
-func IDESeed(script string) {
-	cs := C.CString(script)
-	C.apIDESetSeed(cs)
+// IDEScripts are put into VS Code's page when the pane is made (call before IDEShow): start at
+// the document's start, end at its end.
+func IDEScripts(start, end string) {
+	cs, ce := C.CString(start), C.CString(end)
+	C.apIDESetScripts(cs, ce)
 	C.free(unsafe.Pointer(cs))
+	C.free(unsafe.Pointer(ce))
 }

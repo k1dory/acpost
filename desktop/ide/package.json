@@ -1,0 +1,13 @@
+{
+  "name": "acpost-ide-build",
+  "private": true,
+  "type": "module",
+  "description": "Builds the IDE's icon font (a subset of Lucide) for the app's VS Code extension.",
+  "scripts": {
+    "build": "node build-themes.mjs && node build-icons.mjs && node build-fonts.mjs"
+  },
+  "devDependencies": {
+    "lucide-static": "1.70.0",
+    "subset-font": "2.9.0"
+  }
+}
