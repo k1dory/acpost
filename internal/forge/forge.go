@@ -182,6 +182,9 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 		if json.Unmarshal(b, &e) == nil && e.Message != "" {
 			msg = e.Message
 		}
+		if tok := c.token(host); tok != "" {
+			msg = strings.ReplaceAll(msg, tok, "•••") // a server that repeats the token back
+		}
 		return resp.Header, &Error{Status: resp.StatusCode, Message: fmt.Sprintf("%s %s %s: %s", host, method, path, msg)}
 	}
 	if int64(len(b)) > max {
@@ -236,11 +239,16 @@ func (c *Client) Probe(ctx context.Context, host string) (Server, error) {
 			srv.API = "https://" + host + "/api/v4"
 		}
 		_, err := c.get(ctx, srv, host, "/version", &v, 1<<16)
+		var fe *Error
+		if k == Forgejo && errors.As(err, &fe) && fe.Status == http.StatusUnauthorized {
+			// Forgejo refuses even its public /version with a bad token: asked again without it, so a
+			// wrong token is told as one, not as an unknown server.
+			_, err = c.anonymous().get(ctx, srv, host, "/version", &v, 1<<16)
+		}
 		if err == nil && v.Version != "" {
 			srv.Version = v.Version
 			return srv, nil
 		}
-		var fe *Error
 		if k == GitLab && errors.As(err, &fe) && fe.Status == http.StatusUnauthorized {
 			return srv, nil // GitLab answers /version only with a token: it is GitLab all the same
 		}
@@ -257,6 +265,13 @@ func (c *Client) Probe(ctx context.Context, host string) (Server, error) {
 		errs = append(errs, err)
 	}
 	return Server{}, fmt.Errorf("%s: not a forge acpost knows (GitHub, GitLab, Forgejo/Gitea): %w", host, errors.Join(errs...))
+}
+
+// anonymous is the client without tokens.
+func (c *Client) anonymous() *Client {
+	a := *c
+	a.Token = func(string) string { return "" }
+	return &a
 }
 
 // Pull is a pull (merge) request.

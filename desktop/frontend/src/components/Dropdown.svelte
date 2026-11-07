@@ -36,7 +36,10 @@
   }
 </script>
 
-<svelte:window onclick={e => { if (open && !root.contains(e.target as Node)) open = false; }} />
+<!-- Fixed on the screen: scrolling under it or resizing the window closes it, as a system menu does. -->
+<svelte:window onclick={e => { if (open && !root.contains(e.target as Node)) open = false; }}
+  onresize={() => (open = false)}
+  onscrollcapture={e => { if (open && !(menu && menu.contains(e.target as Node))) open = false; }} />
 
 <div class="dd" bind:this={root}>
   <button class="chip trig" onclick={toggle} onkeydown={key}>

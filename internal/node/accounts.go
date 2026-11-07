@@ -2,10 +2,12 @@ package node
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/forge"
 )
 
 // The node user's forge accounts (the app's Settings; acpost forge login on the command line).
@@ -69,10 +71,19 @@ func (n *Node) ForgeLogin(ctx context.Context, p Principal, host, kind, token st
 	}
 	srv, err := lc.Probe(ctx, host)
 	if err != nil {
-		return client.ForgeAccount{}, errh("invalid", "name its kind (github, gitlab, forgejo)", "%v", err)
+		var fe *forge.Error
+		if errors.As(err, &fe) && fe.Status == 0 {
+			return client.ForgeAccount{}, errf("unavailable", "%s does not answer (%s)", host, short(fe.Message, 160))
+		}
+		return client.ForgeAccount{}, errh("invalid", "choose its kind instead of Detect",
+			"%s answers, but not as GitHub, GitLab or Forgejo/Gitea", host)
 	}
 	login, err := lc.Whoami(ctx, srv, host)
 	if err != nil {
+		var fe *forge.Error
+		if errors.As(err, &fe) && (fe.Status == 401 || fe.Status == 403) {
+			return client.ForgeAccount{}, errh("refused", tokenHint(srv.Kind, host), "%s did not accept this token", host)
+		}
 		return client.ForgeAccount{}, forgeErr(err)
 	}
 	if err := st.Login(host, kind, token); err != nil {
@@ -97,4 +108,23 @@ func (n *Node) ForgeLogout(ctx context.Context, p Principal, host string) error 
 	delete(n.forges.probed, host)
 	n.forges.mu.Unlock()
 	return nil
+}
+
+// tokenHint says where a forge makes the token acpost needs.
+func tokenHint(kind, host string) string {
+	switch kind {
+	case forge.GitHub:
+		return "make one at https://" + host + "/settings/tokens (repo, read:user)"
+	case forge.GitLab:
+		return "make one at https://" + host + "/-/user_settings/personal_access_tokens (api)"
+	default:
+		return "make one at https://" + host + "/user/settings/applications (repository and user: read and write)"
+	}
+}
+
+func short(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

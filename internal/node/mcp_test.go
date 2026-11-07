@@ -83,10 +83,17 @@ func TestForgeAccounts(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/version":
+			// As Forgejo: a bad token is refused even here, and repeated back in the message.
+			if a := r.Header.Get("Authorization"); a != "" && a != "token good" {
+				w.WriteHeader(401)
+				w.Write([]byte(`{"message":"task with token \"` + strings.TrimPrefix(a, "token ") + `\": resource does not exist"}`))
+				return
+			}
 			w.Write([]byte(`{"version":"11.0.1"}`))
 		case "/api/v1/user":
 			if r.Header.Get("Authorization") != "token good" {
 				w.WriteHeader(401)
+				w.Write([]byte(`{"message":"token ` + strings.TrimPrefix(r.Header.Get("Authorization"), "token ") + ` is malformed"}`))
 				return
 			}
 			w.Write([]byte(`{"login":"lev"}`))
@@ -99,8 +106,13 @@ func TestForgeAccounts(t *testing.T) {
 	n := newNode(t, inboxCfg)
 	c, _ := n.forgeClient()
 	c.HTTP = srv.Client()
-	if _, err := n.ForgeLogin(ctx, me, host, "", "bad"); code(err) != "refused" {
+	// A wrong token on a Forgejo is told as a wrong token (the server known), and never shown.
+	_, err := n.ForgeLogin(ctx, me, host, "", "s3cr3t-wrong")
+	if code(err) != "refused" || !strings.Contains(err.Error(), "did not accept this token") || strings.Contains(err.Error(), "s3cr3t-wrong") {
 		t.Fatalf("a refused token: %v", err)
+	}
+	if e, ok := err.(*Error); !ok || strings.Contains(e.Hint, "s3cr3t") || !strings.Contains(e.Hint, "/user/settings/applications") {
+		t.Fatalf("hint: %+v", err)
 	}
 	acc, err := n.ForgeLogin(ctx, me, host, "", "good")
 	// A refused token does not replace the one kept.

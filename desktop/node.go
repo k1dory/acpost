@@ -109,7 +109,17 @@ func call[T any](n *Node, fn func(ctx context.Context, c *client.Client) (T, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return fn(ctx, c)
+	out, err := fn(ctx, c)
+	return out, withHint(err)
+}
+
+// withHint puts the node's hint (what to do next) after its message: the app shows both.
+func withHint(err error) error {
+	var e *client.Error
+	if errors.As(err, &e) && e.Hint != "" {
+		return fmt.Errorf("%s — %s", e.Message, e.Hint)
+	}
+	return err
 }
 
 // Connection is the node as the app sees it.

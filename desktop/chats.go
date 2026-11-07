@@ -223,7 +223,8 @@ func callLong[T any](n *Node, d time.Duration, fn func(ctx context.Context, c *c
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
-	return fn(ctx, c)
+	out, err := fn(ctx, c)
+	return out, withHint(err)
 }
 
 // ForkSession forks a chat's agent session: the new session, a chat of its own.
