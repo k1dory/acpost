@@ -64,6 +64,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/agents", s.auth(s.agents))
 	mux.HandleFunc("POST /v1/agents/{name}/claim", s.auth(s.claim))
 	mux.HandleFunc("GET /v1/agents/{name}/sessions", s.auth(s.sessions))
+	mux.HandleFunc("GET /v1/agents/{name}/options", s.auth(s.options))
 	mux.HandleFunc("POST /v1/nodes/{name}/announce", s.auth(s.announce))
 	mux.HandleFunc("POST /v1/nodes/{name}/claim", s.auth(s.nodeClaim))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +172,7 @@ func (s *server) send(w http.ResponseWriter, r *http.Request, p node.Principal) 
 		return
 	}
 	sr := node.SendRequest{To: req.To, Body: req.Body, Task: req.Task, Thread: req.Thread, Meta: req.Meta, Session: req.Session,
+		Cwd: req.Cwd, Model: req.Model, Effort: req.Effort, Mode: req.Mode,
 		Files: req.Files, IdemKey: r.Header.Get("Idempotency-Key")}
 	if req.TTL != "" {
 		d, err := time.ParseDuration(req.TTL)
@@ -424,6 +426,15 @@ func (s *server) sessions(w http.ResponseWriter, r *http.Request, p node.Princip
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": list, "next": next})
+}
+
+func (s *server) options(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.AgentOptions(r.Context(), p, r.PathValue("name"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *server) claimParams(w http.ResponseWriter, r *http.Request) (wait, lease time.Duration, ok bool) {

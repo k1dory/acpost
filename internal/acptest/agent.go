@@ -45,11 +45,38 @@ type fakeAgent struct {
 	prompts  map[acp.SessionId]int
 	cancels  map[acp.SessionId]context.CancelFunc
 	sessions atomic.Int64
+	cwds     map[acp.SessionId]string
+	settings map[acp.SessionId]map[string]string // config id → value: model, effort
+}
+
+// options are the session's configuration options as it stands: a model and a reasoning level.
+func (a *fakeAgent) options(sid acp.SessionId) []acp.SessionConfigOption {
+	a.mu.Lock()
+	cur := a.settings[sid]
+	a.mu.Unlock()
+	opt := func(id, name string, cat acp.SessionConfigOptionCategory, values ...string) acp.SessionConfigOption {
+		var vs acp.SessionConfigSelectOptionsUngrouped
+		for _, v := range values {
+			vs = append(vs, acp.SessionConfigSelectOption{Value: acp.SessionConfigValueId(v), Name: strings.ToUpper(v[:1]) + v[1:]})
+		}
+		current := values[0]
+		if c := cur[id]; c != "" {
+			current = c
+		}
+		o := acp.NewSessionConfigOptionSelect(acp.SessionConfigValueId(current), acp.SessionConfigSelectOptions{Ungrouped: &vs})
+		o.Select.Id, o.Select.Name, o.Select.Category = acp.SessionConfigId(id), name, &cat
+		return o
+	}
+	return []acp.SessionConfigOption{
+		opt("model", "Model", acp.SessionConfigOptionCategoryModel, "fake-small", "fake-big"),
+		opt("effort", "Reasoning", acp.SessionConfigOptionCategoryThoughtLevel, "low", "high"),
+	}
 }
 
 // Run serves the scripted agent on stdin/stdout until the client goes, then exits.
 func Run() {
-	a := &fakeAgent{prompts: map[acp.SessionId]int{}, cancels: map[acp.SessionId]context.CancelFunc{}}
+	a := &fakeAgent{prompts: map[acp.SessionId]int{}, cancels: map[acp.SessionId]context.CancelFunc{},
+		cwds: map[acp.SessionId]string{}, settings: map[acp.SessionId]map[string]string{}}
 	a.conn = acp.NewAgentSideConnection(a, os.Stdout, os.Stdin)
 	<-a.conn.Done()
 	os.Exit(0)
@@ -74,7 +101,19 @@ func (a *fakeAgent) Logout(ctx context.Context, p acp.LogoutRequest) (acp.Logout
 
 func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.NewSessionResponse, error) {
 	n := a.sessions.Add(1)
-	return acp.NewSessionResponse{SessionId: acp.SessionId(fmt.Sprintf("s%d-%d", os.Getpid(), n))}, nil
+	sid := acp.SessionId(fmt.Sprintf("s%d-%d", os.Getpid(), n))
+	a.mu.Lock()
+	a.cwds[sid] = p.Cwd
+	a.mu.Unlock()
+	if os.Getenv("FAKE_COMMANDS") != "" {
+		go func() { // what claude-agent-acp does after session/new
+			time.Sleep(10 * time.Millisecond)
+			_ = a.conn.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: sid, Update: acp.SessionUpdate{
+				AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{SessionUpdate: "available_commands_update",
+					AvailableCommands: []acp.AvailableCommand{{Name: "review", Description: "Review the changes"}}}}})
+		}()
+	}
+	return acp.NewSessionResponse{SessionId: sid, ConfigOptions: a.options(sid)}, nil
 }
 
 func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
@@ -139,6 +178,17 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 	switch cmd {
 	case "echo":
 		a.say(ctx, sid, arg)
+	case "cwd": // the session's directory
+		a.mu.Lock()
+		dir := a.cwds[sid]
+		a.mu.Unlock()
+		a.say(ctx, sid, dir)
+	case "settings": // the session's model and reasoning level
+		var b strings.Builder
+		for _, o := range a.options(sid) {
+			fmt.Fprintf(&b, "%s=%s ", o.Select.Id, o.Select.CurrentValue)
+		}
+		a.say(ctx, sid, strings.TrimSpace(b.String()))
 	case "tools":
 		a.say(ctx, sid, "thinking")
 		_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: acp.StartToolCall("t1", "read file", acp.WithStartKind(acp.ToolKindRead))})
@@ -363,5 +413,18 @@ func (a *fakeAgent) ResumeSession(ctx context.Context, p acp.ResumeSessionReques
 }
 
 func (a *fakeAgent) SetSessionConfigOption(ctx context.Context, p acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
-	return acp.SetSessionConfigOptionResponse{}, nil
+	v := p.ValueId
+	if v == nil {
+		return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("a value")
+	}
+	if v.ConfigId != "model" && v.ConfigId != "effort" {
+		return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("no such option")
+	}
+	a.mu.Lock()
+	if a.settings[v.SessionId] == nil {
+		a.settings[v.SessionId] = map[string]string{}
+	}
+	a.settings[v.SessionId][string(v.ConfigId)] = string(v.Value)
+	a.mu.Unlock()
+	return acp.SetSessionConfigOptionResponse{ConfigOptions: a.options(v.SessionId)}, nil
 }

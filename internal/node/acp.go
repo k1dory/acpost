@@ -38,6 +38,10 @@ type acpAgent struct {
 	keyMu  sync.Mutex
 	keys   map[string]*keyLock
 	owners map[string]int // ACP session id → the slot whose process last ran it (concurrency > 1)
+
+	optMu    sync.Mutex
+	lastOpts *acpx.SessionState    // the latest session's options: what the agent offers (models, levels, modes)
+	commands []acp.AvailableCommand // the slash commands it said last
 }
 
 func (a *acpAgent) ownerOf(key string) int {
@@ -81,6 +85,7 @@ type acpProc struct {
 	init     acp.InitializeResponse
 	sessions map[string]acp.SessionId
 	models   map[acp.SessionId]string // the model each session runs, as the agent names it
+	states   map[acp.SessionId]acpx.SessionState // each session's modes and configuration options
 	// costBase is where a session's cost stood when this process took it up: 0 for one it created,
 	// what the agent said while loading one (absent: not known).
 	costBase map[acp.SessionId]float64
@@ -269,7 +274,7 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", a.cfg.Command[0], err)
 	}
-	p := &acpProc{cmd: cmd, stdin: stdin, sessions: map[string]acp.SessionId{}, models: map[acp.SessionId]string{}, costBase: map[acp.SessionId]float64{}, done: make(chan struct{})}
+	p := &acpProc{cmd: cmd, stdin: stdin, sessions: map[string]acp.SessionId{}, models: map[acp.SessionId]string{}, states: map[acp.SessionId]acpx.SessionState{}, costBase: map[acp.SessionId]float64{}, done: make(chan struct{})}
 	go func() {
 		sc := bufio.NewScanner(stderr)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -403,10 +408,10 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 		}
 	}
 	cwd := s.cwd()
+	if sessionCwd != "" {
+		cwd = sessionCwd // the session's own directory, or the one the task was started in
+	}
 	if id, ok := strings.CutPrefix(key, "session:"); ok {
-		if sessionCwd != "" {
-			cwd = sessionCwd
-		}
 		// A session named by the sender: continue exactly it, or fail. Its mode and model are the
 		// session's own, not the agent's configuration.
 		sid, err := s.continueSession(ctx, p, acp.SessionId(id), cwd)
@@ -454,7 +459,7 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 		}
 		st = next
 	}
-	p.setModel(sid, st.Options)
+	a.noteState(p, sid, st)
 	if key != "" {
 		p.sessions[key] = sid
 		a.setOwner(string(sid), s.idx)
@@ -485,7 +490,7 @@ func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.Sessio
 	if caps.SessionCapabilities.Resume != nil {
 		r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
 		if err == nil {
-			p.setModel(id, r.ConfigOptions)
+			s.a.noteState(p, id, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
 			return id, nil
 		}
 		errs = append(errs, err)
@@ -493,7 +498,7 @@ func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.Sessio
 	if caps.LoadSession {
 		r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
 		if err == nil {
-			p.setModel(id, r.ConfigOptions)
+			s.a.noteState(p, id, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
 			return id, nil
 		}
 		errs = append(errs, err)
@@ -598,7 +603,7 @@ func (s *acpSlot) handle(m store.Message) {
 		return
 	}
 	key := sessionKey(a.cfg.Session, m)
-	sid, err := s.sessionIn(ctx, p, key, m.Meta[metaSessionCwd])
+	sid, err := s.sessionIn(ctx, p, key, taskCwd(m))
 	if err != nil {
 		if n.ctx.Err() != nil || cancelled.Load() {
 			return
@@ -612,6 +617,7 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
+	s.applySettings(ctx, p, sid, m)
 	blocks, tfiles, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
 	tf = tfiles
 	defer cleanup()
@@ -623,7 +629,7 @@ func (s *acpSlot) handle(m store.Message) {
 	}
 	// The working tree before the turn: what the turn changed is told after it (changes.go).
 	dir := s.cwd()
-	if c := m.Meta[metaSessionCwd]; c != "" {
+	if c := taskCwd(m); c != "" {
 		dir = c
 	}
 	before := snapshot(ctx, dir)
@@ -854,6 +860,9 @@ func (c *acpClient) record(t *acpTurn, kind string, data any) {
 
 func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification) error {
 	extra, sdk := c.wire.Classify(p.Update)
+	if u := p.Update.AvailableCommandsUpdate; sdk && u != nil {
+		c.slot.a.noteCommands(u.AvailableCommands) // whenever said: after session/new, in a turn
+	}
 	t := c.turn(p.SessionId)
 	if t == nil {
 		// A replayed history (session/load) or a late update: only where the session's cost stands.

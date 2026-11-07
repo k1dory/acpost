@@ -56,6 +56,8 @@ type SendRequest struct {
 	Meta                   map[string]string
 	// Session continues an existing ACP session of the agent (one opened in an editor, say).
 	Session string
+	// Cwd, Model, Effort, Mode: a new task's directory and the session's settings for the message.
+	Cwd, Model, Effort, Mode string
 	// Files go with the message (checked against limits.max_files and max_files_size).
 	Files   []store.File
 	TTL     time.Duration
@@ -367,6 +369,9 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 		}
 	}
 	if err := n.resolveSession(ctx, p, to, &r); err != nil {
+		return store.Message{}, false, err
+	}
+	if err := n.resolveSettings(ctx, p, to, &r); err != nil {
 		return store.Message{}, false, err
 	}
 	m := &store.Message{ID: store.NewID(), From: p.Address(), Body: r.Body, Task: r.Task, Thread: r.Thread, Meta: r.Meta, IdemKey: r.IdemKey, Files: r.Files}

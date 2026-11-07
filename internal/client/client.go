@@ -33,6 +33,12 @@ type SendRequest struct {
 	Thread string `json:"thread,omitempty"`
 	// Session continues an existing ACP session of the agent.
 	Session string            `json:"session,omitempty"`
+	// Cwd is the directory a new task's session runs in (an ACP agent of the node); Model, Effort
+	// and Mode are selected in the session before this message's turn.
+	Cwd    string `json:"cwd,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	Mode   string `json:"mode,omitempty"`
 	Meta    map[string]string `json:"meta,omitempty"`
 	Files   store.Files       `json:"files,omitempty"`
 	TTL     string            `json:"ttl,omitempty"`
@@ -81,6 +87,42 @@ type AgentInfo struct {
 	Queued  int    `json:"queued"`
 	Running int    `json:"running"`
 	Process bool   `json:"process,omitempty"` // an acp agent's process is up
+}
+
+// AgentOptions is what an ACP agent offers to choose (models, reasoning levels, modes) and its
+// slash commands.
+type AgentOptions struct {
+	Agent    string         `json:"agent"`
+	Options  []AgentOption  `json:"options"`
+	Commands []AgentCommand `json:"commands,omitempty"`
+}
+
+// AgentOption is one choice: its category (model, thought_level, mode), the current value, the values.
+type AgentOption struct {
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	Category string        `json:"category,omitempty"`
+	Current  string        `json:"current"`
+	Values   []OptionValue `json:"values"`
+}
+
+type OptionValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Group       string `json:"group,omitempty"`
+}
+
+type AgentCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// Options is what an ACP agent offers to choose.
+func (c *Client) Options(ctx context.Context, agent string) (AgentOptions, error) {
+	var out AgentOptions
+	_, err := c.do(ctx, "GET", "/v1/agents/"+url.PathEscape(agent)+"/options", nil, nil, &out, nil)
+	return out, err
 }
 
 // SessionInfo is one of an ACP agent's sessions.
