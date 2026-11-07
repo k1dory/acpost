@@ -8,7 +8,7 @@ node's socket (`ACPOST_NODE`/`ACPOST_TOKEN` for another node).
 ```sh
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 cd desktop/frontend && npm install && npm run build && cd ..
-go build -o bin/acpost .            # the app (macOS only)
+./build-app.sh                      # bin/acpost.app (open it, or drag it to /Applications)
 wails3 task dev                     # live reload while working on the interface
 ```
 

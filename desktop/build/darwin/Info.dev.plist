@@ -4,7 +4,7 @@
         <key>CFBundlePackageType</key>
             <string>APPL</string>
         <key>CFBundleName</key>
-            <string>My Product</string>
+            <string>acpost</string>
         <key>CFBundleExecutable</key>
             <string>acpost</string>
         <key>CFBundleIdentifier</key>
@@ -24,7 +24,7 @@
         <key>NSHighResolutionCapable</key>
             <string>true</string>
         <key>NSHumanReadableCopyright</key>
-            <string>© 2026, My Company</string>
+            <string>© 2026, acpost</string>
         <key>NSAppTransportSecurity</key>
         <dict>
             <key>NSAllowsLocalNetworking</key>
