@@ -289,3 +289,31 @@ func TestGiteaActionsAndDrafts(t *testing.T) {
 		t.Fatalf("%q", gotQuery)
 	}
 }
+
+// The token a request carries is never in its error: a body that repeats it (past the shown
+// length too), a redirect whose URL holds it.
+func TestErrorsHideTheToken(t *testing.T) {
+	const secret = "s3cr3t0123456789abcdef0123456789abcdef01"
+	c, host, _ := fake(t, Forgejo, map[string]any{
+		"GET /api/v1/version": `{"version":"11"}`,
+		"GET /api/v1/user": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(500)
+			w.Write([]byte(strings.Repeat("x", 280) + secret))
+		}),
+		"GET /api/v1/repos/o/r": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://elsewhere.example/?token="+secret, http.StatusFound)
+		}),
+	})
+	c.Token = func(string) string { return secret }
+	srv, err := c.Probe(context.Background(), host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Whoami(context.Background(), srv, host); err == nil || strings.Contains(err.Error(), secret[:12]) {
+		t.Fatalf("a long body: %v", err)
+	}
+	var v map[string]any
+	if _, err := c.get(context.Background(), srv, host, "/repos/o/r", &v, 1<<16); err == nil || strings.Contains(err.Error(), secret[:12]) {
+		t.Fatalf("a redirect: %v", err)
+	}
+}

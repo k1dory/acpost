@@ -163,10 +163,19 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 	if srv.Kind == GitHub {
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	}
-	auth(req, srv.Kind, c.token(host))
+	// The token this request carries: said nowhere — whatever the server or the transport repeats
+	// (a body, a redirect's URL) is masked before it is cut or shown.
+	tok := c.token(host)
+	redact := func(s string) string {
+		if tok == "" {
+			return s
+		}
+		return strings.ReplaceAll(s, tok, "•••")
+	}
+	auth(req, srv.Kind, tok)
 	resp, err := c.hc().Do(req)
 	if err != nil {
-		return nil, &Error{Message: fmt.Sprintf("%s: %v", host, err)}
+		return nil, &Error{Message: redact(fmt.Sprintf("%s: %v", host, err))}
 	}
 	defer resp.Body.Close()
 	if t, ok := out.(*tailText); ok && resp.StatusCode < 400 {
@@ -174,16 +183,21 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	if err != nil {
-		return resp.Header, &Error{Status: resp.StatusCode, Message: fmt.Sprintf("%s: %v", host, err)}
+		return resp.Header, &Error{Status: resp.StatusCode, Message: redact(fmt.Sprintf("%s: %v", host, err))}
 	}
 	if resp.StatusCode >= 400 {
-		msg := strings.TrimSpace(string(b[:min(len(b), 300)]))
+		whole := redact(string(b))
 		var e struct{ Message string }
-		if json.Unmarshal(b, &e) == nil && e.Message != "" {
+		msg := ""
+		if json.Unmarshal([]byte(whole), &e) == nil && e.Message != "" {
 			msg = e.Message
+		} else {
+			msg = strings.TrimSpace(whole)
 		}
-		if tok := c.token(host); tok != "" {
-			msg = strings.ReplaceAll(msg, tok, "•••") // a server that repeats the token back
+		if tok != "" && len(b) > int(max) {
+			msg = "(an answer too long to show)" // the token may cross the cut: not shown at all
+		} else if r := []rune(msg); len(r) > 300 {
+			msg = string(r[:300]) + "…"
 		}
 		return resp.Header, &Error{Status: resp.StatusCode, Message: fmt.Sprintf("%s %s %s: %s", host, method, path, msg)}
 	}
@@ -196,7 +210,7 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 		*o = string(b)
 	default:
 		if err := json.Unmarshal(b, out); err != nil {
-			return resp.Header, &Error{Status: resp.StatusCode, Message: fmt.Sprintf("%s %s: not the API's answer (%v)", host, path, err)}
+			return resp.Header, &Error{Status: resp.StatusCode, Message: redact(fmt.Sprintf("%s %s: not the API's answer (%v)", host, path, err))}
 		}
 	}
 	return resp.Header, nil
