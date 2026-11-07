@@ -147,6 +147,7 @@ acpost sessions --agent NAME [--cwd DIR]
 acpost serve   [--config FILE] [--join URL]
 acpost status
 acpost changes ID [--tree] [--stat]         # what its turns changed in their git repository
+acpost term    [--agent A | --cwd DIR] [--id T] [--list] [--keep]   # a shell on the node's machine
 acpost usage   [--since 30d | --from DAY [--to DAY]] [--by agent|model|day|session|""] [--agent A]
 ```
 
@@ -175,6 +176,14 @@ snapshot. Changes are for the node's user and its agents. `acpost changes ID` an
 message's turns and each repository's diff from its first snapshot to its last; `--tree`
 (`tree=1`) adds the messages its agent sent while working (subagents) on this node. Turns that run
 at once in one repository each see the other's changes.
+
+**A terminal.** `acpost term` (and `POST /v1/terminals`) starts the user's login shell in a
+pseudo-terminal on the node's machine, in an agent's working directory or another; for the
+node's user only (not its agents, not tokens), at most 32 at once. Its output streams as
+Server-Sent Events (`GET /v1/terminals/{id}/output?from=N`: `event: data`, base64, its id the
+offset after it; `event: end` with the exit code) and the last 256 KiB are kept, so a reader comes
+back where it was (`--id`); input is `POST …/input` (raw bytes), size `POST …/resize`. A terminal
+goes when closed, or ten minutes after its shell ends.
 
 **Watching an answer being written.** An ACP agent's text and thinking are kept as `text` and
 `thought` events while its turn runs (gathered to a few a second, at most 4 KiB each), in order
@@ -384,6 +393,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/messages/{id}/events?after=` | what the agent did: its text (`text`, `thought`), tool calls, plan, permissions, notices |
 | `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
 | `GET /v1/messages/{id}/changes?tree=1&diff=1` | what its turns changed, per turn and per repository |
+| `POST /v1/terminals` · `GET /v1/terminals` · `GET /v1/terminals/{id}/output?from=` · `POST /v1/terminals/{id}/input` · `POST /v1/terminals/{id}/resize` · `DELETE /v1/terminals/{id}` | a shell on the node's machine (the node's user) |
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |

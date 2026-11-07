@@ -80,6 +80,7 @@ type Node struct {
 	mu        sync.Mutex
 	changed   chan struct{}
 	evChanged chan struct{} // closed when an event is recorded: followers read on
+	terms     terms         // the user's terminals
 
 	tokMu   sync.Mutex
 	agentTk map[string]*agentToken // token → agent process

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -649,4 +650,129 @@ func (c *Client) ChangesOf(ctx context.Context, id string, tree, diff bool) (Cha
 	var out Changes
 	_, err := c.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id)+"/changes", q, nil, &out, nil)
 	return out, err
+}
+
+// Terminal is a terminal on a node (node.Terminal on the wire).
+type Terminal struct {
+	ID       string    `json:"id"`
+	Cwd      string    `json:"cwd"`
+	Agent    string    `json:"agent,omitempty"`
+	Started  time.Time `json:"started"`
+	Running  bool      `json:"running"`
+	ExitCode *int      `json:"exit_code,omitempty"`
+	Size     int64     `json:"size"`
+}
+
+// TermRequest opens a terminal: in an agent's working directory, or Cwd.
+type TermRequest struct {
+	Agent string `json:"agent,omitempty"`
+	Cwd   string `json:"cwd,omitempty"`
+	Cols  int    `json:"cols,omitempty"`
+	Rows  int    `json:"rows,omitempty"`
+}
+
+func (c *Client) OpenTerminal(ctx context.Context, r TermRequest) (Terminal, error) {
+	var t Terminal
+	_, err := c.do(ctx, "POST", "/v1/terminals", nil, r, &t, nil)
+	return t, err
+}
+
+func (c *Client) Terminals(ctx context.Context) ([]Terminal, error) {
+	var out struct {
+		Items []Terminal `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/terminals", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// TermInput types b into a terminal.
+func (c *Client) TermInput(ctx context.Context, id string, b []byte) error {
+	req, err := http.NewRequestWithContext(ctx, "POST", c.base+"/v1/terminals/"+url.PathEscape(id)+"/input", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return respErr("POST", "/v1/terminals/input", resp)
+	}
+	return nil
+}
+
+func (c *Client) TermResize(ctx context.Context, id string, cols, rows int) error {
+	_, err := c.do(ctx, "POST", "/v1/terminals/"+url.PathEscape(id)+"/resize", nil, map[string]int{"cols": cols, "rows": rows}, nil, nil)
+	return err
+}
+
+func (c *Client) CloseTerminal(ctx context.Context, id string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/terminals/"+url.PathEscape(id), nil, nil, nil, nil)
+	return err
+}
+
+// TermOutput streams a terminal's output from offset from, calling fn with each piece and the
+// offset after it (where to come back from), until its shell ends (it returns the terminal then)
+// or ctx ends.
+func (c *Client) TermOutput(ctx context.Context, id string, from int64, fn func(next int64, b []byte) error) (Terminal, error) {
+	path := "/v1/terminals/" + url.PathEscape(id) + "/output"
+	req, err := http.NewRequestWithContext(ctx, "GET", c.base+path+"?from="+strconv.FormatInt(from, 10), nil)
+	if err != nil {
+		return Terminal{}, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return Terminal{}, fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return Terminal{}, respErr("GET", path, resp)
+	}
+	rd := bufio.NewReaderSize(resp.Body, 64<<10)
+	var kind, data string
+	var next int64
+	for {
+		line, err := readLine(rd, 1<<20)
+		if err != nil {
+			if ctx.Err() != nil {
+				return Terminal{}, ctx.Err()
+			}
+			return Terminal{}, fmt.Errorf("%w: %s: the terminal's stream broke: %w", ErrUnavailable, c.URL, err)
+		}
+		switch {
+		case line == "":
+			switch kind {
+			case "data":
+				b, err := base64.StdEncoding.DecodeString(data)
+				if err != nil {
+					return Terminal{}, fmt.Errorf("%w: terminal output: %w", ErrBadResponse, err)
+				}
+				if err := fn(next, b); err != nil {
+					return Terminal{}, err
+				}
+			case "end":
+				var t Terminal
+				if err := json.Unmarshal([]byte(data), &t); err != nil {
+					return t, fmt.Errorf("%w: terminal end: %w", ErrBadResponse, err)
+				}
+				return t, nil
+			}
+			kind, data = "", ""
+		case strings.HasPrefix(line, "event:"):
+			kind = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "id:"):
+			next, _ = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "id:")), 10, 64)
+		case strings.HasPrefix(line, "data:"):
+			data += strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+		}
+	}
 }

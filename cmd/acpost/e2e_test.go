@@ -832,3 +832,35 @@ func TestChangesWithSubagent(t *testing.T) {
 		t.Fatalf("no changes event: %s", evs)
 	}
 }
+
+// A terminal through the API, in an agent's working directory.
+func TestTerminalOverAPI(t *testing.T) {
+	dir := t.TempDir()
+	e := newEnv(t, "agents:\n"+fakeAgent("worker", ", cwd: "+dir))
+	e.serve()
+	c, err := client.New("unix://"+e.sock, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := c.OpenTerminal(context.Background(), client.TermRequest{Agent: "worker"})
+	if err != nil || tm.Cwd != dir {
+		t.Fatalf("%+v %v", tm, err)
+	}
+	if err := c.TermInput(context.Background(), tm.ID, []byte("pwd; echo via-\"\"http; exit\n")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var out strings.Builder
+	var next int64
+	end, err := c.TermOutput(ctx, tm.ID, 0, func(n int64, b []byte) error { out.Write(b); next = n; return nil })
+	if next != end.Size {
+		t.Fatalf("offset %d, size %d", next, end.Size)
+	}
+	if err != nil || end.Running || !strings.Contains(out.String(), "via-http") {
+		t.Fatalf("%+v %v %q", end, err, out.String())
+	}
+	if _, err := c.OpenTerminal(context.Background(), client.TermRequest{Agent: "nobody"}); err == nil {
+		t.Fatal("a terminal of no agent")
+	}
+}

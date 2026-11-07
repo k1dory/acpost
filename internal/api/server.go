@@ -3,10 +3,13 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +39,12 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
 	mux.HandleFunc("GET /v1/usage", s.auth(s.usage))
 	mux.HandleFunc("GET /v1/messages/{id}/changes", s.auth(s.changes))
+	mux.HandleFunc("POST /v1/terminals", s.auth(s.termOpen))
+	mux.HandleFunc("GET /v1/terminals", s.auth(s.termList))
+	mux.HandleFunc("GET /v1/terminals/{id}/output", s.auth(s.termOutput))
+	mux.HandleFunc("POST /v1/terminals/{id}/input", s.auth(s.termInput))
+	mux.HandleFunc("POST /v1/terminals/{id}/resize", s.auth(s.termResize))
+	mux.HandleFunc("DELETE /v1/terminals/{id}", s.auth(s.termClose))
 	mux.HandleFunc("GET /v1/messages/{id}/files", s.auth(s.files))
 	mux.HandleFunc("POST /v1/attach", s.auth(s.attach))
 	mux.HandleFunc("POST /v1/messages/{id}/cancel", s.auth(s.cancel))
@@ -540,4 +549,115 @@ func (s *server) follow(w http.ResponseWriter, r *http.Request, p node.Principal
 	}
 	b, _ := json.Marshal(m)
 	_ = send("event: end\ndata: %s\n\n", b)
+}
+
+func (s *server) termOpen(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req node.TermRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	t, err := s.n.OpenTerminal(r.Context(), p, req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, t)
+}
+
+func (s *server) termList(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	ts, err := s.n.Terminals(p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": ts})
+}
+
+func (s *server) termInput(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	b, err := io.ReadAll(io.LimitReader(r.Body, 64<<10+1))
+	if err != nil {
+		writeErr(w, &node.Error{Code: "invalid", Message: err.Error()})
+		return
+	}
+	if err := s.n.TermInput(p, r.PathValue("id"), b); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) termResize(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct{ Cols, Rows int }
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.n.TermResize(p, r.PathValue("id"), req.Cols, req.Rows); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) termClose(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.CloseTerminal(p, r.PathValue("id")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// termOutput streams a terminal's output as Server-Sent Events: `event: data` with the offset as
+// its id and the bytes in base64, then `event: end` with the terminal when its shell has ended.
+// ?from= (or Last-Event-ID, the offset after the last bytes read) goes on from there.
+func (s *server) termOutput(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	from, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+	if last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
+		from = last
+	}
+	ts, err := s.n.Terminals(p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !slices.ContainsFunc(ts, func(t node.Terminal) bool { return t.ID == r.PathValue("id") }) {
+		writeErr(w, &node.Error{Code: "not_found", Message: "no terminal " + r.PathValue("id")})
+		return
+	}
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, &node.Error{Code: "internal", Message: "streaming is not supported here"})
+		return
+	}
+	started := false
+	start := func() {
+		if !started {
+			started = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("X-Accel-Buffering", "no")
+			w.WriteHeader(http.StatusOK)
+			fl.Flush()
+		}
+	}
+	start()
+	t, err := s.n.TermOutput(r.Context(), p, r.PathValue("id"), from, func(off int64, b []byte) error {
+		start()
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: data\ndata: %s\n\n", off+int64(len(b)), base64.StdEncoding.EncodeToString(b)); err != nil {
+			return err
+		}
+		fl.Flush()
+		return nil
+	})
+	if err != nil {
+		if !started {
+			writeErr(w, err)
+		}
+		return
+	}
+	start()
+	b, _ := json.Marshal(t)
+	fmt.Fprintf(w, "event: end\ndata: %s\n\n", b)
+	fl.Flush()
 }
