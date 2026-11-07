@@ -163,4 +163,3 @@ func filesOf(ctx context.Context, c *client.Client, id string) ([]storeFile, err
 	}
 	return out, nil
 }
-
