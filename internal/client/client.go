@@ -125,6 +125,44 @@ func (c *Client) Options(ctx context.Context, agent string) (AgentOptions, error
 	return out, err
 }
 
+// Folders lists the app's folders of chats, with their chats.
+func (c *Client) Folders(ctx context.Context) ([]store.Folder, error) {
+	var out struct {
+		Items []store.Folder `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/folders", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// CreateFolder makes a folder.
+func (c *Client) CreateFolder(ctx context.Context, name string) (store.Folder, error) {
+	var out store.Folder
+	_, err := c.do(ctx, "POST", "/v1/folders", nil, map[string]string{"name": name}, &out, nil)
+	return out, err
+}
+
+// UpdateFolder renames a folder ("" keeps the name) and moves it to pos (nil keeps it).
+func (c *Client) UpdateFolder(ctx context.Context, id, name string, pos *int) error {
+	body := map[string]any{"name": name}
+	if pos != nil {
+		body["pos"] = *pos
+	}
+	_, err := c.do(ctx, "PATCH", "/v1/folders/"+url.PathEscape(id), nil, body, nil, nil)
+	return err
+}
+
+// DeleteFolder removes a folder.
+func (c *Client) DeleteFolder(ctx context.Context, id string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/folders/"+url.PathEscape(id), nil, nil, nil, nil)
+	return err
+}
+
+// MoveChat puts a chat in a folder ("" takes it out).
+func (c *Client) MoveChat(ctx context.Context, chat, folder string) error {
+	_, err := c.do(ctx, "PUT", "/v1/chats/folder", nil, map[string]string{"chat": chat, "folder": folder}, nil, nil)
+	return err
+}
+
 // SessionInfo is one of an ACP agent's sessions.
 type SessionInfo struct {
 	ID        string `json:"id"`

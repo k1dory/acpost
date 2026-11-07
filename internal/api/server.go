@@ -65,6 +65,11 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/agents/{name}/claim", s.auth(s.claim))
 	mux.HandleFunc("GET /v1/agents/{name}/sessions", s.auth(s.sessions))
 	mux.HandleFunc("GET /v1/agents/{name}/options", s.auth(s.options))
+	mux.HandleFunc("GET /v1/folders", s.auth(s.folders))
+	mux.HandleFunc("POST /v1/folders", s.auth(s.createFolder))
+	mux.HandleFunc("PATCH /v1/folders/{id}", s.auth(s.updateFolder))
+	mux.HandleFunc("DELETE /v1/folders/{id}", s.auth(s.deleteFolder))
+	mux.HandleFunc("PUT /v1/chats/folder", s.auth(s.moveChat))
 	mux.HandleFunc("POST /v1/nodes/{name}/announce", s.auth(s.announce))
 	mux.HandleFunc("POST /v1/nodes/{name}/claim", s.auth(s.nodeClaim))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +440,75 @@ func (s *server) options(w http.ResponseWriter, r *http.Request, p node.Principa
 		return
 	}
 	writeJSON(w, 200, out)
+}
+
+func (s *server) folders(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.Folders(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) createFolder(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	f, err := s.n.CreateFolder(r.Context(), p, req.Name)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, f)
+}
+
+func (s *server) updateFolder(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	req := struct {
+		Name string `json:"name"`
+		Pos  *int   `json:"pos"`
+	}{}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	pos := -1
+	if req.Pos != nil {
+		pos = max(*req.Pos, 0)
+	}
+	if err := s.n.UpdateFolder(r.Context(), p, r.PathValue("id"), req.Name, pos); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) deleteFolder(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.DeleteFolder(r.Context(), p, r.PathValue("id")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) moveChat(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		Chat   string `json:"chat"`
+		Folder string `json:"folder"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.n.MoveChat(r.Context(), p, req.Chat, req.Folder); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func (s *server) claimParams(w http.ResponseWriter, r *http.Request) (wait, lease time.Duration, ok bool) {
