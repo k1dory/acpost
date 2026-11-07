@@ -245,6 +245,7 @@ func (n *Node) CreateCloudTask(ctx context.Context, p Principal, r client.CloudT
 	if _, err := n.cloudAgent(s.ID, false); err != nil {
 		return client.Chat{}, err
 	}
+	n.forgetChats()
 	return s.chat(), nil
 }
 

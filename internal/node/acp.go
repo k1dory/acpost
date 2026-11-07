@@ -630,15 +630,26 @@ func (s *acpSlot) handle(m store.Message) {
 		return
 	}
 	s.applySettings(ctx, p, sid, m)
-	if p.fresh[sid] {
-		delete(p.fresh, sid)
+	// Knowledge: in a new session's first prompt, for a message of this node's own user or agents.
+	fresh := p.fresh[sid]
+	if fresh && knowledgeSender(m) {
 		dir := cwd
 		if dir == "" {
 			dir = s.cwd()
 		}
-		m.Body = n.knowledgeFor(ctx, dir) + m.Body
+		k, err := n.knowledgeFor(ctx, dir)
+		if err != nil {
+			if n.ctx.Err() == nil && !cancelled.Load() {
+				release(failf("agent_error", "the knowledge: %v", err))
+			}
+			return
+		}
+		m.Body = k + m.Body
 	}
 	blocks, tfiles, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
+	if err == nil && fresh {
+		delete(p.fresh, sid) // prompted: what it was given stays with it
+	}
 	tf = tfiles
 	defer cleanup()
 	if err != nil {

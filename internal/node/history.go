@@ -195,5 +195,6 @@ func (n *Node) ForkSession(ctx context.Context, p Principal, agent, id, cwd stri
 	if err != nil {
 		return "", explainACPErr(err, "agent:"+agent+" could not fork the session")
 	}
+	n.forgetChats()
 	return string(resp.SessionId), nil
 }

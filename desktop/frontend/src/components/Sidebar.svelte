@@ -2,6 +2,7 @@
   import { app, type Chat } from "../lib/state.svelte";
   import { ago } from "../lib/format";
   import Icon from "./Icon.svelte";
+  import AgentMark, { brandOf } from "./AgentMark.svelte";
 
   let q = $state("");
   let shown = $state(120);
@@ -94,7 +95,7 @@
     <span class="dot {dotOf(c)}"></span>
     <span class="t">
       <span class="title">{c.title || "Untitled"}</span>
-      <span class="sub muted"><span class="srcic"><Icon name={source(c) === "cloud" ? "cloud" : "bot"} size={10} /></span>{source(c) === "claude" ? "Claude" : source(c) === "codex" ? "Codex" : source(c) === "cloud" ? c.cloud_agent || "Cloud" : ""}{place(c) ? " · " + place(c) : ""}</span>
+      <span class="sub muted"><span class="srcic">{#if brandOf(c.cloud_agent || c.agent || "")}<AgentMark of={c.cloud_agent || c.agent || ""} size={11} busy={dotOf(c) === "running"} />{:else}<Icon name={source(c) === "cloud" ? "cloud" : "bot"} size={10} />{/if}</span>{source(c) === "claude" ? "Claude" : source(c) === "codex" ? "Codex" : source(c) === "cloud" ? c.cloud_agent || "Cloud" : ""}{place(c) ? " · " + place(c) : ""}</span>
     </span>
     <span class="when muted num">{ago(c.updated)}</span>
   </button>

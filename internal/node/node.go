@@ -93,6 +93,7 @@ type Node struct {
 	sandboxes map[string]*sandboxAgent // driver: sandbox, cloud agents (the cloud's added as used: sbMu)
 	sbMu      sync.Mutex
 	schedBusy atomic.Bool              // a schedules pass is running
+	chatList  chatCache                // sessions and sandboxes listed elsewhere, cached
 	dynCfg    map[string]*config.Agent // the cloud's sandboxes, as agents
 	cloud     *cloudAPI
 	started   bool // the drivers run (sbMu): a cloud sandbox's agent starts when added

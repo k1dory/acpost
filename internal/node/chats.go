@@ -101,62 +101,18 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 		before = next
 	}
 
-	// Each ACP agent's sessions, at once.
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	for name, a := range n.acp {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			lctx, cancel := context.WithTimeout(ctx, chatListWait)
-			defer cancel()
-			var got []client.Chat
-			cursor := ""
-			for len(got) < chatSessionsPerAgent {
-				list, next, err := n.Sessions(lctx, p, name, "", cursor)
-				if err != nil {
-					if CodeOf(err) != "unsupported" {
-						mu.Lock()
-						out.Partial = append(out.Partial, "agent:"+name+": "+err.Error())
-						mu.Unlock()
-					}
-					break
-				}
-				for _, si := range list {
-					if ours[name+"/"+si.ID] {
-						continue
-					}
-					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
-						Title: si.Title, Cwd: si.Cwd}
-					if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {
-						c.Updated = t
-					}
-					c.Folder = folderOf[c.Key]
-					got = append(got, c)
-				}
-				if next == "" {
-					break
-				}
-				cursor = next
-			}
-			mu.Lock()
-			out.Items = append(out.Items, got...)
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-
-	// Cloud sandboxes.
-	if cl, err := n.cloudChats(ctx); err != nil {
-		out.Partial = append(out.Partial, "cloud: "+err.Error())
-	} else {
-		for _, c := range cl {
-			if ours["cloud/"+c.Sandbox] {
-				continue
-			}
-			c.Folder = folderOf[c.Key]
-			out.Items = append(out.Items, c)
+	// Sessions and sandboxes elsewhere: from the cache, refreshed apart once stale.
+	ext, partial := n.externalChats(ctx)
+	out.Partial = append(out.Partial, partial...)
+	for _, c := range ext {
+		switch {
+		case c.Kind == "session" && ours[strings.TrimPrefix(c.Agent, "agent:")+"/"+c.Session]:
+			continue
+		case c.Kind == "cloud" && ours["cloud/"+c.Sandbox]:
+			continue
 		}
+		c.Folder = folderOf[c.Key]
+		out.Items = append(out.Items, c)
 	}
 
 	// The names the user gave chats.
@@ -173,6 +129,122 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 		out.Items = []client.Chat{}
 	}
 	return out, nil
+}
+
+// chatCacheFresh: how long the sessions and sandboxes listed elsewhere are shown without asking
+// again; past it they are still shown while a refresh runs apart.
+const chatCacheFresh = 30 * time.Second
+
+// chatCache holds what the agents and the cloud last listed: asking them takes seconds.
+type chatCache struct {
+	mu         sync.Mutex
+	at         time.Time
+	items      []client.Chat
+	partial    []string
+	refreshing bool
+	gen        int // bumped by forget: a refresh begun before it does not count as fresh
+}
+
+// externalChats: the ACP sessions of this node's agents and the cloud's sandboxes — the cached
+// list (refreshed apart if stale), or, the first time, listed now.
+func (n *Node) externalChats(ctx context.Context) ([]client.Chat, []string) {
+	c := &n.chatList
+	c.mu.Lock()
+	if c.at.IsZero() {
+		c.mu.Unlock()
+		items, partial := n.listExternal(ctx)
+		c.mu.Lock()
+		if c.at.IsZero() {
+			c.items, c.partial, c.at = items, partial, time.Now()
+		}
+		c.mu.Unlock()
+		return items, partial
+	}
+	items, partial := append([]client.Chat(nil), c.items...), append([]string(nil), c.partial...)
+	if time.Since(c.at) > chatCacheFresh && !c.refreshing && !n.closed.Load() {
+		c.refreshing = true
+		gen := c.gen
+		n.goLoop(func() {
+			got, gotPartial := n.listExternal(n.ctx)
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.refreshing = false
+			if n.ctx.Err() != nil {
+				return
+			}
+			c.items, c.partial = got, gotPartial
+			if gen == c.gen {
+				c.at = time.Now()
+			} else {
+				c.at = time.Now().Add(-2 * chatCacheFresh) // forgotten meanwhile: stale again
+			}
+		})
+	}
+	c.mu.Unlock()
+	return items, partial
+}
+
+// forgetChats marks the cached list stale (a session forked, a sandbox made): the next look
+// refreshes it.
+func (n *Node) forgetChats() {
+	n.chatList.mu.Lock()
+	if !n.chatList.at.IsZero() {
+		n.chatList.at = time.Now().Add(-2 * chatCacheFresh)
+	}
+	n.chatList.gen++
+	n.chatList.mu.Unlock()
+}
+
+// listExternal asks each ACP agent for its sessions, at once, and the cloud for its sandboxes.
+func (n *Node) listExternal(ctx context.Context) ([]client.Chat, []string) {
+	p := Principal{Kind: "user", Name: n.login}
+	var out []client.Chat
+	var partial []string
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for name, a := range n.acp {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lctx, cancel := context.WithTimeout(ctx, chatListWait)
+			defer cancel()
+			var got []client.Chat
+			cursor := ""
+			for len(got) < chatSessionsPerAgent {
+				list, next, err := n.Sessions(lctx, p, name, "", cursor)
+				if err != nil {
+					if CodeOf(err) != "unsupported" {
+						mu.Lock()
+						partial = append(partial, "agent:"+name+": "+err.Error())
+						mu.Unlock()
+					}
+					break
+				}
+				for _, si := range list {
+					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
+						Title: si.Title, Cwd: si.Cwd}
+					if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {
+						c.Updated = t
+					}
+					got = append(got, c)
+				}
+				if next == "" {
+					break
+				}
+				cursor = next
+			}
+			mu.Lock()
+			out = append(out, got...)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if cl, err := n.cloudChats(ctx); err != nil {
+		partial = append(partial, "cloud: "+err.Error())
+	} else {
+		out = append(out, cl...)
+	}
+	return out, partial
 }
 
 // linkedChats are the chats a thread continues — each of its agents' session, each cloud sandbox it

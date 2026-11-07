@@ -1,13 +1,20 @@
 <script lang="ts">
   import { initials, hue, who } from "../lib/format";
-  let { addr, size = 22 }: { addr: string; size?: number } = $props();
+  import AgentMark, { brandOf } from "./AgentMark.svelte";
+  let { addr, size = 22, busy = false, brand = "" }: { addr: string; size?: number; busy?: boolean; brand?: string } = $props();
   const w = $derived(who(addr));
   const h = $derived(hue(w.name));
+  // An agent that is Claude Code or Codex (by its name, or the brand given: a cloud agent's) shows its mark.
+  const mark = $derived(w.kind !== "user" ? brandOf(brand || w.name) : "");
 </script>
 
-<span class="av" class:user={w.kind === "user"} style="--h:{h};width:{size}px;height:{size}px;font-size:{Math.round(size * 0.42)}px" title={addr}>
-  {initials(w.name)}
-</span>
+{#if mark}
+  <span title={addr}><AgentMark of={mark} {size} {busy} /></span>
+{:else}
+  <span class="av" class:user={w.kind === "user"} style="--h:{h};width:{size}px;height:{size}px;font-size:{Math.round(size * 0.42)}px" title={addr}>
+    {initials(w.name)}
+  </span>
+{/if}
 
 <style>
   .av {
@@ -17,4 +24,5 @@
   }
   :global([data-theme="dark"]) .av { color: hsl(var(--h) 60% 80%); background: hsl(var(--h) 30% 20%); box-shadow: 0 0 0 1px hsl(var(--h) 25% 28%); }
   .av.user { color: var(--btn-ink); background: var(--btn); box-shadow: none; }
+  span[title] { display: inline-grid; }
 </style>

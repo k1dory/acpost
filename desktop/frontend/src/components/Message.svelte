@@ -2,6 +2,7 @@
   import { app, final, type Msg } from "../lib/state.svelte";
   import { who, clock } from "../lib/format";
   import Avatar from "./Avatar.svelte";
+  import Working from "./Working.svelte";
   import Markdown from "./Markdown.svelte";
   import TurnBlocks from "./TurnBlocks.svelte";
   import Icon from "./Icon.svelte";
@@ -51,14 +52,14 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="agent" onclick={() => (app.focus = m.id)}>
     <div class="meta">
-      <Avatar addr={m.to} size={20} /><span class="nm">{agent.name}</span>{#if agent.node}<span class="muted">@{agent.node}</span>{/if}
-      {#if m.state === "running"}<span class="chip"><span class="spin"></span> working</span>
+      <Avatar addr={m.to} size={20} busy={m.state === "running"} brand={m.to.startsWith("agent:sb_") ? app.chat?.cloud_agent ?? "" : ""} /><span class="nm">{agent.name}</span>{#if agent.node}<span class="muted">@{agent.node}</span>{/if}
+      {#if m.state === "running"}<Working agent={m.to} view={turn} since={m.updated_at} />
       {:else if m.state === "queued"}<span class="chip warn">queued</span>
       {:else if m.state === "failed"}<span class="chip crit">failed</span>
       {:else if m.state === "cancelled"}<span class="chip">cancelled</span>{/if}
     </div>
 
-    {#if turn}<TurnBlocks view={turn} msg={m.id} {done} />{/if}
+    {#if turn}<TurnBlocks view={turn} msg={m.id} {done} agent={m.to} />{/if}
 
     {#if replyDiffers || (done && !streamed && m.reply)}
       <Markdown text={m.reply ?? ""} />

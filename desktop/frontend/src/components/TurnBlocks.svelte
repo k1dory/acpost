@@ -9,14 +9,14 @@
   import Icon from "./Icon.svelte";
 
   // A turn's blocks as the agent did them: text, thinking, tool calls, requests, plan, notices.
-  let { view, msg = "", done }: { view: ReturnType<Turn["view"]>; msg?: string; done: boolean } = $props();
+  let { view, msg = "", done, agent = "" }: { view: ReturnType<Turn["view"]>; msg?: string; done: boolean; agent?: string } = $props();
 </script>
 
 {#each view.blocks as b, i}
   {#if b.t === "text"}
     <Markdown text={b.text} />
   {:else if b.t === "thought"}
-    <Thought text={b.text} ms={b.end - b.start} live={!done && i === view.blocks.length - 1} />
+    <Thought text={b.text} ms={b.end - b.start} live={!done && i === view.blocks.length - 1} {agent} />
   {:else if b.t === "tool"}
     {@const t = view.tools.get(b.id)}
     {#if t}<ToolRow tool={t} final={done} />{/if}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // The chats are acpost's threads and the agent's sessions started elsewhere, each once (a thread's
@@ -110,5 +111,44 @@ agents:
 		if c.Key == "thread:"+m.Thread && c.Folder != f.ID {
 			t.Fatalf("the failed move took the folder: %+v", c)
 		}
+	}
+}
+
+// The sessions listed elsewhere are cached: a new one shows once the cache is stale and the
+// refresh made apart has run — meanwhile the cached list is answered at once.
+func TestChatsCache(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, os.Args[0], state))
+	os.WriteFile(filepath.Join(state, "outside-1"), []byte("1"), 0o600)
+	count := func() int {
+		c, err := n.Chats(ctx, me)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(c.Items)
+	}
+	if got := count(); got != 1 {
+		t.Fatalf("first: %d", got)
+	}
+	os.WriteFile(filepath.Join(state, "outside-2"), []byte("1"), 0o600)
+	if got := count(); got != 1 {
+		t.Fatalf("fresh cache asked again: %d", got)
+	}
+	n.forgetChats()
+	if got := count(); got != 1 { // the stale list, the refresh begun
+		t.Fatalf("stale: %d", got)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for count() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the refresh did not come")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

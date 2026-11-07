@@ -53,16 +53,32 @@ func (n *Node) DeleteNote(ctx context.Context, p Principal, name string) error {
 	return nil
 }
 
+// knowledgeSender: a message the user's notes may go with — sent here by this node's own user or
+// one of its agents (not a token client, not another node, not through the hub), whose reply could
+// otherwise carry them away.
+func knowledgeSender(m store.Message) bool {
+	from, err := ParseAddress(m.From)
+	return err == nil && m.Origin == "" && from.Node == "" && (from.Kind == "user" || from.Kind == "agent")
+}
+
 // knowledgeFor is what a new session in cwd is given: the enabled notes for everywhere and for a
-// directory cwd is in, up to store.MaxKnowledge; empty when none.
-func (n *Node) knowledgeFor(ctx context.Context, cwd string) string {
+// directory cwd is in (both resolved: a link in or out of a scope goes where it points), up to
+// store.MaxKnowledge; empty when none.
+func (n *Node) knowledgeFor(ctx context.Context, cwd string) (string, error) {
 	notes, err := n.st.Knowledge(ctx)
-	if err != nil || len(notes) == 0 {
-		return ""
+	if err != nil {
+		return "", err
+	}
+	if len(notes) == 0 {
+		return "", nil
+	}
+	real := ""
+	if cwd != "" {
+		real, _ = filepath.EvalSymlinks(cwd) // unresolved: only the notes for everywhere
 	}
 	var b strings.Builder
 	for _, k := range notes {
-		if !k.Enabled || !under(cwd, k.Scope) {
+		if !k.Enabled || !under(real, k.Scope) {
 			continue
 		}
 		part := "## " + k.Name + "\n" + strings.TrimSpace(k.Body) + "\n\n"
@@ -72,13 +88,14 @@ func (n *Node) knowledgeFor(ctx context.Context, cwd string) string {
 		b.WriteString(part)
 	}
 	if b.Len() == 0 {
-		return ""
+		return "", nil
 	}
 	return "[acpost] What the user keeps as knowledge for this work (follow it unless the task says otherwise):\n\n" +
-		b.String() + "[acpost] The task:\n\n"
+		b.String() + "[acpost] The task:\n\n", nil
 }
 
-// under: dir is scope or inside it (an empty scope: everywhere).
+// under: dir is scope or inside it, both resolved (an empty scope: everywhere; a scope that does
+// not resolve, or no dir: no).
 func under(dir, scope string) bool {
 	if scope == "" {
 		return true
@@ -86,6 +103,10 @@ func under(dir, scope string) bool {
 	if dir == "" {
 		return false
 	}
-	rel, err := filepath.Rel(scope, dir)
+	rs, err := filepath.EvalSymlinks(scope)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rs, dir)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
