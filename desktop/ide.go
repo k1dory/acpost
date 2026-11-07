@@ -142,7 +142,17 @@ func (s *ideServer) start(st *ideStart) {
 		return
 	}
 	cmd.Stderr = cmd.Stdout
+	// Started and published under the lock stop takes: a quit either comes first (nothing starts)
+	// or finds the process to end.
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		os.Remove(f.Name())
+		fail(errors.New("the app is quitting"))
+		return
+	}
 	if err := cmd.Start(); err != nil {
+		s.mu.Unlock()
 		os.Remove(f.Name())
 		fail(err)
 		return
@@ -165,14 +175,6 @@ func (s *ideServer) start(st *ideStart) {
 	kill := func() {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		os.Remove(f.Name())
-	}
-	// Published under the lock — unless the app quits meanwhile: then it ends here.
-	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		kill()
-		fail(errors.New("the app is quitting"))
-		return
 	}
 	s.cmd, s.done, s.tokFile, s.app = cmd, done, f.Name(), app
 	s.mu.Unlock()
@@ -250,8 +252,25 @@ func (s *ideServer) loaded() string {
 	return s.shown
 }
 
-// IDEReload loads VS Code again (the Reload button: after a failed load, or to start over).
-func (n *Node) IDEReload() { preview.IDEReload() }
+// IDEReload makes sure VS Code's server runs (started again if it ended) and loads folder's page
+// again: the address it gives back.
+func (n *Node) IDEReload(folder string) (string, error) {
+	u, err := n.IDEStart(folder)
+	if err != nil {
+		return "", err
+	}
+	if u != ide.loaded() {
+		if err := preview.IDELoad(u); err != nil {
+			return "", err
+		}
+		ide.mu.Lock()
+		ide.shown = u
+		ide.mu.Unlock()
+		return u, nil
+	}
+	preview.IDEReload()
+	return u, nil
+}
 
 // IDEHide hides it; VS Code keeps running.
 func (n *Node) IDEHide() { preview.IDEHide() }
