@@ -108,15 +108,24 @@
   <div class="top drag"></div>
   <div class="pad">
     <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> {t("New task")} <kbd>⌘N</kbd></button>
-    <div class="quick">
-      <button class="row qk" class:sel={app.view === "board"} onclick={() => (app.view = "board")}><span class="ic"><Icon name="activity" size={14} /></span><span class="t"><span class="title">{t("Agents")}</span></span>{#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}<kbd>⌘B</kbd></button>
-      <button class="row qk" class:sel={app.view === "wiki"} onclick={() => (app.view = "wiki")}><span class="ic"><Icon name="book" size={14} /></span><span class="t"><span class="title">{t("Wiki")}</span></span></button>
-      <button class="row qk" onclick={() => (app.palette = true)}><span class="ic"><Icon name="search" size={14} /></span><span class="t"><span class="title">{t("Search")}</span></span><kbd>⌘K</kbd></button>
-    </div>
+    <!-- One field: typing filters the chats; ⌘K (or its key here) searches everything. -->
     <label class="search">
       <Icon name="search" />
-      <input placeholder={t("Filter chats")} bind:value={q} />
+      <input placeholder={t("Search chats")} bind:value={q} />
+      <button class="k" onclick={e => { e.preventDefault(); app.palette = true; }} title={t("Search everything")}>⌘K</button>
     </label>
+    <!-- Where to go: tasks of every agent, VS Code beside the chat, the repositories' wikis. -->
+    <div class="tiles nodrag">
+      <button class="tile" class:sel={app.view === "board"} onclick={() => (app.view = "board")} title={t("Tasks") + " · ⌘B"}>
+        <Icon name="activity" size={15} /><span>{t("Tasks")}</span>{#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}
+      </button>
+      <button class="tile" class:sel={app.view === "ide"} onclick={() => (app.view = app.view === "ide" ? "chat" : "ide")} title="VS Code · ⇧⌘I">
+        <Icon name="term" size={15} /><span>IDE</span>
+      </button>
+      <button class="tile" class:sel={app.view === "wiki"} onclick={() => (app.view = "wiki")} title={t("Wiki")}>
+        <Icon name="book" size={15} /><span>{t("Wiki")}</span>
+      </button>
+    </div>
   </div>
 
   <nav class="scroll list">
@@ -207,9 +216,13 @@
   .list { flex: 1; padding: 0 10px 10px; min-height: 0; }
   .h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 8px 6px; letter-spacing: .02em; text-transform: uppercase; border-radius: 8px; }
   .h.drop, .folder.drop { background: var(--accent-bg); }
-  .quick { display: grid; gap: 1px; }
-  .qk { min-height: 30px; padding: 4px 8px; }
-  .qk kbd { margin-left: auto; }
+  .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
+  .search .k:hover { color: var(--ink); }
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .tile { position: relative; display: grid; justify-items: center; gap: 4px; padding: 9px 4px 7px; border: 1px solid var(--line-soft); background: transparent; border-radius: 12px; color: var(--ink-2); font-size: 11.5px; font-weight: 500; cursor: default; }
+  .tile:hover { background: var(--hover); color: var(--ink); }
+  .tile.sel { background: var(--sel); color: var(--ink); border-color: transparent; }
+  .tile .badge { position: absolute; top: 4px; right: 6px; }
   .badge { min-width: 17px; height: 17px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
   .ic-btn { border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; }
   .ic-btn:hover { background: var(--hover); color: var(--ink); }

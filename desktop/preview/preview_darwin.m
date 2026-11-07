@@ -9,6 +9,8 @@
 @end
 
 static WKWebView *apView = nil;
+static WKWebView *apIDE = nil;     // the IDE pane (VS Code's own web server): no collector, its own page
+static NSString *apIDEPending = nil;
 static APPreview *apDelegate = nil;
 static NSString *apScript = nil;
 static NSString *apPending = nil;   // a page asked for before the view was made
@@ -175,7 +177,7 @@ static BOOL apVeto(WKWebView *w, WKNavigationAction *a) {
 static APNavGuard *apGuard = nil;
 
 static WKWebView *apFindWebView(NSView *v) {
-	if ([v isKindOfClass:[WKWebView class]] && v != apView) return (WKWebView *)v;
+	if ([v isKindOfClass:[WKWebView class]] && v != apView && v != (NSView *)apIDE) return (WKWebView *)v;
 	for (NSView *s in v.subviews) { WKWebView *w = apFindWebView(s); if (w) return w; }
 	return nil;
 }
@@ -187,5 +189,50 @@ void apGuardNavigation(void *nswindow) {
 		if (!w || [(id)w.navigationDelegate isKindOfClass:[APNavGuard class]] || w.navigationDelegate == (id)apGuard) return;
 		apGuard = [[APNavGuard alloc] initWithInner:w.navigationDelegate];
 		w.navigationDelegate = (id<WKNavigationDelegate>)apGuard;
+	});
+}
+
+
+// ---- The IDE pane ----
+// VS Code (code serve-web, on 127.0.0.1) in a view of its own over the window, where the
+// interface keeps the IDE's box. It is a page like any: keys, clipboard, its storage persist with
+// the app's (WebKit's default store for the bundle).
+
+void apIDEShow(void *nswindow, double x, double y, double w, double h) {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		NSWindow *win = (__bridge NSWindow *)nswindow;
+		NSView *host = win.contentView;
+		if (!host) return;
+		if (!apIDE) {
+			WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
+			apIDE = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:cfg];
+			if ([apIDE respondsToSelector:@selector(setInspectable:)]) [apIDE setValue:@YES forKey:@"inspectable"];
+			if (apIDEPending) {
+				NSURL *nu = [NSURL URLWithString:apIDEPending];
+				apIDEPending = nil;
+				if (nu) [apIDE loadRequest:[NSURLRequest requestWithURL:nu]];
+			}
+		}
+		if (apIDE.superview != host) {
+			[apIDE removeFromSuperview];
+			[host addSubview:apIDE positioned:NSWindowAbove relativeTo:nil];
+		}
+		CGFloat H = host.bounds.size.height;
+		apIDE.frame = NSMakeRect(x, host.isFlipped ? y : H - y - h, w, h);
+		apIDE.hidden = NO;
+		[win makeFirstResponder:apIDE];
+	});
+}
+
+void apIDEHide(void) {
+	dispatch_async(dispatch_get_main_queue(), ^{ if (apIDE) apIDE.hidden = YES; });
+}
+
+void apIDELoad(const char *url) {
+	NSString *u = [NSString stringWithUTF8String:url];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (!apIDE) { apIDEPending = u; return; }
+		NSURL *nu = [NSURL URLWithString:u];
+		if (nu) [apIDE loadRequest:[NSURLRequest requestWithURL:nu]];
 	});
 }

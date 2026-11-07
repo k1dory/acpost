@@ -73,7 +73,7 @@
 
 <section class="board">
   <header class="drag">
-    <h1>{t("Agents")}</h1>
+    <h1>{t("Tasks")}</h1>
     <span class="muted">{plural(threads.length, "task", "tasks")}</span>
     <span class="sp"></span>
     <button class="btn primary sm nodrag" onclick={() => app.newTask()}><Icon name="plus" size={12} /> {t("New task")}</button>

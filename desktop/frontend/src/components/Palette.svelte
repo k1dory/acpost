@@ -9,8 +9,9 @@
   type Item = { kind: string; label: string; sub?: string; icon: string; run: () => void };
   const actions: Item[] = [
     { kind: "Action", label: "New task", icon: "plus", run: () => app.newTask() },
-    { kind: "Action", label: "Agents board", icon: "activity", run: () => (app.view = "board") },
+    { kind: "Action", label: "Tasks", icon: "activity", run: () => (app.view = "board") },
     { kind: "Action", label: "Wiki", icon: "book", run: () => (app.view = "wiki") },
+    { kind: "Action", label: "IDE (VS Code)", icon: "term", run: () => (app.view = "ide") },
     { kind: "Action", label: "Settings", icon: "sun", run: () => (app.view = "settings") },
     { kind: "Action", label: "Usage", icon: "chart", run: () => (app.view = "usage") },
     { kind: "Action", label: "Terminal", icon: "term", run: () => { app.openTab("terminal"); } },

@@ -79,7 +79,7 @@ class App {
     try { localStorage.setItem("panel-tab", k); } catch {}
   }
   panel = $state(true);
-  view = $state<"chat" | "usage" | "settings" | "board" | "wiki">("chat");
+  view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide">("chat");
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
   palette = $state(false); // ⌘K
@@ -230,7 +230,7 @@ class App {
     this.turns = {};
     this.focus = "";
     this.thread = "";
-    this.view = "chat";
+    if (this.view !== "ide") this.view = "chat"; // in the IDE, another chat opens beside it
   }
 
   /** A new task. */

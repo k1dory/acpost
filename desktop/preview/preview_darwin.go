@@ -20,6 +20,9 @@ void apLoad(const char *url);
 void apReload(void);
 void apBack(void);
 void apGuardNavigation(void *nswindow);
+void apIDEShow(void *nswindow, double x, double y, double w, double h);
+void apIDEHide(void);
+void apIDELoad(const char *url);
 
 */
 import "C"
@@ -112,6 +115,30 @@ func Load(raw string) error {
 
 func Reload() { C.apReload() }
 func Back()   { C.apBack() }
+
+// IDEShow lays the IDE pane over window (as Show does the preview).
+func IDEShow(window unsafe.Pointer, x, y, w, h float64) error {
+	if window == nil {
+		return errors.New("the IDE needs the app's window (not the browser)")
+	}
+	C.apIDEShow(window, C.double(x), C.double(y), C.double(w), C.double(h))
+	return nil
+}
+
+// IDEHide hides it (VS Code stays loaded).
+func IDEHide() { C.apIDEHide() }
+
+// IDELoad opens an address in it: VS Code's, on this Mac only.
+func IDELoad(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost") {
+		return errors.New("the IDE opens VS Code on this Mac only")
+	}
+	cs := C.CString(u.String())
+	C.apIDELoad(cs)
+	C.free(unsafe.Pointer(cs))
+	return nil
+}
 
 var navigate func(string)
 

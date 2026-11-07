@@ -34,6 +34,7 @@ func main() {
 		Services:    services,
 		Assets:      application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		Mac:         application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
+		OnShutdown:  func() { ide.stop() }, // VS Code's server ends with the app
 	})
 	node.app = app
 	node.win = app.Window.NewWithOptions(application.WebviewWindowOptions{

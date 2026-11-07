@@ -263,6 +263,35 @@ export function Home(): $CancellablePromise<string> {
     return $Call.ByID(752005655);
 }
 
+/**
+ * IDEHide hides it; VS Code keeps running.
+ */
+export function IDEHide(): $CancellablePromise<void> {
+    return $Call.ByID(1009136584);
+}
+
+/**
+ * IDEOpenApp opens folder in the VS Code app itself.
+ */
+export function IDEOpenApp(folder: string): $CancellablePromise<void> {
+    return $Call.ByID(3287568603, folder);
+}
+
+/**
+ * IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.
+ */
+export function IDEShow(url: string, x: number, y: number, w: number, h: number): $CancellablePromise<void> {
+    return $Call.ByID(1674563009, url, x, y, w, h);
+}
+
+/**
+ * IDEStart starts VS Code's server once (the first start fetches the server: a minute or so) and
+ * gives the address to open folder in.
+ */
+export function IDEStart(folder: string): $CancellablePromise<string> {
+    return $Call.ByID(1671962452, folder);
+}
+
 export function Knowledge(): $CancellablePromise<store$0.Note[]> {
     return $Call.ByID(871242260).then(($result: any) => {
         return $$createType22($result);
