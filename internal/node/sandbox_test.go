@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -469,6 +470,50 @@ func TestSandboxSteeredAfterTheEnd(t *testing.T) {
 	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "and this too"})
 	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
 	if err != nil || w.State != store.Done || w.Reply != "both answered" {
+		t.Fatalf("%+v %v", w, err)
+	}
+}
+
+// A page of history cut before its closing bracket is not taken: its cursor would skip what was
+// not read.
+func TestSandboxPageCut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Next-Cursor", "1000")
+		w.Write([]byte(`[{"id":4,"run_id":"r1","role":"user","text":"x"}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("SB_TOKEN", "sbtoken")
+	n := newNode(t, `
+agents:
+  cloud:
+    driver: sandbox
+    sandbox: {url: "`+srv.URL+`", id: sb1, token_env: SB_TOKEN}
+`)
+	a := n.sandboxes["cloud"]
+	read := 0
+	next, err := a.page(ctx, 0, func(sandboxMessage) bool { read++; return true })
+	var se *sandboxError
+	if err == nil || next != 0 || !errors.As(err, &se) || !se.retryable() {
+		t.Fatalf("a cut page: next %d err %v (read %d)", next, err, read)
+	}
+}
+
+// Late steering: another client's message between the shared turn's end and the notice does not
+// take the shared answer away; the shared turn's outcome is the message's.
+func TestSandboxSteeredLateOutcome(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
+	f.history = []map[string]any{{"id": 4, "run_id": "r1", "role": "user", "text": "the turn in progress"}}
+	f.frames = []string{
+		"USER:6",
+		frame(7, "r1", "assistant", "cut short", nil),
+		frame(8, "r1", "log", `{"type":"acp.turn_end","stop_reason":"max_tokens"}`, nil),
+		frame(9, "r1", "user", "another client's message", nil),
+		frame(10, "r1", "log", `{"type":"acp.notice","severity":"info","text":"the message joined the turn in progress (steering)"}`, nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "and this too"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Failed || w.Reply != "cut short" || !strings.Contains(w.Error, "max_tokens") {
 		t.Fatalf("%+v %v", w, err)
 	}
 }

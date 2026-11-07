@@ -37,11 +37,12 @@ import (
 // other (acpost approve, the app) and handed to the sandbox.
 
 const (
-	sandboxParts    = 8        // file parts a message takes (sandboxd's limit)
-	sandboxPartMax  = 16 << 20 // bytes of one
-	sandboxCatchUp  = 1000     // events per page of history (catching up, reading a turn again)
-	sandboxBodyMax  = 64 << 20 // bytes of an answer of sandboxd
-	sandboxFrameMax = 4 << 20  // bytes of one SSE frame
+	sandboxParts       = 8               // file parts a message takes (sandboxd's limit)
+	sandboxPartMax     = 16 << 20        // bytes of one
+	sandboxCatchUp     = 1000            // events per page of history (catching up, reading a turn again)
+	sandboxBodyMax     = 64 << 20        // bytes of an answer of sandboxd
+	sandboxPageTimeout = 2 * time.Minute // to read one page of history
+	sandboxFrameMax    = 4 << 20         // bytes of one SSE frame
 )
 
 type sandboxAgent struct {
@@ -257,6 +258,9 @@ func (a *sandboxAgent) catchUp(ctx context.Context) error {
 // (a page is not held whole: sandboxd's lines go up to 1 MiB each), and where the next one starts.
 func (a *sandboxAgent) page(ctx context.Context, after int64, fn func(sandboxMessage) bool) (int64, error) {
 	p := "/messages?raw=true&limit=" + strconv.Itoa(sandboxCatchUp) + "&after=" + strconv.FormatInt(after, 10)
+	// A page has its time (a sandboxd or proxy that never finishes one must not hold the agent).
+	ctx, cancel := context.WithTimeout(ctx, sandboxPageTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", a.path(p), nil)
 	if err != nil {
 		return after, &sandboxError{msg: err.Error()}
@@ -289,6 +293,11 @@ func (a *sandboxAgent) page(ctx context.Context, after int64, fn func(sandboxMes
 		if !fn(sm) {
 			return next, nil
 		}
+	}
+	// More is false at the end of the array and on a broken read alike: only the closing bracket
+	// says the page was read whole (and its cursor may be taken).
+	if tok, err := dec.Token(); err != nil || tok != json.Delim(']') {
+		return after, bad(err)
 	}
 	return next, nil
 }
@@ -402,7 +411,9 @@ type sandboxTurn struct {
 	// skipped is what the turn of an earlier input said; prev, the last one's when it ended just
 	// before this message's turn (prevKept), in case this message joined it (steering).
 	skipped, prev []string
+	skippedLen    int
 	prevKept      bool
+	prevEnd       sandboxEnd
 	replaying     bool // the history is being read: requests wait for its end
 	// quiet: the turn is read again from the sandbox's history (an earlier attempt recorded what
 	// it said): nothing is recorded again, and its requests are asked only if still open after it.
@@ -492,15 +503,24 @@ func (t *sandboxTurn) takeOne(ctx context.Context, sm sandboxMessage) (sandboxEn
 				t.ahead--
 				if t.ahead == 0 && turnEnd(sm) {
 					// The runner says a message joined a turn after steering returns, and the turn
-					// may end first: kept until this message's own turn shows, in case it was it.
+					// may end first: kept, with how it ended, until this message's own turn shows,
+					// in case it was it.
 					t.prev, t.prevKept = t.skipped, true
+					t.prevEnd, _ = t.line(sm.Text)
 				}
 			}
 			if turnEnd(sm) {
-				t.skipped = nil
+				t.skipped, t.skippedLen = nil, 0
 			}
 		case t.started && sm.Role == "assistant":
-			t.skipped = append(t.skipped, strings.TrimSpace(sm.Text)) // an earlier input's turn
+			// An earlier input's turn: its last messages, within the reply's limit.
+			text := strings.TrimSpace(sm.Text)
+			t.skipped = append(t.skipped, text)
+			t.skippedLen += len(text)
+			for len(t.skipped) > 1 && t.skippedLen > t.limit {
+				t.skippedLen -= len(t.skipped[0])
+				t.skipped = t.skipped[1:]
+			}
 		case sm.Role == "system" && strings.HasPrefix(sm.Text, "run "):
 			return sandboxEnd{store.Failed, sm.Text + " before it took the message"}, true
 		}
@@ -514,10 +534,15 @@ func (t *sandboxTurn) takeOne(ctx context.Context, sm sandboxMessage) (sandboxEn
 					t.text(s)
 				}
 			}
-			return sandboxEnd{store.Done, "steered into the turn in progress"}, true
+			if t.prevEnd.state == "" {
+				return sandboxEnd{store.Done, "steered into the turn in progress"}, true
+			}
+			return t.prevEnd, true // as the shared turn ended
 		}
-		if sm.Role != "log" || turnEnd(sm) {
-			t.prev, t.prevKept = nil, false // this message's own turn has begun
+		// Another client's message (user) says nothing of this one's turn; anything the run does
+		// next does: this message's own turn has begun.
+		if (sm.Role != "log" && sm.Role != "user") || turnEnd(sm) {
+			t.prev, t.prevKept = nil, false
 		}
 	}
 	switch sm.Role {
