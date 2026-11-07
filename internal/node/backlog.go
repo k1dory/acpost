@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -90,7 +92,10 @@ func (n *Node) StartBacklogItem(ctx context.Context, p Principal, id, agent stri
 	if strings.TrimSpace(b.Body) != "" {
 		body += "\n\n" + b.Body
 	}
-	m, _, err := n.Send(ctx, p, SendRequest{To: to, Body: body, Cwd: b.Cwd, IdemKey: "bl:" + b.ID})
+	// The key is the item as it is now: a repeat of the same start returns the first message; an
+	// item edited since (it was sent, but not yet taken off) is a new message.
+	sum := sha256.Sum256([]byte(to + "\x00" + b.Cwd + "\x00" + body))
+	m, _, err := n.Send(ctx, p, SendRequest{To: to, Body: body, Cwd: b.Cwd, IdemKey: "bl:" + b.ID + ":" + hex.EncodeToString(sum[:6])})
 	if err != nil {
 		return m, err
 	}

@@ -34,10 +34,23 @@ func TestBacklog(t *testing.T) {
 	}
 	// Sent, but the node stopped before it left the backlog: started again, the same message.
 	c, _ := n.PutBacklogItem(ctx, me, store.BacklogItem{Title: "Again", Agent: "bot"})
-	m1, _, _ := n.Send(ctx, me, SendRequest{To: "agent:bot", Body: "Again", IdemKey: "bl:" + c.ID})
-	m2, err := n.StartBacklogItem(ctx, me, c.ID, "")
+	c2, _ := n.PutBacklogItem(ctx, me, store.BacklogItem{Title: "Again too", Agent: "bot"})
+	n.st.DeleteBacklogItem(ctx, c.ID) // (c only gives the key's form)
+	m1, err := n.StartBacklogItem(ctx, me, c2.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.st.PutBacklogItem(ctx, c2) // as if taking it off had failed
+	m2, err := n.StartBacklogItem(ctx, me, c2.ID, "")
 	if err != nil || m2.ID != m1.ID {
 		t.Fatalf("a repeat sent again: %s vs %s (%v)", m2.ID, m1.ID, err)
+	}
+	// Edited since: a new message with the new text.
+	c2.Title = "Again, changed"
+	n.st.PutBacklogItem(ctx, c2)
+	m3, err := n.StartBacklogItem(ctx, me, c2.ID, "")
+	if err != nil || m3.ID == m1.ID {
+		t.Fatalf("the edit was lost: %s %v", m3.ID, err)
 	}
 	// No agent to give it to: it stays.
 	if _, err := n.StartBacklogItem(ctx, me, other.ID, ""); code(err) != "invalid" {
