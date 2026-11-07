@@ -390,7 +390,7 @@ class App {
   }
 
   /** The preview: what its page did (problems, its address), kept across tabs. */
-  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean; pending: string; cleared: boolean }>({ events: [], url: "", title: "", loaded: false, pending: "", cleared: false });
+  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean; pending: string; cleared: boolean; clearedAt: number; loadAt: number }>({ events: [], url: "", title: "", loaded: false, pending: "", cleared: false, clearedAt: 0, loadAt: 0 });
   /** A page of this Mac (a dev server) opened in the app's preview, not the system's browser. */
   openInPreview(url: string) {
     this.preview.pending = url;
@@ -412,8 +412,13 @@ class App {
     this.openTab("artifacts");
   }
   notePreview(e: PreviewEvent) {
-    // A page loaded (a reload too): what it shows from now on is the truth, cleared or not.
-    if (e.kind === "nav") { if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; } this.preview.cleared = false; return; }
+    // A page loaded that was asked for after the list was cleared (a reload, another address): what it
+    // shows from now on is the truth. A load already under way when it was cleared changes nothing.
+    if (e.kind === "nav") {
+      if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; }
+      if (this.preview.loadAt > this.preview.clearedAt) this.preview.cleared = false;
+      return;
+    }
     this.preview.cleared = false;
     this.preview.events = [...this.preview.events.slice(-299), e];
   }

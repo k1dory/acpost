@@ -29,6 +29,7 @@
     try { localStorage.setItem("preview-url", url); } catch {}
     err = "";
     app.preview.events = [];
+    app.preview.loadAt = Date.now();
     Node.PreviewLoad(url).catch(e => (err = errText(e)));
   }
 
@@ -82,7 +83,7 @@
 <div class="pv">
   <div class="addr">
     <button class="btn ghost sm" title={t("Back")} onclick={() => Node.PreviewBack()}><Icon name="chev" size={12} /></button>
-    <button class="btn ghost sm" title={t("Reload")} onclick={() => Node.PreviewReload()}><Icon name="refresh" size={13} /></button>
+    <button class="btn ghost sm" title={t("Reload")} onclick={() => { app.preview.loadAt = Date.now(); Node.PreviewReload(); }}><Icon name="refresh" size={13} /></button>
     <input class="input url" bind:value={address} onkeydown={e => { if (e.key === "Enter") go(); }} spellcheck="false" />
     <button class="btn ghost sm" title={t("Open in the browser")} onclick={openOutside}><Icon name="link" size={13} /></button>
   </div>
@@ -94,12 +95,12 @@
       {problems.length ? t("{n} problems in the page", { n: problems.length }) : cleared ? t("List cleared — the page is not fixed by it") : t("No problems in the page")}
       <span class="sp"></span>
       {#if cleared && !problems.length}
-        <span class="link" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; Node.PreviewReload(); }} onkeydown={() => {}}>{t("Reload and check")}</span>
+        <span class="link" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.loadAt = Date.now(); Node.PreviewReload(); }} onkeydown={() => {}}>{t("Reload and check")}</span>
       {/if}
       {#if problems.length}
         <span class="btn primary sm toag" role="button" tabindex="0" onclick={e => { e.stopPropagation(); sendToAgent(); }}
           onkeydown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); sendToAgent(); } }}><Icon name="send" size={11} /> {t("To the agent")}</span>
-        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.cleared = true; }} onkeydown={() => {}}>{t("Clear")}</span>
+        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.cleared = true; app.preview.clearedAt = Date.now(); }} onkeydown={() => {}}>{t("Clear")}</span>
       {/if}
     </button>
     {#if open}
