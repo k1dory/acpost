@@ -137,16 +137,17 @@ func (n *Node) sendScheduled(ctx context.Context, sc store.Schedule, occurrence 
 	return m, err
 }
 
-// passing: an error a later try may not meet.
+// passing: an error a later try may not meet. All but a malformed task: a refusal may be a full
+// queue, a missing agent a node not announced again yet; tried for pendingFor, with the error shown.
 func passing(ctx context.Context, err error) bool {
 	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	var e *Error
 	if errors.As(err, &e) {
-		return e.Code == "unavailable" || e.Code == "timeout"
+		return e.Code != "invalid" && e.Code != "unsupported"
 	}
-	return true // not the node's own refusal: the store, the network
+	return true
 }
 
 // runSchedules claims what is due and sends it apart from the maintenance loop (a slow hub must

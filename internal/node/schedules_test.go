@@ -77,6 +77,20 @@ func TestSchedules(t *testing.T) {
 	if _, err := n.PutSchedule(ctx, me, off); err != nil {
 		t.Fatal(err)
 	}
+	// An agent not there (its node not announced yet): the occurrence stays pending, the error shown.
+	gone, err := n.PutSchedule(ctx, me, store.Schedule{Name: "later", Cron: "@hourly", Agent: "agent:nobody", Body: "x", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := n.st.TakeDue(ctx, gone.ID, gone.NextRun, gone.NextRun.Add(time.Hour)); !ok || err != nil {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	tick(t, n)
+	if cur, _ := n.st.Schedule(ctx, gone.ID); cur.Pending.IsZero() || cur.LastErr == "" {
+		t.Fatalf("a missing agent dropped the occurrence: %+v", cur)
+	}
+	_ = n.DeleteSchedule(ctx, me, gone.ID)
+	list, _ = n.Schedules(ctx, me)
 	// A date that never comes is refused.
 	if _, err := n.PutSchedule(ctx, me, store.Schedule{Name: "x", Cron: "0 9 31 2 *", Agent: "fake", Body: "x", Enabled: true}); code(err) != "invalid" {
 		t.Fatalf("31 February: %v", err)
