@@ -327,7 +327,8 @@ func (c *Client) Log(ctx context.Context, srv Server, r Repo, job string, target
 	case Forgejo:
 		// A job of an Actions run (Gitea 1.24+) has its log over the API; a commit status
 		// (Forgejo, older Gitea) has none: the error says where to look.
-		noLogs := &Error{Status: 404, Message: fmt.Sprintf("%s (version %s) gives no job logs over its API: open %s", r.Host, srv.Version, target)}
+		noLogs := &Error{Status: 404, Message: fmt.Sprintf("%s (version %s) gives no job logs over its API: open %s",
+			r.Host, c.shown(r.Host, srv.Version, 40), plainURL(target))}
 		if strings.HasPrefix(job, "status:") {
 			err = noLogs
 			break
@@ -468,4 +469,24 @@ func (c *Client) actionsRuns(ctx context.Context, srv Server, r Repo, ref string
 		out = append(out, ch)
 	}
 	return out, nil
+}
+
+// shown is a value a server gave, fit to show: the host's token masked, cut to n.
+func (c *Client) shown(host, v string, n int) string {
+	if tok := c.token(host); tok != "" {
+		v = strings.ReplaceAll(v, tok, "•••")
+	}
+	if r := []rune(v); len(r) > n {
+		v = string(r[:n]) + "…"
+	}
+	return v
+}
+
+// plainURL is a link without what may be a credential in it: no user, query or fragment.
+func plainURL(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return "the job's page"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
