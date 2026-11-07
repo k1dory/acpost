@@ -90,9 +90,9 @@ func ideScriptText(extDir, extHash string) (start, seed string) {
 		}
 		// The empty editor's mark: the app's (from the extension; the CSS cannot name it itself —
 		// its address is the extension's file by a query, which a relative url() would lose).
-		lp := ".monaco-workbench .part.editor>.content .editor-group-container>.editor-group-watermark>.letterpress"
-		faces += lp + "{background-image:url(" + res("media/letterpress-dark.svg") + ")!important}" +
-			".monaco-workbench.vs " + lp + ",.monaco-workbench.hc-light " + lp + "{background-image:url(" + res("media/letterpress-light.svg") + ")!important}"
+		lp := " .part.editor .editor-group-watermark .letterpress"
+		faces += ".monaco-workbench" + lp + "{background-image:url(" + res("media/letterpress-dark.svg") + ")!important}" +
+			".monaco-workbench.vs" + lp + ",.monaco-workbench.hc-light" + lp + "{background-image:url(" + res("media/letterpress-light.svg") + ")!important}"
 		js := func(v any) string { b, _ := json.Marshal(v); return string(b) }
 		start = `(() => {
 try { localStorage.setItem('vscode.nls.locale', 'en'); localStorage.removeItem('vscode.nls.languagePackExtensionId'); } catch (e) {}

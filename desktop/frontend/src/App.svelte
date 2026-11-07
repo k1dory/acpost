@@ -16,9 +16,10 @@
   import IDE from "./components/IDE.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
 
-  let splashMin = $state(false);
+  let splashMin = $state(false), splashMax = $state(false);
   onMount(() => {
     setTimeout(() => (splashMin = true), 1300);
+    setTimeout(() => (splashMax = true), 8000); // the node not answering at all: the app, not the mark forever
     try { app.theme = (localStorage.getItem("theme") as any) || "light"; } catch {}
     applyTheme(app.theme);
     try { app.textSize = Number(localStorage.getItem("text-size")) || 1; } catch {}
@@ -140,7 +141,7 @@
   {#if app.palette}<Palette />{/if}
   <!-- Starting: the mark drawing itself while the node is reached (or started), at least once
        through, then gone. -->
-  {#if !app.conn || !splashMin}<div class="splash drag" out:fade={{ duration: 260 }}><Logo size={88} loop /></div>{/if}
+  {#if (!app.conn && !splashMax) || !splashMin}<div class="splash drag" out:fade={{ duration: 260 }}><Logo size={88} loop /></div>{/if}
   {#if shownError}
     <div class="toast card" role="alert">
       <div class="tt selectable">{shownError}</div>

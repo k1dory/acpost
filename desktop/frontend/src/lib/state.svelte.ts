@@ -108,7 +108,8 @@ class App {
   }
 
   async connect() {
-    const c: any = await Node.Status();
+    let c: any;
+    try { c = await Node.Status(); } catch (e) { c = { ok: false, error: errText(e) }; } // the app's side failed: shown as the node down
     this.conn = { ok: c.ok, error: c.error, url: c.url, node: c.status?.node, you: c.status?.you };
     if (!c.ok) return;
     // This node's list as it was last time, at once; its answer replaces it.
