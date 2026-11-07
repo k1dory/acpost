@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -54,7 +55,6 @@ type repoState struct {
 	remote, branch, base, head string
 	patch                      []byte
 	left                       []string
-	unpushed                   bool // no remote-tracking base: commits may be on this Mac only
 }
 
 // Handoff sends a local chat on to the cloud.
@@ -111,7 +111,7 @@ func handoffBody(rs repoState, talk, note string) string {
 		if rs.branch != "" {
 			fmt.Fprintf(&b, " (the user's branch is %s)", rs.branch)
 		}
-		b.WriteString(": `git fetch origin && git checkout -b " + cmpOr(rs.branch, "handoff") + " " + rs.base + "`.")
+		b.WriteString(": `git fetch origin && git checkout -b " + handoffBranch(rs.branch) + " " + rs.base + "`.")
 	default:
 		fmt.Fprintf(&b, "Start from the default branch. The Mac's HEAD (%s) may not be on the remote.", rs.head)
 	}
@@ -133,57 +133,101 @@ func handoffBody(rs repoState, talk, note string) string {
 	return b.String()
 }
 
-// readRepo learns the remote, the branch, the base on the remote and the patch from it.
+// gitSafe are settings a handoff's git runs with: nothing of the repository's configuration
+// runs a program (text conversion, external diff, fsmonitor), paths come as they are.
+var gitSafe = []string{"-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "diff.external=", "-c", "core.hooksPath=/dev/null"}
+
+// handoffBranch is a branch name safe to put in a command: the user's, its odd characters dashes.
+func handoffBranch(b string) string {
+	b = branchOdd.ReplaceAllString(b, "-")
+	b = strings.Trim(b, "-./")
+	if b == "" {
+		return "handoff"
+	}
+	return "handoff/" + b
+}
+
+var branchOdd = regexp.MustCompile(`[^A-Za-z0-9._/-]+`)
+
+// readRepo learns the remote, the branch, the base on the remote and the patch from it — for the
+// whole repository dir is in.
 func readRepo(ctx context.Context, dir string) (repoState, error) {
 	var rs repoState
-	git := func(args ...string) (string, error) {
+	run := func(in string, args ...string) ([]byte, error) {
 		c, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(c, "git", append([]string{"-C", dir, "-c", "core.quotepath=off"}, args...)...)
+		cmd := exec.CommandContext(c, "git", append(append([]string{"-C", in}, gitSafe...), args...)...)
+		cmd.Env = append(cmd.Environ(), "GIT_EXTERNAL_DIFF=", "GIT_CONFIG_NOSYSTEM=1")
 		var o, e bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &o, &e
 		err := cmd.Run()
-		return strings.TrimSpace(o.String()), err
+		return o.Bytes(), err
 	}
-	if top, err := git("rev-parse", "--show-toplevel"); err != nil || top == "" {
+	word := func(in string, args ...string) (string, error) { // a scalar result
+		b, err := run(in, args...)
+		return strings.TrimSpace(string(b)), err
+	}
+	top, err := word(dir, "rev-parse", "--show-toplevel")
+	if err != nil || top == "" {
 		return rs, errf("invalid", "%s is not in a git repository: the cloud starts from a repository's remote", dir)
 	}
-	remote, err := git("remote", "get-url", "origin")
+	remote, err := word(top, "remote", "get-url", "origin")
 	if err != nil || remote == "" {
 		return rs, errh("invalid", "add a remote (git remote add origin URL) and push", "the repository has no remote origin: the cloud has nothing to clone")
 	}
-	rs.remote = plainRemote(remote)
-	rs.branch, _ = git("rev-parse", "--abbrev-ref", "HEAD")
+	if rs.remote, err = plainRemote(remote); err != nil {
+		return rs, err
+	}
+	rs.branch, _ = word(top, "rev-parse", "--abbrev-ref", "HEAD")
 	if rs.branch == "HEAD" {
 		rs.branch = ""
 	}
-	rs.head, _ = git("rev-parse", "--short", "HEAD")
+	rs.head, _ = word(top, "rev-parse", "--short", "HEAD")
 	// The base: where this work leaves what the remote has (the branch's upstream, else origin's
-	// default branch).
+	// default branch). None known: the work may be on this Mac only — say so, do not guess.
 	for _, ref := range []string{"@{u}", "origin/HEAD"} {
-		if b, err := git("merge-base", "HEAD", ref); err == nil && b != "" {
+		if b, err := word(top, "merge-base", "HEAD", ref); err == nil && gitObject.MatchString(b) {
 			rs.base = b
 			break
 		}
 	}
-	rs.unpushed = rs.base == ""
-	from := cmpOr(rs.base, "HEAD")
+	if rs.base == "" {
+		return rs, errh("invalid", "push the branch (git push -u origin "+cmpOr(rs.branch, "HEAD")+") or set origin's default (git remote set-head origin -a)",
+			"no commit of this branch is known to be on the remote: what to start from cannot be told")
+	}
 
-	// The patch: from the base to the working tree, tracked files and new ones, secrets left out.
-	excl := []string{"--", "."}
-	for _, s := range secretPaths {
-		excl = append(excl, ":(exclude,glob)**/"+s, ":(exclude,glob)"+s)
-	}
-	diff, err := git(append([]string{"diff", "--no-ext-diff", "--no-textconv", "--binary", from}, excl...)...)
+	// The paths changed since the base (tracked) and the new ones: secrets — by any part of their
+	// path — named and left out, the rest in the patch, byte for byte.
+	names, err := run(top, "diff", "--name-only", "-z", "--no-renames", rs.base, "--")
 	if err != nil {
-		return rs, errf("unavailable", "git diff failed in %s", dir)
+		return rs, errf("unavailable", "git diff failed in %s", top)
 	}
-	var patch strings.Builder
-	if diff != "" {
-		patch.WriteString(diff + "\n")
+	var send []string
+	for _, f := range strings.Split(string(names), "\x00") {
+		switch {
+		case f == "":
+		case secretPath(f):
+			rs.left = append(rs.left, f)
+		default:
+			send = append(send, f)
+		}
 	}
-	untracked, _ := git("ls-files", "--others", "--exclude-standard", "-z")
-	for _, f := range strings.Split(untracked, "\x00") {
+	var patch bytes.Buffer
+	for len(send) > 0 { // in groups: a long list of paths
+		k := min(len(send), 200)
+		args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", rs.base, "--"}
+		for _, f := range send[:k] {
+			args = append(args, ":(literal)"+f)
+		}
+		d, err := run(top, args...)
+		if err != nil {
+			return rs, errf("unavailable", "git diff failed in %s", top)
+		}
+		patch.Write(d)
+		send = send[k:]
+	}
+	untracked, _ := run(top, "ls-files", "--others", "--exclude-standard", "-z")
+	for _, f := range strings.Split(string(untracked), "\x00") {
 		if f == "" {
 			continue
 		}
@@ -192,52 +236,60 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 			continue
 		}
 		// A new file as a patch (git diff --no-index exits 1 when there is a difference).
-		c, cancel := context.WithTimeout(ctx, 30*time.Second)
-		cmd := exec.CommandContext(c, "git", "-C", dir, "diff", "--no-index", "--binary", "--no-ext-diff", "--", "/dev/null", f)
-		var o bytes.Buffer
-		cmd.Stdout = &o
-		_ = cmd.Run()
-		cancel()
-		if patch.Len()+o.Len() > handoffPatch {
+		o, _ := run(top, "diff", "--no-index", "--binary", "--no-ext-diff", "--no-textconv", "--", "/dev/null", f)
+		if patch.Len()+len(o) > handoffPatch {
 			rs.left = append(rs.left, f)
 			continue
 		}
-		patch.Write(o.Bytes())
-	}
-	// Tracked secrets changed since the base: named, not sent.
-	if names, err := git("diff", "--name-only", from); err == nil {
-		for _, f := range strings.Split(names, "\n") {
-			if f != "" && secretPath(f) {
-				rs.left = append(rs.left, f)
-			}
-		}
+		patch.Write(o)
 	}
 	if patch.Len() > handoffPatch {
 		return rs, errh("invalid", "commit and push the work, then hand off", "the work not on the remote is %d MiB, over %d MiB", patch.Len()>>20, handoffPatch>>20)
 	}
-	rs.patch = []byte(patch.String())
+	rs.patch = patch.Bytes()
 	return rs, nil
 }
 
-// secretPath: a path a handoff does not send.
+// secretPath: a path a handoff does not send — when any part of it (a file, or a directory it is
+// in) has a secret's name.
 func secretPath(p string) bool {
-	base := path.Base(p)
-	for _, s := range secretPaths {
-		if ok, _ := path.Match(s, base); ok {
-			return true
+	for _, part := range strings.Split(p, "/") {
+		for _, s := range secretPaths {
+			if ok, _ := path.Match(strings.ToLower(s), strings.ToLower(part)); ok {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// plainRemote is a remote without credentials in it.
-func plainRemote(s string) string {
-	if u, err := url.Parse(s); err == nil && u.Host != "" {
-		u.User = nil
+var scpRemote = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^/\\][^\s]*$|^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:/[^\s]*$`)
+
+// plainRemote is a remote as the cloud gets it: an URL without a password (an ssh user kept, an
+// http one dropped), or the scp form (user@host:path); anything else is refused, not passed on.
+func plainRemote(s string) (string, error) {
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil || u.Host == "" {
+			return "", errf("invalid", "the remote origin is not a URL acpost can read")
+		}
+		switch u.Scheme {
+		case "ssh", "git+ssh":
+			if u.User != nil {
+				u.User = url.User(u.User.Username())
+			}
+		case "https", "http", "git":
+			u.User = nil
+		default:
+			return "", errf("invalid", "the remote origin's scheme %s: https or ssh", u.Scheme)
+		}
 		u.RawQuery, u.Fragment = "", ""
-		return u.String()
+		return u.String(), nil
 	}
-	return s // scp form (git@host:path): the user is a name, not a secret
+	if scpRemote.MatchString(s) {
+		return s, nil
+	}
+	return "", errf("invalid", "the remote origin is not a URL acpost can read")
 }
 
 // handoffTalk is the conversation so far as text: the user's messages and the agent's answers,
@@ -246,9 +298,22 @@ func (n *Node) handoffTalk(ctx context.Context, p Principal, r HandoffRequest) (
 	var parts []string
 	switch {
 	case r.Thread != "":
-		page, _, err := n.st.List(ctx, store.Filter{Thread: r.Thread, Limit: 200})
-		if err != nil {
-			return "", errf("unavailable", "%v", err)
+		// All of the thread (oldest first, page by page), its last 200 kept.
+		var page []store.Message
+		after := ""
+		for i := 0; i < 50; i++ {
+			got, next, err := n.st.List(ctx, store.Filter{Thread: r.Thread, After: after, Limit: 200})
+			if err != nil {
+				return "", errf("unavailable", "%v", err)
+			}
+			page = append(page, got...)
+			if len(page) > 200 {
+				page = page[len(page)-200:]
+			}
+			if next == "" {
+				break
+			}
+			after = next
 		}
 		for _, m := range page {
 			full, err := n.st.Get(ctx, m.ID)

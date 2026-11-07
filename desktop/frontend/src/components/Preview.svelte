@@ -52,6 +52,11 @@
   });
   onDestroy(() => { Node.PreviewHide().catch(() => {}); });
 
+  // Only a web page leaves for the browser (not whatever address a page made up).
+  function openOutside() {
+    const u = app.preview.url || address;
+    if (/^https?:\/\//i.test(u)) Browser.OpenURL(u);
+  }
   function sendToAgent() {
     const list = problems.slice(-30).map(e => {
       const where = e.source ? ` (${e.source}${e.line ? ":" + e.line : ""})` : "";
@@ -68,7 +73,7 @@
     <button class="btn ghost sm" title={t("Back")} onclick={() => Node.PreviewBack()}><Icon name="chev" size={12} /></button>
     <button class="btn ghost sm" title={t("Reload")} onclick={() => Node.PreviewReload()}><Icon name="refresh" size={13} /></button>
     <input class="input url" bind:value={address} onkeydown={e => { if (e.key === "Enter") go(); }} spellcheck="false" />
-    <button class="btn ghost sm" title={t("Open in the browser")} onclick={() => Browser.OpenURL(app.preview.url || address)}><Icon name="link" size={13} /></button>
+    <button class="btn ghost sm" title={t("Open in the browser")} onclick={openOutside}><Icon name="link" size={13} /></button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
   <div class="box" bind:this={box}><div class="muted hint">{t("The page shows here (only in the app, not in a browser).")}</div></div>

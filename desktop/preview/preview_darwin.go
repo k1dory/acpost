@@ -49,7 +49,21 @@ var (
 	mu      sync.Mutex
 	inited  bool
 	handler func(Event)
+	events  = make(chan Event, 256) // to the handler, in order; when it lags, the newest are dropped
 )
+
+func init() {
+	go func() {
+		for e := range events {
+			mu.Lock()
+			f := handler
+			mu.Unlock()
+			if f != nil {
+				f(e)
+			}
+		}
+	}()
+}
 
 // OnEvent sets what is told of each event (from the main thread: quick).
 func OnEvent(f func(Event)) {
@@ -104,11 +118,9 @@ func goPreviewEvent(s *C.char) {
 	if json.Unmarshal([]byte(C.GoString(s)), &e) != nil {
 		return
 	}
-	mu.Lock()
-	f := handler
-	mu.Unlock()
-	if f != nil {
-		go f(e) // off the main thread
+	select { // off the main thread, never blocking it
+	case events <- e:
+	default:
 	}
 }
 

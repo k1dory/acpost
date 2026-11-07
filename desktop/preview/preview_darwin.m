@@ -11,6 +11,11 @@
 static WKWebView *apView = nil;
 static APPreview *apDelegate = nil;
 static NSString *apScript = nil;
+static NSString *apPending = nil;   // a page asked for before the view was made
+static NSTimeInterval apWindow = 0; // the second being counted, and how many came in it
+static int apInWindow = 0;
+static const NSUInteger apMaxField = 4000;
+static const int apMaxPerSecond = 40;
 
 static void apSend(NSDictionary *d) {
 	if (![NSJSONSerialization isValidJSONObject:d]) return;
@@ -21,16 +26,24 @@ static void apSend(NSDictionary *d) {
 }
 
 @implementation APPreview
+// What a page may report (anything else it posts is dropped: navigation is told by WebKit, not
+// the page); its fields, cut; at most apMaxPerSecond a second.
 - (void)userContentController:(WKUserContentController *)c didReceiveScriptMessage:(WKScriptMessage *)m {
+	static NSSet *kinds = nil;
+	if (!kinds) kinds = [NSSet setWithArray:@[@"exception", @"rejection", @"console.error", @"console.warn", @"resource", @"fetch", @"xhr", @"csp"]];
+	static NSSet *fields = nil;
+	if (!fields) fields = [NSSet setWithArray:@[@"kind", @"message", @"source", @"line", @"col", @"stack", @"url", @"at"]];
+	if (![m.body isKindOfClass:[NSDictionary class]]) return;
+	NSDictionary *b = m.body;
+	if (![b[@"kind"] isKindOfClass:[NSString class]] || ![kinds containsObject:b[@"kind"]]) return;
+	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+	if (now - apWindow >= 1) { apWindow = now; apInWindow = 0; }
+	if (++apInWindow > apMaxPerSecond) return;
 	NSMutableDictionary *x = [NSMutableDictionary dictionary];
-	if ([m.body isKindOfClass:[NSDictionary class]]) {
-		for (id k in (NSDictionary *)m.body) {
-			id v = ((NSDictionary *)m.body)[k];
-			if ([k isKindOfClass:[NSString class]] && ([v isKindOfClass:[NSString class]] || [v isKindOfClass:[NSNumber class]])) x[k] = v;
-		}
-	} else {
-		x[@"kind"] = @"log";
-		x[@"message"] = [m.body description] ?: @"";
+	for (NSString *k in fields) {
+		id v = b[k];
+		if ([v isKindOfClass:[NSString class]]) x[k] = [(NSString *)v length] > apMaxField ? [(NSString *)v substringToIndex:apMaxField] : v;
+		else if ([v isKindOfClass:[NSNumber class]]) x[k] = v;
 	}
 	x[@"main_frame"] = @(m.frameInfo.isMainFrame);
 	apSend(x);
@@ -63,6 +76,11 @@ static void apEnsure(NSView *host) {
 		apView.navigationDelegate = apDelegate;
 		if ([apView respondsToSelector:@selector(setInspectable:)]) [apView setValue:@YES forKey:@"inspectable"]; // Safari's Web Inspector (macOS 13.3+)
 	}
+	if (apPending) {
+		NSURL *nu = [NSURL URLWithString:apPending];
+		apPending = nil;
+		if (nu) [apView loadRequest:[NSURLRequest requestWithURL:nu]];
+	}
 	if (apView.superview != host) {
 		[apView removeFromSuperview];
 		[host addSubview:apView positioned:NSWindowAbove relativeTo:nil];
@@ -88,8 +106,9 @@ void apHide(void) {
 void apLoad(const char *url) {
 	NSString *u = [NSString stringWithUTF8String:url];
 	dispatch_async(dispatch_get_main_queue(), ^{
+		if (!apView) { apPending = u; return; } // loaded once the view is made
 		NSURL *nu = [NSURL URLWithString:u];
-		if (apView && nu) [apView loadRequest:[NSURLRequest requestWithURL:nu]];
+		if (nu) [apView loadRequest:[NSURLRequest requestWithURL:nu]];
 	});
 }
 
