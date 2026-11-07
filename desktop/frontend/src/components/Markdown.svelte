@@ -79,7 +79,11 @@
     })();
   });
 
-  async function copy(e: MouseEvent) {
+  // Copy from the keyboard too (Enter or Space on it).
+  function copyKey(e: KeyboardEvent) {
+    if ((e.key === "Enter" || e.key === " ") && (e.target as HTMLElement).closest(".cp")) { e.preventDefault(); copy(e); }
+  }
+  async function copy(e: Event) {
     const btn = (e.target as HTMLElement).closest(".cp") as HTMLButtonElement | null;
     if (!btn) return;
     const code = btn.closest(".code")?.querySelector("code")?.textContent ?? "";
@@ -94,7 +98,7 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="md selectable" bind:this={box} onclick={copy}>{@html html}</div>
+<div class="md selectable" bind:this={box} onclick={copy} onkeydown={copyKey}>{@html html}</div>
 
 <style>
   .md { line-height: 1.65; overflow-wrap: anywhere; font-size: 13.5px; min-width: 0; max-width: 100%; }
