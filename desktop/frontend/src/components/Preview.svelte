@@ -17,6 +17,10 @@
   let address = $state(saved || "http://localhost:3000");
   let err = $state("");
   let open = $state(false); // the list of problems shown
+  // Cleared by hand: the list is empty, the page's problems are not gone — they come again when it
+  // runs again.
+  let cleared = $state(false);
+  $effect(() => { if (problems.length) cleared = false; });
   const problems = $derived(app.preview.events.filter(e => e.kind !== "nav"));
 
   function go(u = address) {
@@ -69,7 +73,8 @@
     }).join("\n").slice(0, 12000);
     const md = `# ${t("The preview of {url} shows these problems:", { url: app.preview.url || address })}\n\n${list}\n`;
     const bytes = new TextEncoder().encode(md);
-    app.pendingFiles = [...app.pendingFiles, { name: "preview-problems.md", type: "text/markdown", size: bytes.length, data: b64(md) }];
+    // One such file at a time: a second click replaces it (the composer does the same).
+    app.pendingFiles = [...app.pendingFiles.filter(f => f.name !== "preview-problems.md"), { name: "preview-problems.md", type: "text/markdown", size: bytes.length, data: b64(md) }];
     app.quote = t("Fix the problems the preview shows (attached).");
   }
   const kindName = (k: string) => k.replace("console.", "");
@@ -87,12 +92,15 @@
   <div class="probs" class:open>
     <button class="ph" onclick={() => (open = !open)}>
       <span class="dot" class:failed={problems.length > 0} class:done={!problems.length}></span>
-      {problems.length ? t("{n} problems in the page", { n: problems.length }) : t("No problems in the page")}
+      {problems.length ? t("{n} problems in the page", { n: problems.length }) : cleared ? t("List cleared — the page is not fixed by it") : t("No problems in the page")}
       <span class="sp"></span>
+      {#if cleared && !problems.length}
+        <span class="link" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; Node.PreviewReload(); }} onkeydown={() => {}}>{t("Reload and check")}</span>
+      {/if}
       {#if problems.length}
         <span class="btn primary sm toag" role="button" tabindex="0" onclick={e => { e.stopPropagation(); sendToAgent(); }}
           onkeydown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); sendToAgent(); } }}><Icon name="send" size={11} /> {t("To the agent")}</span>
-        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; }} onkeydown={() => {}}>{t("Clear")}</span>
+        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; cleared = true; }} onkeydown={() => {}}>{t("Clear")}</span>
       {/if}
     </button>
     {#if open}

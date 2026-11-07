@@ -63,7 +63,7 @@
       {/if}
     {/if}
     {#if m.files?.filter(f => !f.reply).length}
-      <div class="files">{#each m.files.filter(f => !f.reply) as f}<button class="chip fbtn" onclick={() => app.openArtifact({ msg: m.id, name: f.name })} title={f.name}><Icon name="file" size={12} /> {f.name}</button>{/each}</div>
+      <div class="files">{#each m.files.filter(f => !f.reply) as f}{#if f.size > 0 && !(f as any).uri}<button class="chip fbtn" onclick={() => app.openArtifact({ msg: m.id, name: f.name })} title={f.name}><Icon name="file" size={12} /> {f.name}</button>{:else}<span class="chip"><Icon name="file" size={12} /> {f.name}</span>{/if}{/each}</div>
     {/if}
   </div>
 
@@ -81,7 +81,7 @@
     {#if m.files?.some(f => f.reply)}
       <!-- What the agent handed back: each opens in the artifact viewer. -->
       <div class="arts">
-        {#each m.files.filter(f => f.reply) as f}
+        {#each m.files.filter(f => f.reply && f.size > 0 && !(f as any).uri) as f}
           <button class="art" onclick={() => app.openArtifact({ msg: m.id, name: f.name })} title={f.name}>
             <Icon name="file" size={13} /><span class="an">{f.name}</span><span class="muted as">{f.size < 1024 ? f.size + " B" : f.size < 1 << 20 ? Math.round(f.size / 1024) + " KB" : (f.size / (1 << 20)).toFixed(1) + " MB"}</span>
           </button>

@@ -25,7 +25,12 @@
   $effect(() => { if (agent) app.loadOptions(agent); });
   // Files handed over by another part of the app (the preview's problems): attached here.
   $effect(() => {
-    if (app.pendingFiles.length) { files = [...files, ...app.pendingFiles]; app.pendingFiles = []; requestAnimationFrame(() => ta?.focus()); }
+    if (app.pendingFiles.length) {
+      const names = new Set(app.pendingFiles.map(f => f.name)); // a file of the same name: replaced
+      files = [...files.filter(f => !names.has(f.name)), ...app.pendingFiles];
+      app.pendingFiles = [];
+      requestAnimationFrame(() => ta?.focus());
+    }
   });
   // ⌘L and playbooks put text here.
   $effect(() => {
