@@ -20,6 +20,7 @@ import (
 var assets embed.FS
 
 func main() {
+	fixPath() // before the node starts agents: a terminal's PATH, not launchd's
 	node := &Node{}
 	services := []application.Service{application.NewService(node)}
 	// Notifications of the system need the bundle's identifier: from acpost.app only.

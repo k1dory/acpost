@@ -10,8 +10,15 @@
   // A code block: its language (the fence's, else guessed from the code), highlighted, with a copy
   // button in its header.
   const md = new Marked({ gfm: true, breaks: true });
+  // A file path written as code (`src/app.ts`, `/tmp/report.html`): clickable, opens as an artifact.
+  const filePath = /^(~\/|\/|\.{1,2}\/)?[\w@.+-]+(\/[\w@.+-]+)*\.[A-Za-z0-9]{1,8}$/;
   md.use({
     renderer: {
+      codespan({ text: code }) {
+        const raw = code.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        return filePath.test(raw) && raw.includes("/") || /\.(html?|md|png|jpe?g|gif|svg|pdf|csv|json)$/i.test(raw) && filePath.test(raw)
+          ? `<code class="pl" title="${esc(raw)}">${esc(raw)}</code>` : `<code>${esc(raw)}</code>`;
+      },
       code({ text: code, lang }) {
         const want = (lang ?? "").trim().split(/\s+/)[0].toLowerCase();
         // A diagram: drawn after (Mermaid, loaded when first needed), its text kept to show if it fails.
@@ -95,6 +102,8 @@
   .md :global(.mm.drawn) { border: 1px solid var(--line-soft); border-radius: 14px; padding: 14px; background: var(--page); overflow: auto; text-align: center; }
   .md :global(.mm.drawn svg) { max-width: 100%; height: auto; }
   .md :global(.mm pre) { border: 1px solid var(--line-soft); border-radius: 14px; }
+  .md :global(code.pl) { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .md :global(code.pl:hover) { color: var(--accent); }
   .md :global(a) { color: var(--accent); text-decoration: none; }
   .md :global(table) { border-collapse: collapse; margin: 0 0 .8em; font-size: 13px; }
   .md :global(th), .md :global(td) { border: 1px solid var(--line); padding: 5px 9px; }

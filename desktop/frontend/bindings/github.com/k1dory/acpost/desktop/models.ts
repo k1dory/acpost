@@ -13,6 +13,47 @@ import * as client$0 from "../internal/client/models.js";
 import * as store$0 from "../internal/store/models.js";
 
 /**
+ * Artifact is a file to show: its name, type, size and content (base64).
+ */
+export class Artifact {
+    "name": string;
+    "type": string;
+    "size": number;
+
+    /**
+     * a file of this Mac
+     */
+    "path"?: string;
+    "data": string;
+
+    /** Creates a new Artifact instance. */
+    constructor($$source: Partial<Artifact> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("type" in $$source)) {
+            this["type"] = "";
+        }
+        if (!("size" in $$source)) {
+            this["size"] = 0;
+        }
+        if (!("data" in $$source)) {
+            this["data"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Artifact instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Artifact {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Artifact($$parsedSource as Partial<Artifact>);
+    }
+}
+
+/**
  * Connection is the node as the app sees it.
  */
 export class Connection {

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { app, applyTheme } from "./lib/state.svelte";
   import { on } from "./lib/api";
+  import { Browser } from "@wailsio/runtime";
   import Sidebar from "./components/Sidebar.svelte";
   import Conversation from "./components/Conversation.svelte";
   import RightPanel from "./components/RightPanel.svelte";
@@ -25,6 +26,30 @@
     return () => { clearInterval(poll); clearInterval(asking); offPreview(); };
   });
 
+  // Links never take the app's own page away. A page of this Mac (localhost, 127.0.0.1) opens in the
+  // app's preview, other web pages in the system's browser, a file of this Mac as an artifact;
+  // links inside the page (#…) stay its own.
+  const localHost = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0|[a-z0-9-]+\.localhost)$/i;
+  function links(e: MouseEvent) {
+    const el = e.target as HTMLElement | null;
+    const code = el?.closest?.("code.pl") as HTMLElement | null;
+    if (code) { e.preventDefault(); app.openArtifact({ name: code.textContent!.split("/").pop()!, path: code.textContent!, base: app.chatCwd() }); return; }
+    const a = el?.closest?.("a[href]") as HTMLAnchorElement | null;
+    if (!a) return;
+    const href = a.getAttribute("href") ?? "";
+    if (href.startsWith("#")) return;
+    e.preventDefault();
+    let u: URL;
+    try { u = new URL(href, "file:///"); } catch { return; }
+    if (u.protocol === "http:" || u.protocol === "https:") {
+      if (localHost.test(u.hostname)) app.openInPreview(u.href);
+      else Browser.OpenURL(u.href);
+    } else if (u.protocol === "file:") {
+      const path = decodeURIComponent(href.startsWith("file:") ? u.pathname : href);
+      app.openArtifact({ name: path.split("/").pop() || path, path, base: app.chatCwd() });
+    } else if (u.protocol === "mailto:") Browser.OpenURL(u.href);
+  }
+
   function keys(e: KeyboardEvent) {
     if (!e.metaKey) return;
     // Text size: ⌘+ / ⌘− / ⌘0, as in any Mac app.
@@ -45,7 +70,7 @@
   }
 </script>
 
-<svelte:window onkeydown={keys} />
+<svelte:window onkeydown={keys} onclickcapture={links} />
 
 <div class="shell">
   <Sidebar />

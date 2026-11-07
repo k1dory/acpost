@@ -50,6 +50,8 @@
     if (first) { first = false; if (!app.preview.loaded) { app.preview.loaded = true; go(); } }
     return () => { ro.disconnect(); removeEventListener("resize", place); };
   });
+  // A link to a page of this Mac, clicked in a chat: shown here.
+  $effect(() => { const u = app.preview.pending; if (u) { app.preview.pending = ""; go(u); } });
   onDestroy(() => { Node.PreviewHide().catch(() => {}); });
 
   // Only a web page leaves for the browser (not whatever address a page made up).

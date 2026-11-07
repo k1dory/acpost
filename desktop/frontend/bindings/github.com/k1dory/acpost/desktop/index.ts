@@ -7,6 +7,7 @@ export {
 };
 
 export {
+    Artifact,
     Connection,
     ConversationPage,
     Task,

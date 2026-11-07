@@ -482,6 +482,11 @@ func explainStart(err error) Failure {
 			return f
 		}
 	}
+	if strings.Contains(err.Error(), "exit status 127") {
+		// The shell's "command not found": the agent's command, or what it runs (node for the npm
+		// adapters), is not on the PATH the node has.
+		return failf("agent_start", "the agent did not start: its command, or a program it needs (node for claude-agent-acp and codex-acp), was not found on the node's PATH (exit 127)")
+	}
 	return failf("agent_start", "the agent did not start: %v", err)
 }
 

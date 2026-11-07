@@ -8,6 +8,7 @@
   import Terminal from "./Terminal.svelte";
   import Forge from "./Forge.svelte";
   import Preview from "./Preview.svelte";
+  import Artifacts from "./Artifacts.svelte";
 
   // Hidden (another view, or the panel closed) it stays mounted: the terminal's shell goes on.
   let { hidden = false }: { hidden?: boolean } = $props();
@@ -21,6 +22,7 @@
     terminal: { label: "Terminal", icon: "term" },
     prs: { label: "PRs", icon: "pr", title: "Pull requests and CI" },
     preview: { label: "Preview", icon: "eye" },
+    artifacts: { label: "Artifacts", icon: "file" },
   };
   const order = Object.keys(views) as PanelTab[];
   let adding = $state(false);
@@ -80,6 +82,7 @@
     {:else if app.tab === "activity"}<Activity />
     {:else if app.tab === "changes"}<Changes />
     {:else if app.tab === "prs"}<Forge />
+    {:else if app.tab === "artifacts"}<Artifacts />
     {:else if app.tab === "preview"}<Preview covered={adding || app.palette || !!app.error} />{/if}
     <!-- The terminal, while its tab is open, stays mounted (hidden behind the others): its shell
          and what it printed survive switching tabs, other views, the panel closed. -->

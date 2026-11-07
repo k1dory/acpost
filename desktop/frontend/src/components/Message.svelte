@@ -78,6 +78,16 @@
     </div>
 
     {#if turn}<TurnBlocks view={turn} msg={m.id} {done} agent={m.to} />{/if}
+    {#if m.files?.some(f => f.reply)}
+      <!-- What the agent handed back: each opens in the artifact viewer. -->
+      <div class="arts">
+        {#each m.files.filter(f => f.reply) as f}
+          <button class="art" onclick={() => app.openArtifact({ msg: m.id, name: f.name })} title={f.name}>
+            <Icon name="file" size={13} /><span class="an">{f.name}</span><span class="muted as">{f.size < 1024 ? f.size + " B" : f.size < 1 << 20 ? Math.round(f.size / 1024) + " KB" : (f.size / (1 << 20)).toFixed(1) + " MB"}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
     <Subtasks msg={m.id} running={m.state === "running"} />
 
     {#if replyDiffers || (done && !streamed && m.reply)}
@@ -101,6 +111,11 @@
   .eacts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
   .user .meta { justify-content: flex-end; }
   .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
+  .arts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .art { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-soft); background: var(--card); border-radius: 10px; padding: 7px 10px; font-size: 12.5px; max-width: 280px; }
+  .art:hover { border-color: var(--accent); }
+  .an { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .as { font-size: 11px; flex: none; }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
   .agent { min-width: 0; display: grid; gap: 8px; }
   .agent > .meta { margin-bottom: 2px; }

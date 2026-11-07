@@ -26,8 +26,10 @@ export const final = (s: string) => s === "done" || s === "failed" || s === "can
 export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string; cwd: string; repo: string; model: string; effort: string; mode: string };
 
 export type PreviewEvent = { kind: string; message?: string; source?: string; line?: number; col?: number; stack?: string; url?: string; title?: string; main_frame?: boolean };
-export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview";
-const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "preview"];
+export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview" | "artifacts";
+const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "preview", "artifacts"];
+/** An artifact to show: a reply's attachment, or a file of this Mac a reply links to. */
+export type ArtifactRef = { msg?: string; name: string; path?: string; base?: string };
 function savedTab(): PanelTab {
   try { const v = localStorage.getItem("panel-tab") as PanelTab; if (savedTabs().includes(v)) return v; } catch {}
   return savedTabs()[0] ?? "activity";
@@ -386,7 +388,24 @@ class App {
   }
 
   /** The preview: what its page did (problems, its address), kept across tabs. */
-  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean }>({ events: [], url: "", title: "", loaded: false });
+  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean; pending: string }>({ events: [], url: "", title: "", loaded: false, pending: "" });
+  /** A page of this Mac (a dev server) opened in the app's preview, not the system's browser. */
+  openInPreview(url: string) {
+    this.preview.pending = url;
+    this.preview.loaded = true;
+    if (this.view !== "chat") this.view = "chat";
+    this.openTab("preview");
+  }
+  /** The artifact shown, and those opened in this chat. */
+  artifact = $state<ArtifactRef | null>(null);
+  openedArtifacts = $state<ArtifactRef[]>([]);
+  openArtifact(a: ArtifactRef) {
+    const same = (x: ArtifactRef) => x.msg === a.msg && x.name === a.name && x.path === a.path;
+    if (!this.openedArtifacts.some(same)) this.openedArtifacts = [...this.openedArtifacts, a];
+    this.artifact = a;
+    if (this.view !== "chat") this.view = "chat";
+    this.openTab("artifacts");
+  }
   notePreview(e: PreviewEvent) {
     if (e.kind === "nav") { if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; } return; }
     this.preview.events = [...this.preview.events.slice(-299), e];
