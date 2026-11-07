@@ -367,7 +367,7 @@
           {/each}
           <div class="row">
             <Icon name="cloud" size={14} />
-            <div class="t"><b>{t("Cloud")}</b><span class="muted small">{app.cloudAgents.length ? app.cloudAgents.length + " agents in the catalogue" : "optional — an agent-sandbox tenant as cloud: in ~/.config/acpost/config.yaml"}</span></div>
+            <div class="t"><b>{t("Cloud")}</b><span class="muted small">{app.cloudState === "down" ? t("The cloud is not answering") + " — " + app.cloudError : app.cloudState === "ok" ? t("{n} agents in the catalogue", { n: app.cloudAgents.length }) : t("optional — an agent-sandbox tenant as cloud: in ~/.config/acpost/config.yaml")}</span></div>
           </div>
         </div></div>
 

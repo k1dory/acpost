@@ -75,10 +75,14 @@
 
 <div class="setup">
   <!-- Where: only when a cloud is configured (optional: without one, everything is this Mac). -->
-  {#if app.cloudAgents.length}
+  {#if app.cloudState}
     <div class="seg">
       <button class:on={!cloud} onclick={() => (app.draft.where = "mac")}><Icon name="bot" size={13} /> {t("This Mac")}</button>
-      <button class:on={cloud} onclick={() => (app.draft.where = "cloud")}><Icon name="cloud" size={13} /> {t("Cloud")}</button>
+      <!-- Configured but not answering: still here, marked, the reason in its title. -->
+      <button class:on={cloud} class:down={app.cloudState === "down"} onclick={() => { app.draft.where = "cloud"; app.loadCloudAgents(); }}
+        title={app.cloudState === "down" ? t("The cloud is not answering") + "\n" + app.cloudError : ""}>
+        <Icon name="cloud" size={13} /> {t("Cloud")}{#if app.cloudState === "down"}<span class="warn-dot"></span>{/if}
+      </button>
     </div>
   {/if}
 
@@ -112,6 +116,7 @@
       {/if}
     </div>
   {:else}
+    {#if app.cloudState === "down"}<span class="cloud-down" title={app.cloudError}>{t("The cloud is not answering")}</span>{/if}
     <Dropdown bind:value={app.draft.cloudAgent} icon="cloud" items={app.cloudAgents.map(a => ({ value: a.ref, label: a.name }))} />
     <input class="input repo" placeholder={t("Repository (optional)")} bind:value={app.draft.repo} />
   {/if}
@@ -121,6 +126,8 @@
   .setup { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; margin-bottom: 12px; }
   .seg button { display: inline-flex; align-items: center; gap: 5px; }
   .seg button:disabled { opacity: .4; }
+  .warn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); margin-left: 2px; }
+  .cloud-down { font-size: 11.5px; color: var(--warn); }
   .dir { position: relative; }
   .pick { height: 28px; padding: 0 10px; font-size: 12px; gap: 6px; cursor: default; max-width: 340px; }
   .cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }

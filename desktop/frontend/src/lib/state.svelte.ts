@@ -1,5 +1,5 @@
 import { t } from "./i18n.svelte";
-import { Node, on, errText } from "./api";
+import { Node, on, errText, errInfo } from "./api";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -129,11 +129,23 @@ class App {
     try { this.agents = (await Node.Agents()) as any; } catch (e) { this.error = errText(e); }
   }
 
+  /** The cloud: "" none configured, "ok", or "down" (configured, not answering: cloudError says why;
+   * the catalogue last seen stays, so it can be chosen once it is back). */
+  cloudState = $state<"" | "ok" | "down">("");
+  cloudError = $state("");
   async loadCloudAgents() {
     try {
       this.cloudAgents = ((await Node.CloudAgents()) ?? []) as any;
+      this.cloudState = "ok"; this.cloudError = "";
+      try { localStorage.setItem("cloud-agents", JSON.stringify(this.cloudAgents)); } catch {}
       if (!this.draft.cloudAgent && this.cloudAgents[0]) this.draft.cloudAgent = this.cloudAgents[0].ref;
-    } catch { this.cloudAgents = []; }
+    } catch (e) {
+      const x = errInfo(e);
+      if (x.code === "not_found") { this.cloudState = ""; this.cloudAgents = []; return; } // no cloud configured
+      this.cloudState = "down";
+      this.cloudError = errText(e);
+      if (!this.cloudAgents.length) try { this.cloudAgents = JSON.parse(localStorage.getItem("cloud-agents") ?? "[]"); } catch {}
+    }
   }
 
   private wasRunning = new Map<string, number>();
@@ -182,9 +194,21 @@ class App {
     this.loadingChats = false;
   }
 
+  // An agent's choices (model, effort, mode, commands): the ones seen last time at once (asking a
+  // fresh agent process takes seconds), then the agent's answer.
+  private optionsAsked = new Set<string>();
   async loadOptions(agent: string) {
-    if (!agent || this.options[agent] || !this.localAgents().some(a => a.address === agent)) return;
-    try { this.options = { ...this.options, [agent]: (await Node.Options(agent)) as any }; } catch { /* the agent may not start: no choices then */ }
+    if (!agent || this.optionsAsked.has(agent) || !this.localAgents().some(a => a.address === agent)) return;
+    this.optionsAsked.add(agent);
+    if (!this.options[agent]) try {
+      const kept = JSON.parse(localStorage.getItem("options:" + agent) ?? "null");
+      if (kept) this.options = { ...this.options, [agent]: kept };
+    } catch {}
+    try {
+      const got = (await Node.Options(agent)) as any;
+      this.options = { ...this.options, [agent]: got };
+      try { localStorage.setItem("options:" + agent, JSON.stringify(got)); } catch {}
+    } catch { this.optionsAsked.delete(agent); /* the agent may not start: asked again next time */ }
   }
 
   /** Recent directories of the user's chats, newest first. */
