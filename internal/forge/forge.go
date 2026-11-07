@@ -109,7 +109,7 @@ func (c *Client) hc() *http.Client {
 			return errors.New("too many redirects")
 		}
 		if req.URL.Scheme != "https" {
-			return redirectRefused{fmt.Sprintf("a redirect to %s, not https", req.URL.Host)} // the host only
+			return redirectRefused{"a redirect to an address that is not https"} // nothing of the address
 		}
 		if req.URL.Host != via[0].URL.Host {
 			req.Header.Del("Authorization")

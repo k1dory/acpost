@@ -304,6 +304,9 @@ func TestErrorsHideTheToken(t *testing.T) {
 			w.WriteHeader(500)
 			w.Write([]byte(`{"message":"\u0073` + secret[1:] + `"}`))
 		}),
+		"GET /api/v1/repos/o/h": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://"+secret+".example/", http.StatusFound)
+		}),
 		"GET /api/v1/repos/o/m": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Location", "https://logs.example/%zz?sig=LOGSECRET42")
 			w.WriteHeader(http.StatusFound)
@@ -329,5 +332,8 @@ func TestErrorsHideTheToken(t *testing.T) {
 	}
 	if _, err := c.get(context.Background(), srv, host, "/repos/o/m", &v, 1<<16); err == nil || strings.Contains(err.Error(), "LOGSECRET") {
 		t.Fatalf("a malformed redirect: %v", err)
+	}
+	if _, err := c.get(context.Background(), srv, host, "/repos/o/h", &v, 1<<16); err == nil || strings.Contains(err.Error(), secret[:12]) {
+		t.Fatalf("a token as the redirect's host: %v", err)
 	}
 }
