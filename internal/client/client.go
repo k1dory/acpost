@@ -125,6 +125,19 @@ func (c *Client) Options(ctx context.Context, agent string) (AgentOptions, error
 	return out, err
 }
 
+// SessionHistory replays an agent's ACP session: its turns as events (user, text, thought, tool calls…).
+func (c *Client) SessionHistory(ctx context.Context, agent, id, cwd string) ([]store.Event, error) {
+	q := url.Values{}
+	if cwd != "" {
+		q.Set("cwd", cwd)
+	}
+	var out struct {
+		Items []store.Event `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/agents/"+url.PathEscape(agent)+"/sessions/"+url.PathEscape(id)+"/history", q, nil, &out, nil)
+	return out.Items, err
+}
+
 // Folders lists the app's folders of chats, with their chats.
 func (c *Client) Folders(ctx context.Context) ([]store.Folder, error) {
 	var out struct {

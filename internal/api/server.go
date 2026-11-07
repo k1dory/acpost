@@ -65,6 +65,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/agents/{name}/claim", s.auth(s.claim))
 	mux.HandleFunc("GET /v1/agents/{name}/sessions", s.auth(s.sessions))
 	mux.HandleFunc("GET /v1/agents/{name}/options", s.auth(s.options))
+	mux.HandleFunc("GET /v1/agents/{name}/sessions/{id}/history", s.auth(s.sessionHistory))
 	mux.HandleFunc("GET /v1/folders", s.auth(s.folders))
 	mux.HandleFunc("POST /v1/folders", s.auth(s.createFolder))
 	mux.HandleFunc("PATCH /v1/folders/{id}", s.auth(s.updateFolder))
@@ -440,6 +441,15 @@ func (s *server) options(w http.ResponseWriter, r *http.Request, p node.Principa
 		return
 	}
 	writeJSON(w, 200, out)
+}
+
+func (s *server) sessionHistory(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	evs, err := s.n.SessionHistory(r.Context(), p, r.PathValue("name"), r.PathValue("id"), r.URL.Query().Get("cwd"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": evs})
 }
 
 func (s *server) folders(w http.ResponseWriter, r *http.Request, p node.Principal) {

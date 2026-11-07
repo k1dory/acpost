@@ -744,6 +744,7 @@ type acpTurn struct {
 	usage              *acp.SessionUsageUpdate // the agent's last word on the session's context and cost
 	tools              map[string]*toolTrack   // the turn's tool calls as their updates made them
 	ctx                context.Context         // the turn's: ended by its timeout or its message's cancel
+	history            bool                    // a session's history replayed (session/load): its user's messages too
 }
 
 func (t *acpTurn) file(b replyBlock) {
@@ -881,6 +882,10 @@ func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification
 	}
 	u := p.Update
 	switch {
+	case u.UserMessageChunk != nil && t.history:
+		if tb := u.UserMessageChunk.Content.Text; tb != nil {
+			t.stream.add("user", tb.Text)
+		}
 	case u.AgentMessageChunk != nil:
 		if tb := u.AgentMessageChunk.Content.Text; tb != nil {
 			t.text(tb.Text)

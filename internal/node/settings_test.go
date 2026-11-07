@@ -2,6 +2,7 @@ package node
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/k1dory/acpost/internal/store"
@@ -65,5 +66,36 @@ func TestMessageSettings(t *testing.T) {
 	}
 	if opts, _ := n.AgentOptions(ctx, me, "fake"); len(opts.Commands) == 0 || opts.Commands[0].Name != "review" {
 		t.Fatalf("commands %+v", opts.Commands)
+	}
+}
+
+// A session started elsewhere is replayed as events, the user's messages among them; nothing is
+// stored; a message continues it afterwards.
+func TestSessionHistory(t *testing.T) {
+	n := acpNode(t, "")
+	evs, err := n.SessionHistory(ctx, me, "fake", "hist-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, e := range evs {
+		kinds = append(kinds, e.Kind)
+	}
+	got := strings.Join(kinds, " ")
+	if got != "user thought tool_call tool_call_update text user text" {
+		t.Fatalf("history %s", got)
+	}
+	if !strings.Contains(evs[0].Data, "config.go") || !strings.Contains(evs[4].Data, "YAML") {
+		t.Fatalf("%+v", evs)
+	}
+	if _, err := n.SessionHistory(ctx, Principal{Kind: "client", Name: "ci"}, "fake", "hist-1", ""); code(err) != "refused" {
+		t.Fatalf("a client read a session: %v", err)
+	}
+	if _, err := n.SessionHistory(ctx, me, "fake", "unknown", ""); err == nil {
+		t.Fatal("an unknown session replayed")
+	}
+	// Continue it.
+	if m := ask(t, n, SendRequest{Body: "echo more", Session: "hist-1"}); m.State != store.Done || m.Reply != "more" {
+		t.Fatalf("%+v", m)
 	}
 }

@@ -123,6 +123,24 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 			Message: "Invalid request: This Codex session is in use by another Codex client (the Codex app, the CLI or an IDE extension). Close the session there or quit that client, then try again.",
 			Data:    map[string]any{"reason": "thread_active_writer", "threadId": string(p.SessionId)}}
 	}
+	// A session with a history: replayed as updates before the answer, as agents do.
+	if strings.HasPrefix(string(p.SessionId), "hist-") {
+		sid := p.SessionId
+		up := func(u acp.SessionUpdate) {
+			_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: u})
+		}
+		up(acp.SessionUpdate{UserMessageChunk: &acp.SessionUpdateUserMessageChunk{SessionUpdate: "user_message_chunk", Content: acp.TextBlock("what is in config.go?")}})
+		up(acp.UpdateAgentThoughtText("look at the file"))
+		up(acp.StartToolCall("h1", "Read config.go", acp.WithStartKind(acp.ToolKindRead)))
+		up(acp.UpdateToolCall("h1", acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
+		up(acp.UpdateAgentMessageText("It parses the YAML."))
+		up(acp.SessionUpdate{UserMessageChunk: &acp.SessionUpdateUserMessageChunk{SessionUpdate: "user_message_chunk", Content: acp.TextBlock("thanks")}})
+		up(acp.UpdateAgentMessageText("You're welcome."))
+		a.mu.Lock()
+		a.cwds[sid] = p.Cwd
+		a.mu.Unlock()
+		return acp.LoadSessionResponse{ConfigOptions: a.options(sid)}, nil
+	}
 	// A loaded session keeps its prompt count across processes through an env-named file.
 	if dir := os.Getenv("FAKE_STATE"); dir != "" {
 		if b, err := os.ReadFile(dir + "/" + string(p.SessionId)); err == nil {
