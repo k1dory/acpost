@@ -604,7 +604,16 @@ func (s *acpSlot) handle(m store.Message) {
 		return
 	}
 	key := sessionKey(a.cfg.Session, m)
-	sid, err := s.sessionIn(ctx, p, key, taskCwd(m))
+	cwd := taskCwd(m)
+	if cwd == "" && m.Meta[metaSession] != "" {
+		// A session named without its directory (through a hub): the agent's own list says it.
+		cwd = n.sessionCwd(ctx, a.name, m.Meta[metaSession])
+		if m.Meta == nil {
+			m.Meta = map[string]string{}
+		}
+		m.Meta[metaSessionCwd] = cwd
+	}
+	sid, err := s.sessionIn(ctx, p, key, cwd)
 	if err != nil {
 		if n.ctx.Err() != nil || cancelled.Load() {
 			return

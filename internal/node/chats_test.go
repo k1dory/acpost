@@ -87,3 +87,28 @@ agents:
 		}
 	}
 }
+
+// A move to a folder that is not there changes nothing: the thread keeps the folder it inherits.
+func TestChatsFailedMoveKeepsTheFolder(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, os.Args[0], state))
+	os.WriteFile(filepath.Join(state, "outside-3"), []byte("1"), 0o600)
+	f, _ := n.CreateFolder(ctx, me, "argus")
+	n.MoveChat(ctx, me, "session:fake/outside-3", f.ID)
+	m := ask(t, n, SendRequest{Body: "echo go on", Session: "outside-3"})
+	if err := n.MoveChat(ctx, me, "thread:"+m.Thread, "fld_missing"); code(err) != "not_found" {
+		t.Fatalf("a missing folder: %v", err)
+	}
+	chats, _ := n.Chats(ctx, me)
+	for _, c := range chats.Items {
+		if c.Key == "thread:"+m.Thread && c.Folder != f.ID {
+			t.Fatalf("the failed move took the folder: %+v", c)
+		}
+	}
+}

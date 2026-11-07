@@ -151,21 +151,32 @@ func (s *Store) DeleteFolder(ctx context.Context, id string) error {
 	})
 }
 
-// MoveChat puts a chat in a folder ("" takes it out of any).
-func (s *Store) MoveChat(ctx context.Context, chat, folder string) error {
-	if chat == "" || len(chat) > MaxChatKey || strings.ContainsFunc(chat, func(c rune) bool { return c < ' ' || c == 0x7f }) {
-		return fmt.Errorf("a chat's key: 1 to %d printable characters", MaxChatKey)
+// MoveChat puts a chat in a folder ("" takes it out of any), and takes the chats it stands for (a
+// session or sandbox a thread continues) out of theirs — at once: a folder that is not there
+// changes nothing.
+func (s *Store) MoveChat(ctx context.Context, chat, folder string, alsoOut ...string) error {
+	for _, c := range append([]string{chat}, alsoOut...) {
+		if c == "" || len(c) > MaxChatKey || strings.ContainsFunc(c, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+			return fmt.Errorf("a chat's key: 1 to %d printable characters", MaxChatKey)
+		}
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
+		if folder != "" {
+			var one int
+			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM folders WHERE id = ?`, folder).Scan(&one); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrNoFolder
+				}
+				return err
+			}
+		}
+		for _, c := range alsoOut {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM chat_folders WHERE chat = ?`, c); err != nil {
+				return err
+			}
+		}
 		if folder == "" {
 			_, err := tx.ExecContext(ctx, `DELETE FROM chat_folders WHERE chat = ?`, chat)
-			return err
-		}
-		var one int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM folders WHERE id = ?`, folder).Scan(&one); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNoFolder
-			}
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO chat_folders (chat, folder) VALUES (?, ?)

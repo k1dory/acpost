@@ -67,13 +67,9 @@ func (n *Node) MoveChat(ctx context.Context, p Principal, chat, folder string) e
 	if err := userOnly(p, "folders"); err != nil {
 		return err
 	}
+	var linked []string
 	if thread, ok := strings.CutPrefix(chat, "thread:"); ok {
-		// The chats the thread continues follow it: it is their one chat now.
-		for _, linked := range n.linkedChats(ctx, thread) {
-			if err := n.st.MoveChat(ctx, linked, ""); err != nil {
-				return folderErr(err)
-			}
-		}
+		linked = n.linkedChats(ctx, thread) // the chats the thread continues follow it
 	}
-	return folderErr(n.st.MoveChat(ctx, chat, folder))
+	return folderErr(n.st.MoveChat(ctx, chat, folder, linked...))
 }

@@ -24,16 +24,9 @@ func (n *Node) resolveSession(ctx context.Context, p Principal, to Address, r *S
 			}
 		}
 	} else {
-		// The session a node forwards is the one its sender named; where it runs is this node's to
-		// say (from the agent's own list), never the forwarding node's.
+		// Where the session a node forwards runs is the executing node's to say (looked up there,
+		// at its turn), never the forwarding node's.
 		delete(r.Meta, metaSessionCwd)
-		if sid := r.Meta[metaSession]; sid != "" {
-			if cfg := n.agentCfg(to.Name); cfg != nil && cfg.Driver == "acp" {
-				if cwd := n.sessionCwd(ctx, to.Name, sid); cwd != "" {
-					r.Meta[metaSessionCwd] = cwd
-				}
-			}
-		}
 	}
 	if r.Session == "" {
 		return nil

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/store"
 )
 
 // Chats: everything the node's user talks with, in one list for the app — acpost's threads, the
@@ -164,25 +165,52 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	return out, nil
 }
 
-// linkedChats are the chats a thread continues (an agent's session, a cloud sandbox): their folder
-// is the thread's.
+// linkedChats are the chats a thread continues — each of its agents' session, each cloud sandbox it
+// talks to: their folder is the thread's.
 func (n *Node) linkedChats(ctx context.Context, thread string) []string {
 	root, err := n.st.Get(ctx, thread)
 	if err != nil {
 		return nil
 	}
+	page, _, err := n.st.List(ctx, store.Filter{Thread: thread, Limit: 500})
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
 	var out []string
-	name := strings.TrimPrefix(root.To, "agent:")
-	if sid := root.Meta[metaSession]; sid != "" {
-		out = append(out, "session:"+name+"/"+sid)
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
 	}
-	if strings.HasPrefix(name, "sb_") {
-		out = append(out, "cloud:"+name)
+	agents := map[string]bool{root.To: true}
+	for _, m := range page {
+		agents[m.To] = true
 	}
-	if cfg := n.agentCfg(name); cfg != nil {
-		if key := sessionKey(cfg.Session, root); key != "" {
-			if sid, _ := n.st.Session(ctx, root.To, key); sid != "" {
-				out = append(out, "session:"+name+"/"+sid)
+	for to := range agents {
+		name := strings.TrimPrefix(to, "agent:")
+		switch {
+		case strings.Contains(name, "@"):
+		case strings.HasPrefix(name, "sb_"):
+			add("cloud:" + name)
+		default:
+			cfg := n.agentCfg(name)
+			if cfg == nil {
+				continue
+			}
+			r := root
+			if root.To == to {
+				if sid := root.Meta[metaSession]; sid != "" {
+					add("session:" + name + "/" + sid)
+				}
+			} else {
+				r.Meta = nil
+			}
+			if key := sessionKey(cfg.Session, r); key != "" {
+				if sid, _ := n.st.Session(ctx, to, key); sid != "" {
+					add("session:" + name + "/" + sid)
+				}
 			}
 		}
 	}
