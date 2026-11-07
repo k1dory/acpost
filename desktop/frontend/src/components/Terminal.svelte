@@ -7,7 +7,10 @@
   import { app } from "../lib/state.svelte";
   import { Node, on, b64, unb64, errText } from "../lib/api";
 
+  // Shown (its tab current, the panel open): it takes the keys, sized to its box.
+  let { active = true }: { active?: boolean } = $props();
   let el: HTMLDivElement;
+  let fitter: FitAddon | null = null;
   let term: Terminal | null = null;
   let id = "";
   let err = $state("");
@@ -41,6 +44,7 @@
       theme: { background: css("--card"), foreground: css("--ink"), cursor: css("--ink"), selectionBackground: "rgba(47,91,211,.25)" },
     });
     term.loadAddon(fit);
+    fitter = fit;
     term.open(el);
     fit.fit();
     try {
@@ -67,6 +71,10 @@
   // Started once, untracked: a chat opened meanwhile does not restart the shell (New shell does,
   // in that chat's agent's directory).
   $effect(() => { if (el) untrack(start); return close; });
+  $effect(() => {
+    if (!active) return;
+    requestAnimationFrame(() => { try { fitter?.fit(); } catch {} term?.focus(); });
+  });
   onDestroy(close);
 </script>
 
