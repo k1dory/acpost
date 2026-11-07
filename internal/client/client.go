@@ -32,16 +32,16 @@ type SendRequest struct {
 	Task   string `json:"task,omitempty"`
 	Thread string `json:"thread,omitempty"`
 	// Session continues an existing ACP session of the agent.
-	Session string            `json:"session,omitempty"`
+	Session string `json:"session,omitempty"`
 	// Cwd is the directory a new task's session runs in (an ACP agent of the node); Model, Effort
 	// and Mode are selected in the session before this message's turn.
-	Cwd    string `json:"cwd,omitempty"`
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
-	Mode   string `json:"mode,omitempty"`
-	Meta    map[string]string `json:"meta,omitempty"`
-	Files   store.Files       `json:"files,omitempty"`
-	TTL     string            `json:"ttl,omitempty"`
+	Cwd    string            `json:"cwd,omitempty"`
+	Model  string            `json:"model,omitempty"`
+	Effort string            `json:"effort,omitempty"`
+	Mode   string            `json:"mode,omitempty"`
+	Meta   map[string]string `json:"meta,omitempty"`
+	Files  store.Files       `json:"files,omitempty"`
+	TTL    string            `json:"ttl,omitempty"`
 	// Set only by a node forwarding its own message to a hub.
 	ID     string `json:"id,omitempty"`
 	From   string `json:"from,omitempty"`

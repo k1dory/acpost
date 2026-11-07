@@ -751,7 +751,7 @@ func TestFollowAcrossHubAfterRestart(t *testing.T) {
 // the cost by the agent's account turn by turn, an estimate by the sender's prices for a turn
 // without one, the cache's share.
 func TestUsageAcrossHub(t *testing.T) {
-	_, b := hubPair(t, "prices: {fakemodel: {input: 1, output: 2, cache_read: 0.1}}\n", "", "", ", model: fakemodel")
+	_, b := hubPair(t, "prices: {Fake-big: {input: 1, output: 2, cache_read: 0.1}}\n", "", "", ", model: fake-big")
 	send := func(body string) {
 		deadline := time.Now().Add(15 * time.Second)
 		for {

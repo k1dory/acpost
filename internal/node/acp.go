@@ -40,7 +40,7 @@ type acpAgent struct {
 	owners map[string]int // ACP session id → the slot whose process last ran it (concurrency > 1)
 
 	optMu    sync.Mutex
-	lastOpts *acpx.SessionState    // the latest session's options: what the agent offers (models, levels, modes)
+	lastOpts *acpx.SessionState     // the latest session's options: what the agent offers (models, levels, modes)
 	commands []acp.AvailableCommand // the slash commands it said last
 }
 
@@ -84,7 +84,7 @@ type acpProc struct {
 	cl       *acpClient
 	init     acp.InitializeResponse
 	sessions map[string]acp.SessionId
-	models   map[acp.SessionId]string // the model each session runs, as the agent names it
+	models   map[acp.SessionId]string            // the model each session runs, as the agent names it
 	states   map[acp.SessionId]acpx.SessionState // each session's modes and configuration options
 	// costBase is where a session's cost stood when this process took it up: 0 for one it created,
 	// what the agent said while loading one (absent: not known).

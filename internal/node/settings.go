@@ -131,6 +131,9 @@ func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.Session
 
 // noteState keeps a session's state: its model for usage, the agent's offer for the app.
 func (a *acpAgent) noteState(p *acpProc, sid acp.SessionId, st acpx.SessionState) {
+	if p.states == nil {
+		p.states = map[acp.SessionId]acpx.SessionState{}
+	}
 	p.states[sid] = st
 	p.setModel(sid, st.Options)
 	a.optMu.Lock()
