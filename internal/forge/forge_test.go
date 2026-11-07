@@ -300,6 +300,10 @@ func TestErrorsHideTheToken(t *testing.T) {
 			w.WriteHeader(500)
 			w.Write([]byte(strings.Repeat("x", 280) + secret))
 		}),
+		"GET /api/v1/repos/o/e": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(500)
+			w.Write([]byte(`{"message":"\u0073` + secret[1:] + `"}`))
+		}),
 		"GET /api/v1/repos/o/r": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "http://elsewhere.example/?token="+secret, http.StatusFound)
 		}),
@@ -315,5 +319,8 @@ func TestErrorsHideTheToken(t *testing.T) {
 	var v map[string]any
 	if _, err := c.get(context.Background(), srv, host, "/repos/o/r", &v, 1<<16); err == nil || strings.Contains(err.Error(), secret[:12]) {
 		t.Fatalf("a redirect: %v", err)
+	}
+	if _, err := c.get(context.Background(), srv, host, "/repos/o/e", &v, 1<<16); err == nil || strings.Contains(err.Error(), secret[:12]) {
+		t.Fatalf("an escaped token: %v", err)
 	}
 }

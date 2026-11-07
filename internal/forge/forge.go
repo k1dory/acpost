@@ -179,7 +179,10 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 	}
 	defer resp.Body.Close()
 	if t, ok := out.(*tailText); ok && resp.StatusCode < 400 {
-		return resp.Header, t.read(resp.Body, max)
+		if err := t.read(resp.Body, max); err != nil {
+			return resp.Header, &Error{Status: resp.StatusCode, Message: redact(fmt.Sprintf("%s: %v", host, err))}
+		}
+		return resp.Header, nil
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	if err != nil {
@@ -190,7 +193,7 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 		var e struct{ Message string }
 		msg := ""
 		if json.Unmarshal([]byte(whole), &e) == nil && e.Message != "" {
-			msg = e.Message
+			msg = redact(e.Message) // decoded: an escaped token is plain now
 		} else {
 			msg = strings.TrimSpace(whole)
 		}
