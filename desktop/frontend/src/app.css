@@ -1,0 +1,124 @@
+@import "@fontsource-variable/onest";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+:root {
+  --page: #f6f6f3; --side: #fbfbf9; --card: #ffffff;
+  --line: #e4e3dd; --line-soft: #efeee9;
+  --ink: #0b0b0b; --ink-2: #3d3c38; --muted: #898781;
+  --hover: #f4f3ef; --sel: #eeede8; --track: #eeede8;
+  --good: #1f8a3b; --good-text: #006300; --good-bg: #eef7ef;
+  --warn: #c98500; --warn-bg: #fdf6e7;
+  --crit: #c23434; --crit-bg: #fdf1f0;
+  --accent: #2f5bd3; --accent-bg: #eef2fc;
+  --add: #e9f6ec; --add-ink: #126b2c; --del: #fcecec; --del-ink: #a32222;
+  --btn: #0b0b0b; --btn-ink: #ffffff;
+  --sheen: rgba(255,255,255,.9); --edge: rgba(255,255,255,1);
+  --glint: rgba(255,255,255,1); --glare: rgba(255,255,255,.55);
+  --shadow: 0 1px 2px rgba(20,20,10,.05), 0 14px 30px -20px rgba(20,20,10,.22);
+  --sk: #efeee9; --sk-hi: #f8f7f3;
+  --r-card: 24px; --r-panel: 28px; --r-input: 18px; --r-chip: 12px; --r-btn: 12px; --r-row: 14px;
+  --sans: "Onest Variable", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --page: #0f0f0e; --side: #141413; --card: #1a1a18;
+  --line: #2b2a27; --line-soft: #222220;
+  --ink: #f2f1ec; --ink-2: #c9c7bf; --muted: #8c8a83;
+  --hover: #22221f; --sel: #2a2926; --track: #2a2926;
+  --good: #4cc26a; --good-text: #6fd389; --good-bg: #16261a;
+  --warn: #e0a42a; --warn-bg: #2a2212;
+  --crit: #ef6a6a; --crit-bg: #2c1717;
+  --accent: #7d9bf0; --accent-bg: #1a2138;
+  --add: #15281a; --add-ink: #7fd497; --del: #2d1616; --del-ink: #f19a9a;
+  --btn: #f2f1ec; --btn-ink: #0b0b0b;
+  --sheen: rgba(255,255,255,.04); --edge: rgba(255,255,255,.06);
+  --glint: rgba(255,255,255,.25); --glare: rgba(255,255,255,.12);
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 30px -20px rgba(0,0,0,.6);
+  --sk: #22221f; --sk-hi: #2a2a26;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 14px/1.45 var(--sans); color: var(--ink); background: var(--page);
+  -webkit-font-smoothing: antialiased; overflow: hidden; user-select: none; cursor: default;
+}
+#app { height: 100%; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: default; }
+code, pre, .mono { font-family: var(--mono); font-size: 13px; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.selectable, .selectable * { user-select: text; cursor: auto; }
+::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* Material: cards with a sheen and a glint along the top edge */
+.card {
+  position: relative; border-radius: var(--r-card); border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--sheen) 0%, transparent 140px), var(--card);
+  box-shadow: inset 0 1px 0 var(--edge), var(--shadow);
+}
+.card::before {
+  content: ""; position: absolute; left: 12%; right: 12%; top: 0; height: 1px; z-index: 2;
+  background: linear-gradient(90deg, transparent, var(--glint), transparent); pointer-events: none;
+}
+.panel { border-radius: var(--r-panel); padding: 9px; }
+.panel > .inner { border-radius: var(--r-card); border: 1px solid var(--line-soft); background: var(--card); overflow: hidden; }
+
+.btn {
+  position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: var(--r-btn); border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--sheen), transparent), var(--card);
+  box-shadow: inset 0 1px 0 var(--edge), 0 1px 2px rgba(20,20,10,.05); font-weight: 500;
+}
+.btn:hover { background: var(--hover); }
+.btn:disabled { opacity: .5; }
+.btn.primary { background: var(--btn); color: var(--btn-ink); border-color: var(--btn); }
+.btn.primary::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-120%);
+  background: linear-gradient(100deg, transparent 30%, var(--glare) 50%, transparent 70%);
+}
+.btn.primary:hover::after { animation: glare .8s ease-out; }
+.btn.danger { color: var(--crit); }
+.btn.ghost { border-color: transparent; background: transparent; box-shadow: none; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 26px; padding: 0 9px; font-size: 12.5px; border-radius: 10px; }
+@keyframes glare { to { transform: translateX(120%); } }
+
+.seg { display: inline-flex; border-radius: 14px; padding: 3px; border: 1px solid var(--line); box-shadow: inset 0 1px 0 var(--edge); background: var(--card); }
+.seg button { border: 0; background: transparent; height: 26px; padding: 0 11px; border-radius: 11px; color: var(--ink-2); font-weight: 500; }
+.seg button.on { background: var(--sel); color: var(--ink); box-shadow: inset 0 1px 0 var(--edge); }
+
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: var(--r-chip); border: 1px solid var(--line); font-size: 12px; line-height: 1; color: var(--ink-2); background: var(--card); white-space: nowrap; flex: none; }
+.chip.good { color: var(--good-text); background: var(--good-bg); border-color: transparent; }
+.chip.warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+.chip.crit { color: var(--crit); background: var(--crit-bg); border-color: transparent; }
+.chip.ask { color: var(--warn); border-color: var(--warn); background: transparent; }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.running { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.dot.queued { background: var(--warn); }
+.dot.failed { background: var(--crit); }
+.dot.done { background: var(--good); }
+
+.spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--track); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.sk { border-radius: 8px; background: linear-gradient(90deg, var(--sk), var(--sk-hi), var(--sk)); background-size: 200% 100%; animation: sk 1.2s ease-in-out infinite; }
+@keyframes sk { to { background-position: -200% 0; } }
+
+.input {
+  width: 100%; border-radius: var(--r-input); border: 1px solid var(--line); background: var(--card);
+  padding: 8px 12px; outline: none; box-shadow: inset 0 1px 2px rgba(20,20,10,.04);
+}
+.input:focus { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+.scroll { overflow: auto; }
+.scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+.empty { display: grid; place-items: center; text-align: center; color: var(--muted); padding: 40px 20px; gap: 10px; }
+.drag { --wails-draggable: drag; }
+.nodrag { --wails-draggable: no-drag; }

@@ -1,0 +1,211 @@
+// A message's events as the conversation shows them: the agent's text, its thinking, its tool
+// calls (the latest event of a call replaces the earlier), permission requests and their
+// decisions, the plan, usage, notices — in the order they came.
+
+export type Ev = { seq: number; time: string; kind: string; data: string };
+
+export type Edit = { path: string; added: number; removed: number; old?: string; new?: string; cut?: boolean };
+export type Tool = {
+  id: string; title?: string; kind?: string; status?: string; input?: any; locations?: string[];
+  output?: string; exit_code?: number; edits?: Edit[]; description?: string;
+  started: number; ended?: number;
+};
+export type Option = { option_id: string; name: string; kind: string };
+export type Request = {
+  request_id: string; kind: string; title?: string; message?: string; text?: string; tool_kind?: string;
+  tool_call_id?: string; raw_input?: any; options?: Option[]; url?: string;
+  decision?: string; by?: string; at: number;
+};
+export type Usage = {
+  input?: number; output?: number; cache_read?: number; cache_write?: number; total?: number;
+  cost?: number; currency?: string; context_used?: number; context_size?: number; model?: string;
+};
+
+export type Block =
+  | { t: "text"; text: string }
+  | { t: "thought"; text: string; start: number; end: number }
+  | { t: "tool"; id: string }
+  | { t: "request"; id: string }
+  | { t: "plan"; entries: { status: string; content: string }[] }
+  | { t: "notice"; text: string; severity?: string }
+  | { t: "changes"; data: any };
+
+export class Turn {
+  blocks: Block[] = [];
+  tools = new Map<string, Tool>();
+  requests = new Map<string, Request>();
+  usage: Usage | null = null;
+  plan: { status: string; content: string }[] = [];
+  last = 0;
+
+  add(evs: Ev[]): this {
+    for (const e of evs) {
+      if (e.seq <= this.last) continue;
+      this.last = e.seq;
+      this.one(e);
+    }
+    return this;
+  }
+
+  private one(e: Ev) {
+    let d: any;
+    try { d = JSON.parse(e.data); } catch { d = e.data; }
+    const at = Date.parse(e.time) || Date.now();
+    const tail = this.blocks[this.blocks.length - 1];
+    // A thought lasts until what the agent does next.
+    if (tail?.t === "thought" && e.kind !== "thought") tail.end = Math.max(tail.end, at);
+    switch (e.kind) {
+      case "text": {
+        const s = typeof d === "string" ? d : d?.text ?? "";
+        if (tail?.t === "text") tail.text += s; else this.blocks.push({ t: "text", text: s });
+        break;
+      }
+      case "thought": {
+        const s = typeof d === "string" ? d : d?.text ?? "";
+        if (tail?.t === "thought") { tail.text += s; tail.end = at; }
+        else this.blocks.push({ t: "thought", text: s, start: at, end: at });
+        break;
+      }
+      case "tool_call":
+      case "tool_call_update": {
+        if (!d?.id) break;
+        const prev = this.tools.get(d.id);
+        if (!prev) {
+          this.tools.set(d.id, { ...d, started: at });
+          this.blocks.push({ t: "tool", id: d.id });
+        } else {
+          const merged: Tool = { ...prev, ...strip(d) };
+          if (d.status === "completed" || d.status === "failed") merged.ended = at;
+          this.tools.set(d.id, merged);
+        }
+        break;
+      }
+      case "permission_request": {
+        if (!d?.request_id) break;
+        this.requests.set(d.request_id, { ...d, at });
+        this.blocks.push({ t: "request", id: d.request_id });
+        break;
+      }
+      case "permission": {
+        const r = this.requests.get(d?.request_id);
+        if (r) { r.decision = d.decision; r.by = d.by; }
+        break;
+      }
+      case "plan": {
+        const entries = (Array.isArray(d) ? d : []).map((s: string) => {
+          const i = s.indexOf(": ");
+          return i > 0 ? { status: s.slice(0, i), content: s.slice(i + 2) } : { status: "", content: s };
+        });
+        this.plan = entries;
+        // One plan per turn, where it first appeared, kept current.
+        const at = this.blocks.find(b => b.t === "plan") as { t: "plan"; entries: typeof entries } | undefined;
+        if (at) at.entries = entries; else this.blocks.push({ t: "plan", entries });
+        break;
+      }
+      case "usage":
+        this.usage = d;
+        break;
+      case "notice":
+        this.blocks.push({ t: "notice", text: typeof d === "string" ? d : d?.text ?? d?.title ?? "", severity: d?.severity });
+        break;
+      case "changes":
+        this.blocks.push({ t: "changes", data: d });
+        break;
+    }
+  }
+
+  /** A copy for rendering: the turn is mutated in place as events come. */
+  view() {
+    return {
+      blocks: this.blocks.map(b => ({ ...b })) as Block[],
+      tools: new Map([...this.tools].map(([k, v]) => [k, { ...v }])),
+      requests: new Map([...this.requests].map(([k, v]) => [k, { ...v }])),
+      usage: this.usage ? { ...this.usage } : null,
+    };
+  }
+
+  /** Requests still waiting for a person. */
+  waiting(): Request[] {
+    return [...this.requests.values()].filter(r => !r.decision);
+  }
+}
+
+function strip(d: any) {
+  const o: any = {};
+  for (const [k, v] of Object.entries(d)) if (v !== undefined && v !== null && v !== "") o[k] = v;
+  return o;
+}
+
+const bare = new Set(["terminal", "edit", "read", "write", "bash", "tool", "execute", "fetch", "search"]);
+
+/** What the agent set out to do with a call — not "tool call". */
+export function intent(t: Tool): string {
+  if (t.description) return t.description;
+  if (t.title && !bare.has(t.title.trim().toLowerCase())) return t.title;
+  const i = t.input ?? {};
+  if (typeof i.command === "string") return i.command;
+  if (Array.isArray(i.command)) return i.command.join(" ");
+  for (const k of ["file_path", "path", "url", "query", "pattern"]) if (typeof i[k] === "string") return i[k];
+  if (t.locations?.length) return t.locations.join(", ");
+  return t.title || t.kind || "tool";
+}
+
+export function toolName(t: Tool): string {
+  return (t.kind || t.title?.split(/[\s:]/)[0] || "tool").toLowerCase();
+}
+
+export function toolState(t: Tool, final: boolean): "running" | "done" | "failed" | "pending" {
+  if (t.status === "failed" || (t.exit_code !== undefined && t.exit_code !== 0)) return "failed";
+  if (t.status === "completed") return "done";
+  return final ? "done" : t.status === "pending" ? "pending" : "running";
+}
+
+export function editTotals(t: Tool): { files: number; added: number; removed: number } {
+  const e = t.edits ?? [];
+  return { files: new Set(e.map(x => x.path)).size, added: e.reduce((a, x) => a + (x.added || 0), 0), removed: e.reduce((a, x) => a + (x.removed || 0), 0) };
+}
+
+/** A unified diff of one edit's old and new text, line by line (LCS on small inputs). */
+export function lineDiff(oldText = "", newText = ""): { op: " " | "+" | "-"; text: string; a?: number; b?: number }[] {
+  const a = oldText.split("\n"), b = newText.split("\n");
+  if (a.length * b.length > 400_000) {
+    return [...a.map(t => ({ op: "-" as const, text: t })), ...b.map(t => ({ op: "+" as const, text: t }))];
+  }
+  const m = a.length, n = b.length;
+  const L: Uint32Array[] = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out: { op: " " | "+" | "-"; text: string; a?: number; b?: number }[] = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { out.push({ op: " ", text: a[i], a: ++i, b: ++j }); }
+    else if (L[i + 1][j] >= L[i][j + 1]) out.push({ op: "-", text: a[i], a: ++i });
+    else out.push({ op: "+", text: b[j], b: ++j });
+  }
+  while (i < m) out.push({ op: "-", text: a[i], a: ++i });
+  while (j < n) out.push({ op: "+", text: b[j], b: ++j });
+  return out;
+}
+
+/** A git unified diff split into files. */
+export function splitDiff(diff: string): { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] {
+  const files: { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] = [];
+  let cur: (typeof files)[number] | null = null;
+  let a = 0, b = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const m = / b\/(.*)$/.exec(line);
+      cur = { path: m ? m[1] : line.slice(11), lines: [] };
+      files.push(cur);
+      continue;
+    }
+    if (!cur || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("new file") || line.startsWith("deleted file") || line.startsWith("similarity") || line.startsWith("rename ")) continue;
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
+    if (h) { a = +h[1]; b = +h[2]; cur.lines.push({ op: "@", text: line }); continue; }
+    const op = line[0] ?? " ";
+    if (op === "+") cur.lines.push({ op, text: line.slice(1), b: b++ });
+    else if (op === "-") cur.lines.push({ op, text: line.slice(1), a: a++ });
+    else if (op === "\\") continue;
+    else cur.lines.push({ op: " ", text: line.slice(1), a: a++, b: b++ });
+  }
+  return files;
+}

@@ -262,6 +262,50 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			}
 		}
 		a.say(ctx, sid, b.String())
+	case "demo": // a turn with everything a conversation shows, paced like an agent
+		up := func(u acp.SessionUpdate) {
+			_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: u})
+		}
+		pause := func(ms int) {
+			select {
+			case <-time.After(time.Duration(ms) * time.Millisecond):
+			case <-ctx.Done():
+			}
+		}
+		up(acp.UpdateAgentThoughtText("The test fails on an empty config; look at the parser first."))
+		pause(600)
+		plan := func(st ...acp.PlanEntryStatus) {
+			names := []string{"Find why config parsing fails", "Fix the parser", "Run the tests"}
+			var es []acp.PlanEntry
+			for i, n := range names {
+				es = append(es, acp.PlanEntry{Content: n, Status: st[i], Priority: acp.PlanEntryPriorityMedium})
+			}
+			up(acp.SessionUpdate{Plan: &acp.SessionUpdatePlan{SessionUpdate: "plan", Entries: es}})
+		}
+		plan(acp.PlanEntryStatusInProgress, acp.PlanEntryStatusPending, acp.PlanEntryStatusPending)
+		a.say(ctx, sid, "Let me look at how the config is read.\n\n")
+		up(acp.StartToolCall("d1", "Read config.go", acp.WithStartKind(acp.ToolKindRead), acp.WithStartLocations([]acp.ToolCallLocation{{Path: "internal/config/config.go"}}), acp.WithStartRawInput(map[string]any{"file_path": "internal/config/config.go"})))
+		pause(400)
+		up(acp.UpdateToolCall("d1", acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
+		up(acp.StartToolCall("d2", "Terminal", acp.WithStartKind(acp.ToolKindExecute), acp.WithStartRawInput(map[string]any{"command": "go test ./internal/config", "description": "Run the config package's tests"})))
+		pause(900)
+		up(acp.UpdateToolCall("d2", acp.WithUpdateStatus(acp.ToolCallStatusFailed), acp.WithUpdateRawOutput(map[string]any{"output": "--- FAIL: TestEmpty (0.00s)\n    config_test.go:41: unexpected EOF\nFAIL", "exit_code": 1})))
+		plan(acp.PlanEntryStatusCompleted, acp.PlanEntryStatusInProgress, acp.PlanEntryStatusPending)
+		up(acp.StartToolCall("d3", "Edit config.go", acp.WithStartKind(acp.ToolKindEdit), acp.WithStartContent([]acp.ToolCallContent{acp.ToolDiffContent("internal/config/config.go", "\tif len(bytes.TrimSpace(b)) == 0 {\n\t\treturn &Config{}, nil // an empty file is the defaults\n\t}\n\treturn parse(b)", "\tif len(b) == 0 {\n\t\treturn nil, io.ErrUnexpectedEOF\n\t}\n\treturn parse(b)")})))
+		pause(500)
+		up(acp.UpdateToolCall("d3", acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
+		up(acp.StartToolCall("d4", "Terminal", acp.WithStartKind(acp.ToolKindExecute), acp.WithStartRawInput(map[string]any{"command": "go test ./internal/config", "description": "Run the tests again"})))
+		pause(700)
+		up(acp.UpdateToolCall("d4", acp.WithUpdateStatus(acp.ToolCallStatusCompleted), acp.WithUpdateRawOutput(map[string]any{"output": "ok  \tgithub.com/k1dory/acpost/internal/config\t0.41s", "exit_code": 0})))
+		plan(acp.PlanEntryStatusCompleted, acp.PlanEntryStatusCompleted, acp.PlanEntryStatusCompleted)
+		used, size := 12400, 32000
+		up(acp.SessionUpdate{UsageUpdate: &acp.SessionUsageUpdate{SessionUpdate: "usage_update", Used: used, Size: size, Cost: &acp.Cost{Amount: 0.042, Currency: "USD"}}})
+		for _, w := range strings.Fields("Fixed. An **empty config file** now means the defaults instead of failing with `unexpected EOF`:") {
+			a.say(ctx, sid, w+" ")
+			pause(40)
+		}
+		a.say(ctx, sid, "\n\n- `internal/config/config.go`: whitespace-only input returns `&Config{}`\n- `go test ./internal/config` passes")
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn, Usage: &acp.Usage{InputTokens: 1840, OutputTokens: 312, TotalTokens: 14550, CachedReadTokens: acp.Ptr(12398)}}, nil
 	case "usage": // answered below, with the response
 	case "costly":
 		var total float64
