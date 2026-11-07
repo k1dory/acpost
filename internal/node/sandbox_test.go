@@ -453,3 +453,22 @@ func TestSandboxSteered(t *testing.T) {
 		t.Fatalf("%+v %v", w, err)
 	}
 }
+
+// The runner may say a message joined the turn only after that turn ended: the turn's answer is
+// still the message's.
+func TestSandboxSteeredAfterTheEnd(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
+	f.history = []map[string]any{{"id": 4, "run_id": "r1", "role": "user", "text": "the turn in progress"}}
+	f.frames = []string{
+		"USER:6",
+		frame(7, "r1", "assistant", "both answered", nil),
+		frame(8, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+		frame(9, "r1", "log", `{"type":"acp.notice","severity":"info","text":"the message joined the turn in progress (steering)"}`, nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "and this too"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Done || w.Reply != "both answered" {
+		t.Fatalf("%+v %v", w, err)
+	}
+}
