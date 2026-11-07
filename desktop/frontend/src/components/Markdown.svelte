@@ -2,7 +2,7 @@
   import { marked } from "marked";
   import DOMPurify from "dompurify";
   let { text }: { text: string } = $props();
-  const html = $derived(DOMPurify.sanitize(marked.parse(text ?? "", { async: false, gfm: true, breaks: false }) as string));
+  const html = $derived(DOMPurify.sanitize(marked.parse(text ?? "", { async: false, gfm: true, breaks: true }) as string));
 </script>
 
 <div class="md selectable">{@html html}</div>
