@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { fade } from "svelte/transition";
   import { app, applyTheme } from "./lib/state.svelte";
   import { on, Node } from "./lib/api";
   import { Browser } from "@wailsio/runtime";
   import Sidebar from "./components/Sidebar.svelte";
+  import Logo from "./components/Logo.svelte";
   import Conversation from "./components/Conversation.svelte";
   import RightPanel from "./components/RightPanel.svelte";
   import Usage from "./components/Usage.svelte";
@@ -14,7 +16,9 @@
   import IDE from "./components/IDE.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
 
+  let splashMin = $state(false);
   onMount(() => {
+    setTimeout(() => (splashMin = true), 1300);
     try { app.theme = (localStorage.getItem("theme") as any) || "light"; } catch {}
     applyTheme(app.theme);
     try { app.textSize = Number(localStorage.getItem("text-size")) || 1; } catch {}
@@ -134,6 +138,9 @@
   {/if}
   {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
   {#if app.palette}<Palette />{/if}
+  <!-- Starting: the mark drawing itself while the node is reached (or started), at least once
+       through, then gone. -->
+  {#if !app.conn || !splashMin}<div class="splash drag" out:fade={{ duration: 260 }}><Logo size={88} loop /></div>{/if}
   {#if shownError}
     <div class="toast card" role="alert">
       <div class="tt selectable">{shownError}</div>
@@ -148,6 +155,7 @@
   .convwrap.ide-chat { flex: none; width: 400px; order: 2; border-left: 1px solid var(--line); }
   .ide-chat :global(.conv) { min-width: 0; }
   .down { flex: 1; display: grid; place-items: center; }
+  .splash { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: var(--page); }
   .box { padding: 26px 28px; display: grid; gap: 10px; max-width: 460px; }
   .t { font-weight: 600; font-size: 16px; }
   .toast { white-space: pre-line; position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; padding: 12px 12px 12px 16px; max-width: 520px; color: var(--crit); background: var(--crit-bg); text-align: left; z-index: 50; border-color: color-mix(in srgb, var(--crit) 25%, var(--line)); display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; }

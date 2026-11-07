@@ -6,6 +6,7 @@
   import { screenScale } from "../lib/format";
   import Icon from "./Icon.svelte";
   import ViewSwitch from "./ViewSwitch.svelte";
+  import Logo from "./Logo.svelte";
 
   // The IDE: VS Code (the one installed on this Mac, its web server) in a native view over this
   // box, opened in the chat's folder; the chat stays beside it.
@@ -94,7 +95,7 @@
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
   <div class="box" bind:this={box}>
-    {#if starting && !url}<div class="hint"><span class="spin"></span> {t("Starting VS Code… the first time it takes a minute or two.")}</div>{/if}
+    {#if starting && !url}<div class="hint"><Logo size={72} loop /><span>{t("Starting VS Code… the first time it takes a minute or two.")}</span></div>{/if}
   </div>
 </section>
 
@@ -105,6 +106,6 @@
   .sp { flex: 1; }
   .ask { color: var(--warn); font-weight: 600; }
   .box { flex: 1; min-height: 0; display: grid; place-items: center; }
-  .hint { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .hint { font-size: 12.5px; color: var(--muted); display: grid; gap: 14px; justify-items: center; text-align: center; }
   .err { margin: 8px; padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }
 </style>

@@ -2,6 +2,7 @@
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { tick } from "svelte";
+  import Logo from "./Logo.svelte";
   import Message from "./Message.svelte";
   import History from "./History.svelte";
   import Composer from "./Composer.svelte";
@@ -99,6 +100,7 @@
     <div class="center">
       <div class="col">
         <div class="hello">
+          <div class="mark"><Logo size={44} draw /></div>
           <div class="big">{t("What should we work on?")}</div>
           <div class="muted">{t("Where it runs, the agent and its directory — then the task. Type / for the model and effort.")}</div>
         </div>
@@ -140,5 +142,6 @@
   .center { flex: 1; min-height: 0; display: grid; align-content: center; padding: 0 32px 8vh; }
   .center .col { width: 100%; }
   .hello { padding: 0 0 22px; display: grid; gap: 6px; text-align: center; }
+  .mark { display: flex; justify-content: center; margin-bottom: 6px; }
   .big { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
 </style>
