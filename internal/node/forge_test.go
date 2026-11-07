@@ -150,3 +150,53 @@ func TestForgeAgentNeedsApproval(t *testing.T) {
 		t.Fatalf("decisions %v", decisions)
 	}
 }
+
+// An agent that sent the work cannot approve the pull request the agent doing it opens: only the
+// node's user can.
+func TestForgeApprovalIsAPersons(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/version" {
+			json.NewEncoder(w).Encode(map[string]string{"version": "11.0.0"})
+			return
+		}
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]any{"number": 1})
+	}))
+	defer srv.Close()
+	dir := testRepo(t)
+	gitIn(t, dir, "remote", "add", "origin", "https://"+strings.TrimPrefix(srv.URL, "https://")+"/o/r.git")
+	n := newNode(t, inboxCfg)
+	c, _ := n.forgeClient()
+	c.HTTP, c.Token = srv.Client(), func(string) string { return "t" }
+
+	boss := Principal{Kind: "agent", Name: "picky"}
+	m, _, err := n.Send(ctx, boss, SendRequest{To: "bot", Body: "open a PR"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := n.issueAgentToken("bot")
+	n.setCurrent(tok, m.ID, "")
+	done := make(chan error, 1)
+	go func() {
+		_, err := n.OpenPull(ctx, Principal{Kind: "agent", Name: "bot", agent: tok}, ForgeQuery{Dir: dir}, forge.PullRequest{Head: "f", Base: "main", Title: "x"})
+		done <- err
+	}()
+	var id string
+	for deadline := time.Now().Add(5 * time.Second); id == "" && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if reqs, _ := n.Asking(me); len(reqs) == 1 {
+			id = reqs[0].ID
+		}
+	}
+	if id == "" {
+		t.Fatal("nothing asked")
+	}
+	if err := n.Answer(ctx, boss, m.ID, acpx.Reply{RequestID: id, OptionID: approveAllow}); code(err) != "refused" {
+		t.Fatalf("the sending agent approved it: %v", err)
+	}
+	if err := n.Answer(ctx, me, m.ID, acpx.Reply{RequestID: id, OptionID: approveAllow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -20,6 +20,7 @@ type asks struct {
 	pending *acpx.Pending
 	mu      sync.Mutex
 	of      map[string]askRef // request id → its message
+	by      map[string]string // request id → who answered it
 }
 
 type askRef struct {
@@ -31,6 +32,7 @@ func (n *Node) askPending() *acpx.Pending {
 	n.asks.once.Do(func() {
 		n.asks.pending = acpx.NewPending()
 		n.asks.of = map[string]askRef{}
+		n.asks.by = map[string]string{}
 	})
 	return n.asks.pending
 }
@@ -54,6 +56,7 @@ func (c *acpClient) ask(ctx context.Context, t *acpTurn, p acp.RequestPermission
 	defer func() {
 		n.asks.mu.Lock()
 		delete(n.asks.of, req.ID)
+		delete(n.asks.by, req.ID)
 		n.asks.mu.Unlock()
 	}()
 	c.event(t, "permission_request", fitRequest(req)) // its event: bounded
@@ -77,7 +80,7 @@ func (c *acpClient) ask(ctx context.Context, t *acpTurn, p acp.RequestPermission
 		if err != nil {
 			decision = "cancelled"
 		}
-		by, _ = reply.Content["by"].(string)
+		by = n.answeredBy(req.ID)
 	} else {
 		// Nobody answered in time (or the turn ended): refused, as deny would.
 		out, decision, by = refuse(p), "timeout", ""
@@ -125,11 +128,30 @@ func (n *Node) Answer(ctx context.Context, p Principal, msgID string, reply acpx
 	if reply.OptionID != "" && !strings.Contains(optionIDs(ref.req), "\x00"+reply.OptionID+"\x00") {
 		return errf("invalid", "option %q is not one the request offers (%s)", reply.OptionID, strings.Trim(strings.ReplaceAll(optionIDs(ref.req), "\x00\x00", ", "), "\x00"))
 	}
-	reply.Content = map[string]any{"by": p.Address()}
+	// What an agent does on a forge (open, merge a pull request) is a person's to approve: the
+	// node's user, never an agent that sent the work (or itself) to the agent asking.
+	if ref.req.ToolKind == "forge" && p.Kind != "user" {
+		return errh("refused", "the node's user approves it (the app, `acpost approve` on that node)", "%s is for a person to approve", ref.req.Title)
+	}
+	n.asks.mu.Lock()
+	n.asks.by[reply.RequestID] = p.Address()
+	n.asks.mu.Unlock()
 	if err := n.askPending().Resolve(reply); err != nil {
+		n.asks.mu.Lock()
+		delete(n.asks.by, reply.RequestID)
+		n.asks.mu.Unlock()
 		return errf("conflict", "the request was answered already, or timed out")
 	}
 	return nil
+}
+
+// answeredBy is who answered a request (taken once: the record goes).
+func (n *Node) answeredBy(id string) string {
+	n.asks.mu.Lock()
+	defer n.asks.mu.Unlock()
+	by := n.asks.by[id]
+	delete(n.asks.by, id)
+	return by
 }
 
 func optionIDs(r acpx.Request) string {

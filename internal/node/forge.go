@@ -230,15 +230,19 @@ func (n *Node) approve(ctx context.Context, p Principal, title, text string, inp
 	defer func() {
 		n.asks.mu.Lock()
 		delete(n.asks.of, req.ID)
+		delete(n.asks.by, req.ID)
 		n.asks.mu.Unlock()
 	}()
 	if err := n.addEvent(ctx, msgID, "permission_request", eventJSON(fitRequest(req)), true); err != nil {
+		done, cancel := context.WithCancel(context.Background())
+		cancel()
+		pending.Wait(done, req.ID, 0) // what Open holds goes with it
 		return errf("unavailable", "the approval could not be asked: %v", err)
 	}
 	reply, ok := pending.Wait(ctx, req.ID, timeout)
 	decision, by := "timeout", ""
 	if ok {
-		by, _ = reply.Content["by"].(string)
+		by = n.answeredBy(req.ID)
 		decision = "rejected"
 		if reply.OptionID == approveAllow {
 			decision = "allowed"

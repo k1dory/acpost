@@ -178,11 +178,7 @@ func (c *Client) MergePull(ctx context.Context, srv Server, r Repo, m Merge) err
 		_, err := c.do(ctx, "PUT", srv, r.Host, "/repos/"+r.Path+"/pulls/"+num+"/merge", body, nil, listMax)
 		return err
 	case Forgejo:
-		do := m.Method
-		if do == "rebase" {
-			do = "rebase-merge"
-		}
-		body := map[string]any{"Do": do}
+		body := map[string]any{"Do": m.Method} // merge, squash, rebase: Forgejo's own names
 		if m.SHA != "" {
 			body["head_commit_id"] = m.SHA
 		}

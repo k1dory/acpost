@@ -80,6 +80,14 @@ func (f *fakeSandboxd) handler(w http.ResponseWriter, r *http.Request) {
 			fr := f.frames[f.next]
 			f.next++
 			f.mu.Unlock()
+			if id, ok := strings.CutPrefix(fr, "USER:"); ok { // the conversation's turn of what was posted
+				f.mu.Lock()
+				text := f.posted[len(f.posted)-1]
+				f.mu.Unlock()
+				var n int64
+				fmt.Sscan(id, &n)
+				fr = frame(n, "r1", "user", text, nil)
+			}
 			switch fr {
 			case "BREAK":
 				return
@@ -131,15 +139,19 @@ func TestSandboxTurn(t *testing.T) {
 	f.frames = []string{
 		frame(3, "r0", "assistant", "an old turn", nil), // before the cursor: replayed, not ours
 		frame(6, "r0", "assistant", "another run", nil),
-		frame(7, "r1", "assistant", "Looking at the build.", nil),
+		// The run's earlier turn, still ending when this message came: not this message's.
+		frame(7, "r1", "assistant", "the earlier turn's answer", nil),
+		frame(8, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+		"USER:9",
+		frame(10, "r1", "assistant", "Looking at the build.", nil),
 		"BREAK",
-		frame(8, "r1", "tool", "Bash: make test", nil),
-		frame(9, "r1", "log", `{"type":"usage","model":"claude-x","input_tokens":100,"output_tokens":20,"cache_read_tokens":300,"cost_usd":0.25}`, nil),
-		frame(10, "r1", "request", "Run rm -rf build", req),
+		frame(11, "r1", "tool", "Bash: make test", nil),
+		frame(12, "r1", "log", `{"type":"usage","model":"claude-x","input_tokens":100,"output_tokens":20,"cache_read_tokens":300,"cost_usd":0.25}`, nil),
+		frame(13, "r1", "request", "Run rm -rf build", req),
 		"WAIT",
-		frame(11, "r1", "resolved", "selected (user)", map[string]any{"type": "acp.request_resolved", "request_id": "req_00000000000000aa", "outcome": "selected", "by": "user"}),
-		frame(12, "r1", "assistant", "All green.", nil),
-		frame(13, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
+		frame(14, "r1", "resolved", "selected (user)", map[string]any{"type": "acp.request_resolved", "request_id": "req_00000000000000aa", "outcome": "selected", "by": "user"}),
+		frame(15, "r1", "assistant", "All green.", nil),
+		frame(16, "r1", "log", `{"type":"acp.turn_end","stop_reason":"end_turn"}`, nil),
 	}
 	n := sandboxNode(t, f)
 	m, _, err := n.Send(ctx, me, SendRequest{To: "cloud", Body: "fix the build"})
@@ -176,13 +188,13 @@ func TestSandboxTurn(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.posted) != 1 || !strings.Contains(f.posted[0], "fix the build") || f.keys[0] != "acpost-"+m.ID+"-1" {
+	if len(f.posted) != 1 || !strings.Contains(f.posted[0], "fix the build") || f.keys[0] != "acpost-"+m.ID {
 		t.Fatalf("posted %q keys %q", f.posted, f.keys)
 	}
 	if len(f.answers) != 1 || f.answers[0]["run_id"] != "r1" || f.answers[0]["option_id"] != "allow" || f.answers[0]["request"] != "req_00000000000000aa" {
 		t.Fatalf("answers %v", f.answers)
 	}
-	if len(f.afters) != 2 || f.afters[0] != "5" || f.afters[1] != "7" {
+	if len(f.afters) != 2 || f.afters[0] != "5" || f.afters[1] != "10" {
 		t.Fatalf("stream connections after %v: once from the cursor, again from where it broke", f.afters)
 	}
 	evs, _ := n.Events(ctx, me, m.ID, 0, 100)
@@ -207,7 +219,7 @@ func TestSandboxTurn(t *testing.T) {
 			t.Fatalf("no %s event in %s", k, all)
 		}
 	}
-	if strings.Contains(text.String(), "old turn") || strings.Contains(text.String(), "another run") {
+	if strings.Contains(text.String(), "old turn") || strings.Contains(text.String(), "another run") || strings.Contains(text.String(), "earlier turn") {
 		t.Fatalf("another run's text in the turn: %s", text.String())
 	}
 }
@@ -216,8 +228,9 @@ func TestSandboxTurn(t *testing.T) {
 func TestSandboxRunFailed(t *testing.T) {
 	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
 	f.frames = []string{
-		frame(6, "r1", "assistant", "Trying.", nil),
-		frame(7, "r1", "system", "run failed", nil),
+		"USER:6",
+		frame(7, "r1", "assistant", "Trying.", nil),
+		frame(8, "r1", "system", "run failed", nil),
 	}
 	n := sandboxNode(t, f)
 	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "go"})
@@ -242,6 +255,22 @@ agents:
 	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "go"})
 	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
 	if err != nil || w.State != store.Failed || w.ErrorCode != "refused" {
+		t.Fatalf("%+v %v", w, err)
+	}
+}
+
+// A run that ends before the conversation took the message fails the message: nothing of an
+// earlier turn is its reply.
+func TestSandboxRunEndedFirst(t *testing.T) {
+	f := &fakeSandboxd{t: t, answered: make(chan struct{})}
+	f.frames = []string{
+		frame(6, "r1", "assistant", "the earlier turn", nil),
+		frame(7, "r1", "system", "run done", nil),
+	}
+	n := sandboxNode(t, f)
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "cloud", Body: "go"})
+	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	if err != nil || w.State != store.Failed || w.Reply != "" || !strings.Contains(w.Error, "before it took the message") {
 		t.Fatalf("%+v %v", w, err)
 	}
 }

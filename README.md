@@ -204,7 +204,8 @@ the error says so) and opens a pull request from the repository's branch. Tokens
 **An agent's pull request waits for a person.** An agent that opens or merges a pull request
 (`acpost forge open`, `acpost forge merge N [--method squash] [--sha S]`, the same through the
 API) waits until a person approves it: a `permission_request` on the message it works on, answered
-as below (`acpost approve`, the app); rejected, or unanswered within the agent's `ask_timeout`, the
+by the node's user (`acpost approve`, the app; not by an agent, even the one that sent the work);
+rejected, or unanswered within the agent's `ask_timeout`, the
 call is refused and nothing reaches the forge. This holds whatever the agent's `permissions` say,
 so an agent that runs without asking still asks for these two. The node's user acts on its own.
 
@@ -423,7 +424,11 @@ message of the turn (`reply: all`, every one). The turn ends with the agent's tu
 in the sandbox too. A broken stream is opened again where it stopped. A cloud agent runs without
 asking: the sandbox, its policy and the gateway are its boundary (its `harness.permissions`, allow
 by default). When the sandbox does ask, its requests are the message's permission requests,
-answered here and handed to the sandbox. Turns of one sandbox go one at a time.
+answered here and handed to the sandbox (asked again if the answer does not reach it). Turns of
+one sandbox go one at a time, and the sandbox's conversation is the agent's: a turn is the
+message's from the conversation's turn that carries its text. A message posted again (sandboxd's
+answer lost, the node restarted) is the same message there (`Idempotency-Key: acpost-<id>`), never a
+second run.
 
 Paths starting with `~` are expanded. Durations are Go durations (`90s`, `30m`, `168h`); sizes take
 `KiB`, `MiB`, `GiB`.
