@@ -328,7 +328,11 @@ func safeRemote(remote string) string {
 		return strconv.Quote((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String())
 	}
 	if at := strings.LastIndex(remote, "@"); at >= 0 && !strings.Contains(remote, "://") {
-		return strconv.Quote(remote[at+1:]) // scp form, user@host:path: without the user
+		rest := remote[at+1:] // scp form, user@host:path: without the user, query or fragment
+		if i := strings.IndexAny(rest, "?#"); i >= 0 {
+			rest = rest[:i]
+		}
+		return strconv.Quote(rest)
 	}
 	return "the remote"
 }

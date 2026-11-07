@@ -340,7 +340,7 @@ func TestErrorsHideTheToken(t *testing.T) {
 
 // A remote refused is quoted without what may be a credential in it.
 func TestParseRemoteHidesCredentials(t *testing.T) {
-	for _, r := range []string{"https://user:SECRETPW@forge.example/o/r?x=1", "https://SECRETPW@bad_host!/o/r", "https://user:SECRETPW@forge.example/o"} {
+	for _, r := range []string{"https://user:SECRETPW@forge.example/o/r?x=1", "https://SECRETPW@bad_host!/o/r", "https://user:SECRETPW@forge.example/o", "git@forge.example:o/r.git?token=SECRETPW", "git@forge.example:o/r#SECRETPW"} {
 		if _, err := ParseRemote(r); err == nil || strings.Contains(err.Error(), "SECRETPW") {
 			t.Fatalf("%s: %v", r, err)
 		}
