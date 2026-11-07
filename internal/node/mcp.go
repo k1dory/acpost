@@ -20,6 +20,9 @@ import (
 type mcpSecrets struct {
 	once sync.Once
 	kc   *keychain.Store
+	// mu: a change of a server (its secrets and its row) is one step for those reading them for a
+	// session (an agent never gets a secret meant for another).
+	mu sync.RWMutex
 }
 
 func (n *Node) mcpKeychain() *keychain.Store {
@@ -54,7 +57,27 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 		return errf("invalid", "%v", err)
 	}
 	kc := n.mcpKeychain()
-	// Values first: a server listed is one whose secrets are kept.
+	n.mcpSec.mu.Lock()
+	defer n.mcpSec.mu.Unlock()
+	// The names the server no longer has: their values go.
+	if list, err := n.st.MCPServers(ctx); err == nil {
+		for _, old := range list {
+			if old.Name != m.Name {
+				continue
+			}
+			for where, names := range map[string][]string{"env": old.Env, "header": old.Headers} {
+				keep := m.Env
+				if where == "header" {
+					keep = m.Headers
+				}
+				for _, name := range names {
+					if !slices.Contains(keep, name) {
+						_ = kc.Delete(mcpAccount(m.Name, where, name))
+					}
+				}
+			}
+		}
+	}
 	for where, names := range map[string][]string{"env": m.Env, "header": m.Headers} {
 		for _, name := range names {
 			v, given := secrets[where+"/"+name]
@@ -80,6 +103,8 @@ func (n *Node) DeleteMCPServer(ctx context.Context, p Principal, name string) er
 	if err := userOnly(p, "MCP servers"); err != nil {
 		return err
 	}
+	n.mcpSec.mu.Lock()
+	defer n.mcpSec.mu.Unlock()
 	list, _ := n.st.MCPServers(ctx)
 	if err := n.st.DeleteMCPServer(ctx, name); err != nil {
 		if errors.Is(err, store.ErrNoMCPServer) {
@@ -106,6 +131,9 @@ func (n *Node) DeleteMCPServer(ctx context.Context, p Principal, name string) er
 // when the agent takes HTTP.
 func (a *acpAgent) mcpServers(ctx context.Context, p *acpProc) []acp.McpServer {
 	out := []acp.McpServer{}
+	a.n.mcpKeychain()
+	a.n.mcpSec.mu.RLock()
+	defer a.n.mcpSec.mu.RUnlock()
 	list, err := a.n.st.MCPServers(ctx)
 	if err != nil {
 		return out

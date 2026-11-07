@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"regexp"
+	"strings"
 
 	"github.com/k1dory/acpost/internal/client"
 )
@@ -52,22 +53,34 @@ func (n *Node) ForgeLogin(ctx context.Context, p Principal, host, kind, token st
 		return client.ForgeAccount{}, errf("invalid", "kind %q: github, gitlab or forgejo", kind)
 	}
 	c, st := n.forgeClient()
+	// Checked with the token given, before it is kept: a refused token replaces nothing.
+	lc := *c
+	lc.Token = func(h string) string {
+		if h == host {
+			return strings.TrimSpace(token)
+		}
+		return c.Token(h)
+	}
+	lc.Kind = func(h string) string {
+		if h == host && kind != "" {
+			return kind
+		}
+		return c.Kind(h)
+	}
+	srv, err := lc.Probe(ctx, host)
+	if err != nil {
+		return client.ForgeAccount{}, errh("invalid", "name its kind (github, gitlab, forgejo)", "%v", err)
+	}
+	login, err := lc.Whoami(ctx, srv, host)
+	if err != nil {
+		return client.ForgeAccount{}, forgeErr(err)
+	}
 	if err := st.Login(host, kind, token); err != nil {
 		return client.ForgeAccount{}, errf("invalid", "%v", err)
 	}
 	n.forges.mu.Lock()
 	delete(n.forges.probed, host)
 	n.forges.mu.Unlock()
-	srv, err := c.Probe(ctx, host)
-	if err != nil {
-		_ = st.Logout(host)
-		return client.ForgeAccount{}, errh("invalid", "name its kind (github, gitlab, forgejo)", "%v", err)
-	}
-	login, err := c.Whoami(ctx, srv, host)
-	if err != nil {
-		_ = st.Logout(host)
-		return client.ForgeAccount{}, forgeErr(err)
-	}
 	return client.ForgeAccount{Host: host, Kind: srv.Kind, Version: srv.Version, Authed: true, Login: login}, nil
 }
 

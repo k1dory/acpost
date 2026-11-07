@@ -37,6 +37,13 @@ func TestMCPServers(t *testing.T) {
 	if err := n.PutMCPServer(ctx, me, store.MCPServer{Name: "bad name!", Kind: "stdio", Command: "x"}, nil); code(err) != "invalid" {
 		t.Fatalf("a bad name: %v", err)
 	}
+	// A variable taken out: its value goes.
+	if err := n.PutMCPServer(ctx, me, store.MCPServer{Name: "wiki", Kind: "stdio", Command: "wiki-mcp", Enabled: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n.mcpKeychain().Get("wiki/env/TOKEN") != "" {
+		t.Fatal("a variable taken out kept its value")
+	}
 	if err := n.DeleteMCPServer(ctx, me, "wiki"); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +79,13 @@ func TestForgeAccounts(t *testing.T) {
 		t.Fatalf("a refused token: %v", err)
 	}
 	acc, err := n.ForgeLogin(ctx, me, host, "", "good")
+	// A refused token does not replace the one kept.
+	if _, err := n.ForgeLogin(ctx, me, host, "", "bad"); code(err) != "refused" {
+		t.Fatalf("a refused token: %v", err)
+	}
+	if list, _ := n.ForgeAccounts(ctx, me); len(list) != 1 || list[0].Login != "lev" {
+		t.Fatalf("the good token went: %+v", list)
+	}
 	if err != nil || acc.Login != "lev" || acc.Kind != "forgejo" || acc.Version != "11.0.1" {
 		t.Fatalf("%+v %v", acc, err)
 	}

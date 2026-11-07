@@ -45,15 +45,42 @@ func (s *Store) read() (map[string]string, error) {
 }
 
 func (s *Store) write(m map[string]string) error {
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	b, _ := json.Marshal(m)
+	f, err := os.CreateTemp(s.Dir, s.Service+".secrets.*.tmp")
+	if err != nil {
 		return err
 	}
-	b, _ := json.Marshal(m)
-	tmp := s.file() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.file())
+}
+
+// locked runs fn holding the file's lock (other processes of the same home too).
+func (s *Store) locked(fn func() error) error {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return err
+	}
+	lf, err := os.OpenFile(filepath.Join(s.Dir, "."+s.Service+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	return fn()
 }
 
 func security(stdin string, args ...string) ([]byte, error) {
@@ -73,12 +100,14 @@ func (s *Store) Set(account, value string) error {
 		}
 		return nil
 	}
-	m, err := s.read()
-	if err != nil {
-		return err
-	}
-	m[account] = value
-	return s.write(m)
+	return s.locked(func() error {
+		m, err := s.read()
+		if err != nil {
+			return err
+		}
+		m[account] = value
+		return s.write(m)
+	})
 }
 
 // Get is a secret ("" when none).
@@ -106,10 +135,12 @@ func (s *Store) Delete(account string) error {
 		_, _ = security("", "delete-generic-password", "-s", s.Service, "-a", account)
 		return nil
 	}
-	m, err := s.read()
-	if err != nil {
-		return err
-	}
-	delete(m, account)
-	return s.write(m)
+	return s.locked(func() error {
+		m, err := s.read()
+		if err != nil {
+			return err
+		}
+		delete(m, account)
+		return s.write(m)
+	})
 }
