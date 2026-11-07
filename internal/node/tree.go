@@ -3,7 +3,6 @@ package node
 import (
 	"bytes"
 	"context"
-	"os/exec"
 	"path"
 	"regexp"
 	"strings"
@@ -84,17 +83,14 @@ func (n *Node) FileAt(ctx context.Context, p Principal, repo, tree, file string)
 	if !known {
 		return "", errf("not_found", "no turn of this node left that tree in %s", repo)
 	}
-	c, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(c, "git", "-C", repo, "cat-file", "blob", tree+":"+clean)
-	var o, e bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &o, &e
-	if err := cmd.Run(); err != nil {
-		return "", errf("not_found", "%s is not in that version (or the snapshot is gone)", file)
+	// Read through git's own helper: its output bounded while it is read, nothing the repository
+	// names run.
+	b, cut, err := git(ctx, repo, nil, fileAtMax, "cat-file", "blob", tree+":"+clean)
+	if cut {
+		return "", errf("invalid", "the file is over %d KiB to show", fileAtMax>>10)
 	}
-	b := o.Bytes()
-	if len(b) > fileAtMax {
-		return "", errf("invalid", "the file is %d KiB, over %d KiB to show", len(b)>>10, fileAtMax>>10)
+	if err != nil {
+		return "", errf("not_found", "%s is not in that version (or the snapshot is gone)", file)
 	}
 	if bytes.IndexByte(b, 0) >= 0 {
 		return "", errf("unsupported", "%s is binary", file)

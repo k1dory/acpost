@@ -143,3 +143,20 @@ func TestHandoff(t *testing.T) {
 	}
 	_ = store.Done
 }
+
+// Nothing the repository's configuration names runs: a clean filter on a changed tracked file.
+func TestReadRepoRunsNoFilter(t *testing.T) {
+	dir := handoffRepo(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	script := filepath.Join(t.TempDir(), "evil.sh")
+	os.WriteFile(script, []byte("#!/bin/sh\necho ran >> "+marker+"\ncat\n"), 0o755)
+	gitIn(t, dir, "config", "filter.evil.clean", script)
+	gitIn(t, dir, "config", "filter.evil.required", "true")
+	os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("*.go filter=evil\n"), 0o644)
+	if _, err := readRepo(ctx, dir); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(marker); err == nil {
+		t.Fatalf("the filter ran: %s", b)
+	}
+}

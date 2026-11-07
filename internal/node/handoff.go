@@ -6,11 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os/exec"
 	"path"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/store"
@@ -153,15 +151,14 @@ var branchOdd = regexp.MustCompile(`[^A-Za-z0-9._/-]+`)
 // whole repository dir is in.
 func readRepo(ctx context.Context, dir string) (repoState, error) {
 	var rs repoState
+	// git as snapshots run it (changes.go): hooks, fsmonitor, external diff off, every filter driver a
+	// pass-through, the process group killed past its time — and the output bounded.
 	run := func(in string, args ...string) ([]byte, error) {
-		c, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(c, "git", append(append([]string{"-C", in}, gitSafe...), args...)...)
-		cmd.Env = append(cmd.Environ(), "GIT_EXTERNAL_DIFF=", "GIT_CONFIG_NOSYSTEM=1")
-		var o, e bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &o, &e
-		err := cmd.Run()
-		return o.Bytes(), err
+		out, cut, err := git(ctx, in, nil, handoffPatch+1, append(append([]string{}, gitSafe...), args...)...)
+		if cut {
+			return out, errf("invalid", "the work not on the remote is over %d MiB: commit and push it, then hand off", handoffPatch>>20)
+		}
+		return out, err
 	}
 	word := func(in string, args ...string) (string, error) { // a scalar result
 		b, err := run(in, args...)
@@ -185,8 +182,14 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 	rs.head, _ = word(top, "rev-parse", "--short", "HEAD")
 	// The base: where this work leaves what the remote has (the branch's upstream, else origin's
 	// default branch). None known: the work may be on this Mac only — say so, do not guess.
-	for _, ref := range []string{"@{u}", "origin/HEAD"} {
-		if b, err := word(top, "merge-base", "HEAD", ref); err == nil && gitObject.MatchString(b) {
+	// Only origin's refs: the cloud clones origin (an upstream elsewhere, or a local one, has commits
+	// it cannot see).
+	refs := []string{"origin/HEAD"}
+	if up, err := word(top, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil && strings.HasPrefix(up, "origin/") {
+		refs = append([]string{up}, refs...)
+	}
+	for _, ref := range refs {
+		if b, err := word(top, "merge-base", "HEAD", "refs/remotes/"+ref); err == nil && gitObject.MatchString(b) {
 			rs.base = b
 			break
 		}
@@ -200,6 +203,9 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 	// path — named and left out, the rest in the patch, byte for byte.
 	names, err := run(top, "diff", "--name-only", "-z", "--no-renames", rs.base, "--")
 	if err != nil {
+		if CodeOf(err) == "invalid" {
+			return rs, err
+		}
 		return rs, errf("unavailable", "git diff failed in %s", top)
 	}
 	var send []string
@@ -221,6 +227,9 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 		}
 		d, err := run(top, args...)
 		if err != nil {
+			if CodeOf(err) == "invalid" {
+				return rs, err
+			}
 			return rs, errf("unavailable", "git diff failed in %s", top)
 		}
 		patch.Write(d)
@@ -236,7 +245,11 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 			continue
 		}
 		// A new file as a patch (git diff --no-index exits 1 when there is a difference).
-		o, _ := run(top, "diff", "--no-index", "--binary", "--no-ext-diff", "--no-textconv", "--", "/dev/null", f)
+		o, err := run(top, "diff", "--no-index", "--binary", "--no-ext-diff", "--no-textconv", "--", "/dev/null", f)
+		if err != nil && CodeOf(err) == "invalid" {
+			rs.left = append(rs.left, f) // too big to send
+			continue
+		}
 		if patch.Len()+len(o) > handoffPatch {
 			rs.left = append(rs.left, f)
 			continue

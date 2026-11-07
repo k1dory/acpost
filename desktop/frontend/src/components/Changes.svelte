@@ -48,14 +48,19 @@
   const versions = $derived.by(() => {
     if (!shown) return [];
     return ((data?.turns ?? []) as any[])
-      .filter(t => (t.files ?? []).some((f: any) => f.path === shown.path))
+      .filter(t => t.repo === shown.repo && (t.files ?? []).some((f: any) => f.path === shown.path))
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
       .map(t => ({ turn: t, file: (t.files as any[]).find(f => f.path === shown.path), lines: splitDiff(t.diff ?? "").find(f => f.path === shown.path)?.lines ?? [] }));
   });
-  $effect(() => { shown?.path; version = -1; at = null; });
+  let asked = 0; // the file's text asked last: an earlier answer is dropped
+  $effect(() => { shown?.path; shown?.repo; version = -1; at = null; asked++; });
   async function fileAt(v: (typeof versions)[number]) {
+    const my = ++asked;
     at = { text: "" };
-    try { at = { text: await Node.FileAt(v.turn.repo, v.turn.after, shown!.path) }; } catch (e) { at = { err: errText(e) }; }
+    try {
+      const text = await Node.FileAt(v.turn.repo, v.turn.after, shown!.path);
+      if (my === asked) at = { text };
+    } catch (e) { if (my === asked) at = { err: errText(e) }; }
   }
 </script>
 
@@ -89,9 +94,9 @@
             <span class="mono">{shown.path}</span>
             {#if versions.length > 1 || (versions.length === 1 && agent === "")}
               <span class="vers">
-                <button class="vb" class:on={version === -1} onclick={() => { version = -1; at = null; }}>{t("The whole diff")}</button>
+                <button class="vb" class:on={version === -1} onclick={() => { version = -1; at = null; asked++; }}>{t("The whole diff")}</button>
                 {#each versions as v, i}
-                  <button class="vb" class:on={version === i} onclick={() => { version = i; at = null; }} title={who(v.turn.agent).name + " · " + clock(v.turn.at)}>
+                  <button class="vb" class:on={version === i} onclick={() => { version = i; at = null; asked++; }} title={who(v.turn.agent).name + " · " + clock(v.turn.at)}>
                     v{i + 1} <span class="muted">{who(v.turn.agent).name} {clock(v.turn.at)}</span>
                   </button>
                 {/each}

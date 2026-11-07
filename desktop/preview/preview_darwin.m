@@ -17,7 +17,15 @@ static int apInWindow = 0;
 static const NSUInteger apMaxField = 4000;
 static const int apMaxPerSecond = 40;
 
-static void apSend(NSDictionary *d) {
+// apSend hands an event to Go: every string in it cut to apMaxField (whatever made it: a page's
+// report, or WebKit's navigation with a page's title).
+static void apSend(NSDictionary *in) {
+	NSMutableDictionary *d = [NSMutableDictionary dictionaryWithCapacity:in.count];
+	for (id k in in) {
+		id v = in[k];
+		if ([v isKindOfClass:[NSString class]] && [(NSString *)v length] > apMaxField) v = [(NSString *)v substringToIndex:apMaxField];
+		d[k] = v;
+	}
 	if (![NSJSONSerialization isValidJSONObject:d]) return;
 	NSData *j = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
 	if (!j) return;

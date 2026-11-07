@@ -15,9 +15,22 @@
   async function load() {
     try { items = ((await Node.Tree(msg)) ?? []) as any; } catch { items = []; }
   }
+  // Depth first, each under its own parent (the node lists them level by level).
+  const ordered = $derived.by(() => {
+    const kids = new Map<string, Node_[]>();
+    for (const n of items) kids.set(n.parent, [...(kids.get(n.parent) ?? []), n]);
+    const out: Node_[] = [];
+    const walk = (id: string, seen: Set<string>) => {
+      for (const n of kids.get(id) ?? []) if (!seen.has(n.id)) { seen.add(n.id); out.push(n); walk(n.id, seen); }
+    };
+    walk(msg, new Set());
+    return out;
+  });
+  // Refreshed while the message or any of what it asked still runs or waits.
+  const live = $derived(running || items.some(n => n.state === "running" || n.state === "queued"));
+  $effect(() => { msg; load(); });
   $effect(() => {
-    msg; load();
-    if (!running) return;
+    if (!live) return;
     const id = setInterval(load, 4000);
     return () => clearInterval(id);
   });
@@ -27,13 +40,13 @@
   }
 </script>
 
-{#if items.length}
+{#if ordered.length}
   <div class="st">
     <button class="sh" onclick={() => (open = !open)}>
-      <span class="chev" class:rot={open}>›</span> {t("Subtasks")} <span class="muted">{items.length}</span>
+      <span class="chev" class:rot={open}>›</span> {t("Subtasks")} <span class="muted">{ordered.length}</span>
     </button>
     {#if open}
-      {#each items as n (n.id)}
+      {#each ordered as n (n.id)}
         <button class="it" style="padding-left:{8 + (n.depth - 1) * 16}px" onclick={() => go(n)} title={n.body}>
           <span class="dot {n.state === 'running' ? 'running' : n.state === 'queued' ? 'queued' : n.state === 'failed' || n.state === 'expired' ? 'failed' : ''}"></span>
           <AgentMark of={n.to} size={12} busy={n.state === "running"} />
