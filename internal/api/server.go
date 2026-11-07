@@ -66,6 +66,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/agents/{name}/sessions", s.auth(s.sessions))
 	mux.HandleFunc("GET /v1/agents/{name}/options", s.auth(s.options))
 	mux.HandleFunc("GET /v1/agents/{name}/sessions/{id}/history", s.auth(s.sessionHistory))
+	mux.HandleFunc("POST /v1/agents/{name}/sessions/{id}/fork", s.auth(s.forkSession))
 	mux.HandleFunc("GET /v1/chats", s.auth(s.chats))
 	mux.HandleFunc("GET /v1/forge/accounts", s.auth(s.forgeAccounts))
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
@@ -468,6 +469,24 @@ func (s *server) sessionHistory(w http.ResponseWriter, r *http.Request, p node.P
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": evs})
+}
+
+func (s *server) forkSession(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		Cwd string `json:"cwd"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &req); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	id, err := s.n.ForkSession(r.Context(), p, r.PathValue("name"), r.PathValue("id"), req.Cwd)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]string{"session": id})
 }
 
 func (s *server) chats(w http.ResponseWriter, r *http.Request, p node.Principal) {

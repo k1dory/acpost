@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -144,4 +145,55 @@ func (a *acpAgent) sessionCwdApart(ctx context.Context, sid string) string {
 		cursor = *resp.NextCursor
 	}
 	return ""
+}
+
+// ForkSession forks an ACP session (the agent copies its conversation into a new one, in cwd or
+// the session's own directory): the new session's id, a chat to go on in apart from the first.
+func (n *Node) ForkSession(ctx context.Context, p Principal, agent, id, cwd string) (string, error) {
+	cfg := n.agentCfg(agent)
+	a := n.acp[agent]
+	if a == nil || cfg == nil {
+		return "", errh("not_found", "`acpost agents` lists them", "no ACP agent %s here", agent)
+	}
+	if err := canUseSessions(p, agent, cfg); err != nil {
+		return "", err
+	}
+	if id == "" || len(id) > 256 {
+		return "", errf("invalid", "a session id")
+	}
+	if cwd != "" {
+		dir, err := checkDir(cwd)
+		if err != nil {
+			return "", err
+		}
+		cwd = dir
+	} else {
+		cwd = a.sessionCwdApart(ctx, id)
+	}
+	slot, done := a.spare()
+	defer done()
+	if cwd == "" {
+		cwd = slot.cwd()
+	}
+	ctx, cancel := context.WithTimeout(ctx, historyWait)
+	defer cancel()
+	stop := context.AfterFunc(ctx, slot.stopProc)
+	defer stop()
+	proc, err := slot.ensureProc(ctx)
+	if err != nil {
+		return "", errf("unavailable", "agent:%s did not start: %v", agent, err)
+	}
+	if proc.init.AgentCapabilities.SessionCapabilities.Fork == nil {
+		return "", errf("unsupported", "agent:%s cannot fork a session (no session/fork)", agent)
+	}
+	// The unstable request has its own copy of the MCP server types: the same JSON.
+	var mcp []acp.UnstableMcpServer
+	if raw, err := json.Marshal(a.mcpServers(ctx, proc)); err == nil {
+		_ = json.Unmarshal(raw, &mcp)
+	}
+	resp, err := proc.conn.UnstableForkSession(ctx, acp.UnstableForkSessionRequest{SessionId: acp.SessionId(id), Cwd: cwd, McpServers: mcp})
+	if err != nil {
+		return "", explainACPErr(err, "agent:"+agent+" could not fork the session")
+	}
+	return string(resp.SessionId), nil
 }

@@ -223,3 +223,10 @@ func callLong[T any](n *Node, d time.Duration, fn func(ctx context.Context, c *c
 	defer cancel()
 	return fn(ctx, c)
 }
+
+// ForkSession forks a chat's agent session: the new session, a chat of its own.
+func (n *Node) ForkSession(agent, id, cwd string) (string, error) {
+	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) (string, error) {
+		return c.ForkSession(ctx, strings.TrimPrefix(agent, "agent:"), id, cwd)
+	})
+}

@@ -86,7 +86,7 @@ func Run() {
 func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}},
+		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}, Fork: &acp.SessionForkCapabilities{}},
 			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: os.Getenv("FAKE_PLAIN") == "", Image: os.Getenv("FAKE_PLAIN") == ""}},
 		AgentInfo: &acp.Implementation{Name: "fake-agent", Version: "1"},
 	}, nil
@@ -129,6 +129,19 @@ func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (ac
 		}()
 	}
 	return acp.NewSessionResponse{SessionId: sid, ConfigOptions: a.options(sid)}, nil
+}
+
+// UnstableForkSession forks a session: a hist- one into another hist- (the same history replayed).
+func (a *fakeAgent) UnstableForkSession(ctx context.Context, p acp.UnstableForkSessionRequest) (acp.UnstableForkSessionResponse, error) {
+	if strings.HasPrefix(string(p.SessionId), "busy-") {
+		return acp.UnstableForkSessionResponse{}, acp.NewInvalidParams(map[string]any{"sessionId": p.SessionId})
+	}
+	n := a.sessions.Add(1)
+	sid := acp.SessionId(fmt.Sprintf("hist-fork%d-%d", os.Getpid(), n))
+	a.mu.Lock()
+	a.cwds[sid] = p.Cwd
+	a.mu.Unlock()
+	return acp.UnstableForkSessionResponse{SessionId: sid}, nil
 }
 
 func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {

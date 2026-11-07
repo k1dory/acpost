@@ -114,3 +114,27 @@ func TestSettingsNotFromNodes(t *testing.T) {
 		t.Fatalf("a node set the settings: %v", r.Meta)
 	}
 }
+
+// A fork is a new session with the same conversation, in the directory asked; only the node's own
+// may fork, and an error of the agent's is said.
+func TestForkSession(t *testing.T) {
+	n := acpNode(t, "")
+	dir := t.TempDir()
+	sid, err := n.ForkSession(ctx, me, "fake", "hist-1", dir)
+	if err != nil || sid == "" || sid == "hist-1" {
+		t.Fatalf("%q %v", sid, err)
+	}
+	evs, err := n.SessionHistory(ctx, me, "fake", sid, dir)
+	if err != nil || len(evs) != 7 {
+		t.Fatalf("the fork's history: %d %v", len(evs), err)
+	}
+	if _, err := n.ForkSession(ctx, Principal{Kind: "client", Name: "ci"}, "fake", "hist-1", ""); code(err) != "refused" {
+		t.Fatalf("a client forked: %v", err)
+	}
+	if _, err := n.ForkSession(ctx, me, "fake", "busy-1", dir); err == nil {
+		t.Fatal("the agent's refusal was lost")
+	}
+	if _, err := n.ForkSession(ctx, me, "fake", "hist-1", "relative/dir"); code(err) != "invalid" {
+		t.Fatalf("a relative directory: %v", err)
+	}
+}

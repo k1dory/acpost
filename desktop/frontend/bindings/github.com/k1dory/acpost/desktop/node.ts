@@ -204,6 +204,13 @@ export function ForgeLogout(host: string): $CancellablePromise<void> {
 }
 
 /**
+ * ForkSession forks a chat's agent session: the new session, a chat of its own.
+ */
+export function ForkSession(agent: string, id: string, cwd: string): $CancellablePromise<string> {
+    return $Call.ByID(602437800, agent, id, cwd);
+}
+
+/**
  * Home is the user's home directory (the default task directory).
  */
 export function Home(): $CancellablePromise<string> {

@@ -201,6 +201,16 @@ func (c *Client) CreateCloudTask(ctx context.Context, t CloudTask) (Chat, error)
 	return out, err
 }
 
+// ForkSession forks an agent's session (into cwd, or the session's own directory): the new one.
+func (c *Client) ForkSession(ctx context.Context, agent, id, cwd string) (string, error) {
+	var out struct {
+		Session string `json:"session"`
+	}
+	_, err := c.do(ctx, "POST", "/v1/agents/"+url.PathEscape(agent)+"/sessions/"+url.PathEscape(id)+"/fork", nil,
+		map[string]string{"cwd": cwd}, &out, nil)
+	return out.Session, err
+}
+
 // Chats is the list, the folders, and what could not be listed (an agent that did not answer).
 type Chats struct {
 	Items   []Chat         `json:"items"`

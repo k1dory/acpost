@@ -273,6 +273,23 @@ class App {
     try { await Node.SetChatTitle(chat, title); await this.loadChats(); } catch (e) { this.error = errText(e); }
   }
 
+  /** Forks the open chat's agent session into a new chat (the conversation so far, to go on apart). */
+  async forkChat() {
+    const c = this.chat;
+    const agent = c?.agent ?? this.target;
+    if (!c?.session || !agent || c.kind === "cloud") return;
+    try {
+      const sid = await Node.ForkSession(agent, c.session, c.cwd ?? "");
+      const name = agent.replace(/^agent:/, "");
+      const key = `session:${name}/${sid}`;
+      await Node.SetChatTitle(key, "Fork: " + (c.title || "chat").slice(0, 80)).catch(() => {});
+      await this.loadChats();
+      const fork = this.chats.find(x => x.key === key) ??
+        ({ key, kind: "session", agent, session: sid, cwd: c.cwd, title: "Fork: " + c.title, updated: new Date().toISOString() } as any as Chat);
+      await this.open(fork);
+    } catch (e) { this.error = errText(e); }
+  }
+
   /** Opens a chat by its thread (the board's cards, the palette). */
   openKey(key: string) {
     const c = this.chats.find(x => x.key === key);

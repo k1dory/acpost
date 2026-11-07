@@ -45,6 +45,7 @@
     <span class="sp"></span>
     {#if waiting.length}<span class="chip ask nodrag">{waiting.length} needs approval</span>{/if}
     {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
+    {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost sm nodrag" title="Fork: the conversation so far, in a new chat" onclick={() => app.forkChat()}><Icon name="fork" size={14} /></button>{/if}
     <button class="btn ghost sm nodrag" title="Right panel (⌘\)" onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={14} /></button>
   </header>
 
