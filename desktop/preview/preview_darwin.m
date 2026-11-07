@@ -198,29 +198,14 @@ void apGuardNavigation(void *nswindow) {
 // interface keeps the IDE's box. It is a page like any: keys, clipboard, its storage persist with
 // the app's (WebKit's default store for the bundle).
 
-// The first time VS Code runs in the pane, its settings say to follow the system's light or dark
-// (the pane's appearance is the app's theme): written into its own store only when there is no
-// settings.json yet — what the user sets later stays theirs. On a fresh profile VS Code makes its
-// store a bit later: tried again each second for a minute, never made here.
-static NSString *apIDESeed = @"(() => {"
-	"if (sessionStorage.getItem('acpost-seeded')) return;"
-	"let left = 60;"
-	"const again = () => { if (--left > 0) setTimeout(tryIt, 1000); };"
-	"function tryIt() {"
-	"  const q = indexedDB.open('vscode-web-db');"
-	"  q.onupgradeneeded = () => { q.transaction.abort(); };"
-	"  q.onerror = (e) => { e.preventDefault(); again(); };"
-	"  q.onsuccess = () => { const db = q.result;"
-	"    if (!db.objectStoreNames.contains('vscode-userdata-store')) { db.close(); again(); return; }"
-	"    const tx = db.transaction('vscode-userdata-store', 'readwrite'); const st = tx.objectStore('vscode-userdata-store');"
-	"    const g = st.get('/User/settings.json');"
-	"    g.onsuccess = () => { if (g.result !== undefined) { sessionStorage.setItem('acpost-seeded', '1'); return; }"
-	"      st.put(new TextEncoder().encode(JSON.stringify({'window.autoDetectColorScheme': true, 'workbench.preferredDarkColorTheme': 'Default Dark Modern', 'workbench.preferredLightColorTheme': 'Default Light Modern'}, null, 2)), '/User/settings.json');"
-	"      tx.oncomplete = () => { db.close(); sessionStorage.setItem('acpost-seeded', '1'); location.reload(); }; };"
-	"  };"
-	"}"
-	"tryIt();"
-	"})();";
+// A script put into VS Code's page (the app's settings for it: colours, fonts, the theme
+// following the pane's appearance); written by the Go side (ide_theme.go).
+static NSString *apIDESeed = nil; // set by the Go side (apIDESetSeed) before the pane is made
+
+void apIDESetSeed(const char *script) {
+	NSString *js = [NSString stringWithUTF8String:script];
+	dispatch_async(dispatch_get_main_queue(), ^{ apIDESeed = js; });
+}
 
 static void apIDELoadURL(NSString *u) {
 	NSURL *nu = [NSURL URLWithString:u];
@@ -249,9 +234,10 @@ void apIDEShow(void *nswindow, double x, double y, double w, double h, int focus
 		if (!apIDE) {
 			WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
 			WKUserContentController *uc = [WKUserContentController new];
-			[uc addUserScript:[[WKUserScript alloc] initWithSource:apIDESeed injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES]];
+			if (apIDESeed) [uc addUserScript:[[WKUserScript alloc] initWithSource:apIDESeed injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES]];
 			cfg.userContentController = uc;
 			apIDE = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:cfg];
+			[apIDE setValue:@NO forKey:@"drawsBackground"]; // the app's colour under it until VS Code paints
 			if (apIDEDark >= 0) apIDE.appearance = [NSAppearance appearanceNamed:apIDEDark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
 			if ([apIDE respondsToSelector:@selector(setInspectable:)]) [apIDE setValue:@YES forKey:@"inspectable"];
 			if (apIDEPending) {
@@ -284,3 +270,45 @@ void apIDELoad(const char *url) {
 }
 
 void apIDEReload(void) { dispatch_async(dispatch_get_main_queue(), ^{ if (apIDE) [apIDE reload]; }); }
+
+// ---- A menu of the system's ----
+// Shown at x, y (window points from the top left of the content), over everything — the native
+// panes too, which an HTML menu would be under. Blocks until it closes; the item chosen, or -1.
+@interface APMenuTarget : NSObject
+@property (nonatomic) NSInteger chosen;
+- (void)pick:(NSMenuItem *)it;
+@end
+@implementation APMenuTarget
+- (void)pick:(NSMenuItem *)it { self.chosen = it.tag; }
+@end
+
+int apPopup(void *nswindow, double x, double y, const char **titles, const char **keys, int n, int checked) {
+	__block int out = -1;
+	void (^run)(void) = ^{
+		NSWindow *win = (__bridge NSWindow *)nswindow;
+		NSView *host = win.contentView;
+		if (!host) return;
+		APMenuTarget *t = [APMenuTarget new];
+		t.chosen = -1;
+		NSMenu *m = [[NSMenu alloc] initWithTitle:@""];
+		m.autoenablesItems = NO;
+		for (int i = 0; i < n; i++) {
+			NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:[NSString stringWithUTF8String:titles[i]] action:@selector(pick:) keyEquivalent:@""];
+			NSString *k = [NSString stringWithUTF8String:keys[i]];
+			if (k.length) { // "I" with ⇧⌘, as the app's own key
+				it.keyEquivalent = [k lowercaseString];
+				it.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+			}
+			it.target = t;
+			it.tag = i;
+			it.state = i == checked ? NSControlStateValueOn : NSControlStateValueOff;
+			[m addItem:it];
+		}
+		CGFloat H = host.bounds.size.height;
+		NSPoint p = NSMakePoint(x, host.isFlipped ? y : H - y);
+		[m popUpMenuPositioningItem:nil atLocation:p inView:host];
+		out = (int)t.chosen;
+	};
+	if ([NSThread isMainThread]) run(); else dispatch_sync(dispatch_get_main_queue(), run);
+	return out;
+}

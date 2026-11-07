@@ -4,10 +4,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -22,8 +25,9 @@ import (
 )
 
 // The IDE: VS Code's own web server (code serve-web, the VS Code installed on this Mac) on
-// 127.0.0.1, behind a token of this run, shown in a native pane of the window. Extensions install
-// as in VS Code; its server and data stay where VS Code keeps them.
+// 127.0.0.1, behind a token of this run, shown in a native pane of the window. Only VS Code's
+// engine is the Mac's: the server, settings and extensions are the app's own (ideDataDir), and
+// it is dressed in the app's colours and fonts (ideTheme).
 
 // ideStart is one start of the server: its result, ready once it is known.
 type ideStart struct {
@@ -196,6 +200,7 @@ func (s *ideServer) start(st *ideStart) {
 	}
 	s.cmd, s.done, s.tokFile, s.app = cmd, done, f.Name(), app
 	s.mu.Unlock()
+	deadline := time.Now().Add(3 * time.Minute)
 	select {
 	case u := <-found:
 		pu, err := url.Parse(u)
@@ -206,14 +211,45 @@ func (s *ideServer) start(st *ideStart) {
 		}
 		q := pu.Query()
 		q.Set("tkn", token)
-		st.base = pu.Scheme + "://" + pu.Host + "/?" + q.Encode()
+		base := pu.Scheme + "://" + pu.Host + "/?" + q.Encode()
+		// The first time the server fetches VS Code itself, and its page says so meanwhile: the
+		// address is given once it serves VS Code (the interface shows its own wait till then).
+		if err := ideServing(base, done, deadline); err != nil {
+			kill()
+			fail(err)
+			return
+		}
+		st.base = base
 		close(st.ready)
 	case <-done:
 		os.Remove(f.Name())
 		fail(errors.New("VS Code's server stopped as it started"))
-	case <-time.After(3 * time.Minute):
+	case <-time.After(time.Until(deadline)):
 		kill()
 		fail(errors.New("VS Code's server did not start in 3 minutes"))
+	}
+}
+
+// ideServing waits until the server at base serves VS Code (not its "downloading" page), the
+// server ends, or deadline.
+func ideServing(base string, done chan struct{}, deadline time.Time) error {
+	c := &http.Client{Timeout: 10 * time.Second}
+	for {
+		if r, err := c.Get(base); err == nil {
+			b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			r.Body.Close()
+			if r.StatusCode == http.StatusOK && !bytes.Contains(b, []byte("is downloading")) {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errors.New("VS Code's server did not start in 3 minutes")
+		}
+		select {
+		case <-done:
+			return errors.New("VS Code's server stopped as it started")
+		case <-time.After(time.Second):
+		}
 	}
 }
 
@@ -248,6 +284,7 @@ func (n *Node) IDEShow(url string, x, y, w, h float64) error {
 	if n.win == nil {
 		return errPreview
 	}
+	ideSeed() // before the pane is made
 	// Focus goes into VS Code when it is opened (a url), not each time the pane is placed.
 	if err := preview.IDEShow(n.win.NativeWindow(), x, y, w, h, strings.TrimSpace(url) != "" && strings.TrimSpace(url) != ide.loaded()); err != nil {
 		return err
@@ -280,20 +317,14 @@ func (n *Node) IDETheme(dark bool) { preview.IDEAppearance(dark) }
 // IDEHide hides it; VS Code keeps running.
 func (n *Node) IDEHide() { preview.IDEHide() }
 
-// IDEOpenApp opens folder in the VS Code app itself.
-func (n *Node) IDEOpenApp(folder string) error {
-	if !filepath.IsAbs(folder) {
-		return errors.New("an absolute folder")
+// Menu shows a menu of the system's at x, y (window points) — over the native panes, which an
+// HTML menu would be under — and gives the item chosen, or -1 (closed; or no window: the
+// interface then shows its own).
+func (n *Node) Menu(x, y float64, titles, keys []string, checked int) int {
+	if n.win == nil || n.win.NativeWindow() == nil {
+		return -2
 	}
-	ide.mu.Lock()
-	app := ide.app
-	ide.mu.Unlock()
-	if app == "" {
-		if _, a, err := vscodeCLI(); err == nil {
-			app = a
-		}
-	}
-	return exec.Command("/usr/bin/open", "-a", cmpOr(app, "Visual Studio Code"), "--", folder).Run()
+	return preview.Popup(n.win.NativeWindow(), x, y, titles, keys, checked)
 }
 
 // ideDataDir is where the app's VS Code keeps its server, settings and extensions.

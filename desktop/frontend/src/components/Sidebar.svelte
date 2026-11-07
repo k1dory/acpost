@@ -207,7 +207,7 @@
   .side.gone { display: none; }
   .side { width: 260px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; position: relative; }
   .top { height: 50px; flex: none; display: flex; align-items: center; padding-left: 80px; }
-  .pad { padding: 4px 14px 12px; display: grid; gap: 8px; }
+  .pad { padding: 4px 14px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .new { justify-content: center; height: 32px; border-radius: 11px; }
   kbd { font: 11px var(--mono); opacity: .55; margin-left: 4px; }
   .search { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 11px; font-size: 12.5px; border: 1px solid var(--line); background: var(--card); color: var(--muted); }
@@ -218,7 +218,7 @@
   .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
   .search .k:hover { color: var(--ink); }
   .badge { min-width: 17px; height: 17px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
-  .nav { display: grid; gap: 1px; margin: 0 -4px; }
+  .nav { display: grid; gap: 1px; min-width: 0; }
   .row.nr { min-height: 32px; padding: 5px 8px; }
   .ic-btn { border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; }
   .ic-btn:hover { background: var(--hover); color: var(--ink); }

@@ -3,6 +3,8 @@
   import { app } from "../lib/state.svelte";
   import { onDestroy } from "svelte";
   import Icon from "./Icon.svelte";
+  import { Node } from "../lib/api";
+  import { screenScale } from "../lib/format";
 
   // The view switcher in the window's title bar (beside the traffic lights): the app's own
   // layout, or the IDE (VS Code with the chat beside it).
@@ -21,6 +23,19 @@
   let at = app.view;
   $effect(() => { if (app.view !== at) { at = app.view; if (open) set(false); } });
   onDestroy(() => { if (open) app.viewMenu = false; });
+  // The system's menu (over VS Code's native pane, which nothing of the page can be); the page's
+  // own only where there is no window of the app's (the app served to a browser).
+  let btn: HTMLButtonElement;
+  async function pop() {
+    if (open) { set(false); return; }
+    const r = btn.getBoundingClientRect();
+    const z = app.textSize, k = screenScale();
+    const f = Math.abs(k - z) < 0.01 ? 1 : z;
+    let i = -2;
+    try { i = await Node.Menu(r.left * f, (r.bottom + 4) * f, views.map(v => t(v.label)), views.map(v => (v.key ? "I" : "")), views.indexOf(cur)); } catch {}
+    if (i === -2) set(true);
+    else if (i >= 0) go(views[i].view);
+  }
   function go(v: V["view"]) { set(false); app.view = v; }
 </script>
 
@@ -28,7 +43,7 @@
   onkeydown={e => { if (open && e.key === "Escape") set(false); }} />
 
 <div class="vs nodrag" bind:this={root}>
-  <button class="trig" class:on={open} onclick={() => set(!open)}>
+  <button class="trig" class:on={open} bind:this={btn} onclick={pop}>
     <span>{t(cur.label)}</span>
     <span class="chev"><Icon name="chev" size={9} /></span>
   </button>

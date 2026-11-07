@@ -25,6 +25,8 @@ void apIDEHide(void);
 void apIDELoad(const char *url);
 void apIDEReload(void);
 void apIDEAppearance(int dark);
+void apIDESetSeed(const char *script);
+int apPopup(void *nswindow, double x, double y, const char **titles, const char **keys, int n, int checked);
 
 */
 import "C"
@@ -226,3 +228,36 @@ const collector = `(() => {
     return XS.apply(this, arguments);
   };
 })();`
+
+// Popup shows a menu of the system's at x, y (window points) over everything in the window, and
+// gives the item chosen, or -1. keys[i], when not empty, is shown as ⇧⌘ and that letter.
+func Popup(window unsafe.Pointer, x, y float64, titles, keys []string, checked int) int {
+	if window == nil || len(titles) == 0 || len(titles) != len(keys) {
+		return -1
+	}
+	n := len(titles)
+	ct := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	ck := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	defer C.free(ct)
+	defer C.free(ck)
+	ts := unsafe.Slice((**C.char)(ct), n)
+	ks := unsafe.Slice((**C.char)(ck), n)
+	for i := range titles {
+		ts[i] = C.CString(titles[i])
+		ks[i] = C.CString(keys[i])
+	}
+	defer func() {
+		for i := range ts {
+			C.free(unsafe.Pointer(ts[i]))
+			C.free(unsafe.Pointer(ks[i]))
+		}
+	}()
+	return int(C.apPopup(window, C.double(x), C.double(y), (**C.char)(ct), (**C.char)(ck), C.int(n), C.int(checked)))
+}
+
+// IDESeed is a script put into VS Code's page when the pane is made (call it before IDEShow).
+func IDESeed(script string) {
+	cs := C.CString(script)
+	C.apIDESetSeed(cs)
+	C.free(unsafe.Pointer(cs))
+}

@@ -271,13 +271,6 @@ export function IDEHide(): $CancellablePromise<void> {
 }
 
 /**
- * IDEOpenApp opens folder in the VS Code app itself.
- */
-export function IDEOpenApp(folder: string): $CancellablePromise<void> {
-    return $Call.ByID(3287568603, folder);
-}
-
-/**
  * IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
  * again if it ended, and its answer is checked against what is shown before anything navigates).
  */
@@ -329,6 +322,15 @@ export function MCPServers(): $CancellablePromise<store$0.MCPServer[]> {
     return $Call.ByID(3433588060).then(($result: any) => {
         return $$createType25($result);
     });
+}
+
+/**
+ * Menu shows a menu of the system's at x, y (window points) — over the native panes, which an
+ * HTML menu would be under — and gives the item chosen, or -1 (closed; or no window: the
+ * interface then shows its own).
+ */
+export function Menu(x: number, y: number, titles: string[], keys: string[], checked: number): $CancellablePromise<number> {
+    return $Call.ByID(1707053511, x, y, titles, keys, checked);
 }
 
 /**
