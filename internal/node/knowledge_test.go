@@ -33,7 +33,7 @@ func TestKnowledge(t *testing.T) {
 		t.Fatalf("a relative scope: %v", err)
 	}
 	m := ask(t, n, SendRequest{Body: "prompt", Cwd: in})
-	for _, want := range []string{"Use tabs.", "Run make check."} {
+	for _, want := range []string{"Use tabs.", "Run make check.", "```mermaid"} {
 		if !strings.Contains(m.Reply, want) {
 			t.Fatalf("no %q in %q", want, m.Reply)
 		}
@@ -44,7 +44,7 @@ func TestKnowledge(t *testing.T) {
 		}
 	}
 	again := ask(t, n, SendRequest{Body: "prompt", Thread: m.Thread})
-	if strings.Contains(again.Reply, "Use tabs.") {
+	if strings.Contains(again.Reply, "Use tabs.") || strings.Contains(again.Reply, "```mermaid") {
 		t.Fatalf("the notes again in the same session: %q", again.Reply)
 	}
 	// A token client starts a session: no notes go with its message.
@@ -53,7 +53,7 @@ func TestKnowledge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w, err := n.Wait(ctx, ci, cm.ID, 30*time.Second); err != nil || strings.Contains(w.Reply, "Use tabs.") {
+	if w, err := n.Wait(ctx, ci, cm.ID, 30*time.Second); err != nil || strings.Contains(w.Reply, "Use tabs.") || strings.Contains(w.Reply, "```mermaid") {
 		t.Fatalf("a client got the notes: %q %v", w.Reply, err)
 	}
 	// A link into a scope is in it; the scope's notes go with a session there.

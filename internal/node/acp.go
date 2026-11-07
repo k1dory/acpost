@@ -653,6 +653,10 @@ func (s *acpSlot) handle(m store.Message) {
 			return
 		}
 		m.Body = k + m.Body
+		// A person reads the answer (in the app or a terminal): what renders, said once a session.
+		if from, err := ParseAddress(m.From); err == nil && from.Kind == "user" {
+			m.Body = readerNote + m.Body
+		}
 	}
 	blocks, tfiles, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
 	if err == nil && fresh {

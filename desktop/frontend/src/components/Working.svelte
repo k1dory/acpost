@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
-  import AgentMark, { brandOf } from "./AgentMark.svelte";
+  import { brandOf } from "./AgentMark.svelte";
   import type { Block } from "../lib/turn";
   import { app } from "../lib/state.svelte";
 
@@ -39,7 +39,8 @@
 </script>
 
 <span class="working">
-  {#if brand}<AgentMark of={brand} size={13} busy />{:else}<span class="spin"></span>{/if}
+  <!-- The agent's mark already turns beside its name: a spinner only for an agent without one. -->
+  {#if !brand}<span class="spin"></span>{/if}
   {#key doing}<span class="word" class:claude={brand === "claude"}>{t(doing)}…</span>{/key}
   {#if secs}<span class="muted num">{took}</span>{/if}
 </span>

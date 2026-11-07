@@ -63,7 +63,7 @@
       {/if}
     {/if}
     {#if m.files?.filter(f => !f.reply).length}
-      <div class="files">{#each m.files.filter(f => !f.reply) as f}<span class="chip"><Icon name="file" size={12} /> {f.name}</span>{/each}</div>
+      <div class="files">{#each m.files.filter(f => !f.reply) as f}<button class="chip fbtn" onclick={() => app.openArtifact({ msg: m.id, name: f.name })} title={f.name}><Icon name="file" size={12} /> {f.name}</button>{/each}</div>
     {/if}
   </div>
 
@@ -116,6 +116,8 @@
   .art:hover { border-color: var(--accent); }
   .an { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
   .as { font-size: 11px; flex: none; }
+  .fbtn { cursor: default; }
+  .fbtn:hover { border-color: var(--accent); }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
   .agent { min-width: 0; display: grid; gap: 8px; }
   .agent > .meta { margin-bottom: 2px; }

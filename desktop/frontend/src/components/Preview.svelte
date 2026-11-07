@@ -3,7 +3,7 @@
   import { Browser } from "@wailsio/runtime";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
-  import { Node, on, errText } from "../lib/api";
+  import { Node, on, errText, b64 } from "../lib/api";
   import { screenScale } from "../lib/format";
   import Icon from "./Icon.svelte";
 
@@ -59,13 +59,18 @@
     const u = app.preview.url || address;
     if (/^https?:\/\//i.test(u)) Browser.OpenURL(u);
   }
+  // To the agent: the problems as a file attached to the next message (the chat shows a card, the
+  // agent reads it), and a line asking to fix them.
   function sendToAgent() {
-    const list = problems.slice(-30).map(e => {
+    const list = problems.slice(-50).map(e => {
       const where = e.source ? ` (${e.source}${e.line ? ":" + e.line : ""})` : "";
       const stack = e.stack && !e.message?.includes(e.stack) ? "\n  " + e.stack.split("\n").slice(0, 6).join("\n  ") : "";
       return `- [${e.kind}] ${e.message ?? ""}${where}${stack}`;
     }).join("\n").slice(0, 12000);
-    app.quote = t("The preview of {url} shows these problems:", { url: app.preview.url || address }) + "\n\n" + list + "\n\n";
+    const md = `# ${t("The preview of {url} shows these problems:", { url: app.preview.url || address })}\n\n${list}\n`;
+    const bytes = new TextEncoder().encode(md);
+    app.pendingFiles = [...app.pendingFiles, { name: "preview-problems.md", type: "text/markdown", size: bytes.length, data: b64(md) }];
+    app.quote = t("Fix the problems the preview shows (attached).");
   }
   const kindName = (k: string) => k.replace("console.", "");
 </script>
@@ -85,7 +90,8 @@
       {problems.length ? t("{n} problems in the page", { n: problems.length }) : t("No problems in the page")}
       <span class="sp"></span>
       {#if problems.length}
-        <span class="link" role="button" tabindex="0" onclick={e => { e.stopPropagation(); sendToAgent(); }} onkeydown={() => {}}>{t("To the agent")}</span>
+        <span class="btn primary sm toag" role="button" tabindex="0" onclick={e => { e.stopPropagation(); sendToAgent(); }}
+          onkeydown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); sendToAgent(); } }}><Icon name="send" size={11} /> {t("To the agent")}</span>
         <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; }} onkeydown={() => {}}>{t("Clear")}</span>
       {/if}
     </button>
@@ -113,6 +119,7 @@
   .ph { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 8px 10px; font-size: 12px; color: var(--ink-2); text-align: left; }
   .sp { flex: 1; }
   .link { color: var(--accent); font-weight: 500; cursor: default; }
+  .toag { height: 24px; padding: 0 10px; font-size: 11.5px; gap: 5px; display: inline-flex; align-items: center; }
   .link.muted { color: var(--muted); }
   .list { overflow: auto; padding: 0 8px 8px; display: grid; gap: 4px; }
   .pr { display: flex; gap: 8px; font-size: 12px; padding: 6px 4px; border-top: 1px solid var(--line-soft); }

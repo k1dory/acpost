@@ -43,7 +43,9 @@
         }
         if (!out) out = esc(code);
         const label = name ? esc(hljs.getLanguage(name)?.name ?? name) : "text";
-        return `<div class="code"><div class="ch"><span class="lang">${label}</span><span class="cp" role="button" tabindex="0">${t("Copy")}</span></div>` +
+        return `<div class="code"><div class="ch"><span class="lang">${label}</span><span class="cp" role="button" tabindex="0" title="${t("Copy")}" aria-label="${t("Copy")}">` +
+          `<svg class="i-copy" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5V3.6c0-.6-.5-1.1-1.1-1.1H3.6c-.6 0-1.1.5-1.1 1.1v5.8c0 .6.5 1.1 1.1 1.1h1.9"/></svg>` +
+          `<svg class="i-ok" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span></div>` +
           `<pre><code class="hljs">${out}</code></pre></div>`;
       },
     },
@@ -92,8 +94,10 @@
     let ok = false;
     try { await within(navigator.clipboard.writeText(code)); ok = true; } catch {}
     if (!ok) try { await within(Clipboard.SetText(code)); ok = true; } catch {}
-    btn.textContent = ok ? t("Copied") : t("Copy failed");
-    setTimeout(() => (btn.textContent = t("Copy")), 1400);
+    // The icon says it: a check while copied (the title says it in words).
+    btn.classList.toggle("done", ok);
+    btn.title = ok ? t("Copied") : t("Copy failed");
+    setTimeout(() => { btn.classList.remove("done"); btn.title = t("Copy"); }, 1400);
   }
 </script>
 
@@ -112,7 +116,10 @@
   .md :global(.code) { border: 1px solid var(--line-soft); border-radius: 14px; margin: 0 0 .8em; overflow: hidden; background: var(--page); }
   .md :global(.ch) { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px 5px 14px; border-bottom: 1px solid var(--line-soft); background: var(--sel); }
   .md :global(.lang) { font: 500 11px var(--mono); color: var(--muted); text-transform: lowercase; }
-  .md :global(.cp) { display: inline-block; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; padding: 3px 8px; border-radius: 7px; cursor: default; }
+  .md :global(.cp) { display: inline-grid; place-items: center; width: 26px; height: 24px; border: 0; background: transparent; color: var(--muted); border-radius: 7px; cursor: default; }
+  .md :global(.cp .i-ok) { display: none; }
+  .md :global(.cp.done .i-copy) { display: none; }
+  .md :global(.cp.done .i-ok) { display: block; color: var(--good); }
   .md :global(.cp:hover) { background: var(--hover); color: var(--ink); }
   .md :global(pre) { padding: 12px 14px; overflow: auto; margin: 0; }
   .md :global(pre code) { background: none; padding: 0; font-size: 12px; line-height: 1.55; overflow-wrap: normal; white-space: pre; }

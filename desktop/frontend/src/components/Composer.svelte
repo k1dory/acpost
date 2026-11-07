@@ -23,6 +23,10 @@
   const cloud = $derived(isNew ? app.draft.where === "cloud" : agent.startsWith("agent:sb_"));
 
   $effect(() => { if (agent) app.loadOptions(agent); });
+  // Files handed over by another part of the app (the preview's problems): attached here.
+  $effect(() => {
+    if (app.pendingFiles.length) { files = [...files, ...app.pendingFiles]; app.pendingFiles = []; requestAnimationFrame(() => ta?.focus()); }
+  });
   // ⌘L and playbooks put text here.
   $effect(() => {
     if (app.quote) { text = (text ? text + "\n" : "") + app.quote; app.quote = ""; requestAnimationFrame(() => ta?.focus()); }

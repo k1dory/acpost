@@ -266,6 +266,7 @@ export const ru: Record<string, string> = {
   "Headers": "Заголовки",
   "Close": "Закрыть",
   "Wiki": "Вики",
+  "Fix the problems the preview shows (attached).": "Исправь проблемы, которые показывает превью (во вложении).",
   "Artifacts": "Артефакты",
   "Files the agents hand back, and files of this Mac a reply links to, show here.": "Здесь показываются файлы, которые вернули агенты, и файлы этого Mac, на которые ссылается ответ.",
   "Open": "Открыть",

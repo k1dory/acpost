@@ -398,6 +398,9 @@ class App {
     if (this.view !== "chat") this.view = "chat";
     this.openTab("preview");
   }
+  /** Files to attach to the next message (the preview's problems): the composer takes them. */
+  pendingFiles = $state<{ name: string; type: string; size: number; data: string }[]>([]);
+
   /** The artifact shown, and those opened in this chat. */
   artifact = $state<ArtifactRef | null>(null);
   openedArtifacts = $state<ArtifactRef[]>([]);
