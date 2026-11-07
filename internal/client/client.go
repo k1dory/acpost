@@ -138,6 +138,41 @@ func (c *Client) SessionHistory(ctx context.Context, agent, id, cwd string) ([]s
 	return out.Items, err
 }
 
+// Chat is one of the node's user's chats: an acpost thread, an ACP session of an agent of the
+// node (started anywhere), or a cloud sandbox.
+type Chat struct {
+	Key      string    `json:"key"`  // thread:<id>, session:<agent>/<id>, cloud:<sandbox>
+	Kind     string    `json:"kind"` // thread, session, cloud
+	Agent    string    `json:"agent,omitempty"`
+	Title    string    `json:"title"`
+	Cwd      string    `json:"cwd,omitempty"`
+	Repo     string    `json:"repo,omitempty"`
+	Thread   string    `json:"thread,omitempty"`
+	Session  string    `json:"session,omitempty"` // the ACP session (a thread's, or the chat itself)
+	Sandbox  string    `json:"sandbox,omitempty"`
+	Status   string    `json:"status,omitempty"` // a sandbox's
+	Updated  time.Time `json:"updated"`
+	Messages int       `json:"messages,omitempty"`
+	Running  int       `json:"running,omitempty"`
+	Queued   int       `json:"queued,omitempty"`
+	Failed   int       `json:"failed,omitempty"`
+	Folder   string    `json:"folder,omitempty"`
+}
+
+// Chats is the list, the folders, and what could not be listed (an agent that did not answer).
+type Chats struct {
+	Items   []Chat         `json:"items"`
+	Folders []store.Folder `json:"folders"`
+	Partial []string       `json:"partial,omitempty"`
+}
+
+// Chats lists the node's user's chats, the most recently active first, with the folders.
+func (c *Client) Chats(ctx context.Context) (Chats, error) {
+	var out Chats
+	_, err := c.do(ctx, "GET", "/v1/chats", nil, nil, &out, nil)
+	return out, err
+}
+
 // Folders lists the app's folders of chats, with their chats.
 func (c *Client) Folders(ctx context.Context) ([]store.Folder, error) {
 	var out struct {

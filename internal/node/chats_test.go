@@ -1,0 +1,55 @@
+package node
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// The chats are acpost's threads and the agent's sessions started elsewhere, each once (a thread's
+// own session is not listed again), with their folders.
+func TestChats(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+    session: thread
+`, os.Args[0], state))
+	m := ask(t, n, SendRequest{Body: "echo hi"}) // a thread: its session is in FAKE_STATE now
+	// A session another client started (a terminal's Claude Code).
+	os.WriteFile(filepath.Join(state, "outside-1"), []byte("1"), 0o600)
+
+	f, err := n.CreateFolder(ctx, me, "argus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.MoveChat(ctx, me, "session:fake/outside-1", f.ID); err != nil {
+		t.Fatal(err)
+	}
+	chats, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chats.Items) != 2 || len(chats.Partial) != 0 {
+		t.Fatalf("%+v", chats)
+	}
+	byKey := map[string]int{}
+	for i, c := range chats.Items {
+		byKey[c.Key] = i
+	}
+	th, ok1 := byKey["thread:"+m.Thread]
+	out, ok2 := byKey["session:fake/outside-1"]
+	if !ok1 || !ok2 {
+		t.Fatalf("%+v", chats.Items)
+	}
+	if chats.Items[th].Session == "" || chats.Items[out].Folder != f.ID || chats.Items[out].Cwd != "/fake" || len(chats.Folders) != 1 {
+		t.Fatalf("%+v", chats)
+	}
+	if _, err := n.Chats(ctx, Principal{Kind: "client", Name: "ci"}); code(err) != "refused" {
+		t.Fatalf("a client listed the chats: %v", err)
+	}
+}
