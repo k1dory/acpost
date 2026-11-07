@@ -36,7 +36,7 @@
     {:else}
       <div class="ubody selectable">{m.body}</div>
       {#if m.state === "queued"}
-        <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body)}>Edit</button><button class="btn ghost sm" onclick={takeBack}>Take back</button></div>
+        <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>Edit</button><button class="btn ghost sm" onclick={takeBack}>Take back</button></div>
       {/if}
     {/if}
     {#if m.files?.filter(f => !f.reply).length}
