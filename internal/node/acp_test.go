@@ -53,7 +53,7 @@ func ask(t testing.TB, n *Node, r SendRequest) store.Message {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
+	w, err := n.Wait(ctx, me, m.ID, 60*time.Second) // CI runners under -race: a big prompt takes 20 s there
 	if err != nil {
 		t.Fatal(err)
 	}
