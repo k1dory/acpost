@@ -265,6 +265,8 @@ export const ru: Record<string, string> = {
   "Headers": "Заголовки",
   "Close": "Закрыть",
   "Wiki": "Вики",
+  "Agents view": "Чаты",
+  "IDE view": "IDE",
   "Tasks": "Задания",
   "Search chats": "Поиск по чатам",
   "Search everything": "Поиск по всему",

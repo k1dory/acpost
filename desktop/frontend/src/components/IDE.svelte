@@ -89,7 +89,6 @@
     <span class="muted mono path" title={folder}>{short(folder)}</span>
     <span class="sp"></span>
     <button class="btn ghost sm nodrag" onclick={reload} title={t("Reload")}><Icon name="refresh" size={13} /></button>
-    <button class="btn ghost sm nodrag" onclick={() => Node.IDEOpenApp(folder).catch(e => (err = errText(e)))}>{t("Open in VS Code")}</button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
   <div class="box" bind:this={box}>
@@ -99,7 +98,7 @@
 
 <style>
   .ide { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--page); }
-  .bar { height: 40px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 78px; background: var(--side); border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .bar { height: 50px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 80px; background: var(--side); border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
   .path { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .sp { flex: 1; }
   .box { flex: 1; min-height: 0; display: grid; place-items: center; }

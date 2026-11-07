@@ -141,8 +141,17 @@ func (s *ideServer) start(st *ideStart) {
 	} else {
 		port = "0"
 	}
+	// The app's own VS Code: its server, settings and extensions kept apart from the VS Code of
+	// this Mac (only its engine is used), in the app's support folder.
+	data, err := ideDataDir()
+	if err != nil {
+		os.Remove(f.Name())
+		fail(err)
+		return
+	}
 	cmd := exec.Command(cli, "serve-web", "--host", "127.0.0.1", "--port", port, "--connection-token-file", f.Name(),
-		"--accept-server-license-terms", "--disable-telemetry")
+		"--accept-server-license-terms", "--disable-telemetry",
+		"--server-data-dir", filepath.Join(data, "server"), "--cli-data-dir", filepath.Join(data, "cli"))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -285,4 +294,14 @@ func (n *Node) IDEOpenApp(folder string) error {
 		}
 	}
 	return exec.Command("/usr/bin/open", "-a", cmpOr(app, "Visual Studio Code"), "--", folder).Run()
+}
+
+// ideDataDir is where the app's VS Code keeps its server, settings and extensions.
+func ideDataDir() (string, error) {
+	base, err := os.UserConfigDir() // ~/Library/Application Support
+	if err != nil {
+		return "", err
+	}
+	d := filepath.Join(base, "acpost", "vscode")
+	return d, os.MkdirAll(d, 0o700)
 }

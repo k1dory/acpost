@@ -4,17 +4,15 @@
   import { onDestroy } from "svelte";
   import Icon from "./Icon.svelte";
 
-  // The view switcher in the window's title bar (beside the traffic lights): the chats, VS Code
-  // with the chat beside it, the tasks of every agent, the wikis.
-  type V = { view: "chat" | "ide" | "board" | "wiki"; label: string; icon: string; key: string };
+  // The view switcher in the window's title bar (beside the traffic lights): the app's own
+  // layout, or the IDE (VS Code with the chat beside it).
+  type V = { view: "chat" | "ide"; label: string; icon: string; key: string };
   const views: V[] = [
-    { view: "chat", label: "Chats", icon: "chat", key: "" },
-    { view: "ide", label: "IDE", icon: "term", key: "⇧⌘I" },
-    { view: "board", label: "Tasks", icon: "activity", key: "⌘B" },
-    { view: "wiki", label: "Wiki", icon: "book", key: "" },
+    { view: "chat", label: "Agents view", icon: "chat", key: "" },
+    { view: "ide", label: "IDE view", icon: "term", key: "⇧⌘I" },
   ];
   let root: HTMLDivElement;
-  const cur = $derived(views.find(v => v.view === app.view) ?? views[0]);
+  const cur = $derived(app.view === "ide" ? views[1] : views[0]);
   // Open here (two of these are mounted: the sidebar's, hidden in the IDE, and the IDE's own); the
   // app is told, so the native IDE view hides while the menu is over it.
   let open = $state(false);
@@ -32,7 +30,6 @@
 <div class="vs nodrag" bind:this={root}>
   <button class="trig" class:on={open} onclick={() => set(!open)}>
     <span>{t(cur.label)}</span>
-    {#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}
     <span class="chev"><Icon name="chev" size={9} /></span>
   </button>
   {#if open}
@@ -41,7 +38,6 @@
         <button class="mi" class:sel={v.view === cur.view} onclick={() => go(v.view)}>
           <Icon name={v.icon} size={13} />
           <span class="l">{t(v.label)}</span>
-          {#if v.view === "board" && app.asking.length}<span class="badge">{app.asking.length}</span>{/if}
           {#if v.key}<kbd>{v.key}</kbd>{/if}
         </button>
       {/each}
@@ -60,5 +56,4 @@
   .mi.sel { color: var(--ink); font-weight: 600; }
   .l { flex: 1; }
   kbd { font: 10.5px var(--mono); color: var(--muted); }
-  .badge { min-width: 16px; height: 16px; border-radius: 8px; background: var(--warn); color: #fff; font-size: 10.5px; display: grid; place-items: center; padding: 0 4px; font-weight: 600; }
 </style>

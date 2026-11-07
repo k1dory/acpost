@@ -115,6 +115,15 @@
       <input placeholder={t("Search chats")} bind:value={q} />
       <button class="k" onclick={e => { e.preventDefault(); app.palette = true; }} title={t("Search everything")}>⌘K</button>
     </label>
+    <div class="nav">
+      <button class="row nr" class:sel={app.view === "board"} onclick={() => (app.view = "board")}>
+        <span class="ic"><Icon name="activity" size={14} /></span><span class="t"><span class="title">{t("Tasks")}</span></span>
+        {#if app.asking.length}<span class="badge">{app.asking.length}</span>{:else}<kbd>⌘B</kbd>{/if}
+      </button>
+      <button class="row nr" class:sel={app.view === "wiki"} onclick={() => (app.view = "wiki")}>
+        <span class="ic"><Icon name="book" size={14} /></span><span class="t"><span class="title">{t("Wiki")}</span></span>
+      </button>
+    </div>
   </div>
 
   <nav class="scroll list">
@@ -197,7 +206,7 @@
 <style>
   .side.gone { display: none; }
   .side { width: 260px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; position: relative; }
-  .top { height: 40px; flex: none; display: flex; align-items: center; padding-left: 78px; }
+  .top { height: 50px; flex: none; display: flex; align-items: center; padding-left: 80px; }
   .pad { padding: 4px 14px 12px; display: grid; gap: 8px; }
   .new { justify-content: center; height: 32px; border-radius: 11px; }
   kbd { font: 11px var(--mono); opacity: .55; margin-left: 4px; }
@@ -209,6 +218,8 @@
   .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
   .search .k:hover { color: var(--ink); }
   .badge { min-width: 17px; height: 17px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
+  .nav { display: grid; gap: 1px; margin: 0 -4px; }
+  .row.nr { min-height: 32px; padding: 5px 8px; }
   .ic-btn { border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; }
   .ic-btn:hover { background: var(--hover); color: var(--ink); }
   .folder { border-radius: 10px; margin-bottom: 2px; }
