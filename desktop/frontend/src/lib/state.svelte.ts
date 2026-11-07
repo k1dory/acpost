@@ -398,6 +398,9 @@ class App {
     if (this.view !== "chat") this.view = "chat";
     this.openTab("preview");
   }
+  /** The error shown now (App shows it; the preview hides under it — a native view would cover it). */
+  toast = $state("");
+
   /** Files to attach to the next message (the preview's problems): the composer takes them. */
   pendingFiles = $state<{ name: string; type: string; size: number; data: string }[]>([]);
 
@@ -417,7 +420,7 @@ class App {
     if (e.kind === "nav") {
       if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; }
       // (or another page than the one cleared: a link followed in it, Back)
-      if (this.preview.loadAt > this.preview.clearedAt || (e.url && e.url !== this.preview.clearedUrl)) this.preview.cleared = false;
+      if (this.preview.loadAt > this.preview.clearedAt || (e.url && this.preview.clearedUrl && e.url !== this.preview.clearedUrl)) this.preview.cleared = false;
       return;
     }
     this.preview.cleared = false;

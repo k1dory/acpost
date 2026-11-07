@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 )
@@ -60,15 +61,27 @@ func (s *Store) PutBacklogItem(ctx context.Context, b BacklogItem) error {
 	return err
 }
 
-// TakeBacklogItem removes an item and gives it back (to start it): once, even if asked twice.
-func (s *Store) TakeBacklogItem(ctx context.Context, id string) (BacklogItem, error) {
+// BacklogItemOf is one item.
+func (s *Store) BacklogItemOf(ctx context.Context, id string) (BacklogItem, error) {
 	var b BacklogItem
 	var c int64
-	err := s.w.QueryRowContext(ctx, `DELETE FROM backlog WHERE id = ? RETURNING id, title, body, agent, cwd, created`, id).
+	err := s.r.QueryRowContext(ctx, `SELECT id, title, body, agent, cwd, created FROM backlog WHERE id = ?`, id).
 		Scan(&b.ID, &b.Title, &b.Body, &b.Agent, &b.Cwd, &c)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return b, ErrNoBacklogItem
 	}
 	b.Created = fromMS(c)
-	return b, nil
+	return b, err
+}
+
+// DeleteBacklogItem removes one.
+func (s *Store) DeleteBacklogItem(ctx context.Context, id string) error {
+	res, err := s.w.ExecContext(ctx, `DELETE FROM backlog WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if k, _ := res.RowsAffected(); k == 0 {
+		return ErrNoBacklogItem
+	}
+	return nil
 }

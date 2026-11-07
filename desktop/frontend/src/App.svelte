@@ -66,7 +66,7 @@
 
   // The error toast: closed by ×, or after 12 s; the same error closed a moment ago is not shown
   // again (a refresh every few seconds would bring it back each time).
-  let shownError = $state("");
+  let shownError = $derived(app.toast);
   const closedAt = new Map<string, number>();
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
@@ -74,13 +74,13 @@
     if (!e) return;
     app.error = "";
     if (Date.now() - (closedAt.get(e) ?? 0) < 120_000) return;
-    shownError = e;
+    app.toast = e;
     clearTimeout(hideTimer);
     hideTimer = setTimeout(dismiss, 12_000);
   });
   function dismiss() {
-    if (shownError) closedAt.set(shownError, Date.now());
-    shownError = "";
+    if (app.toast) closedAt.set(app.toast, Date.now());
+    app.toast = "";
     clearTimeout(hideTimer);
   }
 

@@ -61,7 +61,7 @@ func (n *Node) DeleteBacklogItem(ctx context.Context, p Principal, id string) er
 	if err := userOnly(p, "the backlog"); err != nil {
 		return err
 	}
-	if _, err := n.st.TakeBacklogItem(ctx, id); errors.Is(err, store.ErrNoBacklogItem) {
+	if err := n.st.DeleteBacklogItem(ctx, id); errors.Is(err, store.ErrNoBacklogItem) {
 		return errf("not_found", "%v", err)
 	} else if err != nil {
 		return errf("unavailable", "%v", err)
@@ -70,28 +70,32 @@ func (n *Node) DeleteBacklogItem(ctx context.Context, p Principal, id string) er
 }
 
 // StartBacklogItem sends an item to its agent (or agent, when it names none) in its directory: the
-// message. The item leaves the backlog; if the message cannot be sent, it comes back.
+// message. Sent first, under a key of the item's own (a repeat — the node stopped, the answer
+// lost — returns the same message), then taken off the backlog: no moment when it is in neither.
 func (n *Node) StartBacklogItem(ctx context.Context, p Principal, id, agent string) (store.Message, error) {
 	if err := userOnly(p, "the backlog"); err != nil {
 		return store.Message{}, err
 	}
-	b, err := n.st.TakeBacklogItem(ctx, id)
-	if err != nil {
+	b, err := n.st.BacklogItemOf(ctx, id)
+	if errors.Is(err, store.ErrNoBacklogItem) {
 		return store.Message{}, errf("not_found", "%v", err)
+	} else if err != nil {
+		return store.Message{}, errf("unavailable", "%v", err)
 	}
 	to := cmpOr(agent, b.Agent)
 	if to == "" {
-		_ = n.st.PutBacklogItem(context.WithoutCancel(ctx), b)
 		return store.Message{}, errf("invalid", "the agent to give it to")
 	}
 	body := b.Title
 	if strings.TrimSpace(b.Body) != "" {
 		body += "\n\n" + b.Body
 	}
-	m, _, err := n.Send(ctx, p, SendRequest{To: to, Body: body, Cwd: b.Cwd})
+	m, _, err := n.Send(ctx, p, SendRequest{To: to, Body: body, Cwd: b.Cwd, IdemKey: "bl:" + b.ID})
 	if err != nil {
-		_ = n.st.PutBacklogItem(context.WithoutCancel(ctx), b) // back where it was
 		return m, err
+	}
+	if err := n.st.DeleteBacklogItem(context.WithoutCancel(ctx), b.ID); err != nil && !errors.Is(err, store.ErrNoBacklogItem) {
+		n.log.Warn("backlog", "id", b.ID, "err", err) // started; it stays listed until the next start returns the same message
 	}
 	return m, nil
 }

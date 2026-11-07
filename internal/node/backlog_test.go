@@ -32,6 +32,13 @@ func TestBacklog(t *testing.T) {
 	if _, err := n.StartBacklogItem(ctx, me, b.ID, ""); code(err) != "not_found" {
 		t.Fatalf("started twice: %v", err)
 	}
+	// Sent, but the node stopped before it left the backlog: started again, the same message.
+	c, _ := n.PutBacklogItem(ctx, me, store.BacklogItem{Title: "Again", Agent: "bot"})
+	m1, _, _ := n.Send(ctx, me, SendRequest{To: "agent:bot", Body: "Again", IdemKey: "bl:" + c.ID})
+	m2, err := n.StartBacklogItem(ctx, me, c.ID, "")
+	if err != nil || m2.ID != m1.ID {
+		t.Fatalf("a repeat sent again: %s vs %s (%v)", m2.ID, m1.ID, err)
+	}
 	// No agent to give it to: it stays.
 	if _, err := n.StartBacklogItem(ctx, me, other.ID, ""); code(err) != "invalid" {
 		t.Fatalf("no agent: %v", err)
