@@ -18,6 +18,28 @@ import * as store$0 from "../store/models.js";
 // @ts-ignore: Unused imports
 import * as acpx$0 from "../../../acpx/models.js";
 
+export class AgentCommand {
+    "name": string;
+    "description"?: string;
+
+    /** Creates a new AgentCommand instance. */
+    constructor($$source: Partial<AgentCommand> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentCommand instance from a string or object.
+     */
+    static createFrom($$source: any = {}): AgentCommand {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AgentCommand($$parsedSource as Partial<AgentCommand>);
+    }
+}
+
 /**
  * AgentInfo is an agent as GET /v1/agents shows it.
  */
@@ -65,6 +87,85 @@ export class AgentInfo {
     static createFrom($$source: any = {}): AgentInfo {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new AgentInfo($$parsedSource as Partial<AgentInfo>);
+    }
+}
+
+/**
+ * AgentOption is one choice: its category (model, thought_level, mode), the current value, the values.
+ */
+export class AgentOption {
+    "id": string;
+    "name": string;
+    "category"?: string;
+    "current": string;
+    "values": OptionValue[];
+
+    /** Creates a new AgentOption instance. */
+    constructor($$source: Partial<AgentOption> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("current" in $$source)) {
+            this["current"] = "";
+        }
+        if (!("values" in $$source)) {
+            this["values"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentOption instance from a string or object.
+     */
+    static createFrom($$source: any = {}): AgentOption {
+        const $$createField4_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("values" in $$parsedSource) {
+            $$parsedSource["values"] = $$createField4_0($$parsedSource["values"]);
+        }
+        return new AgentOption($$parsedSource as Partial<AgentOption>);
+    }
+}
+
+/**
+ * AgentOptions is what an ACP agent offers to choose (models, reasoning levels, modes) and its
+ * slash commands.
+ */
+export class AgentOptions {
+    "agent": string;
+    "options": AgentOption[];
+    "commands"?: AgentCommand[];
+
+    /** Creates a new AgentOptions instance. */
+    constructor($$source: Partial<AgentOptions> = {}) {
+        if (!("agent" in $$source)) {
+            this["agent"] = "";
+        }
+        if (!("options" in $$source)) {
+            this["options"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentOptions instance from a string or object.
+     */
+    static createFrom($$source: any = {}): AgentOptions {
+        const $$createField1_0 = $$createType3;
+        const $$createField2_0 = $$createType5;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("options" in $$parsedSource) {
+            $$parsedSource["options"] = $$createField1_0($$parsedSource["options"]);
+        }
+        if ("commands" in $$parsedSource) {
+            $$parsedSource["commands"] = $$createField2_0($$parsedSource["commands"]);
+        }
+        return new AgentOptions($$parsedSource as Partial<AgentOptions>);
     }
 }
 
@@ -126,7 +227,7 @@ export class AskingRequest {
      * Creates a new AskingRequest instance from a string or object.
      */
     static createFrom($$source: any = {}): AskingRequest {
-        const $$createField5_0 = $$createType1;
+        const $$createField5_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("options" in $$parsedSource) {
             $$parsedSource["options"] = $$createField5_0($$parsedSource["options"]);
@@ -156,8 +257,8 @@ export class Changes {
      * Creates a new Changes instance from a string or object.
      */
     static createFrom($$source: any = {}): Changes {
-        const $$createField0_0 = $$createType3;
-        const $$createField1_0 = $$createType5;
+        const $$createField0_0 = $$createType9;
+        const $$createField1_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("turns" in $$parsedSource) {
             $$parsedSource["turns"] = $$createField0_0($$parsedSource["turns"]);
@@ -166,6 +267,152 @@ export class Changes {
             $$parsedSource["repos"] = $$createField1_0($$parsedSource["repos"]);
         }
         return new Changes($$parsedSource as Partial<Changes>);
+    }
+}
+
+/**
+ * Chat is one of the node's user's chats: an acpost thread, an ACP session of an agent of the
+ * node (started anywhere), or a cloud sandbox.
+ */
+export class Chat {
+    /**
+     * thread:<id>, session:<agent>/<id>, cloud:<sandbox>
+     */
+    "key": string;
+
+    /**
+     * thread, session, cloud
+     */
+    "kind": string;
+    "agent"?: string;
+    "title": string;
+    "cwd"?: string;
+    "repo"?: string;
+    "thread"?: string;
+
+    /**
+     * the ACP session (a thread's, or the chat itself)
+     */
+    "session"?: string;
+    "sandbox"?: string;
+
+    /**
+     * a sandbox's
+     */
+    "status"?: string;
+    "updated": string;
+    "messages"?: number;
+    "running"?: number;
+    "queued"?: number;
+    "failed"?: number;
+    "folder"?: string;
+
+    /**
+     * CloudAgent is the catalogue agent a sandbox was made from.
+     */
+    "cloud_agent"?: string;
+
+    /** Creates a new Chat instance. */
+    constructor($$source: Partial<Chat> = {}) {
+        if (!("key" in $$source)) {
+            this["key"] = "";
+        }
+        if (!("kind" in $$source)) {
+            this["kind"] = "";
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("updated" in $$source)) {
+            this["updated"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Chat instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Chat {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Chat($$parsedSource as Partial<Chat>);
+    }
+}
+
+/**
+ * Chats is the list, the folders, and what could not be listed (an agent that did not answer).
+ */
+export class Chats {
+    "items": Chat[];
+    "folders": store$0.Folder[];
+    "partial"?: string[];
+
+    /** Creates a new Chats instance. */
+    constructor($$source: Partial<Chats> = {}) {
+        if (!("items" in $$source)) {
+            this["items"] = [];
+        }
+        if (!("folders" in $$source)) {
+            this["folders"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Chats instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Chats {
+        const $$createField0_0 = $$createType13;
+        const $$createField1_0 = $$createType15;
+        const $$createField2_0 = $$createType16;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("items" in $$parsedSource) {
+            $$parsedSource["items"] = $$createField0_0($$parsedSource["items"]);
+        }
+        if ("folders" in $$parsedSource) {
+            $$parsedSource["folders"] = $$createField1_0($$parsedSource["folders"]);
+        }
+        if ("partial" in $$parsedSource) {
+            $$parsedSource["partial"] = $$createField2_0($$parsedSource["partial"]);
+        }
+        return new Chats($$parsedSource as Partial<Chats>);
+    }
+}
+
+/**
+ * CloudAgent is an agent of the cloud tenant's catalogue.
+ */
+export class CloudAgent {
+    /**
+     * as a sandbox is made from it: name, or shared/name
+     */
+    "ref": string;
+    "name": string;
+    "description"?: string;
+    "revision": number;
+
+    /** Creates a new CloudAgent instance. */
+    constructor($$source: Partial<CloudAgent> = {}) {
+        if (!("ref" in $$source)) {
+            this["ref"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudAgent instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudAgent {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CloudAgent($$parsedSource as Partial<CloudAgent>);
     }
 }
 
@@ -197,8 +444,8 @@ export class ForgeInfo {
      * Creates a new ForgeInfo instance from a string or object.
      */
     static createFrom($$source: any = {}): ForgeInfo {
-        const $$createField0_0 = $$createType6;
-        const $$createField1_0 = $$createType7;
+        const $$createField0_0 = $$createType17;
+        const $$createField1_0 = $$createType18;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("repo" in $$parsedSource) {
             $$parsedSource["repo"] = $$createField0_0($$parsedSource["repo"]);
@@ -242,6 +489,33 @@ export class Limits {
     }
 }
 
+export class OptionValue {
+    "value": string;
+    "name": string;
+    "description"?: string;
+    "group"?: string;
+
+    /** Creates a new OptionValue instance. */
+    constructor($$source: Partial<OptionValue> = {}) {
+        if (!("value" in $$source)) {
+            this["value"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new OptionValue instance from a string or object.
+     */
+    static createFrom($$source: any = {}): OptionValue {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new OptionValue($$parsedSource as Partial<OptionValue>);
+    }
+}
+
 /**
  * Status is GET /v1/health.
  */
@@ -279,7 +553,7 @@ export class Status {
      * Creates a new Status instance from a string or object.
      */
     static createFrom($$source: any = {}): Status {
-        const $$createField5_0 = $$createType9;
+        const $$createField5_0 = $$createType20;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("limits" in $$parsedSource) {
             $$parsedSource["limits"] = $$createField5_0($$parsedSource["limits"]);
@@ -427,8 +701,8 @@ export class UsageReport {
      * Creates a new UsageReport instance from a string or object.
      */
     static createFrom($$source: any = {}): UsageReport {
-        const $$createField14_0 = $$createType11;
-        const $$createField19_0 = $$createType12;
+        const $$createField14_0 = $$createType22;
+        const $$createField19_0 = $$createType16;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("uncosted" in $$parsedSource) {
             $$parsedSource["uncosted"] = $$createField14_0($$parsedSource["uncosted"]);
@@ -441,16 +715,26 @@ export class UsageReport {
 }
 
 // Private type creation functions
-const $$createType0 = acpx$0.Option.createFrom;
+const $$createType0 = OptionValue.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = store$0.TurnChanges.createFrom;
+const $$createType2 = AgentOption.createFrom;
 const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = store$0.RepoDiff.createFrom;
+const $$createType4 = AgentCommand.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = forge$0.Repo.createFrom;
-const $$createType7 = forge$0.Server.createFrom;
-const $$createType8 = Limits.createFrom;
-const $$createType9 = $Create.Nullable($$createType8);
-const $$createType10 = store$0.ModelTokens.createFrom;
-const $$createType11 = $Create.Map($Create.Any, $$createType10);
-const $$createType12 = $Create.Array($Create.Any);
+const $$createType6 = acpx$0.Option.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = store$0.TurnChanges.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = store$0.RepoDiff.createFrom;
+const $$createType11 = $Create.Array($$createType10);
+const $$createType12 = Chat.createFrom;
+const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = store$0.Folder.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = $Create.Array($Create.Any);
+const $$createType17 = forge$0.Repo.createFrom;
+const $$createType18 = forge$0.Server.createFrom;
+const $$createType19 = Limits.createFrom;
+const $$createType20 = $Create.Nullable($$createType19);
+const $$createType21 = store$0.ModelTokens.createFrom;
+const $$createType22 = $Create.Map($Create.Any, $$createType21);

@@ -6,6 +6,7 @@ export {
     Conversation,
     Event,
     File,
+    Folder,
     Message,
     ModelTokens,
     RepoDiff,

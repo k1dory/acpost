@@ -1,14 +1,61 @@
 <script lang="ts">
   import { app } from "../lib/state.svelte";
-  import { who } from "../lib/format";
   import Icon from "./Icon.svelte";
+  import TaskSetup from "./TaskSetup.svelte";
 
   let text = $state("");
   let files = $state<{ name: string; type: string; size: number; data: string }[]>([]);
   let busy = $state(false);
   let ta: HTMLTextAreaElement;
   let picker: HTMLInputElement;
-  const cloud = $derived(app.agents.find(a => a.address === app.target)?.driver === "sandbox");
+  let pickerFor = $state<"" | "model" | "effort" | "mode">("");
+  let slashSel = $state(0);
+
+  const isNew = $derived(!app.chat && !app.thread);
+  // The agent the message goes to (for its options): a new task's choice, or the chat's.
+  const agent = $derived(isNew ? (app.draft.where === "mac" ? app.draft.agent : "") : app.target);
+  const opts = $derived(app.options[agent]);
+  const byCat = (cat: string) => opts?.options.find(o => o.category === cat);
+  const model = $derived(byCat("model"));
+  const effort = $derived(byCat("thought_level"));
+  const mode = $derived(byCat("mode"));
+  const cloud = $derived(isNew ? app.draft.where === "cloud" : agent.startsWith("agent:sb_"));
+
+  $effect(() => { if (agent) app.loadOptions(agent); });
+
+  // The slash menu: the settings, then the agent's own commands.
+  const slash = $derived.by(() => {
+    if (!text.startsWith("/") || text.includes(" ") || text.includes("\n")) return [];
+    const q = text.slice(1).toLowerCase();
+    const items: { name: string; description: string; pick?: "model" | "effort" | "mode" }[] = [];
+    if (model) items.push({ name: "model", description: "Choose the model", pick: "model" });
+    if (effort) items.push({ name: "effort", description: "Choose the reasoning effort", pick: "effort" });
+    if (mode) items.push({ name: "mode", description: "Choose the mode", pick: "mode" });
+    // The agent's own commands, but for the settings above (Claude Code has its /model too).
+    const seen = new Set(items.map(i => i.name));
+    for (const c of opts?.commands ?? []) {
+      if (c.name && !seen.has(c.name)) { seen.add(c.name); items.push({ name: c.name, description: c.description ?? "" }); }
+    }
+    return items.filter(i => i.name.toLowerCase().startsWith(q));
+  });
+
+  function current(o: typeof model, draft: string) {
+    if (!o) return "";
+    const v = draft || o.current;
+    return o.values.find(x => x.value === v)?.name ?? v;
+  }
+  function setDraft(k: "model" | "effort" | "mode", v: string) {
+    app.draft[k] = v;
+    pickerFor = "";
+    ta?.focus();
+  }
+  function takeSlash(i: number) {
+    const it = slash[i];
+    if (!it) return;
+    if (it.pick) { text = ""; pickerFor = it.pick; return; }
+    text = "/" + it.name + " ";
+    ta?.focus();
+  }
 
   async function send() {
     const body = text.trim();
@@ -21,6 +68,12 @@
     ta?.focus();
   }
   function key(e: KeyboardEvent) {
+    if (slash.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); slashSel = (slashSel + 1) % slash.length; return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); slashSel = (slashSel - 1 + slash.length) % slash.length; return; }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); takeSlash(slashSel); return; }
+    }
+    if (e.key === "Escape") pickerFor = "";
     if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); send(); }
   }
   async function add(list: FileList | null) {
@@ -33,10 +86,35 @@
   }
   function kb(n: number) { return n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`; }
   $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } text; });
+  $effect(() => { slash.length; slashSel = 0; });
 </script>
+
+{#if isNew}<TaskSetup />{/if}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="card comp" ondragover={e => e.preventDefault()} ondrop={e => { e.preventDefault(); add(e.dataTransfer?.files ?? null); }}>
+  {#if slash.length}
+    <div class="menu card">
+      {#each slash as it, i (it.name)}
+        <button class="mi" class:sel={i === slashSel} onmouseenter={() => (slashSel = i)} onclick={() => takeSlash(i)}>
+          <span class="mono">/{it.name}</span><span class="muted">{it.description}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+  {#if pickerFor}
+    {@const o = pickerFor === "model" ? model : pickerFor === "effort" ? effort : mode}
+    {#if o}
+      <div class="menu card">
+        <div class="mh">{o.name}</div>
+        {#each o.values as v (v.value)}
+          <button class="mi" class:sel={(app.draft[pickerFor] || o.current) === v.value} onclick={() => setDraft(pickerFor as any, v.value)}>
+            <span>{v.name}</span>{#if v.description}<span class="muted">{v.description}</span>{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  {/if}
   {#if files.length}
     <div class="files">
       {#each files as f, i}
@@ -45,16 +123,14 @@
       {/each}
     </div>
   {/if}
-  <textarea bind:this={ta} bind:value={text} onkeydown={key} rows="1" placeholder={app.thread ? "Reply…" : "What should the agent do?"}></textarea>
+  <textarea bind:this={ta} bind:value={text} onkeydown={key} rows="1"
+    placeholder={isNew ? "What should the agent do?  ( / for model, effort, commands )" : "Reply…"}></textarea>
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title="Attach files"><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />
-    <label class="agent">
-      <Icon name={cloud ? "cloud" : "bot"} size={14} />
-      <select bind:value={app.target}>
-        {#each app.agents as a (a.address)}<option value={a.address}>{who(a.address).name}{a.node ? ` @${a.node}` : ""}{a.driver === "sandbox" ? " · cloud" : ""}</option>{/each}
-      </select>
-    </label>
+    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title="Model">{current(model, app.draft.model)}</button>{/if}
+    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title="Reasoning effort"><Icon name="brain" size={11} /> {current(effort, app.draft.effort)}</button>{/if}
+    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title="Mode">{current(mode, app.draft.mode)}</button>{/if}
     {#if cloud}<span class="chip muted" title="A cloud agent runs without asking; opening or merging a pull request waits for you">runs without asking</span>{/if}
     <span class="sp"></span>
     <span class="hint muted">⌘↵</span>
@@ -63,14 +139,19 @@
 </div>
 
 <style>
-  .comp { padding: 10px 10px 8px 14px; border-radius: var(--r-panel); }
+  .comp { position: relative; padding: 10px 10px 8px 14px; border-radius: var(--r-panel); }
   textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; padding: 4px 2px 8px; font-size: 13.5px; line-height: 1.5; max-height: 240px; user-select: text; cursor: text; }
-  .bar { display: flex; align-items: center; gap: 8px; }
+  .bar { display: flex; align-items: center; gap: 6px; }
   .sp { flex: 1; }
   .hint { font: 11px var(--mono); }
   .send { width: 30px; height: 30px; padding: 0; justify-content: center; border-radius: 10px; }
-  .agent { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 8px; border-radius: 9px; border: 1px solid var(--line); color: var(--ink-2); }
-  .agent select { border: 0; background: transparent; outline: 0; font-size: 12px; font-weight: 500; max-width: 200px; }
+  .opt { height: 24px; cursor: default; }
+  .opt:hover { background: var(--hover); }
   .files { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px; }
   .x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 2px; display: grid; }
+  .menu { position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 30; padding: 6px; display: grid; max-height: 300px; overflow: auto; }
+  .mh { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; padding: 4px 10px 6px; }
+  .mi { display: flex; gap: 12px; align-items: baseline; border: 0; background: transparent; text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; }
+  .mi.sel, .mi:hover { background: var(--hover); }
+  .mi .muted { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

@@ -76,11 +76,20 @@ export function Changes(id: string): $CancellablePromise<client$0.Changes> {
 }
 
 /**
+ * Chats lists the user's chats (threads, Claude Code and Codex sessions, cloud sandboxes) and folders.
+ */
+export function Chats(): $CancellablePromise<client$0.Chats> {
+    return $Call.ByID(2665631487).then(($result: any) => {
+        return $$createType6($result);
+    });
+}
+
+/**
  * Checks lists CI runs of a ref (the agent's branch when empty).
  */
 export function Checks(agent: string, ref: string): $CancellablePromise<forge$0.Check[]> {
     return $Call.ByID(2396732497, agent, ref).then(($result: any) => {
-        return $$createType7($result);
+        return $$createType8($result);
     });
 }
 
@@ -92,12 +101,52 @@ export function CloseTerminal(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * CloudAgents lists the cloud tenant's catalogue.
+ */
+export function CloudAgents(): $CancellablePromise<client$0.CloudAgent[]> {
+    return $Call.ByID(1938270843).then(($result: any) => {
+        return $$createType10($result);
+    });
+}
+
+/**
+ * CloudHistory reads a cloud sandbox's conversation.
+ */
+export function CloudHistory(id: string): $CancellablePromise<store$0.Event[]> {
+    return $Call.ByID(1162270963, id).then(($result: any) => {
+        return $$createType12($result);
+    });
+}
+
+/**
  * Conversations lists threads, the most recently active first.
  */
 export function Conversations(before: string): $CancellablePromise<$models.ConversationPage> {
     return $Call.ByID(233349500, before).then(($result: any) => {
-        return $$createType8($result);
+        return $$createType13($result);
     });
+}
+
+/**
+ * CreateCloudTask makes the sandbox of a new cloud task.
+ */
+export function CreateCloudTask(agent: string, repo: string, name: string): $CancellablePromise<client$0.Chat> {
+    return $Call.ByID(1313616452, agent, repo, name).then(($result: any) => {
+        return $$createType14($result);
+    });
+}
+
+/**
+ * CreateFolder, RenameFolder, DeleteFolder, MoveChat: the app's folders of chats.
+ */
+export function CreateFolder(name: string): $CancellablePromise<store$0.Folder> {
+    return $Call.ByID(1518361552, name).then(($result: any) => {
+        return $$createType15($result);
+    });
+}
+
+export function DeleteFolder(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1055176159, id);
 }
 
 /**
@@ -105,7 +154,7 @@ export function Conversations(before: string): $CancellablePromise<$models.Conve
  */
 export function Events(id: string, after: number): $CancellablePromise<store$0.Event[]> {
     return $Call.ByID(3699874913, id, after).then(($result: any) => {
-        return $$createType10($result);
+        return $$createType12($result);
     });
 }
 
@@ -122,8 +171,15 @@ export function Follow(id: string, after: number): $CancellablePromise<void> {
  */
 export function Forge(agent: string): $CancellablePromise<client$0.ForgeInfo> {
     return $Call.ByID(4032596231, agent).then(($result: any) => {
-        return $$createType11($result);
+        return $$createType16($result);
     });
+}
+
+/**
+ * Home is the user's home directory (the default task directory).
+ */
+export function Home(): $CancellablePromise<string> {
+    return $Call.ByID(752005655);
 }
 
 /**
@@ -135,14 +191,34 @@ export function Message(id: string): $CancellablePromise<store$0.Message> {
     });
 }
 
+export function MoveChat(chat: string, folder: string): $CancellablePromise<void> {
+    return $Call.ByID(2746657731, chat, folder);
+}
+
 /**
  * OpenTerminal opens a shell (in the agent's working directory when one is named) and streams
  * its output as "term:<id>" (base64 chunks).
  */
 export function OpenTerminal(agent: string, cols: number, rows: number): $CancellablePromise<client$0.Terminal> {
     return $Call.ByID(2110126032, agent, cols, rows).then(($result: any) => {
-        return $$createType12($result);
+        return $$createType17($result);
     });
+}
+
+/**
+ * Options is what an agent of this Mac offers to choose (models, effort, modes) and its commands.
+ */
+export function Options(agent: string): $CancellablePromise<client$0.AgentOptions> {
+    return $Call.ByID(3215550814, agent).then(($result: any) => {
+        return $$createType18($result);
+    });
+}
+
+/**
+ * PickDirectory asks for a directory (the system's dialog); "" when none was chosen.
+ */
+export function PickDirectory(start: string): $CancellablePromise<string> {
+    return $Call.ByID(2293712276, start);
 }
 
 /**
@@ -150,8 +226,12 @@ export function OpenTerminal(agent: string, cols: number, rows: number): $Cancel
  */
 export function Pulls(agent: string, state: string): $CancellablePromise<forge$0.Pull[]> {
     return $Call.ByID(2911689412, agent, state).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType20($result);
     });
+}
+
+export function RenameFolder(id: string, name: string): $CancellablePromise<void> {
+    return $Call.ByID(3968049898, id, name);
 }
 
 /**
@@ -164,11 +244,29 @@ export function Send(to: string, body: string, thread: string, files: $models.Up
 }
 
 /**
+ * SendTask sends a message with its directory and settings.
+ */
+export function SendTask(t: $models.Task): $CancellablePromise<store$0.Message> {
+    return $Call.ByID(1924030611, t).then(($result: any) => {
+        return $$createType4($result);
+    });
+}
+
+/**
+ * SessionHistory replays a Claude Code or Codex session started anywhere.
+ */
+export function SessionHistory(agent: string, id: string, cwd: string): $CancellablePromise<store$0.Event[]> {
+    return $Call.ByID(3891057372, agent, id, cwd).then(($result: any) => {
+        return $$createType12($result);
+    });
+}
+
+/**
  * Status says whether the node answers, and what it is.
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType15($result);
+        return $$createType21($result);
     });
 }
 
@@ -191,7 +289,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType16($result);
+        return $$createType22($result);
     });
 }
 
@@ -207,7 +305,7 @@ export function Unfollow(id: string): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType18($result);
+        return $$createType24($result);
     });
 }
 
@@ -218,16 +316,22 @@ const $$createType2 = client$0.AskingRequest.createFrom;
 const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = store$0.Message.createFrom;
 const $$createType5 = client$0.Changes.createFrom;
-const $$createType6 = forge$0.Check.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = $models.ConversationPage.createFrom;
-const $$createType9 = store$0.Event.createFrom;
+const $$createType6 = client$0.Chats.createFrom;
+const $$createType7 = forge$0.Check.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = client$0.CloudAgent.createFrom;
 const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = client$0.ForgeInfo.createFrom;
-const $$createType12 = client$0.Terminal.createFrom;
-const $$createType13 = forge$0.Pull.createFrom;
-const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = $models.Connection.createFrom;
-const $$createType16 = $Create.Array($$createType4);
-const $$createType17 = client$0.UsageReport.createFrom;
-const $$createType18 = $Create.Array($$createType17);
+const $$createType11 = store$0.Event.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = $models.ConversationPage.createFrom;
+const $$createType14 = client$0.Chat.createFrom;
+const $$createType15 = store$0.Folder.createFrom;
+const $$createType16 = client$0.ForgeInfo.createFrom;
+const $$createType17 = client$0.Terminal.createFrom;
+const $$createType18 = client$0.AgentOptions.createFrom;
+const $$createType19 = forge$0.Pull.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = $models.Connection.createFrom;
+const $$createType22 = $Create.Array($$createType4);
+const $$createType23 = client$0.UsageReport.createFrom;
+const $$createType24 = $Create.Array($$createType23);

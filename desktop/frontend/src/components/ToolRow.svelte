@@ -8,7 +8,8 @@
   let open = $state(false);
   const st = $derived(toolState(tool, final));
   const e = $derived(editTotals(tool));
-  const took = $derived(tool.ended ? dur(tool.ended - tool.started) : "");
+  // A replayed history has no real timing: no duration then.
+  const took = $derived(tool.ended && tool.ended - tool.started >= 5 ? dur(tool.ended - tool.started) : "");
   const cmd = $derived(typeof tool.input?.command === "string" ? tool.input.command : Array.isArray(tool.input?.command) ? tool.input.command.join(" ") : "");
   const hasMore = $derived(!!(tool.output || tool.edits?.length || tool.input));
 </script>

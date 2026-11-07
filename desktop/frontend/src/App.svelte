@@ -10,13 +10,13 @@
     try { app.theme = (localStorage.getItem("theme") as any) || "light"; } catch {}
     applyTheme(app.theme);
     app.connect();
-    const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadConvs(); } }, 15000);
+    const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadChats(); } }, 30000);
     return () => clearInterval(poll);
   });
 
   function keys(e: KeyboardEvent) {
     if (!e.metaKey) return;
-    if (e.key === "n") { e.preventDefault(); app.open(""); }
+    if (e.key === "n") { e.preventDefault(); app.newTask(); }
     else if (e.key === "\\") { e.preventDefault(); app.panel = !app.panel; }
     else if (e.key === "j") { e.preventDefault(); app.panel = true; app.tab = "terminal"; }
   }

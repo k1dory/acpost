@@ -3,11 +3,7 @@
   import { who, clock } from "../lib/format";
   import Avatar from "./Avatar.svelte";
   import Markdown from "./Markdown.svelte";
-  import ToolRow from "./ToolRow.svelte";
-  import Approval from "./Approval.svelte";
-  import Thought from "./Thought.svelte";
-  import Plan from "./Plan.svelte";
-  import ContextMeter from "./ContextMeter.svelte";
+  import TurnBlocks from "./TurnBlocks.svelte";
   import Icon from "./Icon.svelte";
 
   let { m }: { m: Msg } = $props();
@@ -37,30 +33,9 @@
       {:else if m.state === "queued"}<span class="chip warn">queued</span>
       {:else if m.state === "failed"}<span class="chip crit">failed</span>
       {:else if m.state === "cancelled"}<span class="chip">cancelled</span>{/if}
-      {#if turn?.usage}<span class="sp"></span><ContextMeter u={turn.usage} />{/if}
     </div>
 
-    {#if turn}
-      {#each turn.blocks as b, i}
-        {#if b.t === "text"}
-          <Markdown text={b.text} />
-        {:else if b.t === "thought"}
-          <Thought text={b.text} ms={b.end - b.start} live={!done && i === turn.blocks.length - 1} />
-        {:else if b.t === "tool"}
-          {@const t = turn.tools.get(b.id)}
-          {#if t}<ToolRow tool={t} final={done} />{/if}
-        {:else if b.t === "request"}
-          {@const r = turn.requests.get(b.id)}
-          {#if r}<Approval req={r} msg={m.id} />{/if}
-        {:else if b.t === "plan"}
-          <Plan entries={b.entries} />
-        {:else if b.t === "notice"}
-          <div class="notice" class:warnn={b.severity === "warning" || b.severity === "error"}>{b.text}</div>
-        {:else if b.t === "changes"}
-          <button class="btn sm" onclick={() => { app.focus = m.id; app.tab = "changes"; app.panel = true; }}><Icon name="diff" size={13} /> Changed files</button>
-        {/if}
-      {/each}
-    {/if}
+    {#if turn}<TurnBlocks view={turn} msg={m.id} {done} />{/if}
 
     {#if replyDiffers || (done && !streamed && m.reply)}
       <Markdown text={m.reply ?? ""} />
@@ -81,15 +56,12 @@
   .pair { display: grid; gap: 18px; padding: 4px 0 32px; }
   .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; flex-wrap: wrap; }
   .nm { font-weight: 600; }
-  .sp { flex: 1; }
   .user { justify-self: end; max-width: 85%; }
   .user .meta { justify-content: flex-end; }
   .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
   .agent { min-width: 0; display: grid; gap: 8px; }
   .agent > .meta { margin-bottom: 2px; }
-  .notice { font-size: 12px; color: var(--muted); }
-  .notice.warnn { color: var(--warn); }
   .err { padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
   .wait { display: grid; gap: 8px; } .wait .sk { height: 12px; }
   .acts { margin-top: 2px; }

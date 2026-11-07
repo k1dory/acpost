@@ -1,0 +1,225 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/config"
+	"github.com/k1dory/acpost/internal/server"
+	"github.com/k1dory/acpost/internal/store"
+)
+
+// The app's own node: when none answers on the configured socket, the app runs one itself (the
+// configuration written first if there is none: Claude Code and Codex over ACP, the cloud of the
+// first agent-sandbox env file found).
+
+// ensureNode answers whether a node serves now, starting one in the app when none does.
+func (n *Node) ensureNode() error {
+	c, err := n.client()
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, err = c.Status(ctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+	}
+	if os.Getenv("ACPOST_NODE") != "" {
+		return fmt.Errorf("the node at ACPOST_NODE does not answer: %w", err)
+	}
+	path := config.DefaultPath()
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+		if err := writeDefaultConfig(path); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	logPath := filepath.Join(config.StateDir(), "app-node.log")
+	_ = os.MkdirAll(filepath.Dir(logPath), 0o700)
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	ready := make(chan struct{})
+	failed := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	n.stopNode = cancel
+	go func() {
+		defer logf.Close()
+		log := slog.New(slog.NewTextHandler(logf, nil))
+		if err := server.Run(ctx, cfg, log, func() { close(ready) }); err != nil {
+			failed <- err
+		}
+	}()
+	select {
+	case <-ready:
+		n.mu.Lock()
+		n.c = nil // reconnect to the node now listening
+		n.mu.Unlock()
+		return nil
+	case err := <-failed:
+		return fmt.Errorf("the node did not start: %w (log %s)", err, logPath)
+	case <-time.After(20 * time.Second):
+		return fmt.Errorf("the node did not start in 20 s (log %s)", logPath)
+	}
+}
+
+// writeDefaultConfig writes a node for this Mac: the ACP agents found, and a cloud when an
+// agent-sandbox env file is there.
+func writeDefaultConfig(path string) error {
+	var b strings.Builder
+	b.WriteString("# Written by the acpost app. See the README for what else goes here.\nagents:\n")
+	found := 0
+	for _, a := range []struct{ name, bin string }{{"claude", "claude-agent-acp"}, {"codex", "codex-acp"}} {
+		p, err := exec.LookPath(a.bin)
+		if err != nil {
+			for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+				if _, e := os.Stat(filepath.Join(dir, a.bin)); e == nil {
+					p, err = filepath.Join(dir, a.bin), nil
+					break
+				}
+			}
+		}
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s:\n    driver: acp\n    command: [%q]\n    permissions: ask\n    session: thread\n    concurrency: 4\n", a.name, p)
+		found++
+	}
+	if found == 0 {
+		return fmt.Errorf("neither claude-agent-acp nor codex-acp is installed (npm i -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp)")
+	}
+	home, _ := os.UserHomeDir()
+	if envs, _ := filepath.Glob(filepath.Join(home, ".config", "agent-sandbox", "*.env")); len(envs) > 0 {
+		fmt.Fprintf(&b, "cloud: {env_file: %q}\n", envs[0])
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// Chats lists the user's chats (threads, Claude Code and Codex sessions, cloud sandboxes) and folders.
+func (n *Node) Chats() (client.Chats, error) {
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.Chats, error) { return c.Chats(ctx) })
+}
+
+// Options is what an agent of this Mac offers to choose (models, effort, modes) and its commands.
+func (n *Node) Options(agent string) (client.AgentOptions, error) {
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.AgentOptions, error) {
+		return c.Options(ctx, strings.TrimPrefix(agent, "agent:"))
+	})
+}
+
+// SessionHistory replays a Claude Code or Codex session started anywhere.
+func (n *Node) SessionHistory(agent, id, cwd string) ([]store.Event, error) {
+	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) ([]store.Event, error) {
+		return c.SessionHistory(ctx, strings.TrimPrefix(agent, "agent:"), id, cwd)
+	})
+}
+
+// CloudAgents lists the cloud tenant's catalogue.
+func (n *Node) CloudAgents() ([]client.CloudAgent, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]client.CloudAgent, error) { return c.CloudAgents(ctx) })
+}
+
+// CloudHistory reads a cloud sandbox's conversation.
+func (n *Node) CloudHistory(id string) ([]store.Event, error) {
+	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) ([]store.Event, error) { return c.CloudHistory(ctx, id) })
+}
+
+// CreateCloudTask makes the sandbox of a new cloud task.
+func (n *Node) CreateCloudTask(agent, repo, name string) (client.Chat, error) {
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.Chat, error) {
+		return c.CreateCloudTask(ctx, client.CloudTask{Agent: agent, Repo: repo, Name: name})
+	})
+}
+
+// Task is a message as the composer sends it.
+type Task struct {
+	To      string   `json:"to"`
+	Body    string   `json:"body"`
+	Thread  string   `json:"thread,omitempty"`
+	Session string   `json:"session,omitempty"` // continue an ACP session started elsewhere
+	Cwd     string   `json:"cwd,omitempty"`
+	Model   string   `json:"model,omitempty"`
+	Effort  string   `json:"effort,omitempty"`
+	Mode    string   `json:"mode,omitempty"`
+	Files   []Upload `json:"files,omitempty"`
+}
+
+// SendTask sends a message with its directory and settings.
+func (n *Node) SendTask(t Task) (store.Message, error) {
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (store.Message, error) {
+		r := client.SendRequest{To: t.To, Body: t.Body, Thread: t.Thread, Session: t.Session, Cwd: t.Cwd, Model: t.Model, Effort: t.Effort, Mode: t.Mode}
+		files, err := decodeUploads(t.Files)
+		if err != nil {
+			return store.Message{}, err
+		}
+		r.Files = files
+		m, _, err := c.Send(ctx, r, "")
+		return m, err
+	})
+}
+
+// CreateFolder, RenameFolder, DeleteFolder, MoveChat: the app's folders of chats.
+func (n *Node) CreateFolder(name string) (store.Folder, error) {
+	return call(n, func(ctx context.Context, c *client.Client) (store.Folder, error) { return c.CreateFolder(ctx, name) })
+}
+
+func (n *Node) RenameFolder(id, name string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.UpdateFolder(ctx, id, name, nil)
+	})
+	return err
+}
+
+func (n *Node) DeleteFolder(id string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) { return struct{}{}, c.DeleteFolder(ctx, id) })
+	return err
+}
+
+func (n *Node) MoveChat(chat, folder string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.MoveChat(ctx, chat, folder)
+	})
+	return err
+}
+
+// PickDirectory asks for a directory (the system's dialog); "" when none was chosen.
+func (n *Node) PickDirectory(start string) (string, error) {
+	d := n.app.Dialog.OpenFile().CanChooseDirectories(true).CanChooseFiles(false).SetTitle("The task's directory")
+	if start != "" {
+		d = d.SetDirectory(start)
+	}
+	return d.PromptForSingleSelection()
+}
+
+// Home is the user's home directory (the default task directory).
+func (n *Node) Home() string {
+	h, _ := os.UserHomeDir()
+	return h
+}
+
+func callLong[T any](n *Node, d time.Duration, fn func(ctx context.Context, c *client.Client) (T, error)) (T, error) {
+	var zero T
+	c, err := n.client()
+	if err != nil {
+		return zero, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	return fn(ctx, c)
+}

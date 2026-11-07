@@ -29,15 +29,19 @@ type Node struct {
 	mu      sync.Mutex
 	c       *client.Client
 	url     string
-	follows map[string]context.CancelFunc
-	terms   map[string]context.CancelFunc
+	follows  map[string]context.CancelFunc
+	terms    map[string]context.CancelFunc
+	stopNode context.CancelFunc // the node the app runs itself, if it does
+	startErr string
 }
 
 // ServiceStartup connects to the node (a failure is told by Status, the app still opens).
 func (n *Node) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	n.follows = map[string]context.CancelFunc{}
 	n.terms = map[string]context.CancelFunc{}
-	_, _ = n.client()
+	if err := n.ensureNode(); err != nil {
+		n.startErr = err.Error()
+	}
 	return nil
 }
 
@@ -50,6 +54,9 @@ func (n *Node) ServiceShutdown() error {
 	}
 	for _, stop := range n.terms {
 		stop()
+	}
+	if n.stopNode != nil {
+		n.stopNode()
 	}
 	return nil
 }
@@ -115,6 +122,12 @@ func (n *Node) Status() Connection {
 	c, err := n.client()
 	if err != nil {
 		return Connection{Error: err.Error()}
+	}
+	if n.startErr != "" {
+		if err := n.ensureNode(); err != nil {
+			return Connection{Error: err.Error()}
+		}
+		n.startErr = ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -184,13 +197,11 @@ type Upload struct {
 func (n *Node) Send(to, body, thread string, files []Upload) (store.Message, error) {
 	return call(n, func(ctx context.Context, c *client.Client) (store.Message, error) {
 		r := client.SendRequest{To: to, Body: body, Thread: thread}
-		for _, f := range files {
-			b, err := base64.StdEncoding.DecodeString(f.Data)
-			if err != nil {
-				return store.Message{}, fmt.Errorf("%s: %w", f.Name, err)
-			}
-			r.Files = append(r.Files, store.File{Name: f.Name, Type: f.Type, Size: len(b), Data: b})
+		fs, err := decodeUploads(files)
+		if err != nil {
+			return store.Message{}, err
 		}
+		r.Files = fs
 		m, _, err := c.Send(ctx, r, "")
 		return m, err
 	})
@@ -421,4 +432,16 @@ func (n *Node) CloseTerminal(id string) error {
 		return struct{}{}, c.CloseTerminal(ctx, id)
 	})
 	return err
+}
+
+func decodeUploads(files []Upload) ([]store.File, error) {
+	var out []store.File
+	for _, f := range files {
+		b, err := base64.StdEncoding.DecodeString(f.Data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f.Name, err)
+		}
+		out = append(out, store.File{Name: f.Name, Type: f.Type, Size: len(b), Data: b})
+	}
+	return out, nil
 }

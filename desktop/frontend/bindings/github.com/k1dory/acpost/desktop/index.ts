@@ -9,5 +9,6 @@ export {
 export {
     Connection,
     ConversationPage,
+    Task,
     Upload
 } from "./models.js";

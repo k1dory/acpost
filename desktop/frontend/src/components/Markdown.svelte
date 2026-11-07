@@ -8,7 +8,8 @@
 <div class="md selectable">{@html html}</div>
 
 <style>
-  .md { line-height: 1.65; overflow-wrap: anywhere; font-size: 13.5px; }
+  .md { line-height: 1.65; overflow-wrap: anywhere; font-size: 13.5px; min-width: 0; max-width: 100%; }
+  .md :global(table) { display: block; overflow-x: auto; max-width: 100%; }
   .md :global(p) { margin: 0 0 .8em; }
   .md :global(p:last-child) { margin-bottom: 0; }
   .md :global(h1), .md :global(h2), .md :global(h3) { font-size: 14.5px; font-weight: 600; margin: 1em 0 .4em; }

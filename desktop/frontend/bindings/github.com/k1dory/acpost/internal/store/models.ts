@@ -211,6 +211,50 @@ export class File {
 export type Files = File[];
 
 /**
+ * Folder is a folder of chats.
+ */
+export class Folder {
+    "id": string;
+    "name": string;
+    "pos": number;
+
+    /**
+     * the chats in it
+     */
+    "chats": string[];
+
+    /** Creates a new Folder instance. */
+    constructor($$source: Partial<Folder> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("pos" in $$source)) {
+            this["pos"] = 0;
+        }
+        if (!("chats" in $$source)) {
+            this["chats"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Folder instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Folder {
+        const $$createField3_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("chats" in $$parsedSource) {
+            $$parsedSource["chats"] = $$createField3_0($$parsedSource["chats"]);
+        }
+        return new Folder($$parsedSource as Partial<Folder>);
+    }
+}
+
+/**
  * Message is a message as stored. Lists leave Body and Reply empty (BodySize and ReplySize say how
  * big they are).
  */

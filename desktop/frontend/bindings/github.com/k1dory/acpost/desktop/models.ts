@@ -79,6 +79,49 @@ export class ConversationPage {
 }
 
 /**
+ * Task is a message as the composer sends it.
+ */
+export class Task {
+    "to": string;
+    "body": string;
+    "thread"?: string;
+
+    /**
+     * continue an ACP session started elsewhere
+     */
+    "session"?: string;
+    "cwd"?: string;
+    "model"?: string;
+    "effort"?: string;
+    "mode"?: string;
+    "files"?: Upload[];
+
+    /** Creates a new Task instance. */
+    constructor($$source: Partial<Task> = {}) {
+        if (!("to" in $$source)) {
+            this["to"] = "";
+        }
+        if (!("body" in $$source)) {
+            this["body"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Task instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Task {
+        const $$createField8_0 = $$createType4;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("files" in $$parsedSource) {
+            $$parsedSource["files"] = $$createField8_0($$parsedSource["files"]);
+        }
+        return new Task($$parsedSource as Partial<Task>);
+    }
+}
+
+/**
  * Upload is a file the composer attaches.
  */
 export class Upload {
@@ -118,3 +161,5 @@ export class Upload {
 const $$createType0 = client$0.Status.createFrom;
 const $$createType1 = store$0.Conversation.createFrom;
 const $$createType2 = $Create.Array($$createType1);
+const $$createType3 = Upload.createFrom;
+const $$createType4 = $Create.Array($$createType3);
