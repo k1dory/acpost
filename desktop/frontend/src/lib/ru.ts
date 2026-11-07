@@ -265,6 +265,8 @@ export const ru: Record<string, string> = {
   "Environment": "Переменные окружения",
   "Headers": "Заголовки",
   "Close": "Закрыть",
+  "in {agent}'s directory": "в папке агента {agent}",
+  "home directory": "домашняя папка",
   "file": "файл",
   "files": "файлов",
   "#file": "файл|файла|файлов",

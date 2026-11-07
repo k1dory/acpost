@@ -8,6 +8,8 @@
   import Terminal from "./Terminal.svelte";
   import Forge from "./Forge.svelte";
 
+  // Hidden (another view, or the panel closed) it stays mounted: the terminal's shell goes on.
+  let { hidden = false }: { hidden?: boolean } = $props();
   let width = $state(420);
   try { width = +(localStorage.getItem("panel") ?? 420) || 420; } catch {}
   import type { PanelTab } from "../lib/state.svelte";
@@ -46,14 +48,14 @@
 <svelte:window onclick={e => { if (adding && !addEl?.contains(e.target as Node)) adding = false; }}
   onkeydown={e => { if (e.key === "Escape") adding = false; }} onresize={() => (adding = false)} />
 
-<aside class="rp" style="width:{width}px">
+<aside class="rp" class:hidden style="width:{width}px">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="grip" onpointerdown={drag}></div>
   <div class="tabs drag">
     {#each app.tabs as k (k)}
       {@const v = views[k]}
       <div class="tab nodrag" class:on={app.tab === k}>
-        <button class="tl" onclick={() => (app.tab = k)} title={t(v.title ?? v.label)}><Icon name={v.icon} size={14} />{t(v.label)}{#if k === "activity" && asks}<span class="badge">{asks}</span>{/if}</button>
+        <button class="tl" onclick={() => app.showTab(k)} title={t(v.title ?? v.label)}><Icon name={v.icon} size={14} />{t(v.label)}{#if k === "activity" && asks}<span class="badge">{asks}</span>{/if}</button>
         <button class="x" onclick={() => app.closeTab(k)} aria-label={t("Close")} title={t("Close")}><Icon name="x" size={10} /></button>
       </div>
     {/each}
@@ -75,9 +77,11 @@
     {#if !app.tabs.length}<div class="empty">{t("Nothing open here. The + opens activity, changes, a terminal, pull requests or the preview.")}</div>
     {:else if app.tab === "activity"}<Activity />
     {:else if app.tab === "changes"}<Changes />
-    {:else if app.tab === "terminal"}<Terminal />
     {:else if app.tab === "prs"}<Forge />
-    {:else}<div class="empty">{t("The preview opens the agent's dev server in a native view beside the conversation, and hands its errors to the agent.")}<span class="chip">{t("next")}</span></div>{/if}
+    {:else if app.tab === "preview"}<div class="empty">{t("The preview opens the agent's dev server in a native view beside the conversation, and hands its errors to the agent.")}<span class="chip">{t("next")}</span></div>{/if}
+    <!-- The terminal, while its tab is open, stays mounted (hidden behind the others): its shell
+         and what it printed survive switching tabs, other views, the panel closed. -->
+    {#if app.tabs.includes("terminal")}<div class="pane" class:off={app.tab !== "terminal" || !app.tabs.length}><Terminal /></div>{/if}
   </div></div>
 </aside>
 
@@ -102,5 +106,8 @@
   .tab.on { background: var(--card); color: var(--ink); box-shadow: inset 0 1px 0 var(--edge), 0 0 0 1px var(--line), var(--shadow); }
   .badge { min-width: 17px; height: 17px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
   .body { flex: 1; min-height: 0; margin: 0 12px 12px; display: flex; }
-  .body > .inner { flex: 1; min-height: 0; }
+  .body > .inner { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .body > .inner > :global(*) { flex: 1; min-height: 0; }
+  .pane.off { display: none; }
+  .rp.hidden { display: none; }
 </style>

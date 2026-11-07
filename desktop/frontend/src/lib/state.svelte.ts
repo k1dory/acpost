@@ -27,6 +27,10 @@ export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string;
 
 export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview";
 const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "preview"];
+function savedTab(): PanelTab {
+  try { const v = localStorage.getItem("panel-tab") as PanelTab; if (savedTabs().includes(v)) return v; } catch {}
+  return savedTabs()[0] ?? "activity";
+}
 function savedTabs(): PanelTab[] {
   try {
     const v = JSON.parse(localStorage.getItem("panel-tabs") ?? "null");
@@ -50,22 +54,27 @@ class App {
   turns = $state<Record<string, Turn>>({});
   rev = $state(0);
   focus = $state<string>("");
-  tab = $state<PanelTab>(savedTabs()[0] ?? "activity");
+  tab = $state<PanelTab>(savedTab());
   /** The right panel's open tabs, in order (the + adds one, × closes it); kept between launches. */
   tabs = $state<PanelTab[]>(savedTabs());
   openTab(k: PanelTab) {
     if (!this.tabs.includes(k)) { this.tabs = [...this.tabs, k]; this.saveTabs(); }
-    this.tab = k;
+    this.showTab(k);
     this.panel = true;
   }
   closeTab(k: PanelTab) {
     const i = this.tabs.indexOf(k);
     if (i < 0) return;
     this.tabs = this.tabs.filter(x => x !== k);
-    if (this.tab === k) this.tab = this.tabs[Math.min(i, this.tabs.length - 1)] ?? "activity";
+    if (this.tab === k) this.showTab(this.tabs[Math.min(i, this.tabs.length - 1)] ?? "activity");
     this.saveTabs();
   }
   private saveTabs() { try { localStorage.setItem("panel-tabs", JSON.stringify(this.tabs)); } catch {} }
+  /** Shows an open tab (the one shown is kept between launches too). */
+  showTab(k: PanelTab) {
+    this.tab = k;
+    try { localStorage.setItem("panel-tab", k); } catch {}
+  }
   panel = $state(true);
   view = $state<"chat" | "usage" | "settings" | "board">("chat");
   playbooks = $state<{ name: string; body: string }[]>([]);

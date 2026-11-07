@@ -62,8 +62,8 @@
     <Board />
   {:else}
     <Conversation />
-    {#if app.panel}<RightPanel />{/if}
   {/if}
+  {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
   {#if app.palette}<Palette />{/if}
   {#if app.error}
     <button class="toast card" onclick={() => (app.error = "")}>{app.error}</button>

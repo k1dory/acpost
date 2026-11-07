@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
@@ -12,6 +12,7 @@
   let id = "";
   let err = $state("");
   let exited = $state<string>("");
+  let where = $state(""); // the agent whose directory the shell was opened in
   let stop: (() => void) | null = null;
   let ro: ResizeObserver | null = null;
   // Keystrokes go one request at a time, in order: what is typed meanwhile goes in the next.
@@ -43,8 +44,9 @@
     term.open(el);
     fit.fit();
     try {
-      const t: any = await Node.OpenTerminal(app.focusAgent(), term.cols, term.rows);
-      id = t.id;
+      where = app.focusAgent();
+      const opened: any = await Node.OpenTerminal(where, term.cols, term.rows);
+      id = opened.id;
       const dec = new TextDecoder();
       stop = on("term:" + id, d => {
         if (d.data) term?.write(dec.decode(unb64(d.data), { stream: true }));
@@ -62,13 +64,15 @@
     if (id) Node.CloseTerminal(id).catch(() => {});
     id = ""; queued = ""; term?.dispose(); term = null;
   }
-  $effect(() => { if (el) start(); return close; });
+  // Started once, untracked: a chat opened meanwhile does not restart the shell (New shell does,
+  // in that chat's agent's directory).
+  $effect(() => { if (el) untrack(start); return close; });
   onDestroy(close);
 </script>
 
 <div class="tw">
   <div class="tools">
-    <span class="muted">{app.focusAgent() ? `in ${app.focusAgent().slice(6)}'s directory` : "home directory"}</span>
+    <span class="muted">{where ? t("in {agent}'s directory", { agent: where.slice(6) }) : t("home directory")}</span>
     {#if exited}<span class="chip">{exited}</span>{/if}
     <span class="sp"></span>
     <button class="btn sm" onclick={start}>{t("New shell")}</button>
