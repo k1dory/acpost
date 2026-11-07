@@ -172,9 +172,17 @@ func (n *Node) linkedChats(ctx context.Context, thread string) []string {
 	if err != nil {
 		return nil
 	}
-	page, _, err := n.st.List(ctx, store.Filter{Thread: thread, Limit: 500})
-	if err != nil {
-		return nil
+	var page []store.Message
+	for after := ""; ; {
+		got, next, err := n.st.List(ctx, store.Filter{Thread: thread, After: after, Limit: 500})
+		if err != nil {
+			return nil
+		}
+		page = append(page, got...)
+		if next == "" || next == after {
+			break
+		}
+		after = next
 	}
 	seen := map[string]bool{}
 	var out []string

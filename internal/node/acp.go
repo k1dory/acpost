@@ -607,7 +607,9 @@ func (s *acpSlot) handle(m store.Message) {
 	cwd := taskCwd(m)
 	if cwd == "" && m.Meta[metaSession] != "" {
 		// A session named without its directory (through a hub): the agent's own list says it.
-		cwd = n.sessionCwd(ctx, a.name, m.Meta[metaSession])
+		lctx, done := context.WithTimeout(ctx, 30*time.Second) // an agent that does not list holds no slot
+		cwd = n.sessionCwd(lctx, a.name, m.Meta[metaSession])
+		done()
 		if m.Meta == nil {
 			m.Meta = map[string]string{}
 		}
