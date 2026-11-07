@@ -160,6 +160,8 @@ func Open(dsn string, opt Options) (*Store, error) {
 			return nil, fmt.Errorf("store %q: no path", dsn)
 		}
 		if err := s.openFile(path, pragmas); err != nil {
+			// What openFile took (the lock, the connections) goes, or the next Open says ErrLocked.
+			s.Close()
 			return nil, err
 		}
 	default:
