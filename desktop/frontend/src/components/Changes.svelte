@@ -144,5 +144,7 @@
   .vb.on { background: var(--sel); color: var(--ink); border-color: transparent; }
   .vbar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); }
   .whole { margin: 0; padding: 10px 12px; font: 11.5px/1.5 var(--mono); white-space: pre; overflow: auto; }
-  .vh { display: grid; font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; background: var(--card); }
+  /* Above the diff (its line numbers are sticky too): opaque, on top. */
+  .vh { display: grid; gap: 6px; font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; z-index: 5; background: var(--card); box-shadow: 0 1px 0 var(--line-soft); }
+  .vh .mono { font-weight: 600; }
 </style>

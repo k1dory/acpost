@@ -293,6 +293,35 @@ func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
+// Backlog lists the tasks kept for later.
+func (c *Client) Backlog(ctx context.Context) ([]store.BacklogItem, error) {
+	var out struct {
+		Items []store.BacklogItem `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/backlog", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// PutBacklogItem adds (no id) or changes a backlog item.
+func (c *Client) PutBacklogItem(ctx context.Context, b store.BacklogItem) (store.BacklogItem, error) {
+	var out store.BacklogItem
+	_, err := c.do(ctx, "PUT", "/v1/backlog", nil, b, &out, nil)
+	return out, err
+}
+
+// DeleteBacklogItem removes one.
+func (c *Client) DeleteBacklogItem(ctx context.Context, id string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/backlog/"+url.PathEscape(id), nil, nil, nil, nil)
+	return err
+}
+
+// StartBacklogItem gives one to its agent (or agent): the message.
+func (c *Client) StartBacklogItem(ctx context.Context, id, agent string) (store.Message, error) {
+	var out store.Message
+	_, err := c.do(ctx, "POST", "/v1/backlog/"+url.PathEscape(id)+"/start", nil, map[string]string{"agent": agent}, &out, nil)
+	return out, err
+}
+
 // TreeNode is a message an agent sent while working on another.
 type TreeNode struct {
 	ID     string      `json:"id"`

@@ -78,6 +78,10 @@ func explainACP(err error, op string, session bool) Failure {
 		return failf("agent_auth", "%s: the agent needs to be logged in", op)
 	case re.Code == acp.NewMethodNotFound("").Code:
 		return failf("unsupported", "%s: the agent does not offer it", op)
+	case session && re.Code == acp.NewInternalError(nil).Code && strings.TrimSpace(text) == "internal error":
+		// claude-agent-acp says only this for a session another Claude Code holds (a terminal, an
+		// editor — even the very conversation acpost is asked about): the likely cause, said as such.
+		return failf("agent_error", "%s: the agent could not open it (Internal error) — if it is open right now in another app (Claude Code in a terminal or an editor), close it there", op)
 	case session && (re.Code == acp.NewInvalidParams(nil).Code || strings.Contains(text, "not found") || strings.Contains(text, "unknown") || strings.Contains(text, "no such")):
 		return failf("session_not_found", "%s: the agent has no such session (%s)", op, agentWords(re.Message))
 	}

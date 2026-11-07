@@ -64,6 +64,26 @@
     } else if (u.protocol === "mailto:") Browser.OpenURL(u.href);
   }
 
+  // The error toast: closed by ×, or after 12 s; the same error closed a moment ago is not shown
+  // again (a refresh every few seconds would bring it back each time).
+  let shownError = $state("");
+  const closedAt = new Map<string, number>();
+  let hideTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const e = app.error;
+    if (!e) return;
+    app.error = "";
+    if (Date.now() - (closedAt.get(e) ?? 0) < 120_000) return;
+    shownError = e;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(dismiss, 12_000);
+  });
+  function dismiss() {
+    if (shownError) closedAt.set(shownError, Date.now());
+    shownError = "";
+    clearTimeout(hideTimer);
+  }
+
   function keys(e: KeyboardEvent) {
     if (!e.metaKey) return;
     // Text size: ⌘+ / ⌘− / ⌘0, as in any Mac app.
@@ -109,8 +129,11 @@
   {/if}
   {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
   {#if app.palette}<Palette />{/if}
-  {#if app.error}
-    <button class="toast card" onclick={() => (app.error = "")}>{app.error}</button>
+  {#if shownError}
+    <div class="toast card" role="alert">
+      <div class="tt selectable">{shownError}</div>
+      <button class="x" onclick={dismiss} aria-label={t("Close")} title={t("Close")}>×</button>
+    </div>
   {/if}
 </div>
 
@@ -119,5 +142,8 @@
   .down { flex: 1; display: grid; place-items: center; }
   .box { padding: 26px 28px; display: grid; gap: 10px; max-width: 460px; }
   .t { font-weight: 600; font-size: 16px; }
-  .toast { white-space: pre-line; position: fixed; right: 18px; bottom: 18px; padding: 12px 16px; max-width: 420px; color: var(--crit); background: var(--crit-bg); text-align: left; z-index: 50; border-color: color-mix(in srgb, var(--crit) 25%, var(--line)); }
+  .toast { white-space: pre-line; position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; padding: 12px 12px 12px 16px; max-width: 520px; color: var(--crit); background: var(--crit-bg); text-align: left; z-index: 50; border-color: color-mix(in srgb, var(--crit) 25%, var(--line)); display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; }
+  .toast .tt { flex: 1; min-width: 0; }
+  .toast .x { border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; padding: 0 4px; opacity: .7; }
+  .toast .x:hover { opacity: 1; }
 </style>

@@ -390,7 +390,7 @@ class App {
   }
 
   /** The preview: what its page did (problems, its address), kept across tabs. */
-  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean; pending: string; cleared: boolean; clearedAt: number; loadAt: number }>({ events: [], url: "", title: "", loaded: false, pending: "", cleared: false, clearedAt: 0, loadAt: 0 });
+  preview = $state<{ events: PreviewEvent[]; url: string; title: string; loaded: boolean; pending: string; cleared: boolean; clearedAt: number; clearedUrl: string; loadAt: number }>({ events: [], url: "", title: "", loaded: false, pending: "", cleared: false, clearedAt: 0, clearedUrl: "", loadAt: 0 });
   /** A page of this Mac (a dev server) opened in the app's preview, not the system's browser. */
   openInPreview(url: string) {
     this.preview.pending = url;
@@ -416,7 +416,8 @@ class App {
     // shows from now on is the truth. A load already under way when it was cleared changes nothing.
     if (e.kind === "nav") {
       if (e.url) { this.preview.url = e.url; this.preview.title = e.title ?? ""; }
-      if (this.preview.loadAt > this.preview.clearedAt) this.preview.cleared = false;
+      // (or another page than the one cleared: a link followed in it, Back)
+      if (this.preview.loadAt > this.preview.clearedAt || (e.url && e.url !== this.preview.clearedUrl)) this.preview.cleared = false;
       return;
     }
     this.preview.cleared = false;

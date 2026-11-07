@@ -256,3 +256,28 @@ func (n *Node) Tree(id string) ([]client.TreeNode, error) {
 func (n *Node) FileAt(repo, tree, path string) (string, error) {
 	return call(n, func(ctx context.Context, c *client.Client) (string, error) { return c.FileAt(ctx, repo, tree, path) })
 }
+
+func (n *Node) Backlog() ([]store.BacklogItem, error) {
+	return call(n, func(ctx context.Context, c *client.Client) ([]store.BacklogItem, error) { return c.Backlog(ctx) })
+}
+
+func (n *Node) PutBacklogItem(b store.BacklogItem) (store.BacklogItem, error) {
+	return call(n, func(ctx context.Context, c *client.Client) (store.BacklogItem, error) {
+		return c.PutBacklogItem(ctx, b)
+	})
+}
+
+func (n *Node) DeleteBacklogItem(id string) error {
+	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
+		return struct{}{}, c.DeleteBacklogItem(ctx, id)
+	})
+	return err
+}
+
+// StartBacklogItem gives a backlog item to an agent: the thread it starts.
+func (n *Node) StartBacklogItem(id, agent string) (string, error) {
+	m, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) {
+		return c.StartBacklogItem(ctx, id, agent)
+	})
+	return cmpOr(m.Thread, m.ID), err
+}

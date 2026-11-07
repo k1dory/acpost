@@ -50,6 +50,11 @@ const titles: Record<string, string> = {
   unavailable: "Not reachable right now",
   unsupported: "Not supported here",
   node_down: "The acpost node is not running",
+  session_busy: "The session is open in another app",
+  session_not_found: "That session no longer exists",
+  agent_error: "The agent reported an error",
+  agent_start: "The agent did not start",
+  agent_auth: "The agent needs you to sign in",
 };
 
 /** An error for a person: what happened (in the app's language), the detail, what to do. */

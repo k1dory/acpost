@@ -82,7 +82,7 @@
 
 <div class="pv">
   <div class="addr">
-    <button class="btn ghost sm" title={t("Back")} onclick={() => Node.PreviewBack()}><Icon name="chev" size={12} /></button>
+    <button class="btn ghost sm" title={t("Back")} onclick={() => { app.preview.loadAt = Date.now(); Node.PreviewBack(); }}><Icon name="chev" size={12} /></button>
     <button class="btn ghost sm" title={t("Reload")} onclick={() => { app.preview.loadAt = Date.now(); Node.PreviewReload(); }}><Icon name="refresh" size={13} /></button>
     <input class="input url" bind:value={address} onkeydown={e => { if (e.key === "Enter") go(); }} spellcheck="false" />
     <button class="btn ghost sm" title={t("Open in the browser")} onclick={openOutside}><Icon name="link" size={13} /></button>
@@ -100,7 +100,7 @@
       {#if problems.length}
         <span class="btn primary sm toag" role="button" tabindex="0" onclick={e => { e.stopPropagation(); sendToAgent(); }}
           onkeydown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); sendToAgent(); } }}><Icon name="send" size={11} /> {t("To the agent")}</span>
-        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.cleared = true; app.preview.clearedAt = Date.now(); }} onkeydown={() => {}}>{t("Clear")}</span>
+        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.cleared = true; app.preview.clearedAt = Date.now(); app.preview.clearedUrl = app.preview.url; }} onkeydown={() => {}}>{t("Clear")}</span>
       {/if}
     </button>
     {#if open}

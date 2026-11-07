@@ -73,6 +73,10 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
 	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
 	mux.HandleFunc("POST /v1/handoff", s.auth(s.handoff))
+	mux.HandleFunc("GET /v1/backlog", s.auth(s.backlog))
+	mux.HandleFunc("PUT /v1/backlog", s.auth(s.putBacklog))
+	mux.HandleFunc("DELETE /v1/backlog/{id}", s.auth(s.deleteBacklog))
+	mux.HandleFunc("POST /v1/backlog/{id}/start", s.auth(s.startBacklog))
 	mux.HandleFunc("GET /v1/messages/{id}/tree", s.auth(s.tree))
 	mux.HandleFunc("GET /v1/file-at", s.auth(s.fileAt))
 	mux.HandleFunc("GET /v1/wiki", s.auth(s.wikis))
@@ -617,6 +621,55 @@ func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Princi
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (s *server) backlog(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.Backlog(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) putBacklog(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req store.BacklogItem
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := s.n.PutBacklogItem(r.Context(), p, req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *server) deleteBacklog(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.DeleteBacklogItem(r.Context(), p, r.PathValue("id")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) startBacklog(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		Agent string `json:"agent"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &req); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	m, err := s.n.StartBacklogItem(r.Context(), p, r.PathValue("id"), req.Agent)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, m)
 }
 
 func (s *server) tree(w http.ResponseWriter, r *http.Request, p node.Principal) {

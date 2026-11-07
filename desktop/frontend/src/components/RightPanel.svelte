@@ -83,7 +83,7 @@
     {:else if app.tab === "changes"}<Changes />
     {:else if app.tab === "prs"}<Forge />
     {:else if app.tab === "artifacts"}<Artifacts />
-    {:else if app.tab === "preview"}<Preview covered={adding || app.palette || !!app.error} />{/if}
+    {:else if app.tab === "preview"}<Preview covered={adding || app.palette} />{/if}
     <!-- The terminal, while its tab is open, stays mounted (hidden behind the others): its shell
          and what it printed survive switching tabs, other views, the panel closed. -->
     {#if app.tabs.includes("terminal")}<div class="pane" class:off={app.tab !== "terminal" || !app.tabs.length}><Terminal active={!hidden && app.tab === "terminal"} /></div>{/if}

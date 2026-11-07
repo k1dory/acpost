@@ -6,6 +6,41 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * BacklogItem is a task kept for later.
+ */
+export class BacklogItem {
+    "id": string;
+    "title": string;
+    "body"?: string;
+    "agent"?: string;
+    "cwd"?: string;
+    "created": string;
+
+    /** Creates a new BacklogItem instance. */
+    constructor($$source: Partial<BacklogItem> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("created" in $$source)) {
+            this["created"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new BacklogItem instance from a string or object.
+     */
+    static createFrom($$source: any = {}): BacklogItem {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new BacklogItem($$parsedSource as Partial<BacklogItem>);
+    }
+}
+
+/**
  * ChangedFile is a file a turn changed.
  */
 export class ChangedFile {

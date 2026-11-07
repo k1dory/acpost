@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,6 +233,15 @@ func TestNamedSessionInternalErrorIsNotNotFound(t *testing.T) {
 	if f.Code != "agent_error" {
 		t.Fatalf("misleading failure: code=%q message=%q hint=%q",
 			f.Code, f.Message, HintFor(f.Code))
+	}
+}
+
+// The bare "Internal error" claude-agent-acp gives for a session another app holds: said with its
+// likely cause, the code unchanged.
+func TestNamedSessionBareInternalError(t *testing.T) {
+	f := explainACP(&acp.RequestError{Code: -32603, Message: "Internal error"}, "session abc", true)
+	if f.Code != "agent_error" || !strings.Contains(f.Message, "open right now in another app") {
+		t.Fatalf("%+v", f)
 	}
 }
 

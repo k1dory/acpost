@@ -337,6 +337,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(playbooksSchema); err != nil {
 		return err
 	}
+	if _, err := s.w.Exec(backlogSchema); err != nil {
+		return err
+	}
 	if _, err := s.w.Exec(wikiSchema); err != nil {
 		return err
 	}
