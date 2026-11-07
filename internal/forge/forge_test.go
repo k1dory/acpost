@@ -317,7 +317,7 @@ func TestErrorsHideTheToken(t *testing.T) {
 		t.Fatalf("a long body: %v", err)
 	}
 	var v map[string]any
-	if _, err := c.get(context.Background(), srv, host, "/repos/o/r", &v, 1<<16); err == nil || strings.Contains(err.Error(), secret[:12]) {
+	if _, err := c.get(context.Background(), srv, host, "/repos/o/r", &v, 1<<16); err == nil || strings.Contains(err.Error(), secret[:12]) || strings.Contains(err.Error(), "?") {
 		t.Fatalf("a redirect: %v", err)
 	}
 	if _, err := c.get(context.Background(), srv, host, "/repos/o/e", &v, 1<<16); err == nil || strings.Contains(err.Error(), secret[:12]) {

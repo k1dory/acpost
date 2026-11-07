@@ -175,7 +175,12 @@ func (c *Client) do(ctx context.Context, method string, srv Server, host, path s
 	auth(req, srv.Kind, tok)
 	resp, err := c.hc().Do(req)
 	if err != nil {
-		return nil, &Error{Message: redact(fmt.Sprintf("%s: %v", host, err))}
+		// Without the URL Go puts in: a redirect's may carry credentials (GitHub's log links do).
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, &Error{Message: redact(fmt.Sprintf("%s %s %s: %v", host, method, path, err))}
 	}
 	defer resp.Body.Close()
 	if t, ok := out.(*tailText); ok && resp.StatusCode < 400 {
