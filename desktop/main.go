@@ -9,6 +9,8 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
@@ -18,12 +20,17 @@ import (
 var assets embed.FS
 
 func main() {
-	notes := notifications.New()
-	node := &Node{notes: notes}
+	node := &Node{}
+	services := []application.Service{application.NewService(node)}
+	// Notifications of the system need the bundle's identifier: from acpost.app only.
+	if exe, err := os.Executable(); err == nil && strings.Contains(exe, ".app/Contents/MacOS/") {
+		node.notes = notifications.New()
+		services = append(services, application.NewService(node.notes))
+	}
 	app := application.New(application.Options{
 		Name:        "acpost",
 		Description: "Conversations with agents",
-		Services:    []application.Service{application.NewService(node), application.NewService(notes)},
+		Services:    services,
 		Assets:      application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		Mac:         application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 	})
