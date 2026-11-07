@@ -200,19 +200,26 @@ void apGuardNavigation(void *nswindow) {
 
 // The first time VS Code runs in the pane, its settings say to follow the system's light or dark
 // (the pane's appearance is the app's theme): written into its own store only when there is no
-// settings.json yet — what the user sets later stays theirs.
+// settings.json yet — what the user sets later stays theirs. On a fresh profile VS Code makes its
+// store a bit later: tried again each second for a minute, never made here.
 static NSString *apIDESeed = @"(() => {"
 	"if (sessionStorage.getItem('acpost-seeded')) return;"
-	"const q = indexedDB.open('vscode-web-db');"
-	"q.onupgradeneeded = () => { q.transaction.abort(); };"
-	"q.onsuccess = () => { const db = q.result;"
-	"  if (!db.objectStoreNames.contains('vscode-userdata-store')) { db.close(); return; }"
-	"  const tx = db.transaction('vscode-userdata-store', 'readwrite'); const st = tx.objectStore('vscode-userdata-store');"
-	"  const g = st.get('/User/settings.json');"
-	"  g.onsuccess = () => { if (g.result !== undefined) return;"
-	"    st.put(new TextEncoder().encode(JSON.stringify({'window.autoDetectColorScheme': true, 'workbench.preferredDarkColorTheme': 'Default Dark Modern', 'workbench.preferredLightColorTheme': 'Default Light Modern'}, null, 2)), '/User/settings.json');"
-	"    tx.oncomplete = () => { sessionStorage.setItem('acpost-seeded', '1'); location.reload(); }; };"
-	"};"
+	"let left = 60;"
+	"const again = () => { if (--left > 0) setTimeout(tryIt, 1000); };"
+	"function tryIt() {"
+	"  const q = indexedDB.open('vscode-web-db');"
+	"  q.onupgradeneeded = () => { q.transaction.abort(); };"
+	"  q.onerror = (e) => { e.preventDefault(); again(); };"
+	"  q.onsuccess = () => { const db = q.result;"
+	"    if (!db.objectStoreNames.contains('vscode-userdata-store')) { db.close(); again(); return; }"
+	"    const tx = db.transaction('vscode-userdata-store', 'readwrite'); const st = tx.objectStore('vscode-userdata-store');"
+	"    const g = st.get('/User/settings.json');"
+	"    g.onsuccess = () => { if (g.result !== undefined) { sessionStorage.setItem('acpost-seeded', '1'); return; }"
+	"      st.put(new TextEncoder().encode(JSON.stringify({'window.autoDetectColorScheme': true, 'workbench.preferredDarkColorTheme': 'Default Dark Modern', 'workbench.preferredLightColorTheme': 'Default Light Modern'}, null, 2)), '/User/settings.json');"
+	"      tx.oncomplete = () => { db.close(); sessionStorage.setItem('acpost-seeded', '1'); location.reload(); }; };"
+	"  };"
+	"}"
+	"tryIt();"
 	"})();";
 
 static void apIDELoadURL(NSString *u) {
