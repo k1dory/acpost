@@ -39,13 +39,13 @@ mkdirSync("extension/media", { recursive: true });
 // light grey in light.
 writeFileSync("extension/media/letterpress-dark.svg", svg("#000000").replace('<g clip-path', '<g opacity="0.45" clip-path'));
 writeFileSync("extension/media/letterpress-light.svg", svg("#000000").replace('<g clip-path', '<g opacity="0.07" clip-path'));
-// The icon: the mark in white on the app's black, on macOS's rounded square (824 of 1024, centred).
+// The icon: the mark in white on the app's black, the whole square filled — macOS (26) cuts its own
+// rounded shape out of it; an icon with transparent margins is put on a white plate instead.
 writeFileSync("../build/appicon.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
 <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1c1a"/><stop offset="1" stop-color="#0b0b0a"/></linearGradient>
 <clipPath id="a"><path clip-rule="evenodd" d="${clip}"/></clipPath></defs>
-<rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
-<rect x="100.5" y="100.5" width="823" height="823" rx="184.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
-<g transform="translate(512 512) scale(0.7) translate(-550 -625)"><g clip-path="url(#a)" fill="#f2f1ec">${stripes.map(s => `<rect x="${x0}" y="${s.y}" width="${x1 - x0}" height="${s.h}" fill-opacity="${s.o}"/>`).join("")}</g></g>
+<rect width="1024" height="1024" fill="url(#bg)"/>
+<g transform="translate(512 512) scale(0.78) translate(-550 -625)"><g clip-path="url(#a)" fill="#f2f1ec">${stripes.map(s => `<rect x="${x0}" y="${s.y}" width="${x1 - x0}" height="${s.h}" fill-opacity="${s.o}"/>`).join("")}</g></g>
 </svg>
 `);
 console.log(N, "stripes; last at", stripes.at(-1));
