@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import type { Request } from "../lib/turn";
   import Icon from "./Icon.svelte";
@@ -26,17 +27,17 @@
     {#if req.decision}
       <span class="chip" class:good={req.decision.startsWith("allow") || req.decision === "selected"} class:crit={req.decision === "rejected" || req.decision === "timeout"}>{req.decision}{req.by ? ` · ${req.by.replace(/^user:/, "")}` : ""}</span>
     {:else}
-      <span class="chip ask">Needs approval</span>
+      <span class="chip ask">{t("Needs approval")}</span>
     {/if}
   </div>
   {#if raw}
-    <button class="btn ghost sm" onclick={() => (show = !show)}>{show ? "Hide" : "Show"} request</button>
+    <button class="btn ghost sm" onclick={() => (show = !show)}>{show ? t("Hide request") : t("Show request")}</button>
     {#if show}<pre class="raw selectable">{raw}</pre>{/if}
   {/if}
   {#if !req.decision}
     <div class="acts">
       {#if reject}<button class="btn" disabled={busy} onclick={() => pick(reject.option_id)}>{reject.name || "Reject"}</button>
-      {:else}<button class="btn" disabled={busy} onclick={() => pick("")}>Reject</button>{/if}
+      {:else}<button class="btn" disabled={busy} onclick={() => pick("")}>{t("Reject")}</button>{/if}
       {#each (req.options ?? []).filter(o => o !== allow && o !== reject) as o}
         <button class="btn" disabled={busy} onclick={() => pick(o.option_id)}>{o.name}</button>
       {/each}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { who } from "../lib/format";
   import Avatar from "./Avatar.svelte";
@@ -25,7 +26,7 @@
       {/if}
     </div>
   {/each}
-  {#if views.length}<div class="sep"><span>earlier, outside acpost</span></div>{/if}
+  {#if views.length}<div class="sep"><span>{t("earlier, outside acpost")}</span></div>{/if}
 {/if}
 
 <style>

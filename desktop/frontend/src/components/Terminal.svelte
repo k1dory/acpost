@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { onDestroy } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -70,7 +71,7 @@
     <span class="muted">{app.focusAgent() ? `in ${app.focusAgent().slice(6)}'s directory` : "home directory"}</span>
     {#if exited}<span class="chip">{exited}</span>{/if}
     <span class="sp"></span>
-    <button class="btn sm" onclick={start}>New shell</button>
+    <button class="btn sm" onclick={start}>{t("New shell")}</button>
   </div>
   {#if err}<div class="empty">{err}</div>{/if}
   <div class="xt" bind:this={el}></div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   let { lines, max = 400 }: { lines: { op: string; text: string; a?: number; b?: number }[]; max?: number } = $props();
   let all = $state(false);
   const shown = $derived(all ? lines : lines.slice(0, max));
@@ -15,7 +16,7 @@
     {/if}
   {/each}
   {#if lines.length > shown.length}
-    <button class="btn ghost sm" onclick={() => (all = true)}>Show {lines.length - shown.length} more lines</button>
+    <button class="btn ghost sm" onclick={() => (all = true)}>{t("Show {n} more lines", { n: lines.length - shown.length })}</button>
   {/if}
 </div>
 

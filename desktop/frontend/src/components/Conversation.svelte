@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { tick } from "svelte";
   import Message from "./Message.svelte";
@@ -9,7 +10,7 @@
 
   let box = $state<HTMLDivElement>();
   let stick = true;
-  const title = $derived(app.chat?.title || (app.msgs[0]?.body ?? "").split("\n")[0].slice(0, 80) || "New task");
+  const title = $derived(app.chat?.title || (app.msgs[0]?.body ?? "").split("\n")[0].slice(0, 80) || t("New task"));
   const waiting = $derived((app.rev, Object.entries(app.turns).flatMap(([id, t]) => t.waiting().map(r => ({ id, r })))));
   // The context of the latest turn that said it: at the top of the chat.
   const usage = $derived.by(() => {
@@ -21,7 +22,7 @@
     for (let i = app.history.length - 1; i >= 0; i--) if (app.history[i].turn.usage) return app.history[i].turn.usage;
     return null;
   });
-  const source = $derived(app.chat?.kind === "cloud" ? "Cloud" : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
+  const source = $derived(app.chat?.kind === "cloud" ? t("Cloud") : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
 
@@ -45,8 +46,8 @@
     <span class="sp"></span>
     {#if waiting.length}<span class="chip ask nodrag">{waiting.length} needs approval</span>{/if}
     {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
-    {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost sm nodrag" title="Fork: the conversation so far, in a new chat" onclick={() => app.forkChat()}><Icon name="fork" size={14} /></button>{/if}
-    <button class="btn ghost sm nodrag" title="Right panel (⌘\)" onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={14} /></button>
+    {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost sm nodrag" title={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={14} /></button>{/if}
+    <button class="btn ghost sm nodrag" title={t("Right panel (⌘\\)")} onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={14} /></button>
   </header>
 
   {#if !app.chat && !app.thread}
@@ -54,8 +55,8 @@
     <div class="center">
       <div class="col">
         <div class="hello">
-          <div class="big">What should we work on?</div>
-          <div class="muted">Where it runs, the agent and its directory — then the task. Type / for the model and effort.</div>
+          <div class="big">{t("What should we work on?")}</div>
+          <div class="muted">{t("Where it runs, the agent and its directory — then the task. Type / for the model and effort.")}</div>
         </div>
         <Composer />
       </div>

@@ -1,3 +1,4 @@
+import { t } from "./i18n.svelte";
 import { Node, on, errText } from "./api";
 import { Turn, type Ev } from "./turn";
 
@@ -115,7 +116,7 @@ class App {
       this.asking = reqs;
       for (const r of reqs) {
         const id = r.request_id ?? r.id;
-        if (id && !this.asked.has(id)) { this.asked.add(id); this.notify("Needs approval", r.title || "An agent asks"); }
+        if (id && !this.asked.has(id)) { this.asked.add(id); this.notify(t("Needs approval"), r.title || t("An agent asks")); }
       }
     } catch {}
   }
@@ -128,7 +129,7 @@ class App {
       for (const ch of (c.items ?? []) as Chat[]) {
         if (ch.kind !== "thread") continue;
         const was = this.wasRunning.get(ch.key) ?? 0;
-        if (was > 0 && !ch.running && !ch.queued) this.notify(ch.failed ? "Failed" : "Done", ch.title);
+        if (was > 0 && !ch.running && !ch.queued) this.notify(ch.failed ? t("Failed") : t("Done"), ch.title);
         this.wasRunning.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
       }
       this.chats = c.items ?? [];
@@ -347,6 +348,20 @@ class App {
     const c = this.chats.find(x => x.key === chat);
     if (c) c.folder = folder || undefined; // at once; the list follows
     try { await Node.MoveChat(chat, folder); await this.loadChats(); } catch (e) { this.error = errText(e); }
+  }
+
+  /** The size of everything, as a factor (the app's zoom): 0.85 to 1.5. */
+  textSize = $state(1);
+  static sizes = [0.85, 0.92, 1, 1.1, 1.2, 1.35, 1.5];
+  setTextSize(z: number) {
+    this.textSize = Math.min(1.5, Math.max(0.85, z));
+    (document.documentElement.style as any).zoom = String(this.textSize);
+    try { localStorage.setItem("text-size", String(this.textSize)); } catch {}
+  }
+  stepTextSize(dir: 1 | -1) {
+    const s = App.sizes;
+    const i = s.findIndex(v => v >= this.textSize - 0.001);
+    this.setTextSize(s[Math.min(s.length - 1, Math.max(0, (i < 0 ? s.length - 1 : i) + dir))]);
   }
 
   setTheme(t: "light" | "dark" | "system") {

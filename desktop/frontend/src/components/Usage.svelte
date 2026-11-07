@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { Node, errText } from "../lib/api";
   import { tokens, money } from "../lib/format";
 
@@ -24,15 +25,15 @@
 
 <section class="us scroll">
   <header class="drag">
-    <h1>Usage</h1>
+    <h1>{t("Usage")}</h1>
     <span class="sp"></span>
-    <div class="seg nodrag">{#each [[1, "Today"], [7, "7 days"], [30, "30 days"], [0, "All"]] as [d, l]}<button class:on={days === d} onclick={() => (days = d as number)}>{l}</button>{/each}</div>
+    <div class="seg nodrag">{#each [[1, "Today"], [7, "7 days"], [30, "30 days"], [0, "All"]] as [d, l]}<button class:on={days === d} onclick={() => (days = d as number)}>{t(l as string)}</button>{/each}</div>
     <div class="seg nodrag">{#each ["agent", "model", "day", "session"] as b}<button class:on={by === b} onclick={() => (by = b as any)}>{b[0].toUpperCase() + b.slice(1)}</button>{/each}</div>
   </header>
 
   <div class="tiles">
-    {#each [["Cost", money(total.cost, total.cur), rows.some(r => r.estimated) ? "~ includes estimates from prices" : ""], ["Turns", String(total.turns), ""], ["Tokens in / out", `${tokens(total.input + total.cr + total.cw)} / ${tokens(total.output)}`, ""], ["Cache hit", `${(cache * 100).toFixed(0)}%`, `${tokens(total.cr)} read from cache`]] as [k, v, s]}
-      <div class="card tile"><div class="k muted">{k}</div><div class="v num">{loading ? "…" : v}</div>{#if s}<div class="s muted">{s}</div>{/if}</div>
+    {#each [["Cost", money(total.cost, total.cur), rows.some(r => r.estimated) ? t("~ includes estimates from prices") : ""], ["Turns", String(total.turns), ""], ["Tokens in / out", `${tokens(total.input + total.cr + total.cw)} / ${tokens(total.output)}`, ""], ["Cache hit", `${(cache * 100).toFixed(0)}%`, t("{n} read from cache", { n: tokens(total.cr) })]] as [k, v, s]}
+      <div class="card tile"><div class="k muted">{t(k)}</div><div class="v num">{loading ? "…" : v}</div>{#if s}<div class="s muted">{s}</div>{/if}</div>
     {/each}
   </div>
 
@@ -40,7 +41,7 @@
   {:else}
     <div class="card panel"><div class="inner">
       <table>
-        <thead><tr><th>{by}</th><th class="r">turns</th><th>tokens</th><th class="r">cache</th><th class="r">cost</th></tr></thead>
+        <thead><tr><th>{by}</th><th class="r">{t("turns")}</th><th>{t("tokens")}</th><th class="r">{t("cache")}</th><th class="r">{t("cost")}</th></tr></thead>
         <tbody>
           {#each sorted as r (r.key)}
             {@const tok = r.input + r.output + r.cache_read + r.cache_write}
@@ -52,12 +53,12 @@
               <td class="r num">{r.costed ? money(r.cost, r.currency) : ""}{r.estimated ? `${r.costed ? " + " : ""}~${money(r.estimated, r.estimated_currency)}` : ""}{!r.costed && !r.estimated ? "—" : ""}</td>
             </tr>
           {:else}
-            <tr><td colspan="5" class="muted none">{loading ? "Loading…" : "No turns in this period"}</td></tr>
+            <tr><td colspan="5" class="muted none">{loading ? t("Loading…") : t("No turns in this period")}</td></tr>
           {/each}
         </tbody>
       </table>
     </div></div>
-    <div class="legend muted"><span class="sw i"></span>input <span class="sw c"></span>cache read <span class="sw o"></span>output</div>
+    <div class="legend muted"><span class="sw i"></span>{t("input")} <span class="sw c"></span>{t("cache read")} <span class="sw o"></span>{t("output")}</div>
   {/if}
 </section>
 

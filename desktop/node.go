@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -105,7 +106,7 @@ func call[T any](n *Node, fn func(ctx context.Context, c *client.Client) (T, err
 	var zero T
 	c, err := n.client()
 	if err != nil {
-		return zero, err
+		return zero, withHint(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -113,11 +114,18 @@ func call[T any](n *Node, fn func(ctx context.Context, c *client.Client) (T, err
 	return out, withHint(err)
 }
 
-// withHint puts the node's hint (what to do next) after its message: the app shows both.
+// withHint hands the interface the node's error whole — its code, message and hint (what to do
+// next), as JSON — so it can say it plainly, in the app's language. A node that does not answer
+// is the code "node_down".
 func withHint(err error) error {
 	var e *client.Error
-	if errors.As(err, &e) && e.Hint != "" {
-		return fmt.Errorf("%s — %s", e.Message, e.Hint)
+	switch {
+	case errors.As(err, &e):
+		b, _ := json.Marshal(map[string]string{"code": e.Code, "message": e.Message, "hint": e.Hint})
+		return errors.New(string(b))
+	case errors.Is(err, client.ErrUnavailable):
+		b, _ := json.Marshal(map[string]string{"code": "node_down", "message": err.Error()})
+		return errors.New(string(b))
 	}
 	return err
 }

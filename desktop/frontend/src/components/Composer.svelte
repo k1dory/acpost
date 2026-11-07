@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
   import TaskSetup from "./TaskSetup.svelte";
@@ -32,9 +33,9 @@
     if (!text.startsWith("/") || text.includes(" ") || text.includes("\n")) return [];
     const q = text.slice(1).toLowerCase();
     const items: { name: string; description: string; pick?: "model" | "effort" | "mode" }[] = [];
-    if (model) items.push({ name: "model", description: "Choose the model", pick: "model" });
-    if (effort) items.push({ name: "effort", description: "Choose the reasoning effort", pick: "effort" });
-    if (mode) items.push({ name: "mode", description: "Choose the mode", pick: "mode" });
+    if (model) items.push({ name: "model", description: t("Choose the model"), pick: "model" });
+    if (effort) items.push({ name: "effort", description: t("Choose the reasoning effort"), pick: "effort" });
+    if (mode) items.push({ name: "mode", description: t("Choose the mode"), pick: "mode" });
     // Playbooks: the prompts kept, then the agent's own commands (but for the settings above:
     // Claude Code has its /model too).
     const seen = new Set(items.map(i => i.name));
@@ -117,7 +118,7 @@
     <div class="menu card">
       {#each slash as it, i (it.name)}
         <button class="mi" class:sel={i === slashSel} onmouseenter={() => (slashSel = i)} onclick={() => takeSlash(i)}>
-          <span class="mono">/{it.name}</span>{#if (it as any).playbook}<span class="pb">playbook</span>{/if}
+          <span class="mono">/{it.name}</span>{#if (it as any).playbook}<span class="pb">{t("playbook")}</span>{/if}
         </button>
       {/each}
     </div>
@@ -144,20 +145,20 @@
     </div>
   {/if}
   <textarea bind:this={ta} bind:value={text} onkeydown={key} rows="1"
-    placeholder={isNew ? "What should the agent do?  ( / for model, effort, commands )" : "Reply…"}></textarea>
+    placeholder={isNew ? t("What should the agent do?  ( / for model, effort, commands )") : t("Reply…")}></textarea>
   <div class="bar">
-    <button class="btn ghost sm" onclick={() => picker.click()} title="Attach files"><Icon name="clip" size={14} /></button>
+    <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />
-    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title="Model">{current(model, app.draft.model)}</button>{/if}
-    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title="Reasoning effort"><Icon name="brain" size={11} /> {current(effort, app.draft.effort)}</button>{/if}
-    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title="Mode">{current(mode, app.draft.mode)}</button>{/if}
-    {#if cloud}<span class="chip muted" title="A cloud agent runs without asking; opening or merging a pull request waits for you">runs without asking</span>{/if}
+    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, app.draft.model)}</button>{/if}
+    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, app.draft.effort)}</button>{/if}
+    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, app.draft.mode)}</button>{/if}
+    {#if cloud}<span class="chip muted" title={t("A cloud agent runs without asking; opening or merging a pull request waits for you")}>{t("runs without asking")}</span>{/if}
     <span class="sp"></span>
     <span class="hint muted">{stopMode ? "⌃C" : "⌘↵"}</span>
     {#if stopMode}
-      <button class="btn primary send stop" title="Stop (⌃C)" onclick={() => app.stopHere()}><span class="sq"></span></button>
+      <button class="btn primary send stop" title={t("Stop (⌃C)")} onclick={() => app.stopHere()}><span class="sq"></span></button>
     {:else}
-      <button class="btn primary send" disabled={!text.trim() || busy} onclick={send} title={running ? "Queue after the running turn" : "Send"}><Icon name="send" size={14} /></button>
+      <button class="btn primary send" disabled={!text.trim() || busy} onclick={send} title={running ? t("Queue after the running turn") : t("Send")}><Icon name="send" size={14} /></button>
     {/if}
   </div>
 </div>

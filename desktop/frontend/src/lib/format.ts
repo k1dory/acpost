@@ -1,3 +1,7 @@
+import { t, i18n } from "./i18n.svelte";
+
+const i18nLocale = () => (i18n.lang === "ru" ? "ru-RU" : undefined);
+
 export function dur(ms: number): string {
   if (!isFinite(ms) || ms < 0) return "";
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -14,7 +18,7 @@ export function tokens(n: number): string {
 }
 
 export function money(v: number, cur = "USD"): string {
-  if (cur === "mixed") return `${v.toFixed(2)} (mixed)`;
+  if (cur === "mixed") return `${v.toFixed(2)} (${t("mixed")})`;
   try {
     return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD", maximumFractionDigits: v < 1 ? 3 : 2 }).format(v);
   } catch {
@@ -23,19 +27,19 @@ export function money(v: number, cur = "USD"): string {
 }
 
 export function ago(iso: string | Date): string {
-  const t = typeof iso === "string" ? Date.parse(iso) : iso.getTime();
-  if (!t) return "";
-  const s = (Date.now() - t) / 1000;
-  if (s < 45) return "now";
-  if (s < 3600) return `${Math.round(s / 60)}m`;
-  if (s < 86400) return `${Math.round(s / 3600)}h`;
-  if (s < 7 * 86400) return `${Math.round(s / 86400)}d`;
-  return new Date(t).toLocaleDateString();
+  const at = typeof iso === "string" ? Date.parse(iso) : iso.getTime();
+  if (!at) return "";
+  const s = (Date.now() - at) / 1000;
+  if (s < 45) return t("now");
+  if (s < 3600) return t("{n}m", { n: Math.round(s / 60) });
+  if (s < 86400) return t("{n}h", { n: Math.round(s / 3600) });
+  if (s < 7 * 86400) return t("{n}d", { n: Math.round(s / 86400) });
+  return new Date(at).toLocaleDateString(i18nLocale());
 }
 
 export function clock(iso: string): string {
-  const t = Date.parse(iso);
-  return t ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  const at = Date.parse(iso);
+  return at ? new Date(at).toLocaleTimeString(i18nLocale(), { hour: "2-digit", minute: "2-digit" }) : "";
 }
 
 /** agent:name@node → name (node) */

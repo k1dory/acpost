@@ -1,4 +1,21 @@
 <script lang="ts">
+  import { t, tr } from "../lib/i18n.svelte";
+  // Why a turn failed, said to a person (the node's code; its message is the detail).
+  const failTitles: Record<string, string> = {
+    agent_error: "The agent stopped with an error",
+    turn_timeout: "The turn took too long",
+    agent_stopped: "The agent was stopped",
+    agent_crashed: "The agent's process crashed",
+    agent_unavailable: "The agent is not available",
+    agent_start: "The agent did not start",
+    agent_auth: "The agent needs you to sign in",
+    session_not_found: "That session no longer exists",
+    session_busy: "The session is open in another app",
+    expired: "No agent took it in time",
+    refused: "Not allowed",
+    conflict: "It changed meanwhile",
+    unsupported: "Not supported here",
+  };
   import { app, final, type Msg } from "../lib/state.svelte";
   import { who, clock } from "../lib/format";
   import Avatar from "./Avatar.svelte";
@@ -33,15 +50,15 @@
 
 <div class="pair" class:focus={app.focus === m.id}>
   <div class="user">
-    <div class="meta"><Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span><span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">subagent</span>{/if}</div>
+    <div class="meta"><Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span><span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">{t("subagent")}</span>{/if}</div>
     {#if editing !== null}
       <textarea class="ubody edit" bind:value={editing} readonly={saving} rows="3"
         onkeydown={e => { if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); saveEdit(); } else if (e.key === "Escape" && !saving) editing = null; }}></textarea>
-      <div class="eacts"><button class="btn sm" disabled={saving} onclick={() => (editing = null)}>Cancel</button><button class="btn primary sm" disabled={saving} onclick={saveEdit}>Save</button></div>
+      <div class="eacts"><button class="btn sm" disabled={saving} onclick={() => (editing = null)}>{t("Cancel")}</button><button class="btn primary sm" disabled={saving} onclick={saveEdit}>{t("Save")}</button></div>
     {:else}
       <div class="ubody selectable">{m.body}</div>
       {#if m.state === "queued"}
-        <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>Edit</button><button class="btn ghost sm" onclick={takeBack}>Take back</button></div>
+        <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button><button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button></div>
       {/if}
     {/if}
     {#if m.files?.filter(f => !f.reply).length}
@@ -54,9 +71,9 @@
     <div class="meta">
       <Avatar addr={m.to} size={20} busy={m.state === "running"} brand={m.to.startsWith("agent:sb_") ? app.chat?.cloud_agent ?? "" : ""} /><span class="nm">{agent.name}</span>{#if agent.node}<span class="muted">@{agent.node}</span>{/if}
       {#if m.state === "running"}<Working agent={m.to} view={turn} msg={m.id} />
-      {:else if m.state === "queued"}<span class="chip warn">queued</span>
-      {:else if m.state === "failed"}<span class="chip crit">failed</span>
-      {:else if m.state === "cancelled"}<span class="chip">cancelled</span>{/if}
+      {:else if m.state === "queued"}<span class="chip warn">{t("queued")}</span>
+      {:else if m.state === "failed"}<span class="chip crit">{t("failed")}</span>
+      {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>{/if}
     </div>
 
     {#if turn}<TurnBlocks view={turn} msg={m.id} {done} agent={m.to} />{/if}
@@ -68,7 +85,7 @@
       <div class="wait"><span class="sk" style="width:60%"></span><span class="sk" style="width:40%"></span></div>
     {/if}
     {#if m.state === "failed" && m.error}
-      <div class="err selectable"><b>{m.error_code ?? "error"}</b> — {m.error}{#if m.hint}<div class="muted">{m.hint}</div>{/if}</div>
+      <div class="err selectable"><b>{t(failTitles[m.error_code ?? ""] ?? "The turn failed")}</b><div>{tr(m.error ?? "")}</div>{#if m.hint}<div class="hint">{t("What to do")}: {tr(m.hint)}</div>{/if}</div>
     {/if}
   </div>
 </div>
@@ -85,6 +102,7 @@
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
   .agent { min-width: 0; display: grid; gap: 8px; }
   .agent > .meta { margin-bottom: 2px; }
-  .err { padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
+  .err .hint { margin-top: 6px; opacity: .85; }
+  .err { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
   .wait { display: grid; gap: 8px; } .wait .sk { height: 12px; }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app, type Chat } from "../lib/state.svelte";
   import { ago, who } from "../lib/format";
   import Icon from "./Icon.svelte";
@@ -32,19 +33,19 @@
 
 <section class="board">
   <header class="drag">
-    <h1>Agents</h1>
+    <h1>{t("Agents")}</h1>
     <span class="muted">{threads.length} tasks</span>
     <span class="sp"></span>
-    <button class="btn primary sm nodrag" onclick={() => app.newTask()}><Icon name="plus" size={12} /> New task</button>
+    <button class="btn primary sm nodrag" onclick={() => app.newTask()}><Icon name="plus" size={12} /> {t("New task")}</button>
   </header>
   <div class="cols">
     {#each cols as col (col.key)}
       <div class="col">
-        <div class="ch"><span class="dot {col.key === 'run' ? 'running' : col.key === 'fail' ? 'failed' : col.key === 'wait' ? 'queued' : 'done'}"></span>{col.title}<span class="muted num">{col.items.length}</span></div>
+        <div class="ch"><span class="dot {col.key === 'run' ? 'running' : col.key === 'fail' ? 'failed' : col.key === 'wait' ? 'queued' : 'done'}"></span>{t(col.title)}<span class="muted num">{col.items.length}</span></div>
         <div class="cards scroll">
           {#each col.items as c (c.key)}
             <button class="card item" onclick={() => app.open(c)}>
-              <div class="tt">{c.title || "Untitled"}</div>
+              <div class="tt">{c.title || t("Untitled")}</div>
               <div class="meta muted">
                 <span><Icon name={c.kind === "cloud" ? "cloud" : "bot"} size={11} /> {agentName(c)}</span>
                 {#if place(c)}<span class="mono">{place(c)}</span>{/if}

@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
   let { entries }: { entries: { status: string; content: string }[] } = $props();
   const done = $derived(entries.filter(e => e.status === "completed").length);
 </script>
 
 <div class="plan">
-  <div class="h"><span>Plan</span><span class="muted num">{done}/{entries.length}</span><span class="bar"><span style="width:{entries.length ? (done / entries.length) * 100 : 0}%"></span></span></div>
+  <div class="h"><span>{t("Plan")}</span><span class="muted num">{done}/{entries.length}</span><span class="bar"><span style="width:{entries.length ? (done / entries.length) * 100 : 0}%"></span></span></div>
   {#each entries as e}
     <div class="e" class:done={e.status === "completed"} class:now={e.status === "in_progress"}>
       <span class="st">{#if e.status === "completed"}<Icon name="check" size={12} />{:else if e.status === "in_progress"}<span class="spin"></span>{:else}<span class="ring"></span>{/if}</span>

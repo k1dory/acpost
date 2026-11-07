@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { intent, toolName, toolState, editTotals, lineDiff, type Tool } from "../lib/turn";
   import { dur } from "../lib/format";
   import Icon from "./Icon.svelte";
@@ -34,7 +35,7 @@
       {#if cmd}<pre class="cmd selectable"><span class="muted">$</span> {cmd}</pre>{/if}
       {#each tool.edits ?? [] as ed}
         <div class="edit">
-          <div class="path mono">{ed.path} <span class="plus">+{ed.added}</span> <span class="minus">−{ed.removed}</span>{#if ed.cut}<span class="muted"> · cut</span>{/if}</div>
+          <div class="path mono">{ed.path} <span class="plus">+{ed.added}</span> <span class="minus">−{ed.removed}</span>{#if ed.cut}<span class="muted"> {t("· cut")}</span>{/if}</div>
           <DiffLines lines={lineDiff(ed.old, ed.new)} max={200} />
         </div>
       {/each}

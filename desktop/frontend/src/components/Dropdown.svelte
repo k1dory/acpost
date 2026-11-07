@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
 
   // The app's own dropdown (never the system's): a chip, and a menu of names under it.
@@ -44,7 +45,7 @@
 <div class="dd" bind:this={root}>
   <button class="chip trig" onclick={toggle} onkeydown={key}>
     {#if icon}<Icon name={icon} size={12} />{/if}
-    <span class="lbl">{current?.label ?? placeholder}</span>
+    <span class="lbl">{current?.label ?? t(placeholder)}</span>
     <span class="chev" class:rot={open}><Icon name="chev" size={10} /></span>
   </button>
   {#if open}

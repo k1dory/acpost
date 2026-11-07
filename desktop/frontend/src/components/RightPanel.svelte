@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
   import Activity from "./Activity.svelte";
@@ -24,7 +25,7 @@
   <div class="grip" onpointerdown={drag}></div>
   <div class="tabs drag">
     {#each tabs as [k, l, ic]}
-      <button class="tab nodrag" class:on={app.tab === k} onclick={() => (app.tab = k)} title={k === "prs" ? "Pull requests and CI" : l}><Icon name={ic} size={14} />{l}{#if k === "activity" && asks}<span class="badge">{asks}</span>{/if}</button>
+      <button class="tab nodrag" class:on={app.tab === k} onclick={() => (app.tab = k)} title={k === "prs" ? t("Pull requests and CI") : t(l)}><Icon name={ic} size={14} />{t(l)}{#if k === "activity" && asks}<span class="badge">{asks}</span>{/if}</button>
     {/each}
   </div>
   <div class="card panel body"><div class="inner">
@@ -32,7 +33,7 @@
     {:else if app.tab === "changes"}<Changes />
     {:else if app.tab === "terminal"}<Terminal />
     {:else if app.tab === "prs"}<Forge />
-    {:else}<div class="empty">The preview opens the agent's dev server in a native view beside the conversation, and hands its errors to the agent.<span class="chip">next</span></div>{/if}
+    {:else}<div class="empty">{t("The preview opens the agent's dev server in a native view beside the conversation, and hands its errors to the agent.")}<span class="chip">{t("next")}</span></div>{/if}
   </div></div>
 </aside>
 

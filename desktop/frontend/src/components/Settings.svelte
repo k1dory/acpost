@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { t, i18n, type Lang } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
-  import { Node, errText } from "../lib/api";
+  import { Node, errText, errInfo } from "../lib/api";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
 
@@ -52,10 +53,10 @@
     const d = await Node.PickDirectory(sc.cwd || app.home).catch(() => "");
     if (d) sc.cwd = d;
   }
-  function when(t?: string) {
-    if (!t) return "";
-    const d = new Date(t);
-    return d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  function when(at?: string) {
+    if (!at) return "";
+    const d = new Date(at);
+    return d.toLocaleString(i18n.lang === "ru" ? "ru-RU" : undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   }
   let pb = $state<{ isNew: boolean; name: string; body: string } | null>(null);
   async function savePlaybook() {
@@ -95,7 +96,7 @@
       await Node.ForgeLogin(host.trim(), kind, token.trim());
       token = "";
       await loadAccounts();
-    } catch (e) { err = errText(e); }
+    } catch (e) { err = errText(e, errInfo(e).code === "refused" ? "The token was not accepted" : errInfo(e).code === "invalid" ? "Could not connect the account" : undefined); }
     busy = false;
   }
   async function disconnect(h: string) {
@@ -143,11 +144,11 @@
 </script>
 
 <section class="set">
-  <header class="drag"><h1>Settings</h1></header>
+  <header class="drag"><h1>{t("Settings")}</h1></header>
   <div class="cols">
     <nav class="nav">
       {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["knowledge", "Knowledge", "brain"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
-        <button class:on={section === k} onclick={() => { section = k as any; err = ""; }}><Icon name={ic} size={14} /> {l}</button>
+        <button class:on={section === k} onclick={() => { section = k as any; err = ""; }}><Icon name={ic} size={14} /> {t(l)}</button>
       {/each}
     </nav>
 
@@ -155,8 +156,8 @@
       {#if err}<div class="err selectable">{err}</div>{/if}
 
       {#if section === "git"}
-        <h2>Git accounts</h2>
-        <p class="muted">Pull requests, CI and merges of your agents' repositories. The token stays in the macOS keychain.</p>
+        <h2>{t("Git accounts")}</h2>
+        <p class="muted">{t("Pull requests, CI and merges of your agents' repositories. The token stays in the macOS keychain.")}</p>
         <div class="card panel"><div class="inner">
           {#if accounts === null}<div class="row"><span class="sk" style="width:40%;height:12px"></span></div>
           {:else}
@@ -165,69 +166,69 @@
                 <Icon name="pr" size={14} />
                 <div class="t"><b>{a.host}</b><span class="muted small">{a.kind ?? "?"}{a.version ? " " + a.version : ""}{a.login ? " · " + a.login : ""}</span>
                   {#if a.error}<span class="bad small">{a.error}</span>{/if}</div>
-                {#if a.login}<span class="chip good">connected</span>{:else}<span class="chip warn">{a.authed ? "token refused" : "no token"}</span>{/if}
-                <button class="btn ghost sm danger" onclick={() => disconnect(a.host)}>Disconnect</button>
+                {#if a.login}<span class="chip good">{t("connected")}</span>{:else}<span class="chip warn">{a.authed ? t("token refused") : t("no token")}</span>{/if}
+                <button class="btn ghost sm danger" onclick={() => disconnect(a.host)}>{t("Disconnect")}</button>
               </div>
-            {:else}<div class="row muted">No accounts yet</div>{/each}
+            {:else}<div class="row muted">{t("No accounts yet")}</div>{/each}
           {/if}
         </div></div>
         <div class="form card">
-          <div class="fh">Connect an account</div>
+          <div class="fh">{t("Connect an account")}</div>
           <div class="frow">
-            <input class="input" placeholder="Host: github.com, gitlab.example.com" bind:value={host} />
-            <Dropdown bind:value={kind} items={[{ value: "", label: "Detect" }, { value: "github", label: "GitHub" }, { value: "gitlab", label: "GitLab" }, { value: "forgejo", label: "Forgejo / Gitea" }]} />
+            <input class="input" placeholder={t("Host: github.com, gitlab.example.com")} bind:value={host} />
+            <Dropdown bind:value={kind} items={[{ value: "", label: t("Detect") }, { value: "github", label: "GitHub" }, { value: "gitlab", label: "GitLab" }, { value: "forgejo", label: "Forgejo / Gitea" }]} />
           </div>
-          <input class="input" type="password" placeholder="Personal access token" bind:value={token} autocomplete="off" />
-          <div class="acts"><button class="btn primary" disabled={busy || !host.trim() || !token.trim()} onclick={connect}>{busy ? "Checking…" : "Connect"}</button></div>
+          <input class="input" type="password" placeholder={t("Personal access token")} bind:value={token} autocomplete="off" />
+          <div class="acts"><button class="btn primary" disabled={busy || !host.trim() || !token.trim()} onclick={connect}>{busy ? t("Checking…") : t("Connect")}</button></div>
         </div>
 
       {:else if section === "mcp"}
-        <h2>MCP servers</h2>
-        <p class="muted">Every session of the agents gets these. Values of variables and headers stay in the macOS keychain.</p>
+        <h2>{t("MCP servers")}</h2>
+        <p class="muted">{t("Every session of the agents gets these. Values of variables and headers stay in the macOS keychain.")}</p>
         {#if !edit}
           <div class="card panel"><div class="inner">
             {#if servers === null}<div class="row"><span class="sk" style="width:40%;height:12px"></span></div>
             {:else}
               {#each servers as m (m.name)}
                 <div class="row">
-                  <button class="sw" class:on={m.enabled} onclick={() => toggle(m)} title={m.enabled ? "On" : "Off"}><span></span></button>
+                  <button class="sw" class:on={m.enabled} onclick={() => toggle(m)} title={m.enabled ? t("On") : t("Off")}><span></span></button>
                   <div class="t"><b>{m.name}</b><span class="muted small mono">{m.kind === "http" ? m.url : [m.command, ...(m.args ?? [])].join(" ")}</span></div>
                   <span class="chip">{m.agents?.length ? m.agents.map(agentName).join(", ") : "all agents"}</span>
-                  <button class="btn ghost sm" onclick={() => editServer(m)}>Edit</button>
+                  <button class="btn ghost sm" onclick={() => editServer(m)}>{t("Edit")}</button>
                 </div>
-              {:else}<div class="row muted">No MCP servers yet</div>{/each}
+              {:else}<div class="row muted">{t("No MCP servers yet")}</div>{/each}
             {/if}
           </div></div>
-          <div class="acts left"><button class="btn primary" onclick={newServer}><Icon name="plus" size={13} /> Add a server</button></div>
+          <div class="acts left"><button class="btn primary" onclick={newServer}><Icon name="plus" size={13} /> {t("Add a server")}</button></div>
         {:else}
           {@const e = edit}
           <div class="form card">
             <div class="fh">{e.isNew ? "New MCP server" : e.name}</div>
             <div class="frow">
-              {#if e.isNew}<input class="input" placeholder="Name: wiki, github, postgres" bind:value={e.name} />{/if}
-              <div class="seg"><button class:on={e.kind === "stdio"} onclick={() => (e.kind = "stdio")}>Command</button><button class:on={e.kind === "http"} onclick={() => (e.kind = "http")}>HTTP</button></div>
+              {#if e.isNew}<input class="input" placeholder={t("Name: wiki, github, postgres")} bind:value={e.name} />{/if}
+              <div class="seg"><button class:on={e.kind === "stdio"} onclick={() => (e.kind = "stdio")}>{t("Command")}</button><button class:on={e.kind === "http"} onclick={() => (e.kind = "http")}>{t("HTTP")}</button></div>
             </div>
             {#if e.kind === "stdio"}
-              <input class="input mono" placeholder="Command: npx, uvx, /usr/local/bin/server" bind:value={e.command} />
-              <textarea class="input mono" rows="3" placeholder="Arguments, one per line" bind:value={e.args}></textarea>
+              <input class="input mono" placeholder={t("Command: npx, uvx, /usr/local/bin/server")} bind:value={e.command} />
+              <textarea class="input mono" rows="3" placeholder={t("Arguments, one per line")} bind:value={e.args}></textarea>
             {:else}
-              <input class="input mono" placeholder="URL: https://mcp.example.com/mcp" bind:value={e.url} />
+              <input class="input mono" placeholder={t("URL: https://mcp.example.com/mcp")} bind:value={e.url} />
             {/if}
             {#each [["env", e.kind === "stdio" ? "Environment" : null], ["headers", e.kind === "http" ? "Headers" : null]] as [k, label]}
               {#if label}
                 {@const list = k === "env" ? e.env : e.headers}
-                <div class="lbl">{label}</div>
+                <div class="lbl">{t(label)}</div>
                 {#each list as p, i}
                   <div class="frow">
-                    <input class="input mono" placeholder="NAME" bind:value={p.name} disabled={p.kept} />
-                    <input class="input" type="password" placeholder={p.kept ? "kept — type to replace" : "value"} bind:value={p.value} autocomplete="off" />
+                    <input class="input mono" placeholder={t("NAME")} bind:value={p.name} disabled={p.kept} />
+                    <input class="input" type="password" placeholder={p.kept ? t("kept — type to replace") : t("value")} bind:value={p.value} autocomplete="off" />
                     <button class="btn ghost sm" onclick={() => { if (k === "env") e.env = e.env.filter((_, j) => j !== i); else e.headers = e.headers.filter((_, j) => j !== i); }}><Icon name="x" size={12} /></button>
                   </div>
                 {/each}
-                <button class="btn ghost sm addp" onclick={() => { const p = { name: "", value: "", kept: false }; if (k === "env") e.env = [...e.env, p]; else e.headers = [...e.headers, p]; }}><Icon name="plus" size={12} /> {k === "env" ? "Variable" : "Header"}</button>
+                <button class="btn ghost sm addp" onclick={() => { const p = { name: "", value: "", kept: false }; if (k === "env") e.env = [...e.env, p]; else e.headers = [...e.headers, p]; }}><Icon name="plus" size={12} /> {k === "env" ? t("Variable") : t("Header")}</button>
               {/if}
             {/each}
-            <div class="lbl">Agents</div>
+            <div class="lbl">{t("Agents")}</div>
             <div class="frow wrap">
               {#each app.localAgents() as a (a.address)}
                 {@const name = a.address.replace(/^agent:/, "")}
@@ -236,76 +237,76 @@
               <span class="muted small">{e.agents.length ? "" : "none chosen: all agents"}</span>
             </div>
             <div class="acts">
-              {#if !e.isNew}<button class="btn ghost danger" onclick={() => remove(e.name)}>Delete</button>{/if}
+              {#if !e.isNew}<button class="btn ghost danger" onclick={() => remove(e.name)}>{t("Delete")}</button>{/if}
               <span class="sp"></span>
-              <button class="btn" onclick={() => (edit = null)}>Cancel</button>
-              <button class="btn primary" disabled={busy || !e.name.trim()} onclick={save}>Save</button>
+              <button class="btn" onclick={() => (edit = null)}>{t("Cancel")}</button>
+              <button class="btn primary" disabled={busy || !e.name.trim()} onclick={save}>{t("Save")}</button>
             </div>
           </div>
         {/if}
 
       {:else if section === "playbooks"}
-        <h2>Playbooks</h2>
-        <p class="muted">Prompts for tasks you give again. Type / and the name in a new task.</p>
+        <h2>{t("Playbooks")}</h2>
+        <p class="muted">{t("Prompts for tasks you give again. Type / and the name in a new task.")}</p>
         {#if !pb}
           <div class="card panel"><div class="inner">
             {#each app.playbooks as p (p.name)}
               <div class="row">
                 <Icon name="book" size={14} />
                 <div class="t"><b class="mono">/{p.name}</b><span class="muted small one">{p.body.split("\n")[0]}</span></div>
-                <button class="btn ghost sm" onclick={() => (pb = { isNew: false, name: p.name, body: p.body })}>Edit</button>
+                <button class="btn ghost sm" onclick={() => (pb = { isNew: false, name: p.name, body: p.body })}>{t("Edit")}</button>
               </div>
-            {:else}<div class="row muted">No playbooks yet</div>{/each}
+            {:else}<div class="row muted">{t("No playbooks yet")}</div>{/each}
           </div></div>
-          <div class="acts left"><button class="btn primary" onclick={() => (pb = { isNew: true, name: "", body: "" })}><Icon name="plus" size={13} /> New playbook</button></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (pb = { isNew: true, name: "", body: "" })}><Icon name="plus" size={13} /> {t("New playbook")}</button></div>
         {:else}
           <div class="form card">
-            {#if pb.isNew}<input class="input mono" placeholder="Name: review, release-notes" bind:value={pb.name} />{:else}<div class="fh mono">/{pb.name}</div>{/if}
-            <textarea class="input" rows="12" placeholder="What the agent should do, step by step" bind:value={pb.body}></textarea>
+            {#if pb.isNew}<input class="input mono" placeholder={t("Name: review, release-notes")} bind:value={pb.name} />{:else}<div class="fh mono">/{pb.name}</div>{/if}
+            <textarea class="input" rows="12" placeholder={t("What the agent should do, step by step")} bind:value={pb.body}></textarea>
             <div class="acts">
-              {#if !pb.isNew}<button class="btn ghost danger" onclick={() => deletePlaybook(pb!.name)}>Delete</button>{/if}
+              {#if !pb.isNew}<button class="btn ghost danger" onclick={() => deletePlaybook(pb!.name)}>{t("Delete")}</button>{/if}
               <span class="sp"></span>
-              <button class="btn" onclick={() => (pb = null)}>Cancel</button>
-              <button class="btn primary" disabled={busy || !pb.name.trim() || !pb.body.trim()} onclick={savePlaybook}>Save</button>
+              <button class="btn" onclick={() => (pb = null)}>{t("Cancel")}</button>
+              <button class="btn primary" disabled={busy || !pb.name.trim() || !pb.body.trim()} onclick={savePlaybook}>{t("Save")}</button>
             </div>
           </div>
         {/if}
 
       {:else if section === "knowledge"}
-        <h2>Knowledge</h2>
-        <p class="muted">Notes an agent gets at the start of every new session: everywhere, or only in a directory.</p>
+        <h2>{t("Knowledge")}</h2>
+        <p class="muted">{t("Notes an agent gets at the start of every new session: everywhere, or only in a directory.")}</p>
         {#if !note}
           <div class="card panel"><div class="inner">
             {#each notes ?? [] as k (k.name)}
               <div class="row">
                 <Icon name="brain" size={14} />
-                <div class="t"><b>{k.name}</b><span class="muted small one">{k.scope ? tilde(k.scope) : "Everywhere"} · {k.body.split("\n")[0]}</span></div>
-                <button class="btn ghost sm" onclick={() => (note = { ...k })}>Edit</button>
-                <button class="sw" class:on={k.enabled} onclick={() => saveNote({ ...k, enabled: !k.enabled })} aria-label="Enabled"><span></span></button>
+                <div class="t"><b>{k.name}</b><span class="muted small one">{k.scope ? tilde(k.scope) : t("Everywhere")} · {k.body.split("\n")[0]}</span></div>
+                <button class="btn ghost sm" onclick={() => (note = { ...k })}>{t("Edit")}</button>
+                <button class="sw" class:on={k.enabled} onclick={() => saveNote({ ...k, enabled: !k.enabled })} aria-label={t("Enabled")}><span></span></button>
               </div>
-            {:else}<div class="row muted">{notes === null ? "Loading…" : "No notes yet"}</div>{/each}
+            {:else}<div class="row muted">{notes === null ? t("Loading…") : t("No notes yet")}</div>{/each}
           </div></div>
-          <div class="acts left"><button class="btn primary" onclick={() => (note = { isNew: true, name: "", body: "", scope: "", enabled: true })}><Icon name="plus" size={13} /> New note</button></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (note = { isNew: true, name: "", body: "", scope: "", enabled: true })}><Icon name="plus" size={13} /> {t("New note")}</button></div>
         {:else}
           <div class="form card">
-            {#if note.isNew}<input class="input" placeholder="Name: how argus builds" bind:value={note.name} />{:else}<div class="fh">{note.name}</div>{/if}
+            {#if note.isNew}<input class="input" placeholder={t("Name: how argus builds")} bind:value={note.name} />{:else}<div class="fh">{note.name}</div>{/if}
             <div class="frow">
-              <button class="chip pickc" class:on={!note.scope} onclick={() => (note!.scope = "")}>Everywhere</button>
-              <button class="chip pickc" class:on={!!note.scope} onclick={pickNoteDir} title={note.scope}><Icon name="file" size={12} /> {note.scope ? tilde(note.scope) : "In a directory…"}</button>
+              <button class="chip pickc" class:on={!note.scope} onclick={() => (note!.scope = "")}>{t("Everywhere")}</button>
+              <button class="chip pickc" class:on={!!note.scope} onclick={pickNoteDir} title={note.scope}><Icon name="file" size={12} /> {note.scope ? tilde(note.scope) : t("In a directory…")}</button>
             </div>
-            <textarea class="input" rows="12" placeholder="What the agent should know: how to build and test, conventions, what not to touch" bind:value={note.body}></textarea>
+            <textarea class="input" rows="12" placeholder={t("What the agent should know: how to build and test, conventions, what not to touch")} bind:value={note.body}></textarea>
             <div class="acts">
-              {#if !note.isNew}<button class="btn ghost danger" onclick={() => deleteNote(note!.name)}>Delete</button>{/if}
+              {#if !note.isNew}<button class="btn ghost danger" onclick={() => deleteNote(note!.name)}>{t("Delete")}</button>{/if}
               <span class="sp"></span>
-              <button class="btn" onclick={() => (note = null)}>Cancel</button>
-              <button class="btn primary" disabled={busy || !note.name.trim() || !note.body.trim()} onclick={() => saveNote(note!)}>Save</button>
+              <button class="btn" onclick={() => (note = null)}>{t("Cancel")}</button>
+              <button class="btn primary" disabled={busy || !note.name.trim() || !note.body.trim()} onclick={() => saveNote(note!)}>{t("Save")}</button>
             </div>
           </div>
         {/if}
 
       {:else if section === "schedules"}
-        <h2>Schedules</h2>
-        <p class="muted">Tasks the node sends on a schedule. Each run is a new chat.</p>
+        <h2>{t("Schedules")}</h2>
+        <p class="muted">{t("Tasks the node sends on a schedule. Each run is a new chat.")}</p>
         {#if !sc}
           <div class="card panel"><div class="inner">
             {#each scheds ?? [] as s (s.id)}
@@ -316,45 +317,45 @@
                   <span class="muted small one">{agentName(s.agent)} · <span class="mono">{s.cron}</span>{#if s.enabled && s.next_run} · next {when(s.next_run)}{/if}{#if s.last_run} · last {when(s.last_run)}{/if}</span>
                   {#if s.last_err}<span class="small bad one">{s.last_err}</span>{/if}
                 </div>
-                <button class="btn ghost sm" onclick={() => runSched(s.id!)}>Run now</button>
-                <button class="btn ghost sm" onclick={() => (sc = { ...s })}>Edit</button>
-                <button class="sw" class:on={s.enabled} onclick={() => saveSched({ ...s, enabled: !s.enabled })} aria-label="Enabled"><span></span></button>
+                <button class="btn ghost sm" onclick={() => runSched(s.id!)}>{t("Run now")}</button>
+                <button class="btn ghost sm" onclick={() => (sc = { ...s })}>{t("Edit")}</button>
+                <button class="sw" class:on={s.enabled} onclick={() => saveSched({ ...s, enabled: !s.enabled })} aria-label={t("Enabled")}><span></span></button>
               </div>
-            {:else}<div class="row muted">{scheds === null ? "Loading…" : "No schedules yet"}</div>{/each}
+            {:else}<div class="row muted">{scheds === null ? t("Loading…") : t("No schedules yet")}</div>{/each}
           </div></div>
-          <div class="acts left"><button class="btn primary" onclick={() => (sc = { name: "", cron: "0 9 * * 1-5", agent: app.localAgents()[0]?.address ?? "", body: "", cwd: app.home, enabled: true })}><Icon name="plus" size={13} /> New schedule</button></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (sc = { name: "", cron: "0 9 * * 1-5", agent: app.localAgents()[0]?.address ?? "", body: "", cwd: app.home, enabled: true })}><Icon name="plus" size={13} /> {t("New schedule")}</button></div>
         {:else}
           <div class="form card">
-            <input class="input" placeholder="Name: morning review" bind:value={sc.name} />
-            <div class="lbl">When</div>
+            <input class="input" placeholder={t("Name: morning review")} bind:value={sc.name} />
+            <div class="lbl">{t("When")}</div>
             <div class="frow wrap">
-              {#each presets as [l, c]}<button class="chip pickc" class:on={sc.cron === c} onclick={() => (sc!.cron = c)}>{l}</button>{/each}
+              {#each presets as [l, c]}<button class="chip pickc" class:on={sc.cron === c} onclick={() => (sc!.cron = c)}>{t(l)}</button>{/each}
             </div>
-            <input class="input mono" placeholder="cron: min hour day month weekday" bind:value={sc.cron} />
-            <div class="lbl">Agent and directory</div>
+            <input class="input mono" placeholder={t("cron: min hour day month weekday")} bind:value={sc.cron} />
+            <div class="lbl">{t("Agent and directory")}</div>
             <div class="frow">
               <Dropdown bind:value={sc.agent} icon="bot" items={app.localAgents().map(a => ({ value: a.address, label: agentName(a.address) }))} />
               <button class="chip pickc" onclick={pickSchedDir} title={sc.cwd}><Icon name="file" size={12} /> {sc.cwd && app.home && sc.cwd.startsWith(app.home) ? "~" + sc.cwd.slice(app.home.length) : sc.cwd || "~"}</button>
             </div>
-            <div class="lbl">Task</div>
+            <div class="lbl">{t("Task")}</div>
             {#if app.playbooks.length}
               <div class="frow wrap">
                 {#each app.playbooks as p (p.name)}<button class="chip pickc" class:on={sc.body === p.body} onclick={() => (sc!.body = p.body)}>/{p.name}</button>{/each}
               </div>
             {/if}
-            <textarea class="input" rows="8" placeholder="What the agent should do" bind:value={sc.body}></textarea>
+            <textarea class="input" rows="8" placeholder={t("What the agent should do")} bind:value={sc.body}></textarea>
             <div class="acts">
-              {#if sc.id}<button class="btn ghost danger" onclick={() => deleteSched(sc!.id!)}>Delete</button>{/if}
+              {#if sc.id}<button class="btn ghost danger" onclick={() => deleteSched(sc!.id!)}>{t("Delete")}</button>{/if}
               <span class="sp"></span>
-              <button class="btn" onclick={() => (sc = null)}>Cancel</button>
-              <button class="btn primary" disabled={busy || !sc.name.trim() || !sc.cron.trim() || !sc.agent || !sc.body.trim()} onclick={() => saveSched(sc!)}>Save</button>
+              <button class="btn" onclick={() => (sc = null)}>{t("Cancel")}</button>
+              <button class="btn primary" disabled={busy || !sc.name.trim() || !sc.cron.trim() || !sc.agent || !sc.body.trim()} onclick={() => saveSched(sc!)}>{t("Save")}</button>
             </div>
           </div>
         {/if}
 
       {:else if section === "agents"}
-        <h2>Agents</h2>
-        <p class="muted">The agents of this Mac (in ~/.config/acpost/config.yaml), of other nodes and of the cloud.</p>
+        <h2>{t("Agents")}</h2>
+        <p class="muted">{t("The agents of this Mac (in ~/.config/acpost/config.yaml), of other nodes and of the cloud.")}</p>
         <div class="card panel"><div class="inner">
           {#each app.agents as a (a.address)}
             <div class="row">
@@ -366,27 +367,43 @@
           {/each}
           <div class="row">
             <Icon name="cloud" size={14} />
-            <div class="t"><b>Cloud</b><span class="muted small">{app.cloudAgents.length ? app.cloudAgents.length + " agents in the catalogue" : "optional — an agent-sandbox tenant as cloud: in ~/.config/acpost/config.yaml"}</span></div>
+            <div class="t"><b>{t("Cloud")}</b><span class="muted small">{app.cloudAgents.length ? app.cloudAgents.length + " agents in the catalogue" : "optional — an agent-sandbox tenant as cloud: in ~/.config/acpost/config.yaml"}</span></div>
           </div>
         </div></div>
 
       {:else}
-        <h2>General</h2>
+        <h2>{t("General")}</h2>
         <div class="card panel"><div class="inner">
           <div class="row">
-            <div class="t"><b>Notifications</b><span class="muted small">When a turn ends or an agent waits for you, and the app is in the background</span></div>
-            <button class="sw" class:on={notify} onclick={() => setNotify(!notify)} aria-label="Notifications"><span></span></button>
+            <div class="t"><b>{t("Notifications")}</b><span class="muted small">{t("When a turn ends or an agent waits for you, and the app is in the background")}</span></div>
+            <button class="sw" class:on={notify} onclick={() => setNotify(!notify)} aria-label={t("Notifications")}><span></span></button>
           </div>
           <div class="row">
-            <div class="t"><b>Appearance</b></div>
+            <div class="t"><b>{t("Appearance")}</b></div>
             <div class="seg">
-              <button class:on={app.theme === "light"} onclick={() => app.setTheme("light")}>Light</button>
-              <button class:on={app.theme === "dark"} onclick={() => app.setTheme("dark")}>Dark</button>
-              <button class:on={app.theme === "system"} onclick={() => app.setTheme("system")}>Auto</button>
+              <button class:on={app.theme === "light"} onclick={() => app.setTheme("light")}>{t("Light")}</button>
+              <button class:on={app.theme === "dark"} onclick={() => app.setTheme("dark")}>{t("Dark")}</button>
+              <button class:on={app.theme === "system"} onclick={() => app.setTheme("system")}>{t("Auto")}</button>
             </div>
           </div>
           <div class="row">
-            <div class="t"><b>Node</b><span class="muted small mono">{app.conn?.url}</span></div>
+            <div class="t"><b>{t("Language")}</b></div>
+            <div class="seg">
+              {#each [["auto", "Auto"], ["en", "English"], ["ru", "Русский"]] as [v, l]}
+                <button class:on={i18n.choice === v} onclick={() => i18n.set(v as Lang)}>{v === "auto" ? t(l) : l}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="row">
+            <div class="t"><b>{t("Text size")}</b><span class="muted small">{t("Also ⌘+ and ⌘−; ⌘0 for the usual size")}</span></div>
+            <div class="size">
+              <button class="btn ghost sm" onclick={() => app.stepTextSize(-1)} aria-label={t("Smaller")} disabled={app.textSize <= 0.85}><span class="a1">A</span></button>
+              <button class="btn ghost sm pct num" onclick={() => app.setTextSize(1)} title={t("The usual size")}>{Math.round(app.textSize * 100)}%</button>
+              <button class="btn ghost sm" onclick={() => app.stepTextSize(1)} aria-label={t("Larger")} disabled={app.textSize >= 1.5}><span class="a2">A</span></button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="t"><b>{t("Node")}</b><span class="muted small mono">{app.conn?.url}</span></div>
             <span class="chip" class:good={app.conn?.ok}>{app.conn?.node}</span>
           </div>
         </div></div>
@@ -427,6 +444,11 @@
   .err { padding: 10px 12px; border-radius: 12px; background: var(--crit-bg); color: var(--crit); font-size: 12.5px; }
   .pickc { cursor: default; height: 26px; }
   .pickc.on { background: var(--accent-bg); color: var(--accent); border-color: transparent; }
+  .size { display: flex; align-items: center; gap: 2px; }
+  .size .a1 { font-size: 11px; font-weight: 600; }
+  .size .a2 { font-size: 16px; font-weight: 600; }
+  .size .pct { min-width: 52px; justify-content: center; font-size: 12px; }
+  .err { white-space: pre-line; }
   .sw { width: 34px; height: 20px; border-radius: 10px; border: 0; background: var(--track); position: relative; flex: none; }
   .sw span { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: left .15s; }
   .sw.on { background: var(--good); }

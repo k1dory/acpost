@@ -75,7 +75,7 @@ func (n *Node) ForgeLogin(ctx context.Context, p Principal, host, kind, token st
 	if err != nil {
 		var fe *forge.Error
 		if errors.As(err, &fe) && fe.Status == 0 {
-			return client.ForgeAccount{}, errf("unavailable", "%s does not answer (%s)", host, short(fe.Message, 160))
+			return client.ForgeAccount{}, errh("unavailable", "check the address, and that the server is up", "%s does not answer", host)
 		}
 		return client.ForgeAccount{}, errh("invalid", "choose its kind instead of Detect",
 			"%s answers, but not as GitHub, GitLab or Forgejo/Gitea", host)
@@ -122,13 +122,6 @@ func tokenHint(kind, host string) string {
 	default:
 		return "make one at https://" + host + "/user/settings/applications (repository and user: read and write)"
 	}
-}
-
-func short(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }
 
 // plainHost is the host of what was typed: a bare host, or a URL's (user, path and query dropped).

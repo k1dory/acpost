@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app, type Chat } from "../lib/state.svelte";
   import { ago } from "../lib/format";
   import Icon from "./Icon.svelte";
@@ -94,7 +95,7 @@
     onclick={() => app.open(c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
     <span class="dot {dotOf(c)}"></span>
     <span class="t">
-      <span class="title">{c.title || "Untitled"}</span>
+      <span class="title">{c.title || t("Untitled")}</span>
       <span class="sub muted"><span class="srcic">{#if brandOf(c.cloud_agent || c.agent || "")}<AgentMark of={c.cloud_agent || c.agent || ""} size={11} busy={dotOf(c) === "running"} />{:else}<Icon name={source(c) === "cloud" ? "cloud" : "bot"} size={10} />{/if}</span>{source(c) === "claude" ? "Claude" : source(c) === "codex" ? "Codex" : source(c) === "cloud" ? c.cloud_agent || "Cloud" : ""}{place(c) ? " · " + place(c) : ""}</span>
     </span>
     <span class="when muted num">{ago(c.updated)}</span>
@@ -105,24 +106,24 @@
 <aside class="side">
   <div class="top drag"></div>
   <div class="pad">
-    <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> New task <kbd>⌘N</kbd></button>
+    <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> {t("New task")} <kbd>⌘N</kbd></button>
     <div class="quick">
-      <button class="row qk" class:sel={app.view === "board"} onclick={() => (app.view = "board")}><span class="ic"><Icon name="activity" size={14} /></span><span class="t"><span class="title">Agents</span></span>{#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}<kbd>⌘B</kbd></button>
-      <button class="row qk" onclick={() => (app.palette = true)}><span class="ic"><Icon name="search" size={14} /></span><span class="t"><span class="title">Search</span></span><kbd>⌘K</kbd></button>
+      <button class="row qk" class:sel={app.view === "board"} onclick={() => (app.view = "board")}><span class="ic"><Icon name="activity" size={14} /></span><span class="t"><span class="title">{t("Agents")}</span></span>{#if app.asking.length}<span class="badge">{app.asking.length}</span>{/if}<kbd>⌘B</kbd></button>
+      <button class="row qk" onclick={() => (app.palette = true)}><span class="ic"><Icon name="search" size={14} /></span><span class="t"><span class="title">{t("Search")}</span></span><kbd>⌘K</kbd></button>
     </div>
     <label class="search">
       <Icon name="search" />
-      <input placeholder="Filter chats" bind:value={q} />
+      <input placeholder={t("Filter chats")} bind:value={q} />
     </label>
   </div>
 
   <nav class="scroll list">
     <div class="h">
-      <span>Folders</span>
-      <button class="ic-btn" title="New folder" onclick={startNew}><Icon name="plus" size={12} /></button>
+      <span>{t("Folders")}</span>
+      <button class="ic-btn" title={t("New folder")} onclick={startNew}><Icon name="plus" size={12} /></button>
     </div>
     {#if naming === "new"}
-      <input class="input fname" placeholder="Folder name" bind:value={nameText} onkeydown={keyName} onblur={commitName} use:focusOnMount />
+      <input class="input fname" placeholder={t("Folder name")} bind:value={nameText} onkeydown={keyName} onblur={commitName} use:focusOnMount />
     {/if}
     {#each app.folders as f (f.id)}
       {@const items = inFolder(f.id)}
@@ -139,35 +140,35 @@
         {/if}
         {#if !collapsed[f.id]}
           {#each items as c (c.key)}{@render row(c)}{/each}
-          {#if !items.length}<div class="empty-f muted">Drop chats here</div>{/if}
+          {#if !items.length}<div class="empty-f muted">{t("Drop chats here")}</div>{/if}
         {/if}
       </div>
     {:else}
-      {#if naming !== "new"}<div class="none muted">Folders sort your chats: drag one onto a folder.</div>{/if}
+      {#if naming !== "new"}<div class="none muted">{t("Folders sort your chats: drag one onto a folder.")}</div>{/if}
     {/each}
 
     <div class="h loose" class:drop={dropOn === ""} ondragover={e => over(e, "")} ondragleave={() => (dropOn = null)} ondrop={e => drop(e, "")} role="group">
-      <span>Chats</span>
+      <span>{t("Chats")}</span>
       {#if app.loadingChats}<span class="spin"></span>{/if}
     </div>
     {#each loose.slice(0, shown) as c (c.key)}{@render row(c)}{/each}
     {#if loose.length > shown}
-      <button class="btn ghost sm more" onclick={() => (shown += 200)}>{loose.length - shown} more</button>
+      <button class="btn ghost sm more" onclick={() => (shown += 200)}>{t("{n} more", { n: loose.length - shown })}</button>
     {/if}
     {#if !app.chats.length && !app.loadingChats}
-      <div class="none muted">{app.conn?.ok ? "No chats yet" : ""}</div>
+      <div class="none muted">{app.conn?.ok ? t("No chats yet") : ""}</div>
     {/if}
     {#each app.partial as p}<div class="partial">{p}</div>{/each}
   </nav>
 
   <div class="foot">
-    <button class="row" class:sel={app.view === "usage"} onclick={() => (app.view = "usage")}><span class="ic"><Icon name="chart" size={14} /></span><span class="t"><span class="title">Usage</span></span></button>
-    <button class="row" class:sel={app.view === "settings"} onclick={() => (app.view = "settings")}><span class="ic"><Icon name="sun" size={14} /></span><span class="t"><span class="title">Settings</span></span><kbd>⌘,</kbd></button>
+    <button class="row" class:sel={app.view === "usage"} onclick={() => (app.view = "usage")}><span class="ic"><Icon name="chart" size={14} /></span><span class="t"><span class="title">{t("Usage")}</span></span></button>
+    <button class="row" class:sel={app.view === "settings"} onclick={() => (app.view = "settings")}><span class="ic"><Icon name="sun" size={14} /></span><span class="t"><span class="title">{t("Settings")}</span></span><kbd>⌘,</kbd></button>
     <div class="theme">
       <div class="seg">
-        <button class:on={app.theme === "light"} onclick={() => app.setTheme("light")} title="Light"><Icon name="sun" size={14} /></button>
-        <button class:on={app.theme === "dark"} onclick={() => app.setTheme("dark")} title="Dark"><Icon name="moon" size={14} /></button>
-        <button class:on={app.theme === "system"} onclick={() => app.setTheme("system")}>Auto</button>
+        <button class:on={app.theme === "light"} onclick={() => app.setTheme("light")} title={t("Light")}><Icon name="sun" size={14} /></button>
+        <button class:on={app.theme === "dark"} onclick={() => app.setTheme("dark")} title={t("Dark")}><Icon name="moon" size={14} /></button>
+        <button class:on={app.theme === "system"} onclick={() => app.setTheme("system")}>{t("Auto")}</button>
       </div>
       <span class="node muted" title={app.conn?.url}><span class="dot" class:done={app.conn?.ok} class:failed={app.conn && !app.conn.ok}></span>{app.conn?.node ?? "…"}</span>
     </div>
@@ -177,17 +178,17 @@
     <div class="ctx card" style="left:{menu.x}px; top:{menu.y}px">
       {#if menu.chat}
         {@const c = menu.chat}
-        <button class="mi" onclick={() => { renaming = c.key; renameText = c.title; }}><Icon name="file" size={12} /> Rename</button>
-        <div class="mh">Move to</div>
+        <button class="mi" onclick={() => { renaming = c.key; renameText = c.title; }}><Icon name="file" size={12} /> {t("Rename")}</button>
+        <div class="mh">{t("Move to")}</div>
         {#each app.folders as f (f.id)}
           <button class="mi" disabled={c.folder === f.id} onclick={() => app.moveChat(c.key, f.id)}><Icon name="book" size={12} /> {f.name}</button>
         {/each}
-        <button class="mi" onclick={() => { moveAfter = c.key; startNew(); }}><Icon name="plus" size={12} /> New folder…</button>
-        {#if c.folder}<button class="mi" onclick={() => app.moveChat(c.key, "")}><Icon name="x" size={12} /> Out of the folder</button>{/if}
+        <button class="mi" onclick={() => { moveAfter = c.key; startNew(); }}><Icon name="plus" size={12} /> {t("New folder…")}</button>
+        {#if c.folder}<button class="mi" onclick={() => app.moveChat(c.key, "")}><Icon name="x" size={12} /> {t("Out of the folder")}</button>{/if}
       {:else if menu.folder}
         {@const id = menu.folder}
-        <button class="mi" onclick={() => { naming = id; nameText = app.folders.find(f => f.id === id)?.name ?? ""; }}>Rename</button>
-        <button class="mi danger" onclick={() => app.deleteFolder(id)}>Delete the folder (its chats stay)</button>
+        <button class="mi" onclick={() => { naming = id; nameText = app.folders.find(f => f.id === id)?.name ?? ""; }}>{t("Rename")}</button>
+        <button class="mi danger" onclick={() => app.deleteFolder(id)}>{t("Delete the folder (its chats stay)")}</button>
       {/if}
     </div>
   {/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app, final } from "../lib/state.svelte";
   import { intent, toolName, toolState } from "../lib/turn";
   import { who, dur, clock } from "../lib/format";
@@ -19,11 +20,11 @@
         <Avatar addr={r.m.to} size={20} />
         <span class="nm">{who(r.m.to).name}</span>
         <span class="what muted">{(r.m.body ?? "").split("\n")[0]}</span>
-        {#if r.state === "ask"}<span class="chip ask">Needs approval</span>
-        {:else if r.state === "running"}<span class="chip"><span class="spin"></span> Running</span>
-        {:else if r.state === "queued"}<span class="chip warn">Queued</span>
-        {:else if r.state === "failed"}<span class="chip crit">Failed</span>
-        {:else}<span class="chip">Done</span>{/if}
+        {#if r.state === "ask"}<span class="chip ask">{t("Needs approval")}</span>
+        {:else if r.state === "running"}<span class="chip"><span class="spin"></span> {t("Running")}</span>
+        {:else if r.state === "queued"}<span class="chip warn">{t("Queued")}</span>
+        {:else if r.state === "failed"}<span class="chip crit">{t("Failed")}</span>
+        {:else}<span class="chip">{t("Done")}</span>{/if}
       </button>
       {#each r.tools as t (t.id)}
         {@const s = toolState(t, final(r.m.state))}
@@ -36,7 +37,7 @@
       {/each}
     </div>
   {:else}
-    <div class="empty">What the agents do shows up here.</div>
+    <div class="empty">{t("What the agents do shows up here.")}</div>
   {/each}
 </div>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { dur } from "../lib/format";
   import Icon from "./Icon.svelte";
   import AgentMark, { brandOf } from "./AgentMark.svelte";
@@ -9,7 +10,7 @@
 <div class="th">
   <button class="head" onclick={() => (open = !open)}>
     {#if brandOf(agent)}<AgentMark of={agent} size={14} busy={live} />{:else}<Icon name="brain" size={14} />{/if}
-    <span class:live>{live ? "Thinking…" : ms >= 1000 ? `Thought for ${dur(ms)}` : "Thought briefly"}</span>
+    <span class:live>{live ? t("Thinking…") : ms >= 1000 ? t("Thought for {d}", { d: dur(ms) }) : t("Thought briefly")}</span>
     <span class="chev" class:rot={open}><Icon name="chev" size={12} /></span>
   </button>
   {#if open}<div class="body selectable">{text}</div>{/if}

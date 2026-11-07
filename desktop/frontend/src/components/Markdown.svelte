@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { Marked } from "marked";
   import DOMPurify from "dompurify";
   import hljs from "highlight.js/lib/common";
@@ -21,7 +22,7 @@
         }
         if (!out) out = esc(code);
         const label = name ? esc(hljs.getLanguage(name)?.name ?? name) : "text";
-        return `<div class="code"><div class="ch"><span class="lang">${label}</span><button class="cp" type="button">Copy</button></div>` +
+        return `<div class="code"><div class="ch"><span class="lang">${label}</span><button class="cp" type="button">${t("Copy")}</button></div>` +
           `<pre><code class="hljs">${out}</code></pre></div>`;
       },
     },
@@ -37,8 +38,8 @@
     let ok = false;
     try { await within(navigator.clipboard.writeText(code)); ok = true; } catch {}
     if (!ok) try { await within(Clipboard.SetText(code)); ok = true; } catch {}
-    btn.textContent = ok ? "Copied" : "Copy failed";
-    setTimeout(() => (btn.textContent = "Copy"), 1400);
+    btn.textContent = ok ? t("Copied") : t("Copy failed");
+    setTimeout(() => (btn.textContent = t("Copy")), 1400);
   }
 </script>
 

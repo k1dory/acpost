@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
 
@@ -14,14 +15,14 @@
     { kind: "Action", label: "Terminal", icon: "term", run: () => { app.panel = true; app.tab = "terminal"; } },
   ];
   const items = $derived.by(() => {
-    const t = q.trim().toLowerCase();
-    const m = (s?: string) => !t || (s ?? "").toLowerCase().includes(t);
+    const ql = q.trim().toLowerCase();
+    const m = (s?: string) => !ql || (s ?? "").toLowerCase().includes(ql);
     const out: Item[] = [];
     for (const a of actions) if (m(a.label)) out.push(a);
     for (const p of app.playbooks) if (m(p.name)) out.push({ kind: "Playbook", label: "/" + p.name, icon: "book", run: () => { app.newTask(); app.quote = p.body; } });
     for (const c of app.chats) {
       if (out.length > 60) break;
-      if (m(c.title) || m(c.cwd) || m(c.repo)) out.push({ kind: "Chat", label: c.title || "Untitled", sub: (c.cwd || c.repo || "").split("/").filter(Boolean).pop(), icon: c.kind === "cloud" ? "cloud" : "chat", run: () => app.open(c) });
+      if (m(c.title) || m(c.cwd) || m(c.repo)) out.push({ kind: "Chat", label: c.title || t("Untitled"), sub: (c.cwd || c.repo || "").split("/").filter(Boolean).pop(), icon: c.kind === "cloud" ? "cloud" : "chat", run: () => app.open(c) });
     }
     return out;
   });
@@ -40,17 +41,17 @@
 <div class="shade" onclick={() => (app.palette = false)}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="pal card" onclick={e => e.stopPropagation()}>
-    <div class="qrow"><Icon name="search" size={15} /><input placeholder="Search chats, actions, playbooks" bind:value={q} onkeydown={key} use:focus /></div>
+    <div class="qrow"><Icon name="search" size={15} /><input placeholder={t("Search chats, actions, playbooks")} bind:value={q} onkeydown={key} use:focus /></div>
     <div class="list scroll">
       {#each items as it, i}
         <button class="it" class:on={i === sel} onmouseenter={() => (sel = i)} onclick={() => go(i)}>
           <Icon name={it.icon} size={14} />
-          <span class="lb">{it.label}</span>
+          <span class="lb">{it.kind === "Action" ? t(it.label) : it.label}</span>
           {#if it.sub}<span class="muted mono sub">{it.sub}</span>{/if}
-          <span class="muted kind">{it.kind}</span>
+          <span class="muted kind">{t(it.kind)}</span>
         </button>
       {:else}
-        <div class="none muted">Nothing found</div>
+        <div class="none muted">{t("Nothing found")}</div>
       {/each}
     </div>
   </div>

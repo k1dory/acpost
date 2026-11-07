@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node } from "../lib/api";
   import Icon from "./Icon.svelte";
@@ -76,8 +77,8 @@
   <!-- Where: only when a cloud is configured (optional: without one, everything is this Mac). -->
   {#if app.cloudAgents.length}
     <div class="seg">
-      <button class:on={!cloud} onclick={() => (app.draft.where = "mac")}><Icon name="bot" size={13} /> This Mac</button>
-      <button class:on={cloud} onclick={() => (app.draft.where = "cloud")}><Icon name="cloud" size={13} /> Cloud</button>
+      <button class:on={!cloud} onclick={() => (app.draft.where = "mac")}><Icon name="bot" size={13} /> {t("This Mac")}</button>
+      <button class:on={cloud} onclick={() => (app.draft.where = "cloud")}><Icon name="cloud" size={13} /> {t("Cloud")}</button>
     </div>
   {/if}
 
@@ -95,7 +96,7 @@
         <div class="menu card">
           <div class="searchrow">
             <Icon name="search" size={13} />
-            <input class="q" placeholder="Search a directory, or a path: ~/src/…" bind:value={typed} onkeydown={key} use:focusOnMount />
+            <input class="q" placeholder={t("Search a directory, or a path: ~/src/…")} bind:value={typed} onkeydown={key} use:focusOnMount />
           </div>
           <div class="items">
             {#each shown as d, i (d)}
@@ -103,16 +104,16 @@
                 <span class="nm">{d.split("/").filter(Boolean).pop() || "/"}</span><span class="pth">{short(d)}</span>
               </button>
             {:else}
-              <div class="none muted">{typed.trim() ? "Nothing found" : "No recent directories"}</div>
+              <div class="none muted">{typed.trim() ? t("Nothing found") : t("No recent directories")}</div>
             {/each}
           </div>
-          <button class="mi strong" onclick={pick}>Choose in Finder…</button>
+          <button class="mi strong" onclick={pick}>{t("Choose in Finder…")}</button>
         </div>
       {/if}
     </div>
   {:else}
     <Dropdown bind:value={app.draft.cloudAgent} icon="cloud" items={app.cloudAgents.map(a => ({ value: a.ref, label: a.name }))} />
-    <input class="input repo" placeholder="Repository (optional)" bind:value={app.draft.repo} />
+    <input class="input repo" placeholder={t("Repository (optional)")} bind:value={app.draft.repo} />
   {/if}
 </div>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import { ago, dur } from "../lib/format";
@@ -40,22 +41,22 @@
 
 <div class="fg scroll">
   {#if !agent}
-    <div class="empty">Open a conversation with an agent on this node to see its repository.</div>
+    <div class="empty">{t("Open a conversation with an agent on this node to see its repository.")}</div>
   {:else if err}
-    <div class="empty">{err}<button class="btn sm" onclick={load}>Retry</button></div>
+    <div class="empty">{err}<button class="btn sm" onclick={load}>{t("Retry")}</button></div>
   {:else if !info}
     <div class="pad"><div class="sk" style="height:14px;width:60%"></div></div>
   {:else if log}
     <div class="lh">
-      <button class="btn ghost sm" onclick={() => (log = null)}>← Back</button>
+      <button class="btn ghost sm" onclick={() => (log = null)}>{t("← Back")}</button>
       <b class="ln">{log.name}</b>
       <span class="sp"></span>
-      <div class="seg" class:hidden={!!log.error}>{#each ["all", "info", "warn", "error"] as l}<button class:on={level === l} onclick={() => (level = l as any)}>{l === "all" ? "All" : l === "info" ? "Info" : l === "warn" ? "Warnings" : "Errors"}</button>{/each}</div>
+      <div class="seg" class:hidden={!!log.error}>{#each ["all", "info", "warn", "error"] as l}<button class:on={level === l} onclick={() => (level = l as any)}>{t(l === "all" ? "All" : l === "info" ? "Info" : l === "warn" ? "Warnings" : "Errors")}</button>{/each}</div>
     </div>
     {#if log.error}
       <div class="empty">
         <div class="selectable">{log.error}</div>
-        {#if /rate limit|401|403|token/i.test(log.error)}<div>Keep a token for the forge: <code class="selectable">acpost forge login {info.repo.host}</code></div>{/if}
+        {#if /rate limit|401|403|token/i.test(log.error)}<div>{t("Keep a token for the forge:")} <code class="selectable">acpost forge login {info.repo.host}</code></div>{/if}
       </div>
     {:else if !log.text}
       <div class="pad"><div class="sk" style="height:12px;width:80%"></div></div>
@@ -69,19 +70,19 @@
       <Icon name="pr" /><a href={info.repo.web} target="_blank" rel="noreferrer">{info.repo.path}</a>
       <span class="chip">{info.server.kind}{info.server.version ? ` ${info.server.version}` : ""}</span>
       {#if info.branch}<span class="chip mono">{info.branch}</span>{/if}
-      {#if !info.authed}<span class="chip warn" title={`acpost forge login ${info.repo.host}`}>no token</span>{/if}
+      {#if !info.authed}<span class="chip warn" title={`acpost forge login ${info.repo.host}`}>{t("no token")}</span>{/if}
       <span class="sp"></span><button class="btn ghost sm" onclick={load} disabled={busy}><Icon name="refresh" size={13} /></button>
     </div>
 
-    <div class="h">Pull requests</div>
+    <div class="h">{t("Pull requests")}</div>
     <div class="inner">
       {#each pulls as p (p.number)}
         <a class="row" href={p.url} target="_blank" rel="noreferrer">
           <span class="mono muted">#{p.number}</span><span class="t">{p.title}</span>
-          {#if p.draft}<span class="chip">draft</span>{/if}
+          {#if p.draft}<span class="chip">{t("draft")}</span>{/if}
           <span class="mono muted small">{p.head} → {p.base}</span><span class="muted small">{ago(p.updated)}</span>
         </a>
-      {:else}<div class="none muted">No open pull requests</div>{/each}
+      {:else}<div class="none muted">{t("No open pull requests")}</div>{/each}
     </div>
 
     <div class="h">Checks {#if info.branch}<span class="muted">on {info.branch}</span>{/if}</div>
@@ -92,12 +93,12 @@
           {#each c.jobs ?? [] as j (j.id)}
             <button class="row job" class:fail={cls(j.status) === "crit"} onclick={() => openLog(j, c)}>
               <span class="dot {cls(j.status) === 'good' ? 'done' : cls(j.status) === 'crit' ? 'failed' : cls(j.status) === 'warn' ? 'running' : ''}"></span>
-              <span class="t">{j.name}</span><span class="muted small">log</span>
+              <span class="t">{j.name}</span><span class="muted small">{t("log")}</span>
             </button>
           {/each}
-          {#if !(c.jobs ?? []).length && c.logs_by_jobs === false && c.url}<a class="row job" href={c.url} target="_blank" rel="noreferrer"><span class="t muted">Open on the forge</span></a>{/if}
+          {#if !(c.jobs ?? []).length && c.logs_by_jobs === false && c.url}<a class="row job" href={c.url} target="_blank" rel="noreferrer"><span class="t muted">{t("Open on the forge")}</span></a>{/if}
         </div>
-      {:else}<div class="none muted">No CI runs for this branch</div>{/each}
+      {:else}<div class="none muted">{t("No CI runs for this branch")}</div>{/each}
     </div>
   {/if}
 </div>

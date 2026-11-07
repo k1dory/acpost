@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import { splitDiff } from "../lib/turn";
@@ -43,17 +44,17 @@
 
 <div class="ch">
   <div class="tools">
-    <Dropdown bind:value={agent} items={[{ value: "", label: "All agents" }, ...agents.map(a => ({ value: a, label: who(a).name }))]} />
+    <Dropdown bind:value={agent} items={[{ value: "", label: t("All agents") }, ...agents.map(a => ({ value: a, label: who(a).name }))]} />
     <span class="muted num">{stats.size} files</span>
     <span class="sp"></span>
-    <button class="btn sm" onclick={() => load(root)}>Refresh</button>
+    <button class="btn sm" onclick={() => load(root)}>{t("Refresh")}</button>
   </div>
   {#if loading && !data}
     <div class="pad"><div class="sk" style="height:14px;width:70%"></div></div>
   {:else if err}
     <div class="empty">{err}</div>
   {:else if !files.length}
-    <div class="empty">No changes in this session yet.</div>
+    <div class="empty">{t("No changes in this session yet.")}</div>
   {:else}
     <div class="split">
       <div class="tree scroll">
