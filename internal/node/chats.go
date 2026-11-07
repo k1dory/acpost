@@ -51,31 +51,40 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 			if len(c.Agents) > 0 {
 				chat.Agent = c.Agents[0]
 			}
-			if root, err := n.st.Get(ctx, c.Thread); err == nil {
+			root, rootErr := n.st.Get(ctx, c.Thread)
+			if rootErr == nil {
 				chat.Cwd = taskCwd(root)
-				if sid := root.Meta[metaSession]; sid != "" {
-					chat.Session = sid
-				}
 			}
+			// The ACP sessions this thread runs: agent by agent, under the key its turns use.
+			inherit := ""
 			for _, a := range c.Agents {
 				name := strings.TrimPrefix(a, "agent:")
 				if strings.HasPrefix(name, "sb_") {
 					ours["cloud/"+name] = true // a cloud sandbox this thread talks to: the thread is its chat
-				}
-				if strings.Contains(name, "@") {
+					inherit = cmpOr(inherit, folderOf["cloud:"+name])
 					continue
 				}
-				if sid, _ := n.st.Session(ctx, a, "thread:"+c.Thread); sid != "" {
-					ours[name+"/"+sid] = true
-					if chat.Session == "" {
-						chat.Session = sid
+				cfg := n.agentCfg(name)
+				if strings.Contains(name, "@") || cfg == nil || rootErr != nil {
+					continue
+				}
+				sid := ""
+				if root.To == a {
+					sid = root.Meta[metaSession] // a session it continues
+				}
+				if sid == "" {
+					if key := sessionKey(cfg.Session, root); key != "" {
+						sid, _ = n.st.Session(ctx, a, key)
 					}
 				}
-				if chat.Session != "" {
-					ours[name+"/"+chat.Session] = true
+				if sid != "" {
+					ours[name+"/"+sid] = true
+					chat.Session = cmpOr(chat.Session, sid)
+					inherit = cmpOr(inherit, folderOf["session:"+name+"/"+sid])
 				}
 			}
-			chat.Folder = folderOf[chat.Key]
+			// A session or sandbox put in a folder keeps it once a thread continues it.
+			chat.Folder = cmpOr(folderOf[chat.Key], inherit)
 			out.Items = append(out.Items, chat)
 		}
 		if next == "" {

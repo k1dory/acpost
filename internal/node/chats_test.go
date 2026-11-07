@@ -17,9 +17,8 @@ agents:
     driver: acp
     command: [%q]
     env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
-    session: thread
 `, os.Args[0], state))
-	m := ask(t, n, SendRequest{Body: "echo hi"}) // a thread: its session is in FAKE_STATE now
+	m := ask(t, n, SendRequest{Body: "echo hi", Task: "T1"}) // session: task (the default): its session is in FAKE_STATE now
 	// A session another client started (a terminal's Claude Code).
 	os.WriteFile(filepath.Join(state, "outside-1"), []byte("1"), 0o600)
 
@@ -51,5 +50,30 @@ agents:
 	}
 	if _, err := n.Chats(ctx, Principal{Kind: "client", Name: "ci"}); code(err) != "refused" {
 		t.Fatalf("a client listed the chats: %v", err)
+	}
+}
+
+// A session put in a folder keeps it once a thread continues it.
+func TestChatsFolderFollowsTheSession(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, os.Args[0], state))
+	os.WriteFile(filepath.Join(state, "outside-2"), []byte("1"), 0o600)
+	f, _ := n.CreateFolder(ctx, me, "argus")
+	n.MoveChat(ctx, me, "session:fake/outside-2", f.ID)
+	m := ask(t, n, SendRequest{Body: "echo go on", Session: "outside-2"})
+	chats, _ := n.Chats(ctx, me)
+	for _, c := range chats.Items {
+		if c.Key == "session:fake/outside-2" {
+			t.Fatalf("the continued session listed apart: %+v", chats.Items)
+		}
+		if c.Key == "thread:"+m.Thread && c.Folder != f.ID {
+			t.Fatalf("the thread lost the folder: %+v", c)
+		}
 	}
 }

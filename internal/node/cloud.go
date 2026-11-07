@@ -160,6 +160,11 @@ func (n *Node) cloudAgent(name string, verify bool) (*sandboxAgent, error) {
 	if err != nil {
 		return nil, errf("invalid", "%v", err)
 	}
+	// The node's user and its own agents only: not a sender that comes through the hub.
+	cfg.AllowFrom = []string{"user:*"} // a user is the node's own (its socket)
+	for a := range n.cfg.Agents {
+		cfg.AllowFrom = append(cfg.AllowFrom, "agent:"+a)
+	}
 	created, err := newSandboxAgent(n, name, cfg)
 	if err != nil {
 		return nil, errf("invalid", "%v", err)

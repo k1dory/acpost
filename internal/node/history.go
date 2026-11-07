@@ -40,7 +40,10 @@ func (n *Node) SessionHistory(ctx context.Context, p Principal, agent, id, cwd s
 		}
 		cwd = dir
 	}
-	slot := a.slots[0]
+	// A process of its own: the replay touches no turn, no session another slot holds, and the
+	// session is let go with the process (an agent that cannot close it holds it no longer).
+	slot := a.spare()
+	defer slot.stopProc()
 	proc, err := slot.ensureProc(ctx)
 	if err != nil {
 		return nil, errf("unavailable", "agent:%s did not start: %v", agent, err)
@@ -66,9 +69,7 @@ func (n *Node) SessionHistory(ctx context.Context, p Principal, agent, id, cwd s
 		}
 		out = append(out, store.Event{Seq: int64(len(out) + 1), Time: time.Now().UTC(), Kind: kind, Data: eventJSON(data)})
 	}}
-	if !proc.cl.capture(sid, t) {
-		return nil, errf("conflict", "session %s is in a turn here: its history is in that turn's events", id)
-	}
+	proc.cl.capture(sid, t)
 	lctx, cancel := context.WithTimeout(ctx, historyWait)
 	_, err = proc.conn.LoadSession(lctx, acp.LoadSessionRequest{SessionId: sid, Cwd: cwd, McpServers: []acp.McpServer{}})
 	cancel()
@@ -89,15 +90,17 @@ func (n *Node) SessionHistory(ctx context.Context, p Principal, agent, id, cwd s
 	return out, nil
 }
 
-// capture registers a replay's pseudo-turn for a session, unless a turn of it runs.
-func (c *acpClient) capture(sid acp.SessionId, t *acpTurn) bool {
+// capture registers a replay's pseudo-turn for a session (in a process of its own: no turn there).
+func (c *acpClient) capture(sid acp.SessionId, t *acpTurn) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, busy := c.turns[sid]; busy {
-		return false
-	}
 	c.turns[sid] = t
-	return true
+}
+
+// spare is a slot outside the agent's slots, for one job in a process of its own (a replay, asking
+// what the agent offers); its process is the caller's to stop.
+func (a *acpAgent) spare() *acpSlot {
+	return &acpSlot{a: a, idx: -1, token: a.slots[0].token}
 }
 
 func explainACPErr(err error, what string) error {

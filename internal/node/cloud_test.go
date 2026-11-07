@@ -69,6 +69,13 @@ func TestCloud(t *testing.T) {
 	if len(chats.Items) != 1 || chats.Items[0].Kind != "thread" {
 		t.Fatalf("%+v", chats.Items)
 	}
+	// Registered now, still the user's: not a client's, not another node's.
+	if _, _, err := n.Send(ctx, Principal{Kind: "client", Name: "ci"}, SendRequest{To: "agent:" + task.Sandbox, Body: "x"}); code(err) != "refused" {
+		t.Fatalf("a client reached a registered sandbox: %v", err)
+	}
+	if _, _, err := n.Send(ctx, Principal{Kind: "node", Name: "other"}, SendRequest{To: "agent:" + task.Sandbox, Body: "x"}); code(err) != "refused" {
+		t.Fatalf("a node reached a registered sandbox: %v", err)
+	}
 	// Not for a client; not a sandbox the tenant has not.
 	if _, _, err := n.Send(ctx, Principal{Kind: "client", Name: "ci"}, SendRequest{To: "agent:sb_other", Body: "x"}); code(err) != "refused" {
 		t.Fatalf("a client reached the cloud: %v", err)

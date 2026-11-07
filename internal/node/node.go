@@ -187,9 +187,11 @@ func (n *Node) Start(ctx context.Context) error {
 	for name := range n.acp {
 		mine = append(mine, "agent:"+name)
 	}
+	n.sbMu.Lock()
 	for name := range n.sandboxes {
 		mine = append(mine, "agent:"+name)
 	}
+	n.sbMu.Unlock()
 	// The cloud's sandboxes with messages: their agents again, before their turns are requeued.
 	if n.cloud != nil {
 		names, err := n.st.ActiveRecipients(ctx, "agent:sb_")
@@ -370,8 +372,9 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 	if to.Kind != "agent" {
 		return store.Message{}, false, errf("invalid", "%s: messages go to agents (agent:name)", r.To)
 	}
-	// A cloud sandbox of the tenant: its agent, added on first use (by the node's user).
-	if to.Node == "" && n.cloud != nil && strings.HasPrefix(to.Name, "sb_") && n.agentCfg(to.Name) == nil {
+	// A cloud sandbox of the tenant is the node's user's (its agents' too): never a client's or
+	// another node's, registered or not. Its agent is added on first use.
+	if to.Node == "" && n.cloud != nil && strings.HasPrefix(to.Name, "sb_") && n.cfg.Agents[to.Name] == nil {
 		if !p.local() {
 			return store.Message{}, false, errf("refused", "a cloud sandbox is reached by the node's user")
 		}

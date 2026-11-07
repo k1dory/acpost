@@ -476,6 +476,11 @@ func (n *Node) deliver(m store.Message) {
 		refuse("node " + n.Name() + " has no agent " + m.To)
 		return
 	}
+	if n.cfg.Agents[to.Name] == nil {
+		// A cloud sandbox (an agent added as the node's user used it): never through the hub.
+		refuse("agent:" + to.Name + " is a cloud sandbox of node " + n.Name() + "'s user")
+		return
+	}
 	if !matchAny(n.agentCfg(to.Name).AllowFrom, m.From) {
 		refuse("agent:" + to.Name + " does not take messages from " + m.From + " (allow_from)")
 		return

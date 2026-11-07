@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/k1dory/acpost/internal/client"
@@ -33,6 +34,10 @@ func taskCwd(m store.Message) string {
 // resolveSettings checks a message's directory and settings and puts them in its meta. Only the
 // node's user and its agents choose them; a message in a thread inherits the thread's directory.
 func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *SendRequest) error {
+	// A node forwards acp_ keys its node set; these are this node's to set, from its user's choice.
+	for _, k := range []string{metaCwd, metaModel, metaEffort, metaMode} {
+		delete(r.Meta, k)
+	}
 	asked := r.Cwd != "" || r.Model != "" || r.Effort != "" || r.Mode != ""
 	if !asked && r.Thread == "" {
 		return nil
@@ -147,6 +152,35 @@ func (a *acpAgent) noteCommands(cmds []acp.AvailableCommand) {
 	a.optMu.Unlock()
 }
 
+// offer is the agent's latest session's options; when no session said them yet, a session is opened
+// to ask, in a process of its own (one asking at a time).
+func (a *acpAgent) offer(ctx context.Context) (*acpx.SessionState, error) {
+	a.optAsk.Lock()
+	defer a.optAsk.Unlock()
+	a.optMu.Lock()
+	st := a.lastOpts
+	a.optMu.Unlock()
+	if st != nil {
+		return st, nil
+	}
+	slot := a.spare()
+	defer slot.stopProc()
+	proc, err := slot.ensureProc(ctx)
+	if err != nil {
+		return nil, errf("unavailable", "agent:%s did not start: %v", a.name, err)
+	}
+	r, err := proc.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: slot.cwd(), McpServers: []acp.McpServer{}})
+	if err != nil {
+		return nil, errf("unavailable", "agent:%s: session/new: %v", a.name, procErr(proc, err))
+	}
+	a.noteState(proc, r.SessionId, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
+	time.Sleep(100 * time.Millisecond) // the commands the agent says right after session/new
+	slot.closeIfOneOff(proc, "", r.SessionId)
+	a.optMu.Lock()
+	defer a.optMu.Unlock()
+	return a.lastOpts, nil
+}
+
 // AgentOptions is what an ACP agent offers to choose: its models, reasoning levels and modes, as
 // its latest session said (a session is opened in the agent's directory to ask, when none was),
 // and its slash commands.
@@ -158,24 +192,9 @@ func (n *Node) AgentOptions(ctx context.Context, p Principal, agent string) (cli
 	if a == nil {
 		return client.AgentOptions{}, errh("not_found", "`acpost agents` lists them", "no ACP agent %s here", agent)
 	}
-	a.optMu.Lock()
-	st := a.lastOpts
-	a.optMu.Unlock()
-	if st == nil {
-		slot := a.slots[0]
-		proc, err := slot.ensureProc(ctx)
-		if err != nil {
-			return client.AgentOptions{}, errf("unavailable", "agent:%s did not start: %v", agent, err)
-		}
-		r, err := proc.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: slot.cwd(), McpServers: []acp.McpServer{}})
-		if err != nil {
-			return client.AgentOptions{}, errf("unavailable", "agent:%s: session/new: %v", agent, procErr(proc, err))
-		}
-		a.noteState(proc, r.SessionId, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
-		slot.closeIfOneOff(proc, "", r.SessionId)
-		a.optMu.Lock()
-		st = a.lastOpts
-		a.optMu.Unlock()
+	st, err := a.offer(ctx)
+	if err != nil {
+		return client.AgentOptions{}, err
 	}
 	out := client.AgentOptions{Agent: agent}
 	for _, o := range st.Options {

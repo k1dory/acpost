@@ -40,6 +40,7 @@ type acpAgent struct {
 	owners map[string]int // ACP session id → the slot whose process last ran it (concurrency > 1)
 
 	optMu    sync.Mutex
+	optAsk   sync.Mutex             // one asking the agent what it offers at a time
 	lastOpts *acpx.SessionState     // the latest session's options: what the agent offers (models, levels, modes)
 	commands []acp.AvailableCommand // the slash commands it said last
 }
