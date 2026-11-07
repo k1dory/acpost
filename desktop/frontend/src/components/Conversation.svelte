@@ -102,7 +102,6 @@
         <div class="hello">
           <div class="mark"><Logo size={44} draw /></div>
           <div class="big">{t("What should we work on?")}</div>
-          <div class="muted">{t("Where it runs, the agent and its directory — then the task. Type / for the model and effort.")}</div>
         </div>
         <Composer />
       </div>

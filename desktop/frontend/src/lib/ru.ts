@@ -43,13 +43,12 @@ export const ru: Record<string, string> = {
 
   // A new task
   "What should we work on?": "Над чем поработаем?",
-  "Where it runs, the agent and its directory — then the task. Type / for the model and effort.": "Агент, папка — и задача. / — модель и effort",
   "This Mac": "Этот Mac",
   "Cloud": "Облако",
   "Repository (optional)": "Репозиторий",
   "Search a directory, or a path: ~/src/…": "Папка или путь: ~/src/…",
   "Choose in Finder…": "Выбрать в Finder…",
-  "What should the agent do?  ( / for model, effort, commands )": "Что сделать?  / — модель, effort, команды",
+  "/ for the model, effort and commands": "/ — модель, effort, команды",
   "Reply…": "Ответить…",
   "Attach files": "Прикрепить файлы",
   "Model": "Модель",

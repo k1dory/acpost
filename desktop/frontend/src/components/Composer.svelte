@@ -154,7 +154,7 @@
     </div>
   {/if}
   <textarea bind:this={ta} bind:value={text} onkeydown={key} rows="1"
-    placeholder={isNew ? t("What should the agent do?  ( / for model, effort, commands )") : t("Reply…")}></textarea>
+    placeholder={isNew ? t("/ for the model, effort and commands") : t("Reply…")}></textarea>
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />

@@ -74,15 +74,43 @@
     const k = screenScale(); // the app's zoom taken out: fixed positions are in the page's coordinates
     menu = { x: Math.min(e.clientX / k, innerWidth / k - 230), y: Math.min(e.clientY / k, innerHeight / k - 260), chat, folder };
   }
-  function drag(e: DragEvent, c: Chat) { e.dataTransfer?.setData("text/acpost-chat", c.key); }
-  function over(e: DragEvent, target: string) {
-    if (e.dataTransfer?.types.includes("text/acpost-chat")) { e.preventDefault(); dropOn = target; }
+  // Dragging a chat onto a folder (or back to the list) with the mouse — not the page's own
+  // drag and drop, which the app's webview does not carry reliably. Starts after 5 px; the
+  // target is what is under the pointer (data-drop); a drag is not also a click.
+  let dragging = $state<{ chat: Chat; x: number; y: number } | null>(null);
+  let pressed: { chat: Chat; x: number; y: number } | null = null;
+  let dragged = false;
+  function press(e: PointerEvent, c: Chat) {
+    if (e.button !== 0) return;
+    pressed = { chat: c, x: e.clientX, y: e.clientY };
+    dragged = false;
+    addEventListener("pointermove", move);
+    addEventListener("pointerup", release, { once: true });
+    addEventListener("pointercancel", release, { once: true });
   }
-  function drop(e: DragEvent, folder: string) {
-    e.preventDefault();
-    dropOn = null;
-    const key = e.dataTransfer?.getData("text/acpost-chat");
-    if (key) app.moveChat(key, folder);
+  function targetAt(x: number, y: number): string | null {
+    const el = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest("[data-drop]") as HTMLElement | null;
+    return el ? el.dataset.drop ?? "" : null;
+  }
+  function move(e: PointerEvent) {
+    if (!pressed) return;
+    if (!dragging && Math.hypot(e.clientX - pressed.x, e.clientY - pressed.y) < 5) return;
+    const k = screenScale();
+    dragging = { chat: pressed.chat, x: e.clientX / k, y: e.clientY / k };
+    dropOn = targetAt(e.clientX, e.clientY);
+  }
+  function release(e: PointerEvent) {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", release);
+    removeEventListener("pointercancel", release);
+    const d = dragging, to = dragging && e.type === "pointerup" ? targetAt(e.clientX, e.clientY) : null;
+    dragged = !!d;
+    pressed = null; dragging = null; dropOn = null;
+    if (d && to !== null && to !== (d.chat.folder ?? "")) app.moveChat(d.chat.key, to);
+  }
+  function clickRow(c: Chat) {
+    if (dragged) { dragged = false; return; } // the end of a drag
+    app.open(c);
   }
 </script>
 
@@ -93,8 +121,8 @@
     <input class="input fname" bind:value={renameText} use:focusOnMount onblur={commitRename}
       onkeydown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") renaming = null; }} />
   {:else}
-  <button class="row" class:sel={isOpen(c) && app.view === "chat"} draggable="true" ondragstart={e => drag(e, c)}
-    onclick={() => app.open(c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
+  <button class="row" class:sel={isOpen(c) && app.view === "chat"} class:lifted={dragging?.chat.key === c.key}
+    onpointerdown={e => press(e, c)} onclick={() => clickRow(c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
     <span class="dot {dotOf(c)}"></span>
     <span class="t">
       <span class="title">{c.title || t("Untitled")}</span>
@@ -136,7 +164,7 @@
     {/if}
     {#each app.folders as f (f.id)}
       {@const items = inFolder(f.id)}
-      <div class="folder" class:drop={dropOn === f.id} ondragover={e => over(e, f.id)} ondragleave={() => (dropOn = null)} ondrop={e => drop(e, f.id)} role="group">
+      <div class="folder" class:drop={dropOn === f.id} data-drop={f.id} role="group">
         {#if naming === f.id}
           <input class="input fname" bind:value={nameText} onkeydown={keyName} onblur={commitName} use:focusOnMount />
         {:else}
@@ -156,7 +184,7 @@
       {#if naming !== "new"}<div class="none muted">{t("Folders sort your chats: drag one onto a folder.")}</div>{/if}
     {/each}
 
-    <div class="h loose" class:drop={dropOn === ""} ondragover={e => over(e, "")} ondragleave={() => (dropOn = null)} ondrop={e => drop(e, "")} role="group">
+    <div class="h loose" class:drop={dropOn === ""} data-drop="" role="group">
       <span>{t("Chats")}</span>
       {#if app.loadingChats}<span class="spin"></span>{/if}
     </div>
@@ -201,6 +229,9 @@
       {/if}
     </div>
   {/if}
+  {#if dragging}
+    <div class="ghost card" style="left:{dragging.x + 12}px;top:{dragging.y + 8}px">{dragging.chat.title || t("Untitled")}</div>
+  {/if}
 </aside>
 
 <style>
@@ -214,6 +245,8 @@
   .search input { border: 0; outline: 0; background: transparent; flex: 1; color: var(--ink); min-width: 0; }
   .list { flex: 1; padding: 0 10px 10px; min-height: 0; }
   .h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 8px 6px; letter-spacing: .02em; text-transform: uppercase; border-radius: 8px; }
+  .ghost { position: fixed; z-index: 90; pointer-events: none; padding: 6px 10px; font-size: 12.5px; font-weight: 500; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); }
+  .row.lifted { opacity: .45; }
   .h.drop, .folder.drop { background: var(--accent-bg); }
   .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
   .search .k:hover { color: var(--ink); }
