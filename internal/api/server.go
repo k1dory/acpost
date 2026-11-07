@@ -47,6 +47,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/forge", s.auth(s.forgeInfo))
 	mux.HandleFunc("GET /v1/forge/pulls", s.auth(s.forgePulls))
 	mux.HandleFunc("POST /v1/forge/pulls", s.auth(s.forgeOpenPull))
+	mux.HandleFunc("POST /v1/forge/merge", s.auth(s.forgeMerge))
 	mux.HandleFunc("GET /v1/forge/checks", s.auth(s.forgeChecks))
 	mux.HandleFunc("GET /v1/forge/log", s.auth(s.forgeLog))
 	mux.HandleFunc("POST /v1/terminals", s.auth(s.termOpen))
@@ -729,6 +730,22 @@ func (s *server) forgeOpenPull(w http.ResponseWriter, r *http.Request, p node.Pr
 		return
 	}
 	writeJSON(w, 201, pull)
+}
+
+func (s *server) forgeMerge(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct {
+		node.ForgeQuery
+		forge.Merge
+	}
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.n.MergePull(r.Context(), p, req.ForgeQuery, req.Merge); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"merged": true, "number": req.Number})
 }
 
 func nonNilSlice[T any](s []T) []T {

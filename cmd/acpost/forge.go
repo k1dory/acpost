@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -205,7 +206,36 @@ func forgeCmd(g *globals) *cobra.Command {
 	open.Flags().StringVar(&pr.Body, "body", "", "its description")
 	open.Flags().BoolVar(&pr.Draft, "draft", false, "a draft")
 
-	cmd.AddCommand(login, logout, status, prs, checks, logCmd, open)
+	var mg forge.Merge
+	merge := &cobra.Command{
+		Use:   "merge NUMBER",
+		Short: "Merge a pull request (run by an agent: once a person approves it)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			num, err := strconv.Atoi(args[0])
+			if err != nil || num <= 0 {
+				return fmt.Errorf("%q: a pull request's number", args[0])
+			}
+			mg.Number = num
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if err := c.MergePull(cmd.Context(), query(), mg); err != nil {
+				return err
+			}
+			if g.json {
+				printJSON(map[string]any{"merged": true, "number": num})
+				return nil
+			}
+			fmt.Printf("merged #%d\n", num)
+			return nil
+		},
+	}
+	merge.Flags().StringVar(&mg.Method, "method", "merge", "merge, squash or rebase")
+	merge.Flags().StringVar(&mg.SHA, "sha", "", "merge only if the head is this commit")
+
+	cmd.AddCommand(login, logout, status, prs, checks, logCmd, open, merge)
 	return cmd
 }
 

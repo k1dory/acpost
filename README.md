@@ -150,7 +150,7 @@ acpost serve   [--config FILE] [--join URL]
 acpost status
 acpost changes ID [--tree] [--stat]         # what its turns changed in their git repository
 acpost term    [--agent A | --cwd DIR] [--id T] [--list] [--keep]   # a shell on the node's machine
-acpost forge   login HOST [--kind K] | logout HOST | status | prs | checks [--ref R] | log JOB | open --title T [--base B]
+acpost forge   login HOST [--kind K] | logout HOST | status | prs | checks [--ref R] | log JOB | open --title T [--base B] | merge N
                [--agent A | --dir DIR]      # pull requests and CI of a repository's forge
 acpost usage   [--since 30d | --from DAY [--to DAY]] [--by agent|model|day|session|""] [--agent A]
 ```
@@ -200,6 +200,13 @@ the error says so) and opens a pull request from the repository's branch. Tokens
 `acpost forge login HOST` (read from the terminal or stdin): in the macOS keychain (service
 `acpost-forge`, given to `security` on its stdin), elsewhere in `~/.config/acpost/forge-tokens.json`
 (0600). For the node's user and its agents.
+
+**An agent's pull request waits for a person.** An agent that opens or merges a pull request
+(`acpost forge open`, `acpost forge merge N [--method squash] [--sha S]`, the same through the
+API) waits until a person approves it: a `permission_request` on the message it works on, answered
+as below (`acpost approve`, the app); rejected, or unanswered within the agent's `ask_timeout`, the
+call is refused and nothing reaches the forge. This holds whatever the agent's `permissions` say,
+so an agent that runs without asking still asks for these two. The node's user acts on its own.
 
 **Asking a person.** With `permissions: ask` an agent's request for permission waits for a
 person: a `permission_request` event (the tool call, what it would run with its secrets masked,
@@ -396,7 +403,27 @@ agents:
   backend-bot:
     driver: inbox
     lease: 5m
+  cloud:
+    driver: sandbox                  # a cloud agent: a sandbox of agent-sandbox
+    sandbox:
+      url: https://sandboxd.example
+      id: sb-7f3a                    # the sandbox; its conversation is this agent's
+      token_env: SANDBOXD_TOKEN      # sandboxd's API token, from the node's environment
+      ca: ""                         # a CA file for sandboxd's certificate, beside the system's
+    turn_timeout: 30m
 ```
+
+**Cloud agents** (`driver: sandbox`). A message is the next message of the sandbox's conversation
+(`POST /v1/sandboxes/{id}/messages`, its files as uploads: 8 of at most 16 MiB; links are named in
+the text). What the sandbox's run says on its stream (`…/messages/stream`) becomes the message's
+events, as a local agent's would: text, thoughts, tool calls by what they set out to do, plan,
+notices, usage (`session` is `sandbox:<id>/<harness session>`); the reply is the agent's last
+message of the turn (`reply: all`, every one). The turn ends with the agent's turn
+(`acp.turn_end`, a result line) or its run; cancelled or past `turn_timeout`, the run is cancelled
+in the sandbox too. A broken stream is opened again where it stopped. A cloud agent runs without
+asking: the sandbox, its policy and the gateway are its boundary (its `harness.permissions`, allow
+by default). When the sandbox does ask, its requests are the message's permission requests,
+answered here and handed to the sandbox. Turns of one sandbox go one at a time.
 
 Paths starting with `~` are expanded. Durations are Go durations (`90s`, `30m`, `168h`); sizes take
 `KiB`, `MiB`, `GiB`.
@@ -421,7 +448,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/conversations?before=&limit=` | threads, the most recently active first: title, agents, counts by state; `next` continues (a thread active again meanwhile is at the top, not on a later page) |
 | `GET /v1/messages/{id}/changes?tree=1&diff=1` | what its turns changed, per turn and per repository |
 | `POST /v1/terminals` · `GET /v1/terminals` · `GET /v1/terminals/{id}/output?from=` · `POST /v1/terminals/{id}/input` · `POST /v1/terminals/{id}/resize` · `DELETE /v1/terminals/{id}` | a shell on the node's machine (the node's user) |
-| `GET /v1/forge?agent=&dir=` · `GET /v1/forge/pulls?state=` · `POST /v1/forge/pulls` · `GET /v1/forge/checks?ref=` · `GET /v1/forge/log?job=` | the repository's forge: pull requests, CI, logs |
+| `GET /v1/forge?agent=&dir=` · `GET /v1/forge/pulls?state=` · `POST /v1/forge/pulls` · `POST /v1/forge/merge` · `GET /v1/forge/checks?ref=` · `GET /v1/forge/log?job=` | the repository's forge: pull requests, CI, logs; an agent's open and merge wait for a person's approval |
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |

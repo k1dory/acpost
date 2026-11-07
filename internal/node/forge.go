@@ -1,7 +1,10 @@
 package node
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +12,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/forge"
+	"github.com/k1dory/acpx"
 )
 
 // The forge of an agent's repository: its pull requests, CI runs and their logs, a new pull
@@ -170,7 +174,79 @@ func (n *Node) OpenPull(ctx context.Context, p Principal, q ForgeQuery, r forge.
 	if r.Head == "" {
 		r.Head = info.Branch
 	}
+	what := fmt.Sprintf("Open a pull request on %s: %q (%s → %s)", info.Repo.Web, r.Title, r.Head, r.Base)
+	if err := n.approve(ctx, p, what, r.Body, map[string]any{"forge": "open_pull", "repo": info.Repo.Web, "head": r.Head, "base": r.Base, "title": r.Title, "draft": r.Draft}); err != nil {
+		return forge.Pull{}, err
+	}
 	c, _ := n.forgeClient()
 	out, err := c.OpenPull(ctx, info.Server, info.Repo, r)
 	return out, forgeErr(err)
+}
+
+// MergePull merges a pull request of the repository.
+func (n *Node) MergePull(ctx context.Context, p Principal, q ForgeQuery, m forge.Merge) error {
+	info, err := n.forgeOf(ctx, p, q)
+	if err != nil {
+		return err
+	}
+	what := fmt.Sprintf("Merge pull request #%d on %s (%s)", m.Number, info.Repo.Web, cmp.Or(m.Method, "merge"))
+	if err := n.approve(ctx, p, what, "", map[string]any{"forge": "merge_pull", "repo": info.Repo.Web, "number": m.Number, "method": cmp.Or(m.Method, "merge"), "sha": m.SHA}); err != nil {
+		return err
+	}
+	c, _ := n.forgeClient()
+	return forgeErr(c.MergePull(ctx, info.Server, info.Repo, m))
+}
+
+// Options of an approval.
+const (
+	approveAllow  = "allow_once"
+	approveReject = "reject_once"
+)
+
+// approve has a person approve what an agent is about to do on a forge (open or merge a pull
+// request): a permission_request on the message the agent is working on, answered as any other
+// (acpost approve, the app); unanswered within the agent's ask_timeout, refused. Whatever the
+// agent's permissions say: even an agent that runs without asking (a cloud agent) asks for this.
+// The node's user acts on its own.
+func (n *Node) approve(ctx context.Context, p Principal, title, text string, input any) error {
+	if p.Kind != "agent" {
+		return nil
+	}
+	msgID := n.currentOf(p)
+	if msgID == "" {
+		return errh("refused", "an agent does this within a turn, where a person can approve it", "agent:%s has no turn running: nobody to approve %s", p.Name, title)
+	}
+	timeout := 10 * time.Minute
+	if a := n.cfg.Agents[p.Name]; a != nil && a.AskTimeout > 0 {
+		timeout = a.AskTimeout.D()
+	}
+	pending := n.askPending()
+	req := pending.Open(acpx.Request{Kind: acpx.RequestPermission, Title: redact(title), Text: redact(text), ToolKind: "forge",
+		RawInput: json.RawMessage(eventJSON(maskFields(input))),
+		Options:  []acpx.Option{{ID: approveAllow, Name: "Allow", Kind: approveAllow}, {ID: approveReject, Name: "Reject", Kind: approveReject}}})
+	n.asks.mu.Lock()
+	n.asks.of[req.ID] = askRef{msg: msgID, req: req}
+	n.asks.mu.Unlock()
+	defer func() {
+		n.asks.mu.Lock()
+		delete(n.asks.of, req.ID)
+		n.asks.mu.Unlock()
+	}()
+	if err := n.addEvent(ctx, msgID, "permission_request", eventJSON(fitRequest(req)), true); err != nil {
+		return errf("unavailable", "the approval could not be asked: %v", err)
+	}
+	reply, ok := pending.Wait(ctx, req.ID, timeout)
+	decision, by := "timeout", ""
+	if ok {
+		by, _ = reply.Content["by"].(string)
+		decision = "rejected"
+		if reply.OptionID == approveAllow {
+			decision = "allowed"
+		}
+	}
+	_ = n.addEvent(n.ctx, msgID, "permission", eventJSON(map[string]any{"request_id": req.ID, "tool": req.Title, "decision": decision, "by": by}), true)
+	if decision != "allowed" {
+		return errh("refused", "a person approves it in the app or with `acpost approve`", "%s: %s", title, decision)
+	}
+	return nil
 }

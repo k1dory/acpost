@@ -112,7 +112,20 @@ type Agent struct {
 	Preamble     *bool             `yaml:"preamble" json:"preamble"`
 	AllowFrom    []string          `yaml:"allow_from" json:"allow_from"`
 	Lease        Duration          `yaml:"lease" json:"lease"`
+	// Sandbox is the cloud sandbox a sandbox agent talks to (driver: sandbox).
+	Sandbox *Sandbox `yaml:"sandbox" json:"sandbox,omitempty"`
 }
+
+// Sandbox is a sandbox of agent-sandbox (sandboxd): its conversation is the agent's.
+type Sandbox struct {
+	URL      string `yaml:"url" json:"url"` // sandboxd's API: https://sandboxd.example
+	ID       string `yaml:"id" json:"id"`   // the sandbox
+	TokenEnv string `yaml:"token_env" json:"token_env"`
+	CA       string `yaml:"ca" json:"ca"` // a CA file the API's certificate is checked against, beside the system's
+	Token    string `yaml:"-" json:"-"`
+}
+
+var sandboxID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 // PreambleOn says whether prompts start with the preamble.
 func (a *Agent) PreambleOn() bool { return a.Preamble == nil || *a.Preamble }
@@ -323,8 +336,28 @@ func (a *Agent) fill() error {
 		}
 		a.Command[0] = expand(a.Command[0])
 	case "inbox":
+	case "sandbox":
+		sb := a.Sandbox
+		if sb == nil {
+			return errors.New("driver sandbox needs sandbox: {url, id, token_env}")
+		}
+		u, err := url.Parse(sb.URL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" {
+			return fmt.Errorf("sandbox.url %q: https://host[:port]", sb.URL)
+		}
+		sb.URL = strings.TrimRight(sb.URL, "/")
+		if !sandboxID.MatchString(sb.ID) {
+			return fmt.Errorf("sandbox.id %q: the sandbox's id", sb.ID)
+		}
+		if sb.TokenEnv == "" {
+			return errors.New("sandbox.token_env: the variable holding sandboxd's API token")
+		}
+		sb.Token = os.Getenv(sb.TokenEnv)
+		sb.CA = expand(sb.CA)
+		// One sandbox is one conversation: its turns go one at a time.
+		a.Concurrency = 1
 	default:
-		return fmt.Errorf("driver %q: acp or inbox", a.Driver)
+		return fmt.Errorf("driver %q: acp, sandbox or inbox", a.Driver)
 	}
 	a.Cwd = expand(a.Cwd)
 	for k, v := range a.Env {

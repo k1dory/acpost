@@ -555,40 +555,9 @@ func (s *acpSlot) handle(m store.Message) {
 	if err := n.st.Extend(n.ctx, m.ID, m.LeaseID, a.cfg.Lease.D()); err != nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(n.ctx)
-	defer cancel()
-	var cancelled, lost atomic.Bool
-	// Watch for a cancel and keep the lease alive while the turn runs.
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		lease := a.cfg.Lease.D()
-		next := time.Now().Add(lease / 3)
-		for {
-			ch := n.changes()
-			select {
-			case <-ctx.Done():
-				return
-			case <-ch:
-			case <-time.After(time.Until(next)):
-			}
-			if cur, err := n.st.Get(ctx, m.ID); err == nil && cur.State == store.Cancelled {
-				cancelled.Store(true)
-				cancel()
-				return
-			}
-			if time.Now().After(next) {
-				if err := n.st.Extend(ctx, m.ID, m.LeaseID, lease); errors.Is(err, store.ErrLeaseLost) {
-					// Reaped (the node stalled past the lease): another attempt owns the message now.
-					lost.Store(true)
-					cancel()
-					return
-				}
-				next = time.Now().Add(lease / 3)
-			}
-		}
-	}()
-	defer func() { cancel(); <-watchDone }()
+	tl := n.watchTurn(m, a.cfg.Lease.D())
+	defer tl.stop()
+	ctx, cancelled, lost := tl.ctx, &tl.cancelled, &tl.lost
 
 	var turn *acpTurn
 	var tf *turnFiles

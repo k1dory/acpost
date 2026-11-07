@@ -870,6 +870,16 @@ func (c *Client) OpenPull(ctx context.Context, q ForgeQuery, p forge.PullRequest
 	return out, err
 }
 
+// MergePull merges a pull request (an agent's waits for a person's approval).
+func (c *Client) MergePull(ctx context.Context, q ForgeQuery, m forge.Merge) error {
+	body := struct {
+		ForgeQuery
+		forge.Merge
+	}{q, m}
+	_, err := c.do(ctx, "POST", "/v1/forge/merge", nil, body, nil, nil)
+	return err
+}
+
 // Conversations lists threads, the most recently active first; next continues (before).
 func (c *Client) Conversations(ctx context.Context, before string, limit int) ([]store.Conversation, string, error) {
 	q := url.Values{}

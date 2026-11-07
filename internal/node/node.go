@@ -87,7 +87,8 @@ type Node struct {
 	tokMu   sync.Mutex
 	agentTk map[string]*agentToken // token → agent process
 
-	acp map[string]*acpAgent
+	acp       map[string]*acpAgent
+	sandboxes map[string]*sandboxAgent // driver: sandbox, cloud agents
 
 	maintainEvery atomic.Int64
 	wake          chan struct{}
@@ -123,7 +124,7 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	n := &Node{cfg: cfg, st: st, log: log, changed: make(chan struct{}), evChanged: make(chan struct{}), agentTk: map[string]*agentToken{},
-		acp: map[string]*acpAgent{}, wake: make(chan struct{}, 1), remote: newRegistry(),
+		acp: map[string]*acpAgent{}, sandboxes: map[string]*sandboxAgent{}, wake: make(chan struct{}, 1), remote: newRegistry(),
 		following: map[string]bool{}, followWake: make(chan struct{}, 1)}
 	n.maintainEvery.Store(int64(30 * time.Second))
 	n.login = "user"
@@ -131,8 +132,15 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Node, error) {
 		n.login = u.Username
 	}
 	for name, a := range cfg.Agents {
-		if a.Driver == "acp" {
+		switch a.Driver {
+		case "acp":
 			n.acp[name] = newACPAgent(n, name, a)
+		case "sandbox":
+			sa, err := newSandboxAgent(n, name, a)
+			if err != nil {
+				return nil, err
+			}
+			n.sandboxes[name] = sa
 		}
 	}
 	if j := cfg.Node.Join; j != nil {
@@ -166,12 +174,18 @@ func (n *Node) Start(ctx context.Context) error {
 	for name := range n.acp {
 		mine = append(mine, "agent:"+name)
 	}
+	for name := range n.sandboxes {
+		mine = append(mine, "agent:"+name)
+	}
 	if k, err := n.st.RequeueRunning(ctx, mine, n.cfg.Limits.MaxAttempts); err != nil {
 		return err
 	} else if k > 0 {
 		n.log.Info("requeued turns interrupted by the last stop", "messages", k)
 	}
 	for _, a := range n.acp {
+		a.start()
+	}
+	for _, a := range n.sandboxes {
 		a.start()
 	}
 	n.goLoop(n.maintainLoop)
@@ -719,6 +733,9 @@ func (n *Node) Agents(ctx context.Context) []client.AgentInfo {
 		info.Queued, info.Running, _ = n.st.Counts(ctx, info.Address)
 		if d := n.acp[name]; d != nil {
 			info.Process = d.running()
+		}
+		if d := n.sandboxes[name]; d != nil {
+			info.Process = d.busy.Load() // a turn of its sandbox's conversation runs
 		}
 		out = append(out, info)
 	}

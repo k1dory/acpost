@@ -148,6 +148,60 @@ func (c *Client) OpenPull(ctx context.Context, srv Server, r Repo, p PullRequest
 	return Pull{}, fmt.Errorf("forge kind %q", srv.Kind)
 }
 
+// Merge is how a pull request is merged.
+type Merge struct {
+	Number int    `json:"number"`
+	Method string `json:"method,omitempty"` // merge (default), squash, rebase
+	// SHA, when given, is the head the merge must be of: a pull request pushed to since it was
+	// looked at is not merged.
+	SHA string `json:"sha,omitempty"`
+}
+
+// MergePull merges a pull (merge) request.
+func (c *Client) MergePull(ctx context.Context, srv Server, r Repo, m Merge) error {
+	if m.Number <= 0 {
+		return fmt.Errorf("a merge needs the pull request's number")
+	}
+	if m.Method == "" {
+		m.Method = "merge"
+	}
+	if m.Method != "merge" && m.Method != "squash" && m.Method != "rebase" {
+		return fmt.Errorf("merge method %q: merge, squash or rebase", m.Method)
+	}
+	num := strconv.Itoa(m.Number)
+	switch srv.Kind {
+	case GitHub:
+		body := map[string]any{"merge_method": m.Method}
+		if m.SHA != "" {
+			body["sha"] = m.SHA
+		}
+		_, err := c.do(ctx, "PUT", srv, r.Host, "/repos/"+r.Path+"/pulls/"+num+"/merge", body, nil, listMax)
+		return err
+	case Forgejo:
+		do := m.Method
+		if do == "rebase" {
+			do = "rebase-merge"
+		}
+		body := map[string]any{"Do": do}
+		if m.SHA != "" {
+			body["head_commit_id"] = m.SHA
+		}
+		_, err := c.do(ctx, "POST", srv, r.Host, "/repos/"+r.Path+"/pulls/"+num+"/merge", body, nil, listMax)
+		return err
+	case GitLab:
+		body := map[string]any{"squash": m.Method == "squash"}
+		if m.SHA != "" {
+			body["sha"] = m.SHA
+		}
+		if m.Method == "rebase" {
+			return fmt.Errorf("GitLab: rebase is the project's merge method, not a merge's: use merge")
+		}
+		_, err := c.do(ctx, "PUT", srv, r.Host, "/projects/"+glProject(r.Path)+"/merge_requests/"+num+"/merge", body, nil, listMax)
+		return err
+	}
+	return fmt.Errorf("forge kind %q", srv.Kind)
+}
+
 // Checks lists the CI runs of a ref (a branch, a commit), newest first, with their jobs.
 func (c *Client) Checks(ctx context.Context, srv Server, r Repo, ref string) ([]Check, error) {
 	var out []Check
