@@ -82,6 +82,7 @@ type Node struct {
 	evChanged chan struct{} // closed when an event is recorded: followers read on
 	terms     terms         // the user's terminals
 	forges    forges        // forges of agents' repositories
+	asks      asks          // permission requests waiting for a person
 
 	tokMu   sync.Mutex
 	agentTk map[string]*agentToken // token → agent process
@@ -192,6 +193,7 @@ func (n *Node) Close() {
 		return
 	}
 	n.cancel()
+	n.askPending().Close() // nobody answers any more: requests waiting are refused
 	for _, a := range n.acp {
 		a.stop()
 	}

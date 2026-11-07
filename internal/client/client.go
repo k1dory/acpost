@@ -22,6 +22,7 @@ import (
 
 	"github.com/k1dory/acpost/internal/forge"
 	"github.com/k1dory/acpost/internal/store"
+	"github.com/k1dory/acpx"
 )
 
 // SendRequest is the body of POST /v1/messages.
@@ -884,4 +885,25 @@ func (c *Client) Conversations(ctx context.Context, before string, limit int) ([
 	}
 	_, err := c.do(ctx, "GET", "/v1/conversations", q, nil, &out, nil)
 	return out.Items, out.Next, err
+}
+
+// AskingRequest is a permission request waiting for a person, with its message.
+type AskingRequest struct {
+	Message string `json:"message"`
+	acpx.Request
+}
+
+// Asking lists the permission requests waiting (the node's user).
+func (c *Client) Asking(ctx context.Context) ([]AskingRequest, error) {
+	var out struct {
+		Items []AskingRequest `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/permissions", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// Answer answers a permission request of a message: an option it offered, or action "decline".
+func (c *Client) Answer(ctx context.Context, msgID string, reply acpx.Reply) error {
+	_, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(msgID)+"/permission", nil, reply, nil, nil)
+	return err
 }

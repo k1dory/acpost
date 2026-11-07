@@ -19,6 +19,7 @@ import (
 	"github.com/k1dory/acpost/internal/forge"
 	"github.com/k1dory/acpost/internal/node"
 	"github.com/k1dory/acpost/internal/store"
+	"github.com/k1dory/acpx"
 )
 
 type server struct {
@@ -41,6 +42,8 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/usage", s.auth(s.usage))
 	mux.HandleFunc("GET /v1/messages/{id}/changes", s.auth(s.changes))
 	mux.HandleFunc("GET /v1/conversations", s.auth(s.conversations))
+	mux.HandleFunc("POST /v1/messages/{id}/permission", s.auth(s.answer))
+	mux.HandleFunc("GET /v1/permissions", s.auth(s.asking))
 	mux.HandleFunc("GET /v1/forge", s.auth(s.forgeInfo))
 	mux.HandleFunc("GET /v1/forge/pulls", s.auth(s.forgePulls))
 	mux.HandleFunc("POST /v1/forge/pulls", s.auth(s.forgeOpenPull))
@@ -743,4 +746,26 @@ func (s *server) conversations(w http.ResponseWriter, r *http.Request, p node.Pr
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items), "next": next})
+}
+
+func (s *server) answer(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var reply acpx.Reply
+	if err := decode(r, &reply); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.n.Answer(r.Context(), p, r.PathValue("id"), reply); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) asking(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	items, err := s.n.Asking(p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
 }

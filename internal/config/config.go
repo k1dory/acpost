@@ -107,6 +107,7 @@ type Agent struct {
 	Reply        string            `yaml:"reply" json:"reply"`
 	Concurrency  int               `yaml:"concurrency" json:"concurrency"`
 	TurnTimeout  Duration          `yaml:"turn_timeout" json:"turn_timeout"`
+	AskTimeout   Duration          `yaml:"ask_timeout" json:"ask_timeout"` // permissions: ask: how long a person has to answer
 	IdleTimeout  Duration          `yaml:"idle_timeout" json:"idle_timeout"`
 	Preamble     *bool             `yaml:"preamble" json:"preamble"`
 	AllowFrom    []string          `yaml:"allow_from" json:"allow_from"`
@@ -332,8 +333,11 @@ func (a *Agent) fill() error {
 	if a.Permissions == "" {
 		a.Permissions = "allow"
 	}
-	if a.Permissions != "allow" && a.Permissions != "deny" {
-		return fmt.Errorf("permissions %q: allow or deny", a.Permissions)
+	if a.AskTimeout == 0 {
+		a.AskTimeout = Duration(10 * time.Minute)
+	}
+	if a.Permissions != "allow" && a.Permissions != "deny" && a.Permissions != "ask" {
+		return fmt.Errorf("permissions %q: allow, deny or ask", a.Permissions)
 	}
 	if a.Session == "" {
 		a.Session = "task"

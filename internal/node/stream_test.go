@@ -12,6 +12,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/k1dory/acpost/internal/store"
+	"github.com/k1dory/acpx"
 )
 
 type recorded struct{ kind, text string }
@@ -232,5 +233,129 @@ func TestModelName(t *testing.T) {
 		if got := modelName(opt); got != c.want {
 			t.Fatalf("%s: %q, want %q", c.current, got, c.want)
 		}
+	}
+}
+
+// permissions: ask — the agent's request waits for a person: answered, it is what they chose;
+// unanswered, refused after ask_timeout. Who answers: the node's user, the message's sender.
+func TestPermissionsAsk(t *testing.T) {
+	n := newNode(t, fmt.Sprintf("agents:\n  fake:\n    driver: acp\n    command: [%q]\n    preamble: false\n    permissions: ask\n    ask_timeout: 1500ms\n    env: {ACPOST_FAKE_AGENT: \"1\"}\n", os.Args[0]))
+	m, _, err := n.Send(ctx, me, SendRequest{To: "agent:fake", Body: "permission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req struct {
+		ID      string `json:"request_id"`
+		Options []struct {
+			ID   string `json:"option_id"`
+			Kind string `json:"kind"`
+		} `json:"options"`
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for req.ID == "" && time.Now().Before(deadline) {
+		evs, _ := n.Events(ctx, me, m.ID, 0, 100)
+		for _, e := range evs {
+			if e.Kind == "permission_request" {
+				json.Unmarshal([]byte(e.Data), &req)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if req.ID == "" {
+		t.Fatal("no permission request")
+	}
+	if asking, _ := n.Asking(me); len(asking) != 1 || asking[0].Message != m.ID {
+		t.Fatalf("%+v", asking)
+	}
+	if err := n.Answer(ctx, Principal{Kind: "agent", Name: "other"}, m.ID, acpx.Reply{RequestID: req.ID, Action: "decline"}); code(err) != "refused" {
+		t.Fatalf("a stranger answered: %v", err)
+	}
+	allow := ""
+	for _, o := range req.Options {
+		if o.Kind == "allow_once" {
+			allow = o.ID
+		}
+	}
+	if err := n.Answer(ctx, me, m.ID, acpx.Reply{RequestID: req.ID, OptionID: "nope"}); code(err) != "invalid" {
+		t.Fatalf("an option not offered: %v", err)
+	}
+	if err := n.Answer(ctx, me, m.ID, acpx.Reply{RequestID: req.ID, OptionID: allow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Answer(ctx, me, m.ID, acpx.Reply{RequestID: req.ID, OptionID: allow}); err == nil {
+		t.Fatal("answered twice")
+	}
+	if final, _ := n.Wait(ctx, me, m.ID, 10*time.Second); final.Reply != "allowed" {
+		t.Fatalf("%+v", final)
+	}
+	// Nobody answers: refused.
+	m2, _, _ := n.Send(ctx, me, SendRequest{To: "agent:fake", Body: "permission"})
+	if final, _ := n.Wait(ctx, me, m2.ID, 15*time.Second); final.Reply != "denied" {
+		t.Fatalf("%+v", final)
+	}
+	evs, _ := n.Events(ctx, me, m2.ID, 0, 100)
+	if !strings.Contains(fmt.Sprint(evs), `"decision":"timeout"`) {
+		t.Fatalf("%v", evs)
+	}
+}
+
+// A message cancelled while its agent asks: the request is closed at once, not at ask_timeout;
+// a huge request still makes a readable event.
+func TestPermissionsAskEndsWithTheTurn(t *testing.T) {
+	n := newNode(t, fmt.Sprintf("agents:\n  fake:\n    driver: acp\n    command: [%q]\n    preamble: false\n    permissions: ask\n    ask_timeout: 1m\n    env: {ACPOST_FAKE_AGENT: \"1\"}\n", os.Args[0]))
+	m, _, _ := n.Send(ctx, me, SendRequest{To: "agent:fake", Body: "permission"})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if a, _ := n.Asking(me); len(a) == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	start := time.Now()
+	if _, err := n.Cancel(ctx, me, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	for time.Since(start) < 10*time.Second {
+		if a, _ := n.Asking(me); len(a) == 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if a, _ := n.Asking(me); len(a) != 0 {
+		t.Fatalf("still asking after the cancel: %+v", a)
+	}
+	big := fitRequest(acpx.Request{ID: "req_x", Title: strings.Repeat("t", 5000), Text: strings.Repeat("\x01", 20000),
+		RawInput: json.RawMessage(`"` + strings.Repeat("a", 50000) + `"`), Options: []acpx.Option{{ID: "o1", Name: "Allow", Kind: "allow_once"}}})
+	b := eventJSON(big)
+	if len(b) > toolEventMax || !json.Valid([]byte(b)) || big.ID != "req_x" || len(big.Options) != 1 {
+		t.Fatalf("%d bytes", len(b))
+	}
+}
+
+func TestFitRequestEnds(t *testing.T) {
+	var opts []acpx.Option
+	for i := range 48 {
+		opts = append(opts, acpx.Option{ID: "o" + itoa(i), Name: strings.Repeat("\x01", 256), Kind: "allow_once"})
+	}
+	done := make(chan acpx.Request, 1)
+	go func() {
+		done <- fitRequest(acpx.Request{ID: "req_x", RawInput: json.RawMessage(`"` + strings.Repeat(`\u0001`, 20000) + `"`), Options: opts})
+	}()
+	select {
+	case r := <-done:
+		if len(eventJSON(r)) > toolEventMax || r.ID != "req_x" || len(r.Options) != 16 {
+			t.Fatalf("%d bytes, %d options", len(eventJSON(r)), len(r.Options))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fitRequest does not end")
+	}
+}
+
+func TestFitRequestKeepsTheRequest(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	r := acpx.Request{ID: "req_x", Options: []acpx.Option{{ID: long, Name: "Allow", Kind: "allow_once"}}}
+	ev := fitRequest(r)
+	if r.Options[0].ID != long || len(ev.Options[0].ID) > 128 {
+		t.Fatalf("the request's own option changed: %d", len(r.Options[0].ID))
 	}
 }

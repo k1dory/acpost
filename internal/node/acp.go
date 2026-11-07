@@ -660,6 +660,9 @@ func (s *acpSlot) handle(m store.Message) {
 	before := snapshot(ctx, dir)
 	turn = p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply), n.cfg.Limits.MaxFiles, int(n.cfg.Limits.MaxFilesSize))
 	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
+	turn.mu.Lock()
+	turn.ctx = turnCtx // what waits for a person ends with the turn
+	turn.mu.Unlock()
 	// The SDK writes a request before it watches the context: an agent that stopped reading its
 	// stdin holds Prompt in that write. If Prompt has not returned shortly after the turn ended,
 	// the process is killed, which ends the write.
@@ -765,6 +768,7 @@ type acpTurn struct {
 	dropped            int
 	usage              *acp.SessionUsageUpdate // the agent's last word on the session's context and cost
 	tools              map[string]*toolTrack   // the turn's tool calls as their updates made them
+	ctx                context.Context         // the turn's: ended by its timeout or its message's cancel
 }
 
 func (t *acpTurn) file(b replyBlock) {
@@ -934,6 +938,11 @@ func (c *acpClient) SessionUpdate(ctx context.Context, p acp.SessionNotification
 }
 
 func (c *acpClient) RequestPermission(ctx context.Context, p acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
+	if c.slot.a.cfg.Permissions == "ask" {
+		if t := c.turn(p.SessionId); t != nil {
+			return c.ask(ctx, t, p)
+		}
+	}
 	allow := c.slot.a.cfg.Permissions == "allow"
 	want := []acp.PermissionOptionKind{acp.PermissionOptionKindRejectOnce, acp.PermissionOptionKindRejectAlways}
 	if allow {

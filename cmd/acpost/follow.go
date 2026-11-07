@@ -56,6 +56,8 @@ func followMessage(ctx context.Context, g *globals, c *client.Client, id string)
 			}
 		case "permission":
 			note("permission %s: %s", str("decision"), str("tool"))
+		case "permission_request":
+			note("asks permission: %s — acpost approve %s %s (or --reject)", str("title"), id, str("request_id"))
 		case "plan":
 			var steps []string
 			_ = json.Unmarshal([]byte(e.Data), &steps)

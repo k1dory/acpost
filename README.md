@@ -135,6 +135,7 @@ acpost send    --to ADDR [--body TEXT | --body-file F | stdin] [--attach FILE]..
                [--link PATH|URL]... [--session ACP-ID] [--meta k=v]... [--ttl DUR] [--idempotency-key K]
                [--wait [--timeout DUR] [--save DIR]]
 acpost wait    ID... [--timeout DUR] [--save DIR]
+acpost approve [ID [REQUEST]] [--option OPT | --reject] [--list]   # answer an agent's request (permissions: ask)
 acpost conversations [--limit N] [--before CURSOR]   # threads, the most recently active first
 acpost show    ID [--events | --follow]    # --follow: the agent's text as it writes, then the outcome
 acpost list    [--to ADDR] [--from ADDR] [--task T] [--thread ID] [--state S] [--limit N] [--after CURSOR]
@@ -199,6 +200,14 @@ the error says so) and opens a pull request from the repository's branch. Tokens
 `acpost forge login HOST` (read from the terminal or stdin): in the macOS keychain (service
 `acpost-forge`, given to `security` on its stdin), elsewhere in `~/.config/acpost/forge-tokens.json`
 (0600). For the node's user and its agents.
+
+**Asking a person.** With `permissions: ask` an agent's request for permission waits for a
+person: a `permission_request` event (the tool call, what it would run with its secrets masked,
+the agent's options and a `request_id`), answered by the node's user or the message's sender with
+`acpost approve ID` (allow once; `--option`, `--reject`) or `POST /v1/messages/{id}/permission`
+`{"request_id","option_id"}` (or `"action":"decline"`); `GET /v1/permissions` lists those waiting.
+Unanswered within `ask_timeout` (or when the node stops) it is refused; the outcome is a
+`permission` event (`decision`, `by`). It is answered on the agent's node.
 
 **Watching an answer being written.** An ACP agent's text and thinking are kept as `text` and
 `thought` events while its turn runs (gathered to a few a second, at most 4 KiB each), in order
@@ -375,7 +384,8 @@ agents:
     mode: ""                         # ACP session mode / config option
     model: ""
     thought_level: ""
-    permissions: allow               # allow | deny: the answer to session/request_permission
+    permissions: allow               # allow | deny | ask: the answer to session/request_permission
+    ask_timeout: 10m                 # ask: how long a person has to answer (then refused)
     session: task                    # task | thread | message: which messages share an ACP session
     reply: last                      # last: text after the turn's last tool call; all: every text
     concurrency: 1                   # turns at once (one ACP session each)
@@ -407,6 +417,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/messages?to=&from=&task=&thread=&state=&limit=&after=` | a page (≤ 500) of messages without bodies; `next` is the cursor |
 | `GET /v1/messages/{id}/events?after=` | what the agent did: its text (`text`, `thought`), tool calls, plan, permissions, notices |
 | `GET /v1/messages/{id}/events?follow=1` | the same as Server-Sent Events while they are recorded, then `event: end` with the final message; `Last-Event-ID` resumes |
+| `POST /v1/messages/{id}/permission` · `GET /v1/permissions` | answer an agent's request for permission; those waiting |
 | `GET /v1/conversations?before=&limit=` | threads, the most recently active first: title, agents, counts by state; `next` continues (a thread active again meanwhile is at the top, not on a later page) |
 | `GET /v1/messages/{id}/changes?tree=1&diff=1` | what its turns changed, per turn and per repository |
 | `POST /v1/terminals` · `GET /v1/terminals` · `GET /v1/terminals/{id}/output?from=` · `POST /v1/terminals/{id}/input` · `POST /v1/terminals/{id}/resize` · `DELETE /v1/terminals/{id}` | a shell on the node's machine (the node's user) |
