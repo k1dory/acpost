@@ -215,6 +215,65 @@ func (c *Client) Chats(ctx context.Context) (Chats, error) {
 	return out, err
 }
 
+// ForgeAccount is a forge host logged in to.
+type ForgeAccount struct {
+	Host    string `json:"host"`
+	Kind    string `json:"kind,omitempty"`
+	Version string `json:"version,omitempty"`
+	Authed  bool   `json:"authed"`
+	Login   string `json:"login,omitempty"` // whose the token is
+	Error   string `json:"error,omitempty"`
+}
+
+// ForgeAccounts lists the forge hosts logged in to.
+func (c *Client) ForgeAccounts(ctx context.Context) ([]ForgeAccount, error) {
+	var out struct {
+		Items []ForgeAccount `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/forge/accounts", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// ForgeLogin keeps a host's token (checked against the forge first).
+func (c *Client) ForgeLogin(ctx context.Context, host, kind, token string) (ForgeAccount, error) {
+	var out ForgeAccount
+	_, err := c.do(ctx, "POST", "/v1/forge/accounts", nil, map[string]string{"host": host, "kind": kind, "token": token}, &out, nil)
+	return out, err
+}
+
+// ForgeLogout forgets a host's token.
+func (c *Client) ForgeLogout(ctx context.Context, host string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/forge/accounts/"+url.PathEscape(host), nil, nil, nil, nil)
+	return err
+}
+
+// MCPServer is an MCP server the agents get, with secret values to keep (env/NAME, header/NAME).
+type MCPServer struct {
+	store.MCPServer
+	Secrets map[string]string `json:"secrets,omitempty"`
+}
+
+// MCPServers lists the MCP servers the agents get.
+func (c *Client) MCPServers(ctx context.Context) ([]store.MCPServer, error) {
+	var out struct {
+		Items []store.MCPServer `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/mcp", nil, nil, &out, nil)
+	return out.Items, err
+}
+
+// PutMCPServer adds or changes an MCP server.
+func (c *Client) PutMCPServer(ctx context.Context, m MCPServer) error {
+	_, err := c.do(ctx, "PUT", "/v1/mcp/"+url.PathEscape(m.Name), nil, m, nil, nil)
+	return err
+}
+
+// DeleteMCPServer removes an MCP server and its secrets.
+func (c *Client) DeleteMCPServer(ctx context.Context, name string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/mcp/"+url.PathEscape(name), nil, nil, nil, nil)
+	return err
+}
+
 // Folders lists the app's folders of chats, with their chats.
 func (c *Client) Folders(ctx context.Context) ([]store.Folder, error) {
 	var out struct {

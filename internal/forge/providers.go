@@ -148,6 +148,25 @@ func (c *Client) OpenPull(ctx context.Context, srv Server, r Repo, p PullRequest
 	return Pull{}, fmt.Errorf("forge kind %q", srv.Kind)
 }
 
+// Whoami is the login a host's token is (the token checked against the forge).
+func (c *Client) Whoami(ctx context.Context, srv Server, host string) (string, error) {
+	var u struct {
+		Login    string `json:"login"`    // GitHub, Forgejo/Gitea
+		Username string `json:"username"` // GitLab
+	}
+	if _, err := c.get(ctx, srv, host, "/user", &u, listMax); err != nil {
+		return "", err
+	}
+	return cmpOr(u.Login, u.Username), nil
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 // Merge is how a pull request is merged.
 type Merge struct {
 	Number int    `json:"number"`

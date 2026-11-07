@@ -95,6 +95,7 @@ type Node struct {
 	dynCfg    map[string]*config.Agent // the cloud's sandboxes, as agents
 	cloud     *cloudAPI
 	started   bool // the drivers run (sbMu): a cloud sandbox's agent starts when added
+	mcpSec    mcpSecrets
 
 	maintainEvery atomic.Int64
 	wake          chan struct{}

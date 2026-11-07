@@ -71,7 +71,7 @@ func (n *Node) SessionHistory(ctx context.Context, p Principal, agent, id, cwd s
 	}}
 	proc.cl.capture(sid, t)
 	lctx, cancel := context.WithTimeout(ctx, historyWait)
-	_, err = proc.conn.LoadSession(lctx, acp.LoadSessionRequest{SessionId: sid, Cwd: cwd, McpServers: []acp.McpServer{}})
+	_, err = proc.conn.LoadSession(lctx, acp.LoadSessionRequest{SessionId: sid, Cwd: cwd, McpServers: a.mcpServers(ctx, proc)})
 	cancel()
 	proc.cl.end(sid)
 	if err != nil {

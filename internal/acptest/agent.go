@@ -46,6 +46,7 @@ type fakeAgent struct {
 	cancels  map[acp.SessionId]context.CancelFunc
 	sessions atomic.Int64
 	cwds     map[acp.SessionId]string
+	mcp      map[acp.SessionId]string            // the MCP servers the session was given
 	settings map[acp.SessionId]map[string]string // config id → value: model, effort
 }
 
@@ -76,7 +77,7 @@ func (a *fakeAgent) options(sid acp.SessionId) []acp.SessionConfigOption {
 // Run serves the scripted agent on stdin/stdout until the client goes, then exits.
 func Run() {
 	a := &fakeAgent{prompts: map[acp.SessionId]int{}, cancels: map[acp.SessionId]context.CancelFunc{},
-		cwds: map[acp.SessionId]string{}, settings: map[acp.SessionId]map[string]string{}}
+		cwds: map[acp.SessionId]string{}, settings: map[acp.SessionId]map[string]string{}, mcp: map[acp.SessionId]string{}}
 	a.conn = acp.NewAgentSideConnection(a, os.Stdout, os.Stdin)
 	<-a.conn.Done()
 	os.Exit(0)
@@ -104,6 +105,20 @@ func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (ac
 	sid := acp.SessionId(fmt.Sprintf("s%d-%d", os.Getpid(), n))
 	a.mu.Lock()
 	a.cwds[sid] = p.Cwd
+	var mcp []string
+	for _, m := range p.McpServers {
+		switch {
+		case m.Stdio != nil:
+			var env []string
+			for _, e := range m.Stdio.Env {
+				env = append(env, e.Name+"="+e.Value)
+			}
+			mcp = append(mcp, m.Stdio.Name+":"+m.Stdio.Command+":"+strings.Join(env, ","))
+		case m.Http != nil:
+			mcp = append(mcp, m.Http.Name+":http")
+		}
+	}
+	a.mcp[sid] = strings.Join(mcp, ";")
 	a.mu.Unlock()
 	if os.Getenv("FAKE_COMMANDS") != "" {
 		go func() { // what claude-agent-acp does after session/new
@@ -196,6 +211,11 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 	switch cmd {
 	case "echo":
 		a.say(ctx, sid, arg)
+	case "mcp": // the MCP servers the session was given
+		a.mu.Lock()
+		got := a.mcp[sid]
+		a.mu.Unlock()
+		a.say(ctx, sid, got)
 	case "cwd": // the session's directory
 		a.mu.Lock()
 		dir := a.cwds[sid]

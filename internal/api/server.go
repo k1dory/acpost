@@ -67,6 +67,12 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/agents/{name}/options", s.auth(s.options))
 	mux.HandleFunc("GET /v1/agents/{name}/sessions/{id}/history", s.auth(s.sessionHistory))
 	mux.HandleFunc("GET /v1/chats", s.auth(s.chats))
+	mux.HandleFunc("GET /v1/forge/accounts", s.auth(s.forgeAccounts))
+	mux.HandleFunc("POST /v1/forge/accounts", s.auth(s.forgeLogin))
+	mux.HandleFunc("DELETE /v1/forge/accounts/{host}", s.auth(s.forgeLogout))
+	mux.HandleFunc("GET /v1/mcp", s.auth(s.mcpList))
+	mux.HandleFunc("PUT /v1/mcp/{name}", s.auth(s.mcpPut))
+	mux.HandleFunc("DELETE /v1/mcp/{name}", s.auth(s.mcpDelete))
 	mux.HandleFunc("GET /v1/cloud/agents", s.auth(s.cloudAgents))
 	mux.HandleFunc("POST /v1/cloud/tasks", s.auth(s.cloudTask))
 	mux.HandleFunc("GET /v1/cloud/sandboxes/{id}/history", s.auth(s.cloudHistory))
@@ -495,6 +501,68 @@ func (s *server) cloudHistory(w http.ResponseWriter, r *http.Request, p node.Pri
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": evs})
+}
+
+func (s *server) forgeAccounts(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.ForgeAccounts(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) forgeLogin(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req struct{ Host, Kind, Token string }
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := s.n.ForgeLogin(r.Context(), p, req.Host, req.Kind, req.Token)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, out)
+}
+
+func (s *server) forgeLogout(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.ForgeLogout(r.Context(), p, r.PathValue("host")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) mcpList(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.MCPServers(r.Context(), p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+func (s *server) mcpPut(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req client.MCPServer
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	req.Name = r.PathValue("name")
+	if err := s.n.PutMCPServer(r.Context(), p, req.MCPServer, req.Secrets); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.DeleteMCPServer(r.Context(), p, r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func (s *server) folders(w http.ResponseWriter, r *http.Request, p node.Principal) {

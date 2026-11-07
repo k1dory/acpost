@@ -169,7 +169,7 @@ func (a *acpAgent) offer(ctx context.Context) (*acpx.SessionState, error) {
 	if err != nil {
 		return nil, errf("unavailable", "agent:%s did not start: %v", a.name, err)
 	}
-	r, err := proc.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: slot.cwd(), McpServers: []acp.McpServer{}})
+	r, err := proc.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: slot.cwd(), McpServers: a.mcpServers(ctx, proc)})
 	if err != nil {
 		return nil, errf("unavailable", "agent:%s: session/new: %v", a.name, procErr(proc, err))
 	}

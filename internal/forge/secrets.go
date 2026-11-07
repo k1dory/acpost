@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -109,15 +110,16 @@ func (s *Store) Login(host, kind, token string) error {
 		return fmt.Errorf("a host (no scheme, no path) and a token")
 	}
 	return s.locked(func() error {
-		if kind != "" {
-			kinds := map[string]string{}
-			if err := readJSON(s.kindsFile(), &kinds); err != nil {
-				return err
-			}
+		// The host is listed (its kind, when given): the accounts are these hosts.
+		kinds := map[string]string{}
+		if err := readJSON(s.kindsFile(), &kinds); err != nil {
+			return err
+		}
+		if kind != "" || kinds[host] == "" {
 			kinds[host] = kind
-			if err := writeJSON(s.kindsFile(), kinds, 0o600); err != nil {
-				return err
-			}
+		}
+		if err := writeJSON(s.kindsFile(), kinds, 0o600); err != nil {
+			return err
 		}
 		if s.keychain() {
 			// Asked twice: given twice, on stdin (never on a command line).
@@ -135,9 +137,28 @@ func (s *Store) Login(host, kind, token string) error {
 	})
 }
 
-// Logout forgets a host's token.
+// Hosts lists the hosts logged in to (and those given a kind).
+func (s *Store) Hosts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kinds := map[string]string{}
+	_ = readJSON(s.kindsFile(), &kinds)
+	out := make([]string, 0, len(kinds))
+	for h := range kinds {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Logout forgets a host's token (and the host).
 func (s *Store) Logout(host string) error {
 	return s.locked(func() error {
+		kinds := map[string]string{}
+		if err := readJSON(s.kindsFile(), &kinds); err == nil {
+			delete(kinds, host)
+			_ = writeJSON(s.kindsFile(), kinds, 0o600)
+		}
 		if s.keychain() {
 			_, _ = security("", "delete-generic-password", "-s", keychainService, "-a", host)
 			return nil

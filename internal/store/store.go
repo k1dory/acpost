@@ -328,6 +328,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(foldersSchema); err != nil {
 		return err
 	}
+	if _, err := s.w.Exec(mcpSchema); err != nil {
+		return err
+	}
 	// Columns added after the first release.
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},

@@ -1,0 +1,133 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+)
+
+// MCP servers the node's user gives its agents: every ACP session they open has them. Their
+// environment's and headers' values are secrets, kept apart (the keychain); here, their names.
+
+const mcpSchema = `
+CREATE TABLE IF NOT EXISTS mcp_servers (
+	name    TEXT    PRIMARY KEY,
+	kind    TEXT    NOT NULL,              -- stdio, http
+	command TEXT    NOT NULL DEFAULT '',
+	args    TEXT    NOT NULL DEFAULT '[]', -- JSON
+	url     TEXT    NOT NULL DEFAULT '',
+	env     TEXT    NOT NULL DEFAULT '[]', -- JSON: the variables' names
+	headers TEXT    NOT NULL DEFAULT '[]', -- JSON: the headers' names
+	agents  TEXT    NOT NULL DEFAULT '[]', -- JSON: the agents that get it (none: all)
+	enabled INTEGER NOT NULL DEFAULT 1,
+	ts      INTEGER NOT NULL
+) WITHOUT ROWID;
+`
+
+// MCPServer is an MCP server the agents get.
+type MCPServer struct {
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"` // stdio, http
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Env     []string `json:"env,omitempty"`     // names (values: secrets)
+	Headers []string `json:"headers,omitempty"` // names (values: secrets)
+	Agents  []string `json:"agents,omitempty"`  // none: every agent
+	Enabled bool     `json:"enabled"`
+}
+
+var mcpName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+var mcpKey = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+
+// Check says what is wrong with a server, if anything.
+func (m MCPServer) Check() error {
+	if !mcpName.MatchString(m.Name) {
+		return fmt.Errorf("an MCP server's name: letters, digits, . _ - (up to 64)")
+	}
+	switch m.Kind {
+	case "stdio":
+		if strings.TrimSpace(m.Command) == "" {
+			return fmt.Errorf("%s: a command to run", m.Name)
+		}
+	case "http":
+		if !strings.HasPrefix(m.URL, "https://") && !strings.HasPrefix(m.URL, "http://") {
+			return fmt.Errorf("%s: an http(s) URL", m.Name)
+		}
+	default:
+		return fmt.Errorf("%s: kind stdio or http", m.Name)
+	}
+	for _, k := range append(append([]string{}, m.Env...), m.Headers...) {
+		if !mcpKey.MatchString(k) {
+			return fmt.Errorf("%s: %q is not a variable or header name", m.Name, k)
+		}
+	}
+	if len(m.Args) > 64 || len(m.Env) > 64 || len(m.Headers) > 64 {
+		return fmt.Errorf("%s: too many arguments, variables or headers", m.Name)
+	}
+	return nil
+}
+
+// MCPServers lists the servers, by name.
+func (s *Store) MCPServers(ctx context.Context) ([]MCPServer, error) {
+	rows, err := s.r.QueryContext(ctx, `SELECT name, kind, command, args, url, env, headers, agents, enabled FROM mcp_servers ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MCPServer{}
+	for rows.Next() {
+		var m MCPServer
+		var args, env, headers, agents string
+		if err := rows.Scan(&m.Name, &m.Kind, &m.Command, &args, &m.URL, &env, &headers, &agents, &m.Enabled); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(args), &m.Args)
+		_ = json.Unmarshal([]byte(env), &m.Env)
+		_ = json.Unmarshal([]byte(headers), &m.Headers)
+		_ = json.Unmarshal([]byte(agents), &m.Agents)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// PutMCPServer adds or replaces a server.
+func (s *Store) PutMCPServer(ctx context.Context, m MCPServer) error {
+	if err := m.Check(); err != nil {
+		return err
+	}
+	j := func(v []string) string {
+		if v == nil {
+			v = []string{}
+		}
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+	_, err := s.w.ExecContext(ctx, `INSERT INTO mcp_servers (name, kind, command, args, url, env, headers, agents, enabled, ts)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, command = excluded.command, args = excluded.args,
+			url = excluded.url, env = excluded.env, headers = excluded.headers, agents = excluded.agents,
+			enabled = excluded.enabled, ts = excluded.ts`,
+		m.Name, m.Kind, m.Command, j(m.Args), m.URL, j(m.Env), j(m.Headers), j(m.Agents), m.Enabled, time.Now().UnixMilli())
+	return err
+}
+
+// ErrNoMCPServer: no such server.
+var ErrNoMCPServer = errors.New("no such MCP server")
+
+// DeleteMCPServer removes a server.
+func (s *Store) DeleteMCPServer(ctx context.Context, name string) error {
+	res, err := s.w.ExecContext(ctx, `DELETE FROM mcp_servers WHERE name = ?`, name)
+	if err != nil {
+		return err
+	}
+	if k, _ := res.RowsAffected(); k == 0 {
+		return ErrNoMCPServer
+	}
+	return nil
+}
+

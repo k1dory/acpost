@@ -429,20 +429,20 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 		if prev, _ := n.st.Session(ctx, a.addr, key); prev != "" {
 			caps := p.init.AgentCapabilities
 			if caps.SessionCapabilities.Resume != nil {
-				if r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: acp.SessionId(prev), Cwd: cwd, McpServers: []acp.McpServer{}}); err == nil {
+				if r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: acp.SessionId(prev), Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)}); err == nil {
 					sid, st = acp.SessionId(prev), acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
 				}
 			}
 			if sid == "" && caps.LoadSession {
 				// The history the agent replays is not attributed to any turn: no turn is registered yet.
-				if r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: acp.SessionId(prev), Cwd: cwd, McpServers: []acp.McpServer{}}); err == nil {
+				if r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: acp.SessionId(prev), Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)}); err == nil {
 					sid, st = acp.SessionId(prev), acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
 				}
 			}
 		}
 	}
 	if sid == "" {
-		r, err := p.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: []acp.McpServer{}})
+		r, err := p.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
 		if err != nil {
 			return "", fmt.Errorf("session/new: %w", procErr(p, err))
 		}
@@ -489,7 +489,7 @@ func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.Sessio
 	caps := p.init.AgentCapabilities
 	var errs []error
 	if caps.SessionCapabilities.Resume != nil {
-		r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
+		r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
 		if err == nil {
 			s.a.noteState(p, id, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
 			return id, nil
@@ -497,7 +497,7 @@ func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.Sessio
 		errs = append(errs, err)
 	}
 	if caps.LoadSession {
-		r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: []acp.McpServer{}})
+		r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
 		if err == nil {
 			s.a.noteState(p, id, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
 			return id, nil
