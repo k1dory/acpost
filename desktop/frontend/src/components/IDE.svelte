@@ -44,6 +44,18 @@
       .catch(e => (err = errText(e)));
   }
   const onResize = () => place();
+  // Reload: the server made sure of (started again if it ended), then — if this is still the folder
+  // asked for — the page loaded again, or the new address loaded.
+  async function reload() {
+    const my = ++gen, dir = folder;
+    err = "";
+    try {
+      const u = await Node.IDEStart(dir);
+      if (!alive || my !== gen) return;
+      if (u === url) Node.IDEReload();
+      else { url = u; pending = u; place(); }
+    } catch (e) { if (alive && my === gen) err = errText(e); }
+  }
   let opened = "";
   $effect(() => { const d = folder; if (d && d !== opened) { opened = d; open(d); } });
   $effect(() => {
@@ -64,7 +76,7 @@
     <b>VS Code</b>
     <span class="muted mono path" title={folder}>{short(folder)}</span>
     <span class="sp"></span>
-    <button class="btn ghost sm" onclick={() => Node.IDEReload(folder).then(u => { url = u; err = ""; }).catch(e => (err = errText(e)))} title={t("Reload")}><Icon name="refresh" size={13} /></button>
+    <button class="btn ghost sm" onclick={reload} title={t("Reload")}><Icon name="refresh" size={13} /></button>
     <button class="btn ghost sm" onclick={() => Node.IDEOpenApp(folder).catch(e => (err = errText(e)))}>{t("Open in VS Code")}</button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}

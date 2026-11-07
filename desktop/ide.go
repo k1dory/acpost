@@ -252,25 +252,9 @@ func (s *ideServer) loaded() string {
 	return s.shown
 }
 
-// IDEReload makes sure VS Code's server runs (started again if it ended) and loads folder's page
-// again: the address it gives back.
-func (n *Node) IDEReload(folder string) (string, error) {
-	u, err := n.IDEStart(folder)
-	if err != nil {
-		return "", err
-	}
-	if u != ide.loaded() {
-		if err := preview.IDELoad(u); err != nil {
-			return "", err
-		}
-		ide.mu.Lock()
-		ide.shown = u
-		ide.mu.Unlock()
-		return u, nil
-	}
-	preview.IDEReload()
-	return u, nil
-}
+// IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
+// again if it ended, and its answer is checked against what is shown before anything navigates).
+func (n *Node) IDEReload() { preview.IDEReload() }
 
 // IDEHide hides it; VS Code keeps running.
 func (n *Node) IDEHide() { preview.IDEHide() }

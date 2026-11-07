@@ -278,11 +278,11 @@ export function IDEOpenApp(folder: string): $CancellablePromise<void> {
 }
 
 /**
- * IDEReload makes sure VS Code's server runs (started again if it ended) and loads folder's page
- * again: the address it gives back.
+ * IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
+ * again if it ended, and its answer is checked against what is shown before anything navigates).
  */
-export function IDEReload(folder: string): $CancellablePromise<string> {
-    return $Call.ByID(3178862189, folder);
+export function IDEReload(): $CancellablePromise<void> {
+    return $Call.ByID(3178862189);
 }
 
 /**
