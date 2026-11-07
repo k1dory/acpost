@@ -114,7 +114,10 @@ func TestForgeAccounts(t *testing.T) {
 	if e, ok := err.(*Error); !ok || strings.Contains(e.Hint, "s3cr3t") || !strings.Contains(e.Hint, "/user/settings/applications") {
 		t.Fatalf("hint: %+v", err)
 	}
-	acc, err := n.ForgeLogin(ctx, me, host, "", "good")
+	if _, err := n.ForgeLogin(ctx, me, "https://user:SECRETPW@bad_host!/x", "", "good"); code(err) != "invalid" || strings.Contains(err.Error(), "SECRETPW") {
+		t.Fatalf("a bad host: %v", err)
+	}
+	acc, err := n.ForgeLogin(ctx, me, "https://"+host+"/some/repo", "", "good") // a pasted address: its host
 	// A refused token does not replace the one kept.
 	if _, err := n.ForgeLogin(ctx, me, host, "", "bad"); code(err) != "refused" {
 		t.Fatalf("a refused token: %v", err)

@@ -46,8 +46,10 @@ func (n *Node) ForgeLogin(ctx context.Context, p Principal, host, kind, token st
 	if err := userOnly(p, "forge accounts"); err != nil {
 		return client.ForgeAccount{}, err
 	}
+	// A pasted address is taken as its host (no scheme, user, path); a refusal quotes nothing of it.
+	host = plainHost(host)
 	if !forgeHost.MatchString(host) {
-		return client.ForgeAccount{}, errf("invalid", "%q: a host (github.com, gitlab.example.com:8443), no scheme or path", host)
+		return client.ForgeAccount{}, errf("invalid", "the host: a name such as github.com or gitlab.example.com:8443")
 	}
 	switch kind {
 	case "", "github", "gitlab", "forgejo":
@@ -127,4 +129,19 @@ func short(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// plainHost is the host of what was typed: a bare host, or a URL's (user, path and query dropped).
+func plainHost(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, "@"); i >= 0 {
+		s = s[i+1:]
+	}
+	return strings.ToLower(s)
 }
