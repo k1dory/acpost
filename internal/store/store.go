@@ -356,6 +356,8 @@ func (s *Store) migrate() error {
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
 		{"relayed", "relayed INTEGER NOT NULL DEFAULT 0"}, // events taken from the node running the agent
+		// The lease Complete ended the message under: the holder's repeat of its reply is no conflict.
+		{"closed_lease", "closed_lease TEXT NOT NULL DEFAULT ''"},
 	} {
 		var n int
 		if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = ?", c.name).Scan(&n); err != nil {
@@ -810,12 +812,20 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 	now := ms(time.Now())
 	err := s.tx(ctx, func(t *sql.Tx) error {
 		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, error_code = ?, reply_size = ?, lease_id = '', lease_until = 0,
-			updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''`,
-			state, errText, errCode, len(reply), now, now, id, lease)
+			closed_lease = ?, updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''`,
+			state, errText, errCode, len(reply), lease, now, now, id, lease)
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
+			// A holder repeating its own answer (its response was lost) is told it is recorded.
+			same, err := sameCompletion(ctx, t, id, lease, state, errCode, reply)
+			if err != nil {
+				return err
+			}
+			if same {
+				return errRepeat
+			}
 			return ErrLeaseLost
 		}
 		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
@@ -828,6 +838,9 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 		}
 		return s.putFiles(ctx, t, seq, true, files)
 	})
+	if errors.Is(err, errRepeat) {
+		return nil // nothing was written: the first call recorded it
+	}
 	if err == nil {
 		s.afterWrite(ctx, int64(len(reply))+filesSize(files))
 	}
@@ -1278,4 +1291,23 @@ func (p *Party) where(prefix string) (string, []any) {
 		}
 	}
 	return "(" + cond + ")", args
+}
+
+// errRepeat ends Complete's transaction without writing: the call repeats one already recorded.
+var errRepeat = errors.New("store: completion already recorded")
+
+// sameCompletion says whether message id was already ended under lease with this outcome: the
+// repeat of a reply whose response was lost. Another outcome under the same lease is not a repeat.
+// Files are not compared; the first call attached them.
+func sameCompletion(ctx context.Context, t *sql.Tx, id, lease string, state State, errCode, reply string) (bool, error) {
+	if lease == "" {
+		return false, nil
+	}
+	var same bool
+	err := t.QueryRowContext(ctx, `SELECT m.state = ? AND m.error_code = ? AND c.reply = ? FROM messages m JOIN contents c ON c.seq = m.seq
+		WHERE m.id = ? AND m.closed_lease = ?`, state, errCode, reply, id, lease).Scan(&same)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return same, err
 }
