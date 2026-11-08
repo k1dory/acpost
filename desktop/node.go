@@ -32,7 +32,7 @@ type Node struct {
 	mu       sync.Mutex
 	c        *client.Client
 	url      string
-	follows  map[string]context.CancelFunc
+	follows  map[string]*follow
 	terms    map[string]context.CancelFunc
 	stopNode context.CancelFunc // the node the app runs itself, if it does
 	notes    *notifications.NotificationService
@@ -43,7 +43,7 @@ type Node struct {
 
 // ServiceStartup connects to the node (a failure is told by Status, the app still opens).
 func (n *Node) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	n.follows = map[string]context.CancelFunc{}
+	n.follows = map[string]*follow{}
 	n.terms = map[string]context.CancelFunc{}
 	if err := n.ensureNode(); err != nil {
 		n.startErr = err.Error()
@@ -55,8 +55,8 @@ func (n *Node) ServiceStartup(ctx context.Context, _ application.ServiceOptions)
 func (n *Node) ServiceShutdown() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for _, stop := range n.follows {
-		stop()
+	for _, f := range n.follows {
+		f.cancel()
 	}
 	for _, stop := range n.terms {
 		stop()
@@ -266,24 +266,28 @@ type EventBatch struct {
 func (n *Node) Follow(id string, after int64) error {
 	c, err := n.client()
 	if err != nil {
-		return err
+		return withHint(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	me := &follow{cancel: cancel}
 	n.mu.Lock()
-	if stop := n.follows[id]; stop != nil {
-		stop()
+	if old := n.follows[id]; old != nil {
+		old.cancel()
 	}
-	n.follows[id] = cancel
+	n.follows[id] = me
 	n.mu.Unlock()
 	go func() {
+		// Only this stream's own entry goes: a Follow meanwhile put a newer one there.
 		defer func() {
 			n.mu.Lock()
-			if n.follows[id] != nil {
+			if n.follows[id] == me {
 				delete(n.follows, id)
 			}
 			n.mu.Unlock()
 		}()
-		// Events come one at a time; they reach the interface a few times a second.
+		// Events come one at a time; they reach the interface a few times a second. One
+		// goroutine emits at a time, the final after the last batch: the window drops a batch
+		// whose seq is not after the last it applied.
 		var mu sync.Mutex
 		var pending []store.Event
 		flush := func() {
@@ -291,14 +295,17 @@ func (n *Node) Follow(id string, after int64) error {
 			evs := pending
 			pending = nil
 			mu.Unlock()
-			if len(evs) > 0 {
+			if len(evs) > 0 && ctx.Err() == nil {
 				n.emit("events:"+id, EventBatch{ID: id, Events: evs})
 			}
 		}
 		tick := time.NewTicker(120 * time.Millisecond)
 		defer tick.Stop()
 		done := make(chan struct{})
+		var ticking sync.WaitGroup
+		ticking.Add(1)
 		go func() {
+			defer ticking.Done()
 			for {
 				select {
 				case <-done:
@@ -315,13 +322,14 @@ func (n *Node) Follow(id string, after int64) error {
 			return nil
 		})
 		close(done)
+		ticking.Wait()
 		flush()
 		if ctx.Err() != nil {
 			return
 		}
 		b := EventBatch{ID: id}
 		if err != nil {
-			b.Error = err.Error()
+			b.Error = withHint(err).Error()
 		} else {
 			b.Final = &final
 		}
@@ -334,8 +342,8 @@ func (n *Node) Follow(id string, after int64) error {
 func (n *Node) Unfollow(id string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if stop := n.follows[id]; stop != nil {
-		stop()
+	if f := n.follows[id]; f != nil {
+		f.cancel()
 		delete(n.follows, id)
 	}
 }
@@ -477,3 +485,6 @@ func (n *Node) emit(name string, data any) {
 	}
 	n.app.Event.Emit(name, data)
 }
+
+// follow is a message's stream; its own goroutine removes it, when it is still the one there.
+type follow struct{ cancel context.CancelFunc }
