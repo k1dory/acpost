@@ -1412,6 +1412,11 @@ func decodeLenient(dec *json.Decoder, v any) error {
 			return err
 		}
 		if key, _ := t.(string); strings.EqualFold(key, "files") {
+			if len(spans) > 0 {
+				// One list of files: a key given twice is no body a node sends (and would
+				// have each copy rebuild the body).
+				return errors.New("files: given more than once")
+			}
 			files, err := knownFileFields(val)
 			if err != nil {
 				return err
@@ -1420,8 +1425,7 @@ func decodeLenient(dec *json.Decoder, v any) error {
 			spans = append(spans, span{end - len(val), end, files})
 		}
 	}
-	for i := len(spans) - 1; i >= 0; i-- {
-		sp := spans[i]
+	for _, sp := range spans { // at most one
 		body = append(body[:sp.start:sp.start], append(sp.files, body[sp.end:]...)...)
 	}
 	return json.Unmarshal(body, v)

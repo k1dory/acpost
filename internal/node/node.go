@@ -654,7 +654,7 @@ func (n *Node) Conversations(ctx context.Context, p Principal, before string, li
 	}
 	out, next, err := n.st.Conversations(ctx, party, before, limit)
 	if err != nil {
-		return nil, "", errf("invalid", "%v", err)
+		return nil, "", invalidOr(err)
 	}
 	return out, next, nil
 }
@@ -947,4 +947,13 @@ func clientParty(p Principal) *store.Party {
 		party.Recipients = append(party.Recipients, "agent:"+a)
 	}
 	return party
+}
+
+// invalidOr is a store's refusal as invalid, unless the request was cut short (the node stops and
+// ends every request): that stays itself, so the API answers unavailable and the client asks again.
+func invalidOr(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errf("invalid", "%v", err)
 }
