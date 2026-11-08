@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,7 +89,7 @@ func (n *Node) StartBacklogItem(ctx context.Context, p Principal, id, agent stri
 	} else if err != nil {
 		return store.Message{}, errf("unavailable", "%v", err)
 	}
-	to := cmpOr(agent, b.Agent)
+	to := cmp.Or(agent, b.Agent)
 	if to == "" {
 		return store.Message{}, errf("invalid", "the agent to give it to")
 	}

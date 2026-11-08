@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -116,7 +117,7 @@ func (s cloudSandbox) chat() client.Chat {
 	if c.Updated.IsZero() {
 		c.Updated = s.CreatedAt
 	}
-	if ref := cmpOr(s.AgentRef, s.Slug); ref != "" {
+	if ref := cmp.Or(s.AgentRef, s.Slug); ref != "" {
 		c.CloudAgent = ref
 	}
 	return c
@@ -247,7 +248,7 @@ func (n *Node) CreateCloudTask(ctx context.Context, p Principal, r client.CloudT
 		mu.(*sync.Mutex).Lock()
 		defer mu.(*sync.Mutex).Unlock()
 	}
-	name = strings.TrimPrefix(cmpOr(name, "task")+"-"+hex.EncodeToString(b), "-")
+	name = strings.TrimPrefix(cmp.Or(name, "task")+"-"+hex.EncodeToString(b), "-")
 	var s cloudSandbox
 	if r.Idem != "" {
 		var list []cloudSandbox
@@ -255,7 +256,7 @@ func (n *Node) CreateCloudTask(ctx context.Context, p Principal, r client.CloudT
 			return client.Chat{}, err
 		}
 		for _, it := range list {
-			if it.Name == name && cmpOr(it.AgentRef, it.Slug) == r.Agent {
+			if it.Name == name && cmp.Or(it.AgentRef, it.Slug) == r.Agent {
 				s = it
 			}
 		}

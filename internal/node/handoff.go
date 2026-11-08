@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -212,7 +213,7 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 		}
 	}
 	if rs.base == "" {
-		return rs, errh("invalid", "push the branch (git push -u origin "+cmpOr(rs.branch, "HEAD")+") or set origin's default (git remote set-head origin -a)",
+		return rs, errh("invalid", "push the branch (git push -u origin "+cmp.Or(rs.branch, "HEAD")+") or set origin's default (git remote set-head origin -a)",
 			"no commit of this branch is known to be on the remote: what to start from cannot be told")
 	}
 
