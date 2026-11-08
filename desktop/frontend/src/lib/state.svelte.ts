@@ -582,6 +582,21 @@ class App {
     if (this.view !== "chat") this.view = "chat";
     this.openTab("artifacts");
   }
+  /** The preview's problems cleared: the page is not fixed by it (a reload shows them again). */
+  clearPreview() {
+    const p = this.preview;
+    p.events = []; p.cleared = true; p.clearedAt = Date.now(); p.clearedUrl = p.url;
+  }
+  /** The preview's page loaded again (fresh: its problems listed anew). */
+  previewReload(fresh = false) {
+    if (fresh) this.preview.events = [];
+    this.preview.loadAt = Date.now();
+    Node.PreviewReload().catch(e => (this.error = errText(e)));
+  }
+  previewBack() {
+    this.preview.loadAt = Date.now();
+    Node.PreviewBack().catch(e => (this.error = errText(e)));
+  }
   notePreview(e: PreviewEvent) {
     // A page loaded that was asked for after the list was cleared (a reload, another address): what it
     // shows from now on is the truth. A load already under way when it was cleared changes nothing.

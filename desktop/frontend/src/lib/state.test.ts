@@ -270,6 +270,27 @@ describe("what the app remembers does not grow without end (P3)", () => {
   });
 });
 
+describe("the preview (P3)", () => {
+  it("says a reload that fails instead of leaving it unhandled", async () => {
+    const app = await load();
+    fake.Node.PreviewReload.mockRejectedValue(new Error("no page"));
+    fake.Node.PreviewBack.mockRejectedValue(new Error("no history"));
+    app.previewReload(true);
+    await flush();
+    expect(app.error).toContain("no page");
+    app.previewBack();
+    await flush();
+    expect(app.error).toContain("no history");
+  });
+  it("clears its list as cleared from the page shown", async () => {
+    const app = await load();
+    app.preview.url = "http://localhost:5173/";
+    app.preview.events = [{ kind: "console.error", message: "x" }];
+    app.clearPreview();
+    expect(app.preview).toMatchObject({ events: [], cleared: true, clearedUrl: "http://localhost:5173/" });
+  });
+});
+
 describe("history", () => {
   it("is not left loading by a new task opened meanwhile", async () => {
     const app = await load();
