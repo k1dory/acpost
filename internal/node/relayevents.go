@@ -114,7 +114,7 @@ func (n *Node) relayAll(id, lease string, sent int64, extended time.Time) {
 			case <-time.After(time.Second):
 			}
 		}
-		if time.Since(extended) >= hubLease/3 {
+		if time.Since(extended) >= hubRenew {
 			extended = time.Now()
 			ctx, done := context.WithTimeout(n.ctx, 10*time.Second)
 			err := n.hub.Extend(ctx, id, lease, hubLease)

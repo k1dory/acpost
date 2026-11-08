@@ -550,19 +550,11 @@ func (n *Node) deliver(m store.Message) {
 	}
 	local := &store.Message{ID: m.ID, From: m.From, To: "agent:" + to.Name, Task: m.Task, Thread: m.Thread, Parent: m.Parent,
 		Depth: m.Depth, Meta: m.Meta, Body: m.Body, ExpiresAt: m.ExpiresAt, Origin: originHub + m.LeaseID, Files: files}
-	if _, _, err := n.st.InsertLimited(ctx, local, lim.MaxQueuedPerAgent); err != nil {
-		if errors.Is(err, store.ErrQueueFull) {
-			refuse(fmt.Sprintf("node %s: %s has a full queue (limits.max_queued_per_agent)", n.Name(), local.To))
-			return
+	if why, ok := n.takeDelivery(ctx, local, lim.MaxQueuedPerAgent); !ok {
+		if why != "" {
+			refuse(why)
 		}
-		prev, gerr := n.st.Get(ctx, m.ID)
-		// Only an earlier delivery of this same message is adopted, never a local message with the id.
-		if gerr != nil || !strings.HasPrefix(prev.Origin, originHub) || prev.To != local.To || prev.From != local.From {
-			refuse("node " + n.Name() + ": message id " + m.ID + " is already in use here")
-			return
-		}
-		// Delivered again (the hub's lease ran out before): keep the copy, follow it under the new lease.
-		_ = n.st.SetOrigin(ctx, m.ID, originHub+m.LeaseID)
+		return
 	}
 	n.notify()
 	n.goLoop(func() { n.relay(m.ID, m.LeaseID) })
@@ -620,16 +612,10 @@ func (n *Node) relay(id, lease string) {
 		if m.Origin != originHub+lease {
 			return // delivered again under another lease: that delivery's relay takes over
 		}
-		if time.Since(extended) >= hubLease/3 {
+		if time.Since(extended) >= hubRenew {
 			extended = time.Now()
 			if err := n.hub.Extend(n.ctx, id, lease, hubLease); err != nil && isFinalErr(err) {
-				// The hub gave the message up (cancelled, or the lease went to another delivery).
-				if cur, _ := n.st.Get(n.ctx, id); cur.Origin != originHub+lease {
-					return
-				}
-				if _, err := n.st.Cancel(n.ctx, id); err == nil {
-					n.notify()
-				}
+				n.hubLeaseGone(id, lease)
 				return
 			}
 		}
@@ -639,9 +625,69 @@ func (n *Node) relay(id, lease string) {
 		select {
 		case <-evs:
 		case <-changed:
-		case <-time.After(hubLease/3 - time.Since(extended)):
+		case <-time.After(hubRenew - time.Since(extended)):
 		case <-n.ctx.Done():
 			return
 		}
+	}
+}
+
+// takeDelivery makes a delivery the local copy of its message. An earlier delivery of the same
+// message is adopted first, in one step with its new lease (a full queue does not refuse what is
+// already here); only a new one is admitted under the queue's limit. Not ok: why is the refusal
+// for the hub, or "" when the delivery is left to the hub's lease (a passing failure of the store).
+func (n *Node) takeDelivery(ctx context.Context, local *store.Message, maxQueued int) (why string, ok bool) {
+	for range 2 {
+		_, err := n.st.AdoptDelivery(ctx, local.ID, local.From, local.To, originHub, local.Origin)
+		switch {
+		case err == nil:
+			return "", true
+		case errors.Is(err, store.ErrIDInUse):
+			// Only an earlier delivery of this same message is adopted, never a local message with the id.
+			return "node " + n.Name() + ": message id " + local.ID + " is already in use here", false
+		case !errors.Is(err, store.ErrNotFound):
+			n.log.Warn("take a delivery", "id", local.ID, "err", err)
+			return "", false
+		}
+		_, _, err = n.st.InsertLimited(ctx, local, maxQueued)
+		switch {
+		case err == nil:
+			return "", true
+		case errors.Is(err, store.ErrQueueFull):
+			return fmt.Sprintf("node %s: %s has a full queue (limits.max_queued_per_agent)", n.Name(), local.To), false
+		case errors.Is(err, store.ErrStoreFull):
+			return fmt.Sprintf("node %s: %v", n.Name(), err), false
+		}
+		// Another delivery of it was stored meanwhile (the id is taken): that one is adopted.
+	}
+	n.log.Warn("take a delivery: the id is taken and not adoptable", "id", local.ID)
+	return "", false
+}
+
+// hubLeaseGone is what a relay does when the hub no longer takes its lease on a delivered message.
+// The hub cancelled it, or ended it without this node (it gave up after the lease was lost too
+// often): the copy here ends too, if it is still this delivery's. Otherwise the lease went to
+// another delivery, or the hub's lease ran out and it delivers again: the copy is left as it is (a
+// turn running goes on) for the next delivery to adopt; it is not cancelled for good.
+func (n *Node) hubLeaseGone(id, lease string) {
+	ctx, done := context.WithTimeout(n.ctx, 10*time.Second)
+	hm, err := n.hub.Get(ctx, id)
+	done()
+	var ce *client.Error
+	switch {
+	case err == nil && hm.State == store.Cancelled:
+		if ok, _ := n.st.CancelIfOrigin(n.ctx, id, originHub+lease, "", ""); ok {
+			n.notify()
+		}
+	case err == nil && hm.State.Final(), errors.As(err, &ce) && ce.Code == "not_found":
+		why := "the hub ended the message without this node"
+		if err == nil && hm.Error != "" {
+			why += ": " + hm.Error
+		}
+		if ok, _ := n.st.CancelIfOrigin(n.ctx, id, originHub+lease, store.CodeHubGaveUp, why); ok {
+			n.notify()
+		}
+	default:
+		n.log.Info("hub lease lost; the message is left to the hub's next delivery", "id", id)
 	}
 }
