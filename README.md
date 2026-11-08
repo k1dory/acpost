@@ -351,7 +351,7 @@ message instead of creating another; keys are per sender and kept as long as the
 
 YAML or JSON (by extension). Every field is optional; this is the full set with defaults.
 An absent `~/.config/acpost/config.yaml` is the defaults; a file named by `--config` or
-`ACPOST_CONFIG` must exist. Limits are positive (0 is the default).
+`ACPOST_CONFIG` must exist, the default one too. Limits are positive (0 is the default).
 
 ```yaml
 node:

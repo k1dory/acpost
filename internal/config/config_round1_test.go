@@ -54,3 +54,22 @@ func TestLoadNamedMissingFile(t *testing.T) {
 		t.Fatalf("ACPOST_CONFIG file present: %+v %v", c, err)
 	}
 }
+
+// The default file named on purpose must exist too: by ACPOST_CONFIG (Load sees it) or by
+// --config (the CLI calls LoadNamed).
+func TestNamedDefaultFileMustExist(t *testing.T) {
+	t.Setenv("ACPOST_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	def := DefaultPath()
+	if _, err := LoadNamed(def); err == nil || !strings.Contains(err.Error(), def) {
+		t.Fatalf("--config naming the absent default file: %v", err)
+	}
+	t.Setenv("ACPOST_CONFIG", def)
+	if _, err := Load(DefaultPath()); err == nil || !strings.Contains(err.Error(), def) {
+		t.Fatalf("ACPOST_CONFIG naming the absent default file: %v", err)
+	}
+	t.Setenv("ACPOST_CONFIG", "")
+	if c, err := Load(def); err != nil || c.Limits.MaxBody == 0 {
+		t.Fatalf("the implicit default file absent: %+v %v", c, err)
+	}
+}

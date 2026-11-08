@@ -215,12 +215,20 @@ func implicitPath() string {
 	return filepath.Join(home, ".config", "acpost", "config.yaml")
 }
 
-// Load reads a configuration file. The default file (no --config, no ACPOST_CONFIG) that does
-// not exist is the defaults; a file named that does not exist is an error, or a typo in its path
-// would start a node with no agents and no tokens.
+// Load reads a configuration file. The implicit default file (ACPOST_CONFIG unset) that does not
+// exist is the defaults; any other file that does not exist is an error, or a typo in its path
+// would start a node with no agents and no tokens. A path given by --config goes to LoadNamed,
+// since only the caller knows it was named, even when it names the default file.
 func Load(path string) (*Config, error) {
+	return load(path, os.Getenv("ACPOST_CONFIG") == "" && samePath(path, implicitPath()))
+}
+
+// LoadNamed reads a configuration file someone named: it must exist.
+func LoadNamed(path string) (*Config, error) { return load(path, false) }
+
+func load(path string, mayBeAbsent bool) (*Config, error) {
 	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) && samePath(path, implicitPath()) {
+	if errors.Is(err, os.ErrNotExist) && mayBeAbsent {
 		return Parse(nil, ".yaml")
 	}
 	if err != nil {
