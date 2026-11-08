@@ -143,6 +143,8 @@ func Open(dsn string, opt Options) (*Store, error) {
 		opt.MaxEventData = 16 << 10
 	}
 	s := &Store{opt: opt}
+	// Foreign keys stay off: every delete removes its dependent rows itself, in the same
+	// transaction, and checks on each write would cost the queue for no case it misses.
 	pragmas := []string{"busy_timeout(10000)", "foreign_keys(0)", fmt.Sprintf("journal_size_limit(%d)", opt.JournalSizeLimit)}
 	switch {
 	case dsn == "memory:":
