@@ -28,6 +28,8 @@ const (
 	changesFiles   = 100              // files listed in the event
 	snapshotFiles  = 10000            // untracked files a snapshot takes at most
 	snapshotBytes  = 64 << 20         // and their bytes
+	snapshotIndex  = 64 << 20         // a repository whose index is bigger is not snapshot (each turn would walk it twice)
+	gitStderrMax   = 64 << 10         // what of git's stderr is kept for its error
 )
 
 // gitSnap is a working tree as it was.
@@ -43,18 +45,25 @@ type gitSnap struct {
 // pass-through (gitDefuse), diffs are without textconv. Past gitTimeout the whole process group
 // is killed and its pipes let go.
 func git(ctx context.Context, dir string, env []string, max int, args ...string) (out []byte, cut bool, err error) {
+	return gitDefused(ctx, dir, gitDefuse(ctx, dir), env, max, args...)
+}
+
+// gitDefused is git with the repository's filter drivers already read (gitDefuse): a snapshot or a
+// diff reads them once for its few calls, not once a call. nil is for a call that runs no filter
+// (rev-parse, symbolic-ref).
+func gitDefused(ctx context.Context, dir string, defused [][2]string, env []string, max int, args ...string) (out []byte, cut bool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), append(gitSafeEnv(gitDefuse(ctx, dir)), env...)...)
+	cmd.Env = append(os.Environ(), append(gitSafeEnv(defused), env...)...)
 	killGroupOnCancel(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, false, err
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &capped{max: gitStderrMax} // a warning per file of a big add is not kept whole
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, false, err
 	}
@@ -71,17 +80,22 @@ func git(ctx context.Context, dir string, env []string, max int, args ...string)
 
 // snapshot is dir's working tree as it is now, when dir is in a git repository (else nil).
 func snapshot(ctx context.Context, dir string) *gitSnap {
-	top, _, err := git(ctx, dir, nil, 4096, "rev-parse", "--show-toplevel")
+	// The repository and its index in one call; rev-parse runs nothing of the repository.
+	paths, _, err := gitDefused(ctx, dir, nil, nil, 16384, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-path", "index")
 	if err != nil {
 		return nil
 	}
-	repo := strings.TrimSpace(string(top))
-	if !untrackedFits(ctx, repo) {
+	lines := strings.Split(strings.TrimRight(string(paths), "\n"), "\n")
+	if len(lines) != 2 {
+		return nil
+	}
+	repo, index := lines[0], lines[1]
+	if fi, err := os.Stat(index); err == nil && fi.Size() > snapshotIndex {
+		return nil
+	}
+	defused := gitDefuse(ctx, repo)
+	if !untrackedFits(ctx, repo, defused) {
 		return nil // too much untracked to take into the repository's objects
-	}
-	index, _, err := git(ctx, repo, nil, 4096, "rev-parse", "--path-format=absolute", "--git-path", "index")
-	if err != nil {
-		return nil
 	}
 	tmp, err := os.CreateTemp("", "acpost-index-")
 	if err != nil {
@@ -91,27 +105,27 @@ func snapshot(ctx context.Context, dir string) *gitSnap {
 	defer os.Remove(tmp.Name())
 	defer os.Remove(tmp.Name() + ".lock")
 	// The repository's index as a start: files unchanged since it are not read again.
-	if b, err := os.ReadFile(strings.TrimSpace(string(index))); err == nil {
+	if b, err := os.ReadFile(index); err == nil {
 		_ = os.WriteFile(tmp.Name(), b, 0o600)
 		// The copy keeps the index's time: git takes an entry as clean by its stat only when the
 		// file is older than the index ("racy git"). A copy written now would make a file changed
 		// in the index's second, at the same size, look unchanged.
-		if fi, err := os.Stat(strings.TrimSpace(string(index))); err == nil {
+		if fi, err := os.Stat(index); err == nil {
 			_ = os.Chtimes(tmp.Name(), fi.ModTime(), fi.ModTime())
 		}
 	} else {
 		os.Remove(tmp.Name())
 	}
 	env := []string{"GIT_INDEX_FILE=" + tmp.Name()}
-	if _, _, err := git(ctx, repo, env, 1<<16, "add", "-A", "--", "."); err != nil {
+	if _, _, err := gitDefused(ctx, repo, defused, env, 1<<16, "add", "-A", "--", "."); err != nil {
 		return nil
 	}
-	tree, _, err := git(ctx, repo, env, 4096, "write-tree")
+	tree, _, err := gitDefused(ctx, repo, defused, env, 4096, "write-tree")
 	if err != nil {
 		return nil
 	}
 	snap := &gitSnap{repo: repo, tree: strings.TrimSpace(string(tree)), at: time.Now().UTC()}
-	if b, _, err := git(ctx, repo, nil, 4096, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
+	if b, _, err := gitDefused(ctx, repo, nil, nil, 4096, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
 		snap.branch = strings.TrimSpace(string(b))
 	}
 	return snap
@@ -119,16 +133,17 @@ func snapshot(ctx context.Context, dir string) *gitSnap {
 
 // diffSnaps is what changed from one snapshot to the other: the files and the diff.
 func diffSnaps(ctx context.Context, before, after *gitSnap) ([]store.ChangedFile, string, bool, error) {
-	status, _, err := git(ctx, before.repo, nil, 1<<20, "diff", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", "--name-status", "-z", before.tree, after.tree)
+	defused := gitDefuse(ctx, before.repo)
+	status, _, err := gitDefused(ctx, before.repo, defused, nil, 1<<20, "diff", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", "--name-status", "-z", before.tree, after.tree)
 	if err != nil {
 		return nil, "", false, err
 	}
 	files := parseNameStatus(status)
-	if num, _, err := git(ctx, before.repo, nil, 1<<20, "diff", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", "--numstat", "-z", before.tree, after.tree); err == nil {
+	if num, _, err := gitDefused(ctx, before.repo, defused, nil, 1<<20, "diff", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", "--numstat", "-z", before.tree, after.tree); err == nil {
 		addNumstat(files, num)
 	}
 	// Whole files only, masked, then cut between files: a cut does not leave half a secret.
-	diff, cut, err := git(ctx, before.repo, nil, 2*changesDiffMax, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", before.tree, after.tree)
+	diff, cut, err := gitDefused(ctx, before.repo, defused, nil, 2*changesDiffMax, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short", "-M", before.tree, after.tree)
 	if err != nil {
 		return files, "", false, err
 	}
@@ -343,8 +358,8 @@ func gitDefuse(ctx context.Context, dir string) [][2]string {
 
 // untrackedFits says whether the files a snapshot would take into repo's object store (untracked,
 // and tracked but changed since the index) are few and small enough.
-func untrackedFits(ctx context.Context, repo string) bool {
-	b, cut, err := git(ctx, repo, nil, 4<<20, "ls-files", "-z", "--others", "--modified", "--exclude-standard")
+func untrackedFits(ctx context.Context, repo string, defused [][2]string) bool {
+	b, cut, err := gitDefused(ctx, repo, defused, nil, 4<<20, "ls-files", "-z", "--others", "--modified", "--exclude-standard")
 	if err != nil || cut {
 		return false
 	}
@@ -386,4 +401,17 @@ func wholeFiles(diff string, max int) string {
 		return head[:i+1]
 	}
 	return ""
+}
+
+// capped keeps the first max bytes written to it and drops the rest.
+type capped struct {
+	bytes.Buffer
+	max int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.max - c.Len(); room > 0 {
+		c.Buffer.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
 }
