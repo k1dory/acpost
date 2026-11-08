@@ -360,6 +360,20 @@ export const ru: Record<string, string> = {
   "Allow scripts": "Разрешить скрипты",
   "Scripts on": "Скрипты включены",
   "The page's scripts run in a frame of their own; they reach nothing outside the app": "Скрипты страницы работают в отдельной рамке и не выходят за пределы приложения",
+  "The agent asks": "Агент спрашивает",
+  "Allow": "Разрешить",
+  "{n} to approve": "ждут одобрения: {n}",
+  "in {n}": "вход {n}",
+  "out {n}": "выход {n}",
+  "cache {n}": "кэш {n}",
+  "Checks": "Проверки",
+  "on {branch}": "в {branch}",
+  "all agents": "все агенты",
+  "New MCP server": "Новый MCP-сервер",
+  "none chosen: all agents": "не выбраны: все агенты",
+  "next {when}": "следующий {when}",
+  "last {when}": "последний {when}",
+  "exit {code}": "код выхода {code}",
 };
 
 // The node's messages (English) that have a known form, in Russian.

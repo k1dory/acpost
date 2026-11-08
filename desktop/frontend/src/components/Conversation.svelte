@@ -71,7 +71,7 @@
       {/if}
     </div>
     <span class="sp"></span>
-    {#if waiting.length}<span class="chip ask nodrag">{waiting.length} needs approval</span>{/if}
+    {#if waiting.length}<span class="chip ask nodrag">{t("{n} to approve", { n: waiting.length })}</span>{/if}
     {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
     {#if canHand}
       <div class="hand nodrag">

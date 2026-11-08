@@ -27,7 +27,7 @@
     <span class="name mono">{toolName(tool)}</span>
     <span class="what">{intent(tool)}</span>
     {#if e.files}<span class="stat mono"><span class="plus">+{e.added}</span> <span class="minus">−{e.removed}</span></span>{/if}
-    {#if tool.exit_code !== undefined && tool.exit_code !== 0}<span class="chip crit">exit {tool.exit_code}</span>{/if}
+    {#if tool.exit_code !== undefined && tool.exit_code !== 0}<span class="chip crit">{t("exit {code}", { code: tool.exit_code })}</span>{/if}
     <span class="took muted num">{took}</span>
     {#if hasMore}<span class="chev" class:rot={open}><Icon name="chev" size={12} /></span>{/if}
   </button>

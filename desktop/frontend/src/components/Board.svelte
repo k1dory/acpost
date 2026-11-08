@@ -126,7 +126,7 @@
                 <span><Icon name={c.kind === "cloud" ? "cloud" : "bot"} size={11} /> {agentName(c)}</span>
                 {#if place(c)}<span class="mono">{place(c)}</span>{/if}
                 <span class="sp"></span>
-                {#if col.key === "wait"}<span class="chip ask">{asksByThread.get(c.key)} to approve</span>{/if}
+                {#if col.key === "wait"}<span class="chip ask">{t("{n} to approve", { n: asksByThread.get(c.key) ?? 0 })}</span>{/if}
                 {#if col.key === "run"}<span class="spin"></span>{/if}
                 <span class="num">{ago(c.updated)}</span>
               </div>

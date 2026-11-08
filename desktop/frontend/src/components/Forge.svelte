@@ -92,7 +92,7 @@
       {:else}<div class="none muted">{t("No open pull requests")}</div>{/each}
     </div>
 
-    <div class="h">Checks {#if info.branch}<span class="muted">on {info.branch}</span>{/if}</div>
+    <div class="h">{t("Checks")} {#if info.branch}<span class="muted">{t("on {branch}", { branch: info.branch })}</span>{/if}</div>
     <div class="inner">
       {#each checks as c (c.id)}
         <div class="check">

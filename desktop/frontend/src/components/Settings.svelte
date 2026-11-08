@@ -185,7 +185,7 @@
                 <div class="row">
                   <button class="sw" class:on={m.enabled} onclick={() => toggle(m)} title={m.enabled ? t("On") : t("Off")}><span></span></button>
                   <div class="t"><b>{m.name}</b><span class="muted small mono">{m.kind === "http" ? m.url : [m.command, ...(m.args ?? [])].join(" ")}</span></div>
-                  <span class="chip">{m.agents?.length ? m.agents.map(agentName).join(", ") : "all agents"}</span>
+                  <span class="chip">{m.agents?.length ? m.agents.map(agentName).join(", ") : t("all agents")}</span>
                   <button class="btn ghost sm" onclick={() => editServer(m)}>{t("Edit")}</button>
                 </div>
               {:else}<div class="row muted">{t("No MCP servers yet")}</div>{/each}
@@ -195,7 +195,7 @@
         {:else}
           {@const e = edit}
           <div class="form card">
-            <div class="fh">{e.isNew ? "New MCP server" : e.name}</div>
+            <div class="fh">{e.isNew ? t("New MCP server") : e.name}</div>
             <div class="frow">
               {#if e.isNew}<input class="input" placeholder={t("Name: wiki, github, postgres")} bind:value={e.name} />{/if}
               <div class="seg"><button class:on={e.kind === "stdio"} onclick={() => (e.kind = "stdio")}>{t("Command")}</button><button class:on={e.kind === "http"} onclick={() => (e.kind = "http")}>{t("HTTP")}</button></div>
@@ -226,7 +226,7 @@
                 {@const name = a.address.replace(/^agent:/, "")}
                 <button class="chip pickc" class:on={e.agents.includes(name)} onclick={() => (e.agents = e.agents.includes(name) ? e.agents.filter(x => x !== name) : [...e.agents, name])}>{agentName(a.address)}</button>
               {/each}
-              <span class="muted small">{e.agents.length ? "" : "none chosen: all agents"}</span>
+              <span class="muted small">{e.agents.length ? "" : t("none chosen: all agents")}</span>
             </div>
             <div class="acts">
               {#if !e.isNew}<button class="btn ghost danger" onclick={() => remove(e.name)}>{t("Delete")}</button>{/if}
@@ -306,7 +306,7 @@
                 <Icon name="clock" size={14} />
                 <div class="t">
                   <b>{s.name}</b>
-                  <span class="muted small one">{agentName(s.agent)} · <span class="mono">{s.cron}</span>{#if s.enabled && s.next_run} · next {when(s.next_run)}{/if}{#if s.last_run} · last {when(s.last_run)}{/if}</span>
+                  <span class="muted small one">{agentName(s.agent)} · <span class="mono">{s.cron}</span>{#if s.enabled && s.next_run} · {t("next {when}", { when: when(s.next_run) })}{/if}{#if s.last_run} · {t("last {when}", { when: when(s.last_run) })}{/if}</span>
                   {#if s.last_err}<span class="small bad one">{s.last_err}</span>{/if}
                 </div>
                 <button class="btn ghost sm" onclick={() => runSched(s.id!)}>{t("Run now")}</button>
