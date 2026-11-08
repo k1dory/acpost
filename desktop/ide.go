@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -59,9 +60,10 @@ type ideStart struct {
 
 // ideRun is one process of the server, with what is its own.
 type ideRun struct {
-	cmd  *exec.Cmd
-	out  *ideOutput
-	done chan struct{} // closed once it has ended (its group too) and its files are removed
+	cmd    *exec.Cmd
+	out    *ideOutput
+	exited chan struct{} // closed once the CLI has ended: its address (the CLI's own listener) is dead
+	done   chan struct{} // closed once its whole group is gone and its files are removed
 }
 
 type ideServer struct {
@@ -144,7 +146,7 @@ func (s *ideServer) open(folder string) (string, error) {
 	}
 	st := s.cur
 	// st.run is read only once ready is closed (written before it).
-	if st == nil || (closed(st.ready) && (st.err != nil || closed(st.run.done))) {
+	if st == nil || (closed(st.ready) && (st.err != nil || closed(st.run.exited))) {
 		budget := s.budget
 		if budget == 0 {
 			budget = ideBudget
@@ -205,8 +207,14 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	s.mu.Unlock()
 	if prev != nil {
 		prev.kill()
+		if !closed(prev.done) {
+			return "", nil, fmt.Errorf("VS Code's previous server (process group %d) has not ended: not starting another beside it", prev.cmd.Process.Pid)
+		}
 	}
-	port := s.choosePort(data)
+	port, err := s.choosePort(data)
+	if err != nil {
+		return "", nil, err
+	}
 	token, tokFile, err := ideTokenFile()
 	if err != nil {
 		return "", nil, err
@@ -237,7 +245,7 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 		os.Remove(tokFile)
 		return "", nil, err
 	}
-	run := &ideRun{cmd: cmd, out: out, done: make(chan struct{})}
+	run := &ideRun{cmd: cmd, out: out, exited: make(chan struct{}), done: make(chan struct{})}
 	s.run = run
 	pidFile := filepath.Join(data, idePidFile)
 	pid := strconv.Itoa(cmd.Process.Pid)
@@ -262,7 +270,7 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 		}
 		// The first time the server fetches VS Code itself, and its page says so meanwhile: the
 		// address is given once it serves VS Code (the interface shows its own wait till then).
-		if err := ideServing(ctx, base, run.done); err != nil {
+		if err := ideServing(ctx, base, run.exited); err != nil {
 			return fail(out.with(s.why(ctx, err)))
 		}
 		// The app's look for it, installed (or brought up to date) now that VS Code's server is
@@ -270,7 +278,8 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 		// tried again on the next IDEStart).
 		s.lookInstall(ctx, data)
 		return base, run, nil
-	case <-run.done:
+	case <-run.exited:
+		run.kill() // its group: ended, waited for
 		return "", nil, out.with(errors.New("VS Code's server stopped as it started"))
 	case <-ctx.Done():
 		return fail(out.with(s.why(ctx, ctx.Err())))
@@ -368,15 +377,18 @@ func ideBase(u, token string) (string, error) {
 // and pid files removed (the pid file only while it is still this process's), then done closed.
 func (r *ideRun) wait(tokFile, pidFile, pid string) {
 	_ = r.cmd.Wait()
+	close(r.exited)
 	// The CLI's end is not its group's: VS Code's own server may still be ending (or, the CLI
 	// gone by itself, running on). The group gets the same time to end in order, then is killed;
-	// done is closed once it is gone, its port free.
+	// done is closed once it is gone, its port free: not before, however long that is (a process
+	// stuck past SIGKILL keeps its group, and a new start is refused meanwhile).
 	pg := r.cmd.Process.Pid
 	if !groupGone(pg, 0) {
 		_ = syscall.Kill(-pg, syscall.SIGTERM)
 		if !groupGone(pg, ideTermWait) {
-			_ = syscall.Kill(-pg, syscall.SIGKILL)
-			groupGone(pg, 3*time.Second)
+			for !groupGone(pg, 3*time.Second) {
+				_ = syscall.Kill(-pg, syscall.SIGKILL)
+			}
 		}
 	}
 	os.Remove(tokFile)
@@ -402,14 +414,19 @@ func (r *ideRun) kill() {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	select {
 	case <-r.done:
-	case <-time.After(ideTermWait + 5*time.Second): // wait's own steps, all bounded
+	case <-time.After(ideTermWait + 5*time.Second):
+		// A group still there past SIGKILL: given up here; done stays open until it is gone (and a
+		// new start is refused till then).
 	}
 }
+
+// ideStuckGroup is a process group taken as never gone (for tests: a process SIGKILL does not end).
+var ideStuckGroup atomic.Int64
 
 // groupGone waits up to d for the process group pg to have no process left.
 func groupGone(pg int, d time.Duration) bool {
 	for end := time.Now().Add(d); ; time.Sleep(20 * time.Millisecond) {
-		if syscall.Kill(-pg, 0) == syscall.ESRCH {
+		if ideStuckGroup.Load() != int64(pg) && syscall.Kill(-pg, 0) == syscall.ESRCH {
 			return true
 		}
 		if !time.Now().Before(end) {
@@ -600,7 +617,7 @@ const ideLockFile = "serve-web.lock"
 
 // choosePort is the IDE's port, when it is free or taken by a server of this app's left from
 // before (ended then); else, a free one (VS Code's state there is another's: said so).
-func (s *ideServer) choosePort(data string) int {
+func (s *ideServer) choosePort(data string) (int, error) {
 	want := s.port
 	if want == 0 {
 		want = idePort
@@ -616,12 +633,13 @@ func (s *ideServer) choosePort(data string) int {
 	if s.owned != nil {
 		s.owned()
 	}
-	if pid := ideOrphan(data); owner && pid > 0 {
-		endGroup(pid, func() bool { return groupGone(pid, 0) })
+	if pid := ideOrphan(data); owner && pid > 0 && !endGroup(pid) {
+		s.claim.Unlock()
+		return 0, fmt.Errorf("VS Code's server left from before (process group %d) does not end: not starting another beside it", pid)
 	}
 	s.claim.Unlock()
 	if portFree(want) {
-		return want
+		return want, nil
 	}
 	// Taken: the server picks a free port itself as it listens (one picked here could be taken
 	// before it starts); its address says which.
@@ -630,7 +648,7 @@ func (s *ideServer) choosePort(data string) int {
 		who = "another acpost"
 	}
 	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by %s; VS Code starts on another, without its settings and state\n", want, who)
-	return 0
+	return 0, nil
 }
 
 func portFree(port int) bool {
@@ -667,22 +685,14 @@ func ideOrphan(data string) int {
 	return pid
 }
 
-// endGroup ends the group pid leads: SIGTERM, then SIGKILL, each followed by a wait for freed.
-func endGroup(pid int, freed func() bool) {
-	waitFor := func(d time.Duration) bool {
-		for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
-			if freed() {
-				return true
-			}
-		}
-		return false
-	}
+// endGroup ends the group pid leads: SIGTERM, then SIGKILL; whether it is gone.
+func endGroup(pid int) bool {
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	if waitFor(3 * time.Second) {
-		return
+	if groupGone(pid, 3*time.Second) {
+		return true
 	}
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	waitFor(2 * time.Second)
+	return groupGone(pid, 2*time.Second)
 }
 
 // IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.

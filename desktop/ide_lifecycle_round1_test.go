@@ -689,3 +689,88 @@ func TestIDEStopWaitsForOrphanCheck(t *testing.T) {
 		t.Fatal("the next app's server was ended as an orphan")
 	}
 }
+
+// Review 4.1: once the CLI has ended its address is dead (the listener was the CLI's), even while
+// its server is still ending: an IDEStart then waits for that and starts the server anew.
+func TestIDEOpenDuringGroupEnd(t *testing.T) {
+	f := newFakeIDE(t, "lingering")
+	base1, err := f.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := f.current()
+	syscall.Kill(run.cmd.Process.Pid, syscall.SIGTERM) // the CLI alone ends; its server lingers
+	if !waitClosed(run.exited, 3*time.Second) {
+		t.Fatal("the CLI did not end")
+	}
+	if closed(run.done) {
+		t.Fatal("the group ended at once: the window under test is not there")
+	}
+	base2, err := f.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.starts() != 2 || !closed(run.done) {
+		t.Fatalf("%d starts, old group gone: %v", f.starts(), closed(run.done))
+	}
+	if portOf(t, base2) != portOf(t, base1) {
+		t.Fatalf("ports %d, %d", portOf(t, base1), portOf(t, base2))
+	}
+	if r, err := http.Get(base2); err != nil {
+		t.Fatalf("the new address: %v", err)
+	} else {
+		r.Body.Close()
+	}
+}
+
+// Review 4.2: a group that does not go (a process SIGKILL does not end) is not taken for gone: no
+// new server starts beside it, the start says why, and one starts once it is gone.
+func TestIDEStuckGroupRefusesStart(t *testing.T) {
+	old := ideTermWait
+	ideTermWait = 100 * time.Millisecond
+	defer func() { ideTermWait = old; ideStuckGroup.Store(0) }()
+	t.Run("own", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		base, err := f.open("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := f.current()
+		ideStuckGroup.Store(int64(run.cmd.Process.Pid))
+		u, _ := url.Parse(base)
+		http.Get("http://" + u.Host + "/exit")
+		if !waitClosed(run.exited, 3*time.Second) {
+			t.Fatal("the CLI did not end")
+		}
+		_, err = f.open("")
+		if err == nil || !strings.Contains(err.Error(), "has not ended") || f.starts() != 1 {
+			t.Fatalf("a start beside a stuck group: %v, %d starts", err, f.starts())
+		}
+		if closed(run.done) {
+			t.Fatal("done closed while the group is there")
+		}
+		ideStuckGroup.Store(0)
+		if !waitClosed(run.done, 6*time.Second) {
+			t.Fatal("done not closed once the group went")
+		}
+		if _, err := f.open(""); err != nil || f.starts() != 2 {
+			t.Fatalf("after: %v, %d starts", err, f.starts())
+		}
+	})
+	t.Run("orphan", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		orphan := f.current()
+		f.disown()
+		ideStuckGroup.Store(int64(orphan.cmd.Process.Pid))
+		g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+		t.Cleanup(g.stop)
+		_, err := g.open("")
+		if err == nil || !strings.Contains(err.Error(), "does not end") || f.starts() != 1 {
+			t.Fatalf("a start beside a stuck orphan: %v, %d starts", err, f.starts())
+		}
+		ideStuckGroup.Store(0)
+	})
+}
