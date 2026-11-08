@@ -70,7 +70,14 @@ func TestEmbeddedExtension(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	files := []string{m.Main, "workbench.css", "fonts/onest-latin.woff2", "fonts/jetbrains-mono-cyrillic-400.woff2"}
+	files := []string{m.Main, "workbench.css"}
+	fonts := ideFonts()
+	if len(fonts) == 0 {
+		t.Fatal("no fonts in fonts/fonts.json")
+	}
+	for _, f := range fonts {
+		files = append(files, "fonts/"+f.File)
+	}
 	for _, th := range m.Contributes.Themes {
 		files = append(files, th.Path)
 	}

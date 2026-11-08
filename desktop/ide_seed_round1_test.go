@@ -159,3 +159,90 @@ func TestIDEDefaultsNotAppScoped(t *testing.T) {
 		}
 	}
 }
+
+// I7: the fonts the page links are the ones the extension carries: each listed file is there, each
+// font there is listed (one list, the build's).
+func TestIDEFontsOneList(t *testing.T) {
+	listed := map[string]bool{}
+	for _, f := range ideFonts() {
+		listed[f.File] = true
+		if f.Family == "" || f.Weight == "" {
+			t.Errorf("%+v", f)
+		}
+	}
+	ents, err := ideExtFS.ReadDir("ide/extension/fonts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".woff2") {
+			n++
+			if !listed[e.Name()] {
+				t.Errorf("%s not in fonts.json", e.Name())
+			}
+		}
+	}
+	if n != len(listed) || n == 0 {
+		t.Fatalf("%d fonts, %d listed", n, len(listed))
+	}
+	start, _ := ideScriptText("/x/acpost.acpost-ide-1.0.0", strings.Repeat("ab", 32))
+	for f := range listed {
+		if !strings.Contains(start, "fonts%2F"+f) {
+			t.Errorf("%s not linked by the page", f)
+		}
+	}
+}
+
+// I8: the extension tidies VS Code's side panel once it has: a command that failed is tried again
+// on the next activation.
+func TestIDEExtensionTidiesAfterSuccess(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	dir := t.TempDir()
+	js, _ := ideExtFS.ReadFile("ide/extension/extension.js")
+	os.MkdirAll(filepath.Join(dir, "node_modules", "vscode"), 0o700)
+	os.WriteFile(filepath.Join(dir, "extension.js"), js, 0o600)
+	os.WriteFile(filepath.Join(dir, "node_modules", "vscode", "index.js"), []byte(`let fails = 1; exports.calls = 0;
+exports.commands = { executeCommand: async () => { exports.calls++; if (fails-- > 0) throw new Error("not yet"); } };`), 0o600)
+	os.WriteFile(filepath.Join(dir, "t.cjs"), []byte(`const assert = require("node:assert/strict");
+const vscode = require("vscode"), ext = require("./extension.js");
+const state = new Map(), ctx = { workspaceState: { get: (k) => state.get(k), update: async (k, v) => state.set(k, v) } };
+(async () => {
+  await ext.activate(ctx); assert.equal(state.get("acpost.tidied"), undefined);
+  await ext.activate(ctx); assert.equal(state.get("acpost.tidied"), true);
+  await ext.activate(ctx); assert.equal(vscode.calls, 2);
+  console.log("ok");
+})().catch((e) => { console.error(e); process.exit(1); });
+`), 0o600)
+	cmd := exec.Command(node, "t.cjs")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+}
+
+// I8: the theme build stops at a token app.css does not have (it made "undefined80" colours).
+func TestIDEThemeBuildStrict(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	src, err := os.ReadFile("ide/build-themes.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "ide", "extension", "themes"), 0o700)
+	os.MkdirAll(filepath.Join(dir, "frontend", "src"), 0o700)
+	os.WriteFile(filepath.Join(dir, "ide", "build-themes.mjs"), src, 0o600)
+	os.WriteFile(filepath.Join(dir, "frontend", "src", "app.css"), []byte(":root {\n  --ink: #111111;\n}\n:root[data-theme=\"dark\"] {\n  --ink: #eeeeee;\n}\n"), 0o600)
+	cmd := exec.Command(node, "build-themes.mjs")
+	cmd.Dir = filepath.Join(dir, "ide")
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "in app.css") {
+		t.Fatalf("a missing token: %v: %s", err, out)
+	}
+}

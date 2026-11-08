@@ -46,6 +46,16 @@ func ideDefaults() map[string]any {
 	return m.Contributes.ConfigurationDefaults
 }
 
+type ideFont struct{ Family, File, Weight string }
+
+// ideFonts are the extension's fonts, as its build lists them (ide/build-fonts.mjs).
+func ideFonts() []ideFont {
+	var fs []ideFont
+	b, _ := ideExtFS.ReadFile("ide/extension/fonts/fonts.json")
+	_ = json.Unmarshal(b, &fs)
+	return fs
+}
+
 //go:embed ide/page/seed.js
 var ideSeedJS string
 
@@ -75,11 +85,8 @@ func ideScriptText(extDir, extHash string) (start, seed string) {
 			return "/vscode-remote-resource?path=" + url.QueryEscape(filepath.Join(extDir, p)) + "&v=" + extHash[:12]
 		}
 		var faces string
-		for _, s := range []string{"latin", "cyrillic"} {
-			faces += "@font-face{font-family:'Onest';src:url(" + res("fonts/onest-"+s+".woff2") + ") format('woff2');font-weight:100 900;font-display:block}"
-			for _, w := range []string{"400", "500"} {
-				faces += "@font-face{font-family:'JetBrains Mono';src:url(" + res("fonts/jetbrains-mono-"+s+"-"+w+".woff2") + ") format('woff2');font-weight:" + w + ";font-display:block}"
-			}
+		for _, f := range ideFonts() {
+			faces += "@font-face{font-family:'" + f.Family + "';src:url(" + res("fonts/"+f.File) + ") format('woff2');font-weight:" + f.Weight + ";font-display:block}"
 		}
 		// The empty editor's mark: the app's (from the extension; the CSS cannot name it itself —
 		// its address is the extension's file by a query, which a relative url() would lose).
