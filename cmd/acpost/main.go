@@ -53,7 +53,20 @@ type globals struct {
 	node, token, config string
 	json                bool
 	explicitNode        bool
+	cancel              context.CancelFunc // of a quick command's budget
 }
+
+// How long the CLI waits for a node that took the connection but does not answer: a probe of the
+// local node (then it is said to be stuck, not started again), and a whole quick command (one
+// that only asks: status, list…). Commands that wait by design (wait, send --wait, recv --wait,
+// show --follow, term, forge open/merge waiting for an approval) keep their own budgets.
+const (
+	probeTimeout = 5 * time.Second
+	quickTimeout = 30 * time.Second
+)
+
+// quick marks a command whose whole run is bounded by quickTimeout.
+var quick = map[string]string{"quick": "1"}
 
 func (g *globals) configPath() string {
 	p := g.config
@@ -115,7 +128,7 @@ func exitCode(err error) int {
 		}
 		return exitError
 	}
-	if errors.Is(err, client.ErrUnavailable) {
+	if errors.Is(err, client.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded) {
 		return exitNoNode
 	}
 	if isFlagErr(err) {
@@ -139,6 +152,8 @@ func hintOf(err error) string {
 			"run acpost outside the sandbox (allow the command), or reach the node over TCP with --node http://127.0.0.1:PORT --token …"
 	case errors.Is(err, client.ErrUnavailable):
 		return "no node answers there: `acpost serve` starts one, or check --node / ACPOST_NODE"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "the node took the request but did not answer in time: it may be stuck (its log says), or the network slow"
 	case exitCode(err) == exitUsage:
 		return "`acpost <command> --help` shows the flags"
 	}
@@ -200,6 +215,11 @@ func rootCmd(g *globals) *cobra.Command {
 			if g.config == "" {
 				g.config = os.Getenv("ACPOST_CONFIG")
 			}
+			if cmd.Annotations["quick"] != "" {
+				ctx, cancel := context.WithTimeout(cmd.Context(), quickTimeout)
+				g.cancel = cancel
+				cmd.SetContext(ctx)
+			}
 			return nil
 		},
 	}
@@ -240,7 +260,13 @@ func (g *globals) connect(ctx context.Context) (*client.Client, error) {
 	if g.explicitNode || cfg == nil || !strings.HasPrefix(url, "unix://") {
 		return c, nil
 	}
-	if _, err := c.Status(ctx); err == nil || !errors.Is(err, client.ErrUnavailable) {
+	if err := probe(ctx, c); err == nil || !errors.Is(err, client.ErrUnavailable) {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// Something holds the socket and does not answer: a stuck node, not a missing one
+			// (another started now would find its store taken).
+			return nil, &exitErr{code: exitNoNode, name: "unavailable", err: fmt.Errorf("the node at %s does not answer (%s)", url, probeTimeout),
+				hint: "it may be stuck: its log is " + filepath.Join(filepath.Dir(strings.TrimPrefix(url, "unix://")), "acpost.log")}
+		}
 		return c, nil
 	}
 	if err := autostart(ctx, g, c, strings.TrimPrefix(url, "unix://")); err != nil {
@@ -289,18 +315,18 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	go func() { _ = cmd.Wait(); close(exited) }()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := c.Status(ctx); err == nil {
+		if probe(ctx, c) == nil {
 			_ = cmd.Process.Release()
 			return nil
 		}
 		select {
 		case <-exited:
 			// Another command may have started a node at the same moment: it holds the store.
-			if _, err := c.Status(ctx); err == nil {
+			if probe(ctx, c) == nil {
 				return nil
 			}
 			time.Sleep(200 * time.Millisecond)
-			if _, err := c.Status(ctx); err == nil {
+			if probe(ctx, c) == nil {
 				return nil
 			}
 			return startFailed(filepath.Join(dir, "acpost.log"), logStart)
@@ -308,6 +334,14 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 		}
 	}
 	return &exitErr{code: exitNoNode, err: fmt.Errorf("the local node did not answer within 15s"), hint: "its log is " + filepath.Join(dir, "acpost.log")}
+}
+
+// probe asks the node for its status, waiting probeTimeout at most.
+func probe(ctx context.Context, c *client.Client) error {
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	_, err := c.Status(pctx)
+	return err
 }
 
 // startFailed says why the node just started from this command exited: the last line it logged.
@@ -413,7 +447,9 @@ func sendCmd(g *globals) *cobra.Command {
 			if ttl > 0 {
 				req.TTL = ttl.String()
 			}
-			m, _, err := c.Send(ctx, req, idem)
+			sctx, done := context.WithTimeout(ctx, requestBudget(req.Body, req.Files))
+			m, _, err := c.Send(sctx, req, idem)
+			done()
 			if err != nil {
 				return err
 			}
@@ -664,9 +700,10 @@ func showCmd(g *globals) *cobra.Command {
 func listCmd(g *globals) *cobra.Command {
 	var f client.ListFilter
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List messages, oldest first (a page; --after continues)",
-		Args:  cobra.NoArgs,
+		Use:         "list",
+		Annotations: quick,
+		Short:       "List messages, oldest first (a page; --after continues)",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -709,9 +746,10 @@ func listCmd(g *globals) *cobra.Command {
 
 func cancelCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "cancel ID",
-		Short: "Cancel a message that is not answered yet",
-		Args:  cobra.ExactArgs(1),
+		Use:         "cancel ID",
+		Annotations: quick,
+		Short:       "Cancel a message that is not answered yet",
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -749,7 +787,11 @@ func recvCmd(g *globals) *cobra.Command {
 			}
 			deadline := time.Now().Add(wait)
 			for {
-				m, ok, err := c.Claim(ctx, strings.TrimPrefix(as, "agent:"), max(min(time.Until(deadline), client.MaxWait), 0), lease)
+				step := max(min(time.Until(deadline), client.MaxWait), 0)
+				// The long poll itself is bounded: a node that stalls does not hold recv past it.
+				cctx, done := context.WithTimeout(ctx, step+quickTimeout)
+				m, ok, err := c.Claim(cctx, strings.TrimPrefix(as, "agent:"), step, lease)
+				done()
 				if err != nil {
 					return err
 				}
@@ -818,7 +860,9 @@ func replyCmd(g *globals) *cobra.Command {
 				return err
 			}
 			r.Files = append(files, linked...)
-			return c.Reply(cmd.Context(), args[0], r)
+			rctx, done := context.WithTimeout(cmd.Context(), requestBudget(r.Body, r.Files))
+			defer done()
+			return c.Reply(rctx, args[0], r)
 		},
 	}
 	f := cmd.Flags()
@@ -833,9 +877,10 @@ func replyCmd(g *globals) *cobra.Command {
 
 func agentsCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "agents",
-		Short: "List the agents the node knows",
-		Args:  cobra.NoArgs,
+		Use:         "agents",
+		Annotations: quick,
+		Short:       "List the agents the node knows",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -870,9 +915,10 @@ func printAgents(list []client.AgentInfo) error {
 func sessionsCmd(g *globals) *cobra.Command {
 	var agent, cwd, cursor string
 	cmd := &cobra.Command{
-		Use:   "sessions --agent NAME",
-		Short: "List an ACP agent's sessions, newest first (for send --session)",
-		Args:  cobra.NoArgs,
+		Use:         "sessions --agent NAME",
+		Annotations: quick,
+		Short:       "List an ACP agent's sessions, newest first (for send --session)",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if agent == "" {
 				return usageErr(errors.New("--agent is required"))
@@ -922,9 +968,10 @@ func sessionsCmd(g *globals) *cobra.Command {
 
 func statusCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Check the node is up",
-		Args:  cobra.NoArgs,
+		Use:         "status",
+		Annotations: quick,
+		Short:       "Check the node is up",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Like every command, status starts the local node when there is none: it is the first
 			// call an agent makes, and it should not tell a story the next command contradicts.
@@ -956,4 +1003,14 @@ func statusCmd(g *globals) *cobra.Command {
 			return printAgents(agents)
 		},
 	}
+}
+
+// requestBudget is how long a request carrying a body and files may take: quickTimeout, and a
+// second more for each 256 KiB it carries (a slow link uploads; a stuck node is still found).
+func requestBudget(body string, files []store.File) time.Duration {
+	n := len(body)
+	for _, f := range files {
+		n += len(f.Data)
+	}
+	return quickTimeout + time.Duration(n/(256<<10))*time.Second
 }

@@ -77,9 +77,10 @@ func forgeCmd(g *globals) *cobra.Command {
 	}
 	login.Flags().StringVar(&kind, "kind", "", "github, gitlab or forgejo (default: ask the host)")
 	logout := &cobra.Command{
-		Use:   "logout HOST",
-		Short: "Forget a forge host's token (on the node)",
-		Args:  cobra.ExactArgs(1),
+		Use:         "logout HOST",
+		Annotations: quick,
+		Short:       "Forget a forge host's token (on the node)",
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -90,9 +91,10 @@ func forgeCmd(g *globals) *cobra.Command {
 	}
 
 	status := &cobra.Command{
-		Use:   "status",
-		Short: "The repository's forge: host, kind, version, branch, whether a token is kept",
-		Args:  cobra.NoArgs,
+		Use:         "status",
+		Annotations: quick,
+		Short:       "The repository's forge: host, kind, version, branch, whether a token is kept",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {

@@ -3,7 +3,6 @@ package main
 // End to end: the built binary, a node it serves, and the commands an agent or a script would run.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -89,21 +88,7 @@ type result struct {
 
 func (e *env) run(stdin string, args ...string) result {
 	e.t.Helper()
-	cmd := exec.Command(filepath.Join(binDir, "acpost"), args...)
-	cmd.Env = append(cleanEnv(), e.vars...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	err := cmd.Run()
-	code := 0
-	if ee, ok := err.(*exec.ExitError); ok {
-		code = ee.ExitCode()
-	} else if err != nil {
-		e.t.Fatal(err)
-	}
-	return result{out.String(), errb.String(), code}
+	return e.runFor(childBound, stdin, args...)
 }
 
 func cleanEnv() []string {
