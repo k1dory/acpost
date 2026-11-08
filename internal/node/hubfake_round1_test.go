@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,13 +29,24 @@ type fakeHub struct {
 	hang    bool // accept and never answer (until the request's context ends)
 	srv     *httptest.Server
 	quit    chan struct{} // closed at the test's end: hung requests end
-	missing bool          // GET of the message: not_found
-	sent    []client.SendRequest
-	onSend  func() // after a send is answered (the response written)
+	missing bool          // GET of a message it was not sent: not_found
+
+	// Sends: what it was sent, and the messages it keeps (by id; by sender and key, as a hub
+	// keeps a repeat of a key to its first send).
+	sent       []client.SendRequest
+	msgs       map[string]store.Message
+	keys       map[string]string
+	refuse     int           // the next sends refused (403)
+	loseAnswer int           // the next sends taken, the answer lost (the connection dropped)
+	hold       chan struct{} // a send taken waits for it before answering
+	received   chan struct{} // told when a send is taken
+	getFails   int           // the next GETs of a message answer 500
+	cancels    []string
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
-	f := &fakeHub{lease: lease, state: store.Running, extends: map[string]int{}, calls: map[string]int{}, byLease: map[string]int{}, quit: make(chan struct{})}
+	f := &fakeHub{lease: lease, state: store.Running, extends: map[string]int{}, calls: map[string]int{}, byLease: map[string]int{}, quit: make(chan struct{}),
+		msgs: map[string]store.Message{}, keys: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(func() { close(f.quit); f.srv.Close() })
 	return f
@@ -104,13 +116,63 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "POST" && part == "messages":
 		var rq client.SendRequest
 		_ = json.NewDecoder(r.Body).Decode(&rq)
-		f.sent = append(f.sent, rq)
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(store.Message{ID: rq.ID, From: rq.From, To: rq.To + "@far", Body: rq.Body, Thread: rq.ID, State: store.Queued})
-		w.(http.Flusher).Flush()
-		if f.onSend != nil {
-			f.onSend()
+		key := r.Header.Get("Idempotency-Key")
+		if f.refuse > 0 {
+			f.refuse--
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "refused", "message": "not now"}})
+			return
 		}
+		f.sent = append(f.sent, rq)
+		m, dup := f.msgs[f.keys[rq.From+"|"+key]], key != "" && f.keys[rq.From+"|"+key] != ""
+		if !dup {
+			m = store.Message{ID: rq.ID, From: rq.From, To: rq.To + "@far", Body: rq.Body, Thread: rq.ID, State: store.Queued}
+			f.msgs[rq.ID] = m
+			if key != "" {
+				f.keys[rq.From+"|"+key] = rq.ID
+			}
+		}
+		if f.received != nil {
+			select {
+			case f.received <- struct{}{}:
+			default:
+			}
+		}
+		if hold := f.hold; hold != nil {
+			f.mu.Unlock()
+			select {
+			case <-hold:
+			case <-f.quit:
+			}
+			f.mu.Lock()
+		}
+		if f.loseAnswer > 0 {
+			f.loseAnswer--
+			hj, _ := w.(http.Hijacker)
+			c, _, _ := hj.Hijack()
+			c.Close()
+			return
+		}
+		if dup {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusCreated)
+		}
+		_ = json.NewEncoder(w).Encode(m)
+	case r.Method == "POST" && part == "cancel":
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/messages/"), "/cancel")
+		f.cancels = append(f.cancels, id)
+		f.state = store.Cancelled
+		_ = json.NewEncoder(w).Encode(store.Message{ID: id, State: store.Cancelled})
+	case r.Method == "GET" && part == "by-idem":
+		q := r.URL.Query()
+		id := f.keys[q.Get("from")+"|"+q.Get("key")]
+		if id == "" {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "none"}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(f.msgs[id])
 	case part == "wait":
 		f.mu.Unlock()
 		select {
@@ -119,6 +181,13 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		_ = json.NewEncoder(w).Encode(store.Message{ID: r.PathValue("id"), State: f.state})
+	case r.Method == "GET" && strings.HasPrefix(part, "msg_") && f.getFails > 0:
+		f.getFails--
+		w.WriteHeader(500)
+	case r.Method == "GET" && strings.HasPrefix(part, "msg_") && f.msgs[part].ID != "":
+		m := f.msgs[part]
+		m.State = f.state
+		_ = json.NewEncoder(w).Encode(m)
 	case r.Method == "GET" && strings.HasPrefix(part, "msg_") && f.missing:
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "no message " + part}})
@@ -153,7 +222,7 @@ func (f *fakeHub) get() fakeHub {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return fakeHub{lease: f.lease, state: f.state, replies: append([]client.ReplyRequest(nil), f.replies...),
-		sent: append([]client.SendRequest(nil), f.sent...)}
+		sent: append([]client.SendRequest(nil), f.sent...), cancels: append([]string(nil), f.cancels...), msgs: maps.Clone(f.msgs)}
 }
 
 func (f *fakeHub) count(part string) int {

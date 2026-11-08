@@ -8,22 +8,45 @@ import (
 	"github.com/k1dory/acpost/internal/store"
 )
 
-// The client gives up right after the hub took the message: the local copy is there all the
-// same, and follows the hub's.
+// heldSend makes the hub keep its answer to the next send until release is called; received is
+// told when the hub has taken it.
+func heldSend(f *fakeHub) (received chan struct{}, release func()) {
+	received, hold := make(chan struct{}, 1), make(chan struct{})
+	f.set(func(f *fakeHub) { f.hold, f.received = hold, received })
+	return received, func() { f.set(func(f *fakeHub) { f.hold = nil }); close(hold) }
+}
+
+func waitFor(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out: " + what)
+	}
+}
+
+// The client gives up once the hub has the message and before its answer: the send fails for the
+// client, the local copy is there all the same and follows the hub's.
 func TestForwardKeepsCopyWhenRequestEnds(t *testing.T) {
 	fastHub(t, 30*time.Millisecond)
 	n := newNode(t, hubCfg)
 	f := newFakeHub(t, "")
 	f.set(func(f *fakeHub) { f.state = store.Queued })
 	n.hub = f.client(t)
+	received, release := heldSend(f)
 	rctx, cancel := context.WithCancel(ctx)
-	f.set(func(f *fakeHub) { f.onSend = cancel })
-	_, _, _ = n.Send(rctx, me, SendRequest{To: "agent:far@other", Body: "work"})
-	sent := f.get().sent
-	if len(sent) != 1 {
-		t.Fatal("not sent to the hub")
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := n.Send(rctx, me, SendRequest{To: "agent:far@other", Body: "work"})
+		errc <- err
+	}()
+	waitFor(t, received, "the hub takes the send")
+	cancel()
+	if err := <-errc; err == nil {
+		t.Fatal("a send whose request ended said it was sent")
 	}
-	id := sent[0].ID
+	release()
+	id := f.get().sent[0].ID
 	eventually(t, "the local copy follows the hub's", func() bool {
 		m, err := n.st.Get(ctx, id)
 		return err == nil && m.Origin == originRemote

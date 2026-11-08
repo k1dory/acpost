@@ -242,8 +242,13 @@ func (n *Node) CreateCloudTask(ctx context.Context, p Principal, r client.CloudT
 		if len(r.Idem) > maxLabel {
 			return client.Chat{}, errf("invalid", "the idempotency key is %d bytes, over %d", len(r.Idem), maxLabel)
 		}
+		// The name carries 128 bits of the key (the task's own words cut shorter to fit a DNS
+		// label): two operations never take each other's sandbox.
 		sum := sha256.Sum256([]byte(n.login + "\x00" + r.Idem))
-		b = sum[:3]
+		b = sum[:16]
+		if len(name) > 24 {
+			name = strings.Trim(name[:24], "-")
+		}
 		mu, _ := n.cloudOps.LoadOrStore(r.Idem, &sync.Mutex{})
 		mu.(*sync.Mutex).Lock()
 		defer mu.(*sync.Mutex).Unlock()

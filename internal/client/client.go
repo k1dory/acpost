@@ -378,6 +378,7 @@ type HandoffRequest struct {
 	Cwd        string `json:"cwd,omitempty"`
 	CloudAgent string `json:"cloud_agent"`
 	Note       string `json:"note,omitempty"`
+	Idem       string `json:"idem,omitempty"` // the same for a retry: the sandbox and message of the first are the answer
 }
 
 // HandoffResult is the cloud chat it goes on in, and what went with it.
@@ -1378,4 +1379,12 @@ func (c *Client) Asking(ctx context.Context) ([]AskingRequest, error) {
 func (c *Client) Answer(ctx context.Context, msgID string, reply acpx.Reply) error {
 	_, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(msgID)+"/permission", nil, reply, nil, nil)
 	return err
+}
+
+// ByIdem returns the message a sender of this node sent its hub with an idempotency key (a node
+// learning what became of a send whose answer was lost).
+func (c *Client) ByIdem(ctx context.Context, from, key string) (store.Message, error) {
+	var m store.Message
+	_, err := c.do(ctx, "GET", "/v1/messages/by-idem", url.Values{"from": {from}, "key": {key}}, nil, &m, nil)
+	return m, err
 }

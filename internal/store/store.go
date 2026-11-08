@@ -941,7 +941,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 func (s *Store) Expire(ctx context.Context, now time.Time) (int, error) {
 	t := ms(now)
 	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', error_code = 'expired', updated_at = ?, finished_at = ?
-		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ? AND origin <> 'remote'`, t, t, t)
+		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ? AND origin NOT IN ('remote', 'forwarding')`, t, t, t)
 	if err != nil {
 		return 0, err
 	}

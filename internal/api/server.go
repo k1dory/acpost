@@ -36,6 +36,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/messages", s.auth(s.send))
 	mux.HandleFunc("GET /v1/messages", s.auth(s.list))
 	mux.HandleFunc("GET /v1/messages/{id}", s.auth(s.get))
+	mux.HandleFunc("GET /v1/messages/by-idem", s.auth(s.byIdem))
 	mux.HandleFunc("GET /v1/messages/{id}/wait", s.auth(s.wait))
 	mux.HandleFunc("GET /v1/messages/{id}/events", s.auth(s.events))
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
@@ -1291,4 +1292,14 @@ func (s *server) asking(w http.ResponseWriter, r *http.Request, p node.Principal
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+// byIdem: a joined node looks up what one of its senders sent here with an idempotency key.
+func (s *server) byIdem(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	m, err := s.n.MessageByIdem(r.Context(), p, r.URL.Query().Get("from"), r.URL.Query().Get("key"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, m)
 }

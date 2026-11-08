@@ -117,8 +117,9 @@ type Node struct {
 
 	closed atomic.Bool
 
-	held     heldLeases // the leases of turns running in this process (lease.go)
-	cloudOps sync.Map   // idempotency key → *sync.Mutex: one cloud task made at a time per key (cloud.go)
+	held      heldLeases // the leases of turns running in this process (lease.go)
+	cloudOps  sync.Map   // idempotency key → *sync.Mutex: one cloud task made at a time per key (cloud.go)
+	resolving sync.Map   // ids of forwarded messages resolveForward runs for (forward.go)
 }
 
 type agentToken struct {
@@ -698,6 +699,9 @@ func (n *Node) Cancel(ctx context.Context, p Principal, id string) (store.Messag
 	if err != nil {
 		return got, err
 	}
+	if m.Origin == originForwarding {
+		n.resolveLater(id) // the hub may have it already: the cancel goes there too
+	}
 	n.notify()
 	return hideLease(got), nil
 }
@@ -947,4 +951,24 @@ func clientParty(p Principal) *store.Party {
 		party.Recipients = append(party.Recipients, "agent:"+a)
 	}
 	return party
+}
+
+// MessageByIdem returns the message a joined node's sender sent here with an idempotency key: the
+// node asks when a send's answer was lost and the hub kept the message under an earlier send's id.
+func (n *Node) MessageByIdem(ctx context.Context, p Principal, from, key string) (store.Message, error) {
+	if p.Kind != "node" {
+		return store.Message{}, errf("refused", "only a joined node looks a message up by its key")
+	}
+	a, err := ParseAddress(from)
+	if err != nil || a.Node != p.Name || key == "" {
+		return store.Message{}, errf("refused", "node %s may only look up its own senders' messages (…@%s), by a key", p.Name, p.Name)
+	}
+	m, err := n.st.ByIdem(ctx, a.String(), key)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Message{}, errf("not_found", "no message of %s with that key", a)
+	}
+	if err != nil {
+		return store.Message{}, err
+	}
+	return hideLease(m), nil
 }

@@ -149,3 +149,52 @@ func (s *Store) DropForward(ctx context.Context, id, forwarding string) error {
 		return dropOrphans(ctx, t)
 	})
 }
+
+// ForwardNotSent marks a message stored to be sent to a hub (origin forwarding) as not sent for
+// certain (the hub refused it, or never got it): its origin becomes unsent, a message not final
+// yet fails with why, and its idempotency key is freed, so a send again with the key is sent
+// rather than answered with this failure. It reports whether it did.
+func (s *Store) ForwardNotSent(ctx context.Context, id, forwarding, unsent, why string) (bool, error) {
+	now := ms(time.Now())
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, idem_key = NULL,
+		error = CASE WHEN state IN ('queued', 'running') THEN ? ELSE error END,
+		finished_at = CASE WHEN state IN ('queued', 'running') THEN ? ELSE finished_at END,
+		state = CASE WHEN state IN ('queued', 'running') THEN 'failed' ELSE state END,
+		lease_id = '', lease_until = 0, updated_at = ? WHERE id = ? AND origin = ?`, unsent, why, now, now, id, forwarding)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// IdemKeyOf is a message's idempotency key ("" none).
+func (s *Store) IdemKeyOf(ctx context.Context, id string) (string, error) {
+	var key sql.NullString
+	err := s.r.QueryRowContext(ctx, "SELECT idem_key FROM messages WHERE id = ?", id).Scan(&key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return key.String, err
+}
+
+// OfOrigin lists, after the id after, the ids of the messages whose origin is origin, in any state.
+func (s *Store) OfOrigin(ctx context.Context, origin, after string, limit int) ([]string, error) {
+	if limit <= 0 || limit > MaxPage {
+		limit = MaxPage
+	}
+	rows, err := s.r.QueryContext(ctx, `SELECT id FROM messages WHERE origin = ? AND id > ? ORDER BY id LIMIT ?`, origin, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
