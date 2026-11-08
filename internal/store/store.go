@@ -1071,13 +1071,19 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 	if len(data) > s.opt.MaxEventData {
 		data = data[:s.opt.MaxEventData] + truncMark
 	}
-	switch {
-	case kind == "usage":
-		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
-		u, ok := readUsage(data)
-		if !ok {
-			return n, nil
+	var u Usage
+	usage := false
+	if kind == "usage" {
+		// Not readable (or cut to MaxEventData): counted nowhere, and kept as usage it would make
+		// every relay of the message's events refused; what the agent did is said by a notice.
+		if u, usage = readUsage(data); !usage {
+			kind, data = "notice", unreadableUsage
 		}
+	}
+	marked := false
+	switch {
+	case usage:
+		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
 		var have, counted int
 		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'usage'", seq).Scan(&have); err != nil {
 			return n, err
@@ -1091,16 +1097,24 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 		if err := addUsage(ctx, t, id, u, now); err != nil {
 			return n, err
 		}
+		// Usage in the last place would leave no room for the marker: it follows.
+		marked = n == s.opt.MaxEventsPerMessage-1
 	case n >= s.opt.MaxEventsPerMessage:
 		return n, nil
 	case n == s.opt.MaxEventsPerMessage-1:
-		kind, data = "truncated", "later events were not kept (limits.max_events_per_message)"
+		kind, data = "truncated", truncatedEvents
 	}
 	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(now), kind, data); err != nil {
 		return n, err
 	}
+	if _, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq); err != nil || !marked {
+		return n + 1, err
+	}
+	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, 'truncated', ?)", seq, n+2, ms(now), truncatedEvents); err != nil {
+		return n + 1, err
+	}
 	_, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
-	return n + 1, err
+	return n + 2, err
 }
 
 // RelayedEvent is an event the node running a message's agent hands over: its kind and data.
@@ -1325,3 +1339,8 @@ func sameCompletion(ctx context.Context, t *sql.Tx, id, lease string, state Stat
 	}
 	return same, err
 }
+
+const (
+	truncatedEvents = "later events were not kept (limits.max_events_per_message)"
+	unreadableUsage = `{"severity":"warning","text":"the agent's usage of this turn could not be read: not counted"}`
+)
