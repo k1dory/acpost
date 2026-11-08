@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -85,7 +86,7 @@ func main() {
 	g := &globals{}
 	root := rootCmd(g) // registering the flags sets their defaults
 	// Known before flags are parsed: an error in parsing them is reported in JSON too.
-	g.json = os.Getenv("ACPOST_JSON") == "1" || slices.Contains(os.Args[1:], "--json") || slices.Contains(os.Args[1:], "--json=true")
+	g.json = jsonWanted(os.Args[1:], os.Getenv("ACPOST_JSON"))
 	err := root.ExecuteContext(context.Background())
 	if err == nil {
 		return
@@ -108,6 +109,15 @@ func main() {
 	os.Exit(code)
 }
 
+// codes are the error codes a node says (and --json shows) and the exit codes they are.
+var codes = []struct {
+	exit int
+	name string
+}{
+	{exitUsage, "invalid"}, {exitNotFound, "not_found"}, {exitTimeout, "timeout"},
+	{exitFailed, "failed"}, {exitNoNode, "unavailable"}, {exitRefused, "refused"},
+}
+
 func exitCode(err error) int {
 	var ee *exitErr
 	if errors.As(err, &ee) {
@@ -115,17 +125,10 @@ func exitCode(err error) int {
 	}
 	var ce *client.Error
 	if errors.As(err, &ce) {
-		switch ce.Code {
-		case "invalid":
-			return exitUsage
-		case "not_found":
-			return exitNotFound
-		case "refused":
-			return exitRefused
-		case "timeout":
-			return exitTimeout
-		case "unavailable":
-			return exitNoNode
+		for _, c := range codes {
+			if c.name == ce.Code && c.exit != exitFailed { // a message fails; a request does not
+				return c.exit
+			}
 		}
 		return exitError
 	}
@@ -170,28 +173,53 @@ func codeName(err error) string {
 	if errors.As(err, &ce) {
 		return ce.Code
 	}
-	switch exitCode(err) {
-	case exitUsage:
-		return "invalid"
-	case exitNotFound:
-		return "not_found"
-	case exitTimeout:
-		return "timeout"
-	case exitFailed:
-		return "failed"
-	case exitNoNode:
-		return "unavailable"
-	case exitRefused:
-		return "refused"
+	code := exitCode(err)
+	for _, c := range codes {
+		if c.exit == code {
+			return c.name
+		}
 	}
 	return "error"
 }
 
+// isFlagErr is cobra's refusal of an unknown command (flags and arguments are wrapped: see
+// usageArgs and SetFlagErrorFunc).
 func isFlagErr(err error) bool {
-	s := err.Error()
-	return strings.HasPrefix(s, "unknown flag") || strings.HasPrefix(s, "unknown shorthand") || strings.Contains(s, "flag needs an argument") ||
-		strings.HasPrefix(s, "invalid argument") || strings.HasPrefix(s, "required flag") || strings.Contains(s, "accepts ") ||
-		strings.HasPrefix(s, "unknown command") || strings.Contains(s, "requires at least")
+	return strings.HasPrefix(err.Error(), "unknown command")
+}
+
+// jsonWanted says whether the output is JSON: the last --json flag given (--json, --json=BOOL),
+// else ACPOST_JSON=1.
+func jsonWanted(args []string, env string) bool {
+	want := env == "1"
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--json" {
+			want = true
+		} else if v, ok := strings.CutPrefix(a, "--json="); ok {
+			if b, err := strconv.ParseBool(v); err == nil {
+				want = b
+			}
+		}
+	}
+	return want
+}
+
+// usageArgs makes the argument checks of a command and those under it usage errors (exit 2).
+func usageArgs(c *cobra.Command) {
+	if check := c.Args; check != nil {
+		c.Args = func(cmd *cobra.Command, args []string) error {
+			if err := check(cmd, args); err != nil {
+				return usageErr(err)
+			}
+			return nil
+		}
+	}
+	for _, sub := range c.Commands() {
+		usageArgs(sub)
+	}
 }
 
 func rootCmd(g *globals) *cobra.Command {
@@ -210,8 +238,8 @@ func rootCmd(g *globals) *cobra.Command {
 			if g.token == "" {
 				g.token = os.Getenv("ACPOST_TOKEN")
 			}
-			if !g.json {
-				g.json = os.Getenv("ACPOST_JSON") == "1"
+			if !cmd.Flags().Changed("json") {
+				g.json = os.Getenv("ACPOST_JSON") == "1" // the flag, when given, wins
 			}
 			if g.config == "" {
 				g.config = os.Getenv("ACPOST_CONFIG")
@@ -238,6 +266,7 @@ func rootCmd(g *globals) *cobra.Command {
 	message := &cobra.Command{Use: "message", Short: "The message commands again (acpost message send … = acpost send …)"}
 	message.AddCommand(msgCmds()...)
 	root.AddCommand(message, filesCmd(g), attachCmd(g), agentsCmd(g), sessionsCmd(g), statusCmd(g), usageCmd(g), changesCmd(g), termCmd(g), forgeCmd(g), conversationsCmd(g), approveCmd(g), serveCmd(g))
+	usageArgs(root)
 	return root
 }
 
