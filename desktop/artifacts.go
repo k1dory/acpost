@@ -118,9 +118,24 @@ func (n *Node) SaveArtifact(name, data string) (string, error) {
 
 // saveFile replaces dest whole, keeping its mode when it exists.
 func saveFile(dest string, b []byte) error {
-	keep := os.FileMode(0)
+	// A link is written through, as os.WriteFile does: the file it points to is replaced, in
+	// its own directory, and the link stays.
+	if real, err := filepath.EvalSymlinks(dest); err == nil {
+		dest = real
+	} else if st, lerr := os.Lstat(dest); lerr == nil && st.Mode()&os.ModeSymlink != 0 {
+		to, err := os.Readlink(dest) // a link to nothing yet: the file it names is made
+		if err != nil {
+			return err
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(filepath.Dir(dest), to)
+		}
+		dest = to
+	}
+	var keep *os.FileMode
 	if st, err := os.Stat(dest); err == nil {
-		keep = st.Mode().Perm()
+		m := st.Mode().Perm() // 0000 too: a mode, not "none"
+		keep = &m
 	}
 	return writeAtomic(dest, b, 0o644, keep, true)
 }
@@ -212,12 +227,12 @@ func typeOf(name, said string, b []byte) string {
 // writeAtomic writes path whole or not at all: a temporary file beside it, synced, then renamed
 // over it (replace) or linked in only where there is no file yet (else fs.ErrExist). A
 // failure or a crash midway leaves what was there. A new file gets perm under the umask, as
-// os.WriteFile gives it; keep (when not 0) is an existing file's mode, kept as it was.
-func writeAtomic(path string, b []byte, perm, keep os.FileMode, replace bool) error {
+// os.WriteFile gives it; keep (when not nil) is an existing file's mode, kept as it was.
+func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool) error {
 	dir := filepath.Dir(path)
 	mode := perm
-	if keep != 0 {
-		mode = keep
+	if keep != nil {
+		mode = *keep
 	}
 	var f *os.File
 	var err error
@@ -241,8 +256,8 @@ func writeAtomic(path string, b []byte, perm, keep os.FileMode, replace bool) er
 	if afterWrite != nil {
 		afterWrite(tmp)
 	}
-	if err == nil && keep != 0 {
-		err = f.Chmod(keep)
+	if err == nil && keep != nil {
+		err = f.Chmod(*keep)
 	}
 	if err == nil {
 		err = f.Sync()

@@ -190,7 +190,7 @@ func writeDefaultConfig(path string) error {
 		return err
 	}
 	// Written whole, and only where there is none: a configuration that appeared meanwhile is kept.
-	if err := writeAtomic(path, []byte(b.String()), 0o600, 0, false); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := writeAtomic(path, []byte(b.String()), 0o600, nil, false); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	return nil

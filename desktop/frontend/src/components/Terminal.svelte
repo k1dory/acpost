@@ -6,6 +6,7 @@
   import "@xterm/xterm/css/xterm.css";
   import { app } from "../lib/state.svelte";
   import { Node, on, b64, unb64, errText } from "../lib/api";
+  import { attachShell } from "./terminalAttach";
 
   // Shown (its tab current, the panel open): it takes the keys, sized to its box.
   let { active = true }: { active?: boolean } = $props();
@@ -64,9 +65,9 @@
         if (d.lost) lost = true;
         if (d.exit) { lost = false; exited = d.error ? errText(d.error) : d.code !== undefined && d.code !== null ? t("exited ({code})", { code: d.code }) : t("exited"); }
       });
-      await Node.TermAttach(id, 0);
+      const xt = term, tid = id;
+      await attachShell({ onData: fn => xt.onData(fn), input: type, attach: () => Node.TermAttach(tid, 0) });
       if (my !== gen || !term) return;
-      term.onData(type);
       term.onResize(({ cols, rows }) => Node.TermResize(id, cols, rows).catch(() => {}));
       ro = new ResizeObserver(() => fit.fit());
       ro.observe(el);
