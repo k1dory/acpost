@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -36,7 +37,8 @@ type Node struct {
 	stopNode context.CancelFunc // the node the app runs itself, if it does
 	nodeDone chan struct{}      // closed when that node has stopped
 	startMu  sync.Mutex         // one ensureNode at a time
-	closed   bool               // the app is quitting: no node starts
+	closed   bool               // the app is quitting: no node starts, no terminal opens
+	opening  sync.WaitGroup     // terminals being opened
 	notes    notifier
 	noteOK   int // 0 not asked, 1 allowed, -1 refused
 	noteAsk  sync.Once
@@ -71,6 +73,12 @@ func (n *Node) ServiceShutdown() error {
 	clear(n.terms)
 	stop, done := n.stopNode, n.nodeDone
 	n.mu.Unlock()
+	opened := make(chan struct{})
+	go func() { n.opening.Wait(); close(opened) }()
+	select { // a terminal opening now closes itself when its id comes
+	case <-opened:
+	case <-time.After(3 * time.Second):
+	}
 	if len(terms) > 0 {
 		closeTerminals(n, terms)
 	}
@@ -266,8 +274,8 @@ func (n *Node) Follow(id string, after int64) error {
 			evs := pending
 			pending = nil
 			mu.Unlock()
-			if len(evs) > 0 && ctx.Err() == nil {
-				n.emit("events:"+id, EventBatch{ID: id, Events: evs})
+			if len(evs) > 0 {
+				n.emitFollow(id, me, EventBatch{ID: id, Events: evs})
 			}
 		}
 		tick := time.NewTicker(120 * time.Millisecond)
@@ -304,7 +312,7 @@ func (n *Node) Follow(id string, after int64) error {
 		} else {
 			b.Final = &final
 		}
-		n.emit("events:"+id, b)
+		n.emitFollow(id, me, b)
 	}()
 	return nil
 }
@@ -375,6 +383,16 @@ func (n *Node) CILog(agent, job, target string) (string, error) {
 // OpenTerminal opens a shell (in the agent's working directory when one is named). Its output
 // comes once the window attaches (TermAttach): the window subscribes to "term:<id>" first.
 func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, error) {
+	// An open in flight is counted: shutdown waits for it, and a shell whose id comes after the
+	// app began quitting is closed, not kept (on a node of another machine it would go on).
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return client.Terminal{}, errQuitting
+	}
+	n.opening.Add(1)
+	n.mu.Unlock()
+	defer n.opening.Done()
 	t, err := call(n, func(ctx context.Context, c *client.Client) (client.Terminal, error) {
 		return c.OpenTerminal(ctx, client.TermRequest{Agent: agent, Cols: cols, Rows: rows})
 	})
@@ -382,6 +400,11 @@ func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, erro
 		return t, err
 	}
 	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		closeTerminals(n, []string{t.ID})
+		return client.Terminal{}, errQuitting
+	}
 	if n.terms[t.ID] == nil {
 		n.terms[t.ID] = &term{}
 	}
@@ -401,34 +424,47 @@ func (n *Node) TermAttach(id string, from int64) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	me := &term{cancel: cancel}
 	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		cancel()
+		return errQuitting
+	}
 	if old := n.terms[id]; old != nil {
 		old.stop()
 	}
 	n.terms[id] = me
 	n.mu.Unlock()
 	go func() {
+		// The terminal stays the app's (CloseTerminal, shutdown) until its shell is known to have
+		// ended: its end came, or the node says there is no such terminal.
+		ended := false
 		defer func() {
 			n.mu.Lock()
-			if n.terms[id] == me && ctx.Err() == nil { // the shell ended
+			if ended && n.terms[id] == me {
 				delete(n.terms, id)
 			}
 			n.mu.Unlock()
 		}()
-		lost := false
+		lost, wait := false, time.Second
 		for {
 			final, err := c.TermOutput(ctx, id, from, func(next int64, b []byte) error {
-				from, lost = next, false
+				from, lost, wait = next, false, time.Second
 				n.emit("term:"+id, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
 				return nil
 			})
 			if ctx.Err() != nil {
 				return
 			}
-			switch {
-			case err == nil:
+			switch termOutcome(err) {
+			case termEnded:
+				ended = true
 				n.emit("term:"+id, map[string]any{"exit": true, "code": final.ExitCode})
 				return
-			case errors.Is(err, client.ErrUnavailable):
+			case termGone:
+				ended = true
+				n.emit("term:"+id, map[string]any{"exit": true, "error": withHint(err).Error()})
+				return
+			case termRetry:
 				if !lost {
 					lost = true
 					n.emit("term:"+id, map[string]any{"lost": true, "error": withHint(err).Error()})
@@ -436,9 +472,10 @@ func (n *Node) TermAttach(id string, from int64) error {
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(time.Second):
+				case <-time.After(wait):
 				}
-			default:
+				wait = min(2*wait, 10*time.Second)
+			default: // refused, invalid: said, and the terminal still closed with the app
 				n.emit("term:"+id, map[string]any{"exit": true, "error": withHint(err).Error()})
 				return
 			}
@@ -606,4 +643,43 @@ func closeTerminals(n *Node, ids []string) {
 		go func() { defer wg.Done(); _ = c.CloseTerminal(ctx, id) }()
 	}
 	wg.Wait()
+}
+
+// emitFollow emits a stream's batch only while the stream is the one registered for its
+// message: a batch of a stream replaced meanwhile would land in the new one's turn.
+func (n *Node) emitFollow(id string, me *follow, b EventBatch) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.follows[id] == me {
+		n.emit("events:"+id, b)
+	}
+}
+
+var errQuitting = &client.Error{Code: "unavailable", Message: "the app is quitting"}
+
+const (
+	termEnded  = iota // the shell's end came
+	termGone          // the node has no such terminal
+	termRetry         // the connection, or the node for now: read again from where it stopped
+	termFailed        // refused, invalid: not to be retried
+)
+
+// termOutcome is what a terminal stream's end means.
+func termOutcome(err error) int {
+	if err == nil {
+		return termEnded
+	}
+	if errors.Is(err, client.ErrUnavailable) {
+		return termRetry
+	}
+	var e *client.Error
+	if errors.As(err, &e) {
+		switch {
+		case e.Code == "not_found" || e.Status == http.StatusNotFound:
+			return termGone
+		case e.Status >= 500 || e.Status == http.StatusTooManyRequests || e.Code == "unavailable" || e.Code == "timeout":
+			return termRetry
+		}
+	}
+	return termFailed
 }

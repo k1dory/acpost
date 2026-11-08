@@ -134,7 +134,12 @@ func expandHome(p string) string {
 		return home
 	}
 	if strings.HasPrefix(p, "~/") {
-		return filepath.Join(home, p[2:])
+		// The trailing slash stays: "~/src/" lists src, as "/…/" does.
+		out := filepath.Join(home, p[2:])
+		if strings.HasSuffix(p, "/") && !strings.HasSuffix(out, "/") {
+			out += "/"
+		}
+		return out
 	}
 	return p
 }

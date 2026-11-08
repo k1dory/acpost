@@ -83,7 +83,7 @@ func (n *Node) startNode() error {
 	}
 	ready := make(chan struct{})
 	var readyOnce sync.Once
-	failed := make(chan error, 1)
+	result := make(chan error, 1) // what Run returned, sent before done closes
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	n.mu.Lock()
@@ -99,9 +99,7 @@ func (n *Node) startNode() error {
 		defer close(done)
 		defer logf.Close()
 		log := slog.New(slog.NewTextHandler(logf, nil))
-		if err := runNode(ctx, cfg, log, func() { readyOnce.Do(func() { close(ready) }) }); err != nil {
-			failed <- err
-		}
+		result <- runNode(ctx, cfg, log, func() { readyOnce.Do(func() { close(ready) }) })
 	}()
 	select {
 	case <-ready:
@@ -109,11 +107,12 @@ func (n *Node) startNode() error {
 		n.c = nil // reconnect to the node now listening
 		n.mu.Unlock()
 		return nil
-	case err := <-failed:
+	case err := <-result: // one channel: the cause is not lost to a "stopped" picked first
 		cancel()
+		if err == nil {
+			return fmt.Errorf("the node stopped as it started (log %s)", logPath)
+		}
 		return fmt.Errorf("the node did not start: %w (log %s)", err, logPath)
-	case <-done:
-		return fmt.Errorf("the node stopped as it started (log %s)", logPath)
 	case <-time.After(nodeStartWait):
 		// Not left starting: the next try would start another beside it.
 		cancel()
