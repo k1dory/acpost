@@ -501,6 +501,14 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 			left = max(time.Until(deadline), time.Millisecond)
 		}
 		m, err := c.WaitFinal(ctx, id, left)
+		var ce *client.Error
+		if errors.As(err, &ce) && ce.Code == "timeout" {
+			// The long poll itself ran into the deadline (the node answered late): the message as
+			// it is now, said as any other one still going (its text so far, the hint to go on).
+			gctx, done := context.WithTimeout(ctx, quickTimeout)
+			m, err = c.Get(gctx, id)
+			done()
+		}
 		if err != nil {
 			return err
 		}
