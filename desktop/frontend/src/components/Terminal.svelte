@@ -62,7 +62,7 @@
       stop = on("term:" + id, d => {
         if (d.data) { lost = false; term?.write(dec.decode(unb64(d.data), { stream: true })); }
         if (d.lost) lost = true;
-        if (d.exit) { lost = false; exited = d.error ? errText(d.error) : `exited${d.code !== undefined && d.code !== null ? ` (${d.code})` : ""}`; }
+        if (d.exit) { lost = false; exited = d.error ? errText(d.error) : d.code !== undefined && d.code !== null ? t("exited ({code})", { code: d.code }) : t("exited"); }
       });
       await Node.TermAttach(id, 0);
       if (my !== gen || !term) return;
