@@ -904,13 +904,14 @@ func (c *Client) Agents(ctx context.Context) ([]AgentInfo, error) {
 // unavailable (unless ctx has a deadline of its own).
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	var s Status
+	parent := ctx
 	if _, ok := ctx.Deadline(); !ok {
 		var done context.CancelFunc
 		ctx, done = context.WithTimeout(ctx, statusTimeout)
 		defer done()
 	}
 	_, err := c.do(ctx, "GET", "/v1/health", nil, nil, &s, nil)
-	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
+	if errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil { // our bound, not the caller's
 		return s, fmt.Errorf("%w: %s: no answer to a health check within %v", ErrUnavailable, c.URL, statusTimeout)
 	}
 	return s, err
@@ -931,7 +932,17 @@ func (c *Client) NodeClaim(ctx context.Context, node string, wait, lease time.Du
 }
 
 // respErr is the API error a response of status 400 or more carries.
-func respErr(method, path string, resp *http.Response) *Error {
+func respErr(method, path string, resp *http.Response) error {
+	e := respError(method, path, resp)
+	if e.Code == "unavailable" {
+		// The node says what a refused connection says: not now, maybe the next time or node.
+		return fmt.Errorf("%w: %w", ErrUnavailable, e)
+	}
+	return e
+}
+
+// respError is the API error a response of status 400 or more carries.
+func respError(method, path string, resp *http.Response) *Error {
 	var eb struct {
 		Error Error `json:"error"`
 	}
@@ -1015,7 +1026,7 @@ func (c *Client) followOnce(ctx context.Context, id string, after *int64, fn fun
 				kind = ""
 				continue
 			}
-			if kind == "error" {
+			if kind == streamErrorEvent {
 				return store.Message{}, false, streamErr(data.String())
 			}
 			if kind == "end" {
@@ -1258,7 +1269,7 @@ func (c *Client) TermOutput(ctx context.Context, id string, from int64, fn func(
 					return t, fmt.Errorf("%w: terminal end: %w", ErrBadResponse, err)
 				}
 				return t, nil
-			case "error":
+			case streamErrorEvent:
 				return Terminal{}, streamErr(data)
 			}
 			kind, data = "", ""
@@ -1431,7 +1442,11 @@ func (c *Client) unreachable(ctx context.Context, err error) error {
 	return fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
 }
 
-// streamErr is the error an `event: error` of a stream carries: the node's own, which ends the
+// streamErrorEvent is the event a node's stream fails with (an event kind has no dash: an
+// agent's `error` event is an event like any other).
+const streamErrorEvent = "acpost-error"
+
+// streamErr is the error an `event: acpost-error` of a stream carries: the node's own, which ends the
 // stream for good, unless the node says it is unavailable (then reopening it may work).
 func streamErr(data string) error {
 	var eb struct {

@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -161,10 +164,16 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func decode(r *http.Request, v any) error {
 	dec := json.NewDecoder(r.Body)
-	if r.Context().Value(lenientKey{}) == nil {
+	lenient := r.Context().Value(lenientKey{}) != nil
+	if !lenient {
 		dec.DisallowUnknownFields()
 	}
-	err := dec.Decode(v)
+	var err error
+	if lenient {
+		err = decodeLenient(dec, v)
+	} else {
+		err = dec.Decode(v)
+	}
 	if err == nil {
 		// One value is the body: a second one or garbage after it is a broken client, not ignored.
 		if _, err = dec.Token(); err == io.EOF {
@@ -1198,7 +1207,11 @@ func errorOf(err error) (int, *node.Error) {
 	var e *node.Error
 	if !errors.As(err, &e) {
 		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
+		if errors.Is(err, context.Canceled) {
+			// The request was cut short: its client went away, or the node stops (it ends every
+			// request then). Worth asking again, at this node or the next, not an internal error.
+			e = &node.Error{Code: "unavailable", Message: "the request ended before its answer: the node may be stopping"}
+		} else if errors.As(err, &mbe) {
 			e = &node.Error{Code: "refused", Message: "the request is over the size limit"}
 		} else {
 			e = &node.Error{Code: "internal", Message: err.Error()}
@@ -1217,7 +1230,7 @@ func errorOf(err error) (int, *node.Error) {
 
 // sseStream writes one Server-Sent Events response. It starts (headers, 200) with its first
 // write, so an error before anything was sent is still a plain JSON error; after the start an
-// error is an `event: error` with the same envelope (and the status), which the client ends on
+// error is an `event: acpost-error` with the same envelope (and the status), which the client ends on
 // instead of reconnecting to a stream that fails the same way. A comment every ssePing keeps an
 // idle connection open through proxies; once done returns nothing writes to w.
 type sseStream struct {
@@ -1318,7 +1331,7 @@ func (st *sseStream) fail(err error) {
 		return
 	}
 	b, _ := json.Marshal(map[string]any{"status": code, "error": e})
-	if _, err := fmt.Fprintf(st.w, "event: error\ndata: %s\n\n", b); err == nil {
+	if _, err := fmt.Fprintf(st.w, "event: "+sseErrorEvent+"\ndata: %s\n\n", b); err == nil {
 		st.fl.Flush()
 	}
 }
@@ -1352,4 +1365,56 @@ func noContent(w http.ResponseWriter, err error) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sseErrorEvent names the event a stream fails with. Event kinds are [a-z_] (an agent's, or relayed
+// by a node), so a name with a dash is never one of them.
+const sseErrorEvent = "acpost-error"
+
+// fileFields are the fields of a file in a body, as store.File spells them.
+var fileFields = func() []string {
+	var out []string
+	t := reflect.TypeFor[store.File]()
+	for i := range t.NumField() {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			out = append(out, name)
+		}
+	}
+	return out
+}()
+
+// decodeLenient decodes a body from another node into v, ignoring fields this version does not
+// know. A list of files decodes strictly in the store (a misspelt field there is an error), so
+// in it the fields a store.File does not have are dropped first.
+func decodeLenient(dec *json.Decoder, v any) error {
+	var top map[string]json.RawMessage
+	if err := dec.Decode(&top); err != nil {
+		return err
+	}
+	for key, raw := range top {
+		if !strings.EqualFold(key, "files") || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			continue
+		}
+		var files []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &files); err != nil {
+			return err
+		}
+		for _, f := range files {
+			for k := range f {
+				if !slices.ContainsFunc(fileFields, func(n string) bool { return strings.EqualFold(n, k) }) {
+					delete(f, k)
+				}
+			}
+		}
+		b, err := json.Marshal(files)
+		if err != nil {
+			return err
+		}
+		top[key] = b
+	}
+	b, err := json.Marshal(top)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
 }

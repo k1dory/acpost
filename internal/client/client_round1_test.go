@@ -106,7 +106,7 @@ func sseServer(t *testing.T, hits *atomic.Int32, stream string) *httptest.Server
 func TestStreamErrorEvents(t *testing.T) {
 	setVar(t, &followRetry, 20*time.Millisecond)
 	var hits atomic.Int32
-	h := sseServer(t, &hits, "id: 1\nevent: status\ndata: {\"seq\":1,\"kind\":\"status\"}\n\nevent: error\ndata: {\"status\":403,\"error\":{\"code\":\"refused\",\"message\":\"no longer yours\"}}\n\n")
+	h := sseServer(t, &hits, "id: 1\nevent: status\ndata: {\"seq\":1,\"kind\":\"status\"}\n\nevent: acpost-error\ndata: {\"status\":403,\"error\":{\"code\":\"refused\",\"message\":\"no longer yours\"}}\n\n")
 	c, _ := New(h.URL, "", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -123,7 +123,7 @@ func TestStreamErrorEvents(t *testing.T) {
 	}
 
 	var again atomic.Int32
-	h2 := sseServer(t, &again, "event: error\ndata: {\"status\":503,\"error\":{\"code\":\"unavailable\",\"message\":\"the hub is away\"}}\n\n")
+	h2 := sseServer(t, &again, "event: acpost-error\ndata: {\"status\":503,\"error\":{\"code\":\"unavailable\",\"message\":\"the hub is away\"}}\n\n")
 	c2, _ := New(h2.URL, "", "")
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel2()
@@ -213,5 +213,49 @@ func TestListQueryIsStable(t *testing.T) {
 	}
 	if len(seen) != 1 {
 		t.Fatalf("%d different queries: %v", len(seen), seen)
+	}
+}
+
+// An agent's own `error` event is an event like the others: delivered, and the stream goes on.
+func TestFollowDeliversAnErrorKindEvent(t *testing.T) {
+	var hits atomic.Int32
+	h := sseServer(t, &hits, "id: 1\nevent: error\ndata: {\"seq\":1,\"kind\":\"error\",\"data\":\"the tool failed\"}\n\n"+
+		"id: 2\nevent: text\ndata: {\"seq\":2,\"kind\":\"text\"}\n\n"+
+		"event: end\ndata: {\"id\":\"msg_x\",\"state\":\"done\"}\n\n")
+	c, _ := New(h.URL, "", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var kinds []string
+	m, err := c.Follow(ctx, "msg_x", 0, func(e store.Event) error { kinds = append(kinds, e.Kind); return nil })
+	if err != nil || m.ID != "msg_x" || len(kinds) != 2 || kinds[0] != "error" || kinds[1] != "text" {
+		t.Fatalf("%+v %v %v", m, kinds, err)
+	}
+}
+
+// A caller whose own deadline has passed gets its deadline back, not "no answer within 30s".
+func TestStatusKeepsTheCallersDeadline(t *testing.T) {
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{}`) }))
+	defer h.Close()
+	c, _ := New(h.URL, "", "")
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if _, err := c.Status(ctx); !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A node that answers 503 unavailable (it stops, its hub is away) is unavailable to the caller
+// too, and still says what it said.
+func TestUnavailableAnswerIsErrUnavailable(t *testing.T) {
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+		fmt.Fprint(w, `{"error":{"code":"unavailable","message":"the node may be stopping"}}`)
+	}))
+	defer h.Close()
+	c, _ := New(h.URL, "", "")
+	_, err := c.Wait(context.Background(), "msg_x", time.Second)
+	var e *Error
+	if !errors.Is(err, ErrUnavailable) || !errors.As(err, &e) || e.Code != "unavailable" || e.Status != 503 {
+		t.Fatalf("%v", err)
 	}
 }

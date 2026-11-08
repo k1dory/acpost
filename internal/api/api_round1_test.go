@@ -29,6 +29,11 @@ func sha(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToSt
 // TCP listener sees it and as the Unix socket sees it.
 func testServer(t *testing.T) (n *node.Node, tcp, local *httptest.Server) {
 	t.Helper()
+	// Nothing of the user's own: no forge logins or config from HOME, no keychain.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home+"/.config")
+	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	y := fmt.Sprintf(`node: {name: hub, listen: ["tcp://127.0.0.1:0"]}
 agents:
   bot: {driver: inbox}
@@ -121,6 +126,25 @@ func TestDecodeLenientForNodesStrictForOthers(t *testing.T) {
 	}
 	if code, body := call(t, tcp, "POST", "/v1/messages", ci, "{\"to\":\"agent:bot\",\"body\":\"x\"}\n\n"); code != http.StatusCreated {
 		t.Fatalf("white space after the value: %d %s", code, body)
+	}
+
+	// The files of a message are read by the store's own strict decoder: a newer node's field in
+	// one is dropped for a node, refused for a client.
+	file := `"files":[{"name":"a.md","data":"eA==","from_the_future":true}]`
+	code, body = call(t, tcp, "POST", "/v1/messages", peer, `{"to":"agent:bot","from":"user:me@peer","body":"x",`+file+`}`)
+	if code != http.StatusCreated {
+		t.Fatalf("node with an unknown field in a file: %d %s", code, body)
+	}
+	var m store.Message
+	_ = json.Unmarshal([]byte(body), &m)
+	if len(m.Files) != 1 || m.Files[0].Name != "a.md" {
+		t.Fatalf("the node's file: %+v", m.Files)
+	}
+	if code, body := call(t, tcp, "POST", "/v1/messages", ci, `{"to":"agent:bot","body":"x",`+file+`}`); code != http.StatusBadRequest || errCode(body) != "invalid" {
+		t.Fatalf("client with an unknown field in a file: %d %s", code, body)
+	}
+	if code, body := call(t, tcp, "POST", "/v1/messages", peer, `{"to":"agent:bot","from":"user:me@peer","body":"x","files":[{"name":"a.md","data":"eA=="}]} x`); code != http.StatusBadRequest {
+		t.Fatalf("node, garbage after a body with files: %d %s", code, body)
 	}
 }
 

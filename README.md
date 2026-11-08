@@ -460,7 +460,7 @@ without or with an unknown token, else 403), `not_found` (404), `timeout` (408),
 `internal` (500), `unsupported` (501), `agent_…`/`session_…` (502: the agent behind the node failed) and
 `unavailable` (503). A body is one JSON object; fields it does not know are refused, except in a
 request from another node (versions may differ across a hub). A stream that fails after it started
-ends with `event: error` carrying the same envelope and `status`.
+ends with `event: acpost-error` carrying the same envelope and `status` (event kinds have no dash, so it is never an event of the message). A request cut short because the node stops answers `unavailable`.
 
 | | |
 |---|---|

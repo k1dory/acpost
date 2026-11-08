@@ -33,10 +33,10 @@ func TestSSEStreamErrors(t *testing.T) {
 		t.Fatal("a write after done")
 	}
 	out := w.Body.String()
-	if w.Code != 200 || !strings.Contains(out, "event: error\ndata: {") || strings.Contains(out, "late") {
+	if w.Code != 200 || !strings.Contains(out, "event: acpost-error\ndata: {") || strings.Contains(out, "late") {
 		t.Fatalf("after the start: %d %q", w.Code, out)
 	}
-	data := strings.TrimSpace(out[strings.Index(out, "event: error\ndata: ")+len("event: error\ndata: "):])
+	data := strings.TrimSpace(out[strings.Index(out, "event: acpost-error\ndata: ")+len("event: acpost-error\ndata: "):])
 	var eb struct {
 		Status int        `json:"status"`
 		Error  node.Error `json:"error"`

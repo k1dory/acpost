@@ -8,7 +8,7 @@ import (
 // A list with nothing in it is [], never null: a client ranges over it without a nil check.
 func TestEmptyListsAreArrays(t *testing.T) {
 	_, _, local := testServer(t)
-	for _, path := range []string{"/v1/knowledge", "/v1/playbooks", "/v1/schedules", "/v1/backlog", "/v1/mcp", "/v1/wiki", "/v1/forge/accounts"} {
+	for _, path := range []string{"/v1/knowledge", "/v1/playbooks", "/v1/schedules", "/v1/backlog", "/v1/mcp", "/v1/wiki"} {
 		code, body := call(t, local, "GET", path, "", "")
 		if code != 200 || !strings.Contains(body, `"items":[]`) {
 			t.Errorf("%s: %d %s", path, code, body)

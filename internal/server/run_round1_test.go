@@ -145,12 +145,16 @@ func TestRunStopEndsLongPolls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiting := make(chan error, 1)
+	waiting := make(chan error, 2)
 	go func() {
 		_, err := c.Wait(context.Background(), m.ID, 60*time.Second)
 		waiting <- err
 	}()
-	time.Sleep(300 * time.Millisecond) // the wait is in the handler
+	go func() {
+		_, err := c.WaitFinal(context.Background(), m.ID, 0)
+		waiting <- err
+	}()
+	time.Sleep(300 * time.Millisecond) // the waits are in their handlers
 	err, took := stop()
 	if err != nil {
 		t.Fatalf("stop: %v", err)
@@ -158,10 +162,22 @@ func TestRunStopEndsLongPolls(t *testing.T) {
 	if took > 2*time.Second {
 		t.Fatalf("stop with an open wait took %v", took)
 	}
-	select {
-	case <-waiting:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the wait did not end with the node")
+	// Cut by the stop, a wait is what a refused connection is: unavailable, worth asking again.
+	for range 2 {
+		select {
+		case err := <-waiting:
+			if !errors.Is(err, client.ErrUnavailable) {
+				t.Fatalf("a wait cut by the stop: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the wait did not end with the node")
+		}
+	}
+	// Asked again of the node started again, the same wait is answered.
+	runServer(t, cfg)
+	got, err := c.Wait(context.Background(), m.ID, 200*time.Millisecond)
+	if err != nil || got.ID != m.ID {
+		t.Fatalf("the wait again: %+v %v", got, err)
 	}
 }
 
