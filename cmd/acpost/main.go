@@ -297,7 +297,7 @@ func (g *globals) connect(ctx context.Context) (*client.Client, error) {
 	if err == nil {
 		g.status = &st
 	}
-	if err == nil || !errors.Is(err, client.ErrUnavailable) {
+	if err == nil || !errors.Is(err, client.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded) {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Something holds the socket and does not answer: a stuck node, not a missing one
 			// (another started now would find its store taken).
@@ -378,7 +378,13 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 func probe(ctx context.Context, c *client.Client) (client.Status, error) {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	return c.Status(pctx)
+	st, err := c.Status(pctx)
+	if err != nil && ctx.Err() == nil && errors.Is(pctx.Err(), context.DeadlineExceeded) {
+		// Out of time, whatever the client calls it (a body that stops midway is "unavailable"
+		// there): the node is there and stuck, not missing.
+		return st, fmt.Errorf("%w: %w", context.DeadlineExceeded, err)
+	}
+	return st, err
 }
 
 // startFailed says why the node just started from this command exited: the last line it logged.

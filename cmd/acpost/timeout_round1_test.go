@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,36 @@ func TestStuckNodeIsSaidNotWaitedFor(t *testing.T) {
 	}
 	if took > probeTimeout+5*time.Second {
 		t.Fatalf("took %s", took)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(e.sock), "acpost.pid")); err == nil {
+		t.Fatal("a second node was started beside the stuck one")
+	}
+}
+
+// A node that sends its health answer's headers and then stops midway in the body is stuck too:
+// exit 6 within the probe's time, no second node started.
+func TestStuckBodyIsSaidNotRestarted(t *testing.T) {
+	e := newEnv(t, inbox)
+	os.MkdirAll(filepath.Dir(e.sock), 0o700)
+	ln, err := net.Listen("unix", e.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hang := make(chan struct{})
+	defer close(hang)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"ok":`))
+		w.(http.Flusher).Flush()
+		<-hang
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+	start := time.Now()
+	r := e.runFor(30*time.Second, "", "status")
+	if r.code != exitNoNode || !strings.Contains(r.err, "does not answer") || time.Since(start) > probeTimeout+5*time.Second {
+		t.Fatalf("exit %d after %s: %s", r.code, time.Since(start), r.err)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(e.sock), "acpost.pid")); err == nil {
 		t.Fatal("a second node was started beside the stuck one")
