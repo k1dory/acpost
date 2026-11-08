@@ -189,6 +189,10 @@ func forgeCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if g.json {
+				printJSON(map[string]string{"job": args[0], "log": text})
+				return nil
+			}
 			fmt.Print(text)
 			return nil
 		},

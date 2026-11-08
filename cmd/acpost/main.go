@@ -54,6 +54,7 @@ type globals struct {
 	json                bool
 	explicitNode        bool
 	cancel              context.CancelFunc // of a quick command's budget
+	status              *client.Status     // what connect's probe was told (nil: not asked)
 }
 
 // How long the CLI waits for a node that took the connection but does not answer: a probe of the
@@ -226,7 +227,7 @@ func rootCmd(g *globals) *cobra.Command {
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErr(err) })
 	pf := root.PersistentFlags()
 	pf.StringVar(&g.node, "node", "", "node to talk to: unix:///path, http(s)://host:port (ACPOST_NODE; default: the local node)")
-	pf.StringVar(&g.token, "token", "", "bearer token (ACPOST_TOKEN)")
+	pf.StringVar(&g.token, "token", "", "bearer token (ACPOST_TOKEN: given here it shows in ps, the variable does not)")
 	pf.BoolVar(&g.json, "json", false, "JSON output (ACPOST_JSON=1)")
 	pf.StringVar(&g.config, "config", "", "configuration file (ACPOST_CONFIG; default ~/.config/acpost/config.yaml)")
 
@@ -260,7 +261,11 @@ func (g *globals) connect(ctx context.Context) (*client.Client, error) {
 	if g.explicitNode || cfg == nil || !strings.HasPrefix(url, "unix://") {
 		return c, nil
 	}
-	if err := probe(ctx, c); err == nil || !errors.Is(err, client.ErrUnavailable) {
+	st, err := probe(ctx, c)
+	if err == nil {
+		g.status = &st
+	}
+	if err == nil || !errors.Is(err, client.ErrUnavailable) {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			// Something holds the socket and does not answer: a stuck node, not a missing one
 			// (another started now would find its store taken).
@@ -315,7 +320,7 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	go func() { _ = cmd.Wait(); close(exited) }()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if probe(ctx, c) == nil {
+		if _, err := probe(ctx, c); err == nil {
 			// Left running, detached (its own session): not Released, which would race the
 			// goroutine waiting for it (the race detector's find).
 			return nil
@@ -323,11 +328,11 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 		select {
 		case <-exited:
 			// Another command may have started a node at the same moment: it holds the store.
-			if probe(ctx, c) == nil {
+			if _, err := probe(ctx, c); err == nil {
 				return nil
 			}
 			time.Sleep(200 * time.Millisecond)
-			if probe(ctx, c) == nil {
+			if _, err := probe(ctx, c); err == nil {
 				return nil
 			}
 			return startFailed(filepath.Join(dir, "acpost.log"), logStart)
@@ -338,11 +343,10 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 }
 
 // probe asks the node for its status, waiting probeTimeout at most.
-func probe(ctx context.Context, c *client.Client) error {
+func probe(ctx context.Context, c *client.Client) (client.Status, error) {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	_, err := c.Status(pctx)
-	return err
+	return c.Status(pctx)
 }
 
 // startFailed says why the node just started from this command exited: the last line it logged.
@@ -996,8 +1000,11 @@ func statusCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			s, err := c.Status(cmd.Context())
-			if err != nil {
+			// connect asked already (the local node): not asked twice.
+			s := client.Status{}
+			if g.status != nil {
+				s = *g.status
+			} else if s, err = c.Status(cmd.Context()); err != nil {
 				return err
 			}
 			// One call tells an agent all it needs to start: the node, who it is, whom it can write to.
