@@ -441,7 +441,11 @@ func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 // afterWrite keeps the WAL bounded. SQLite's own checkpoints after a commit are passive: while
 // readers keep reading they cannot reset the WAL, and it grows. So once about a quarter of
 // journal_size_limit has been written, the WAL's size is checked, and above the limit a
-// TRUNCATE checkpoint waits (busy_timeout) for the readers of old snapshots and resets it.
+// TRUNCATE checkpoint waits for the readers of old snapshots and resets it.
+//
+// It runs on the caller's goroutine and holds the one writer connection, so it waits at most
+// checkpointWait, not busy_timeout (10 s): a reader that keeps its snapshot longer leaves the WAL
+// as it is until the next check, and no send waits out that reader.
 func (s *Store) afterWrite(ctx context.Context, n int64) {
 	if s.path == "" || s.written.Add(n) < s.opt.JournalSizeLimit/4 {
 		return
@@ -451,8 +455,18 @@ func (s *Store) afterWrite(ctx context.Context, n int64) {
 	if err != nil || st.Size() <= s.opt.JournalSizeLimit {
 		return
 	}
+	c, err := s.w.Conn(ctx)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	if _, err := c.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", checkpointWait.Milliseconds())); err != nil {
+		return
+	}
 	var busy, logPages, done int
-	_ = s.w.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done)
+	_ = c.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done)
+	// Back to the connection's own wait, whatever ctx has become.
+	_, _ = c.ExecContext(context.WithoutCancel(ctx), "PRAGMA busy_timeout = 10000")
 }
 
 // liveBytes is how much of the file holds data (pages in use).
@@ -1346,3 +1360,6 @@ const (
 	truncatedEvents = "later events were not kept (limits.max_events_per_message)"
 	unreadableUsage = `{"severity":"warning","text":"the agent's usage of this turn could not be read: not counted"}`
 )
+
+// checkpointWait bounds how long afterWrite's checkpoint waits for readers (see there).
+const checkpointWait = 250 * time.Millisecond
