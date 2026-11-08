@@ -68,7 +68,10 @@ func (c *Client) listPulls(ctx context.Context, srv Server, r Repo, state string
 					Login string `json:"login"`
 				} `json:"user"`
 				Head struct {
-					Ref string `json:"ref"`
+					Ref  string `json:"ref"`
+					Repo *struct {
+						FullName string `json:"full_name"`
+					} `json:"repo"` // null: the fork is gone
 				} `json:"head"`
 				Base struct {
 					Ref string `json:"ref"`
@@ -85,8 +88,12 @@ func (c *Client) listPulls(ctx context.Context, srv Server, r Repo, state string
 				if p.Merged || p.MergedAt != nil {
 					st = "merged"
 				}
-				out.Items = append(out.Items, Pull{Number: p.Number, Title: p.Title, State: st, Draft: p.Draft, Author: p.User.Login,
-					Head: p.Head.Ref, Base: p.Base.Ref, URL: p.HTMLURL, Updated: p.Updated})
+				pr := Pull{Number: p.Number, Title: p.Title, State: st, Draft: p.Draft, Author: p.User.Login,
+					Head: p.Head.Ref, Base: p.Base.Ref, URL: p.HTMLURL, Updated: p.Updated}
+				if p.Head.Repo != nil {
+					pr.HeadRepo = p.Head.Repo.FullName
+				}
+				out.Items = append(out.Items, pr)
 			}
 			return len(list), nil
 		})
@@ -112,6 +119,8 @@ func (c *Client) listPulls(ctx context.Context, srv Server, r Repo, state string
 				WebURL       string `json:"web_url"`
 				SourceBranch string `json:"source_branch"`
 				TargetBranch string `json:"target_branch"`
+				SourceProj   int64  `json:"source_project_id"`
+				TargetProj   int64  `json:"target_project_id"`
 				Author       struct {
 					Username string `json:"username"`
 				} `json:"author"`
@@ -125,8 +134,12 @@ func (c *Client) listPulls(ctx context.Context, srv Server, r Repo, state string
 				if st == "" {
 					st = m.State
 				}
-				out.Items = append(out.Items, Pull{Number: m.IID, Title: m.Title, State: st, Draft: m.Draft, Author: m.Author.Username,
-					Head: m.SourceBranch, Base: m.TargetBranch, URL: m.WebURL, Updated: m.Updated})
+				pr := Pull{Number: m.IID, Title: m.Title, State: st, Draft: m.Draft, Author: m.Author.Username,
+					Head: m.SourceBranch, Base: m.TargetBranch, URL: m.WebURL, Updated: m.Updated, HeadRepo: r.Path}
+				if m.SourceProj != m.TargetProj {
+					pr.HeadRepo = "project " + strconv.FormatInt(m.SourceProj, 10) // a fork's: its path is not in the list
+				}
+				out.Items = append(out.Items, pr)
 			}
 			return len(list), nil
 		})
@@ -614,27 +627,40 @@ func plainURL(s string) string {
 }
 
 // alreadyOpen is what an open refused as a duplicate (GitHub 422, GitLab and Forgejo 409: one is
-// open from this head) gives: the pull request open from that head into that base, as a repeat of
-// the same open (a retry after a lost answer) expects. Any other refusal is the error it was.
+// open from this head) gives: the pull request open from that head (its branch in the same source
+// repository: owner:branch names a fork's) into that base, as a repeat of the same open (a retry
+// after a lost answer) expects. Any other refusal is the error it was; a lookup that fails is its
+// own error (a 503, a broken connection: worth a retry), not the duplicate's.
 func (c *Client) alreadyOpen(ctx context.Context, srv Server, r Repo, p PullRequest, err error) (Pull, error) {
 	fe, ok := err.(*Error)
 	if !ok || (fe.Status != 409 && fe.Status != 422) {
 		return Pull{}, err
 	}
+	owner, _, _ := strings.Cut(r.Path, "/")
+	src, ref := owner, p.Head
+	if o, b, ok := strings.Cut(p.Head, ":"); ok && srv.Kind != GitLab {
+		src, ref = o, b
+		if o, _, ok := strings.Cut(src, "/"); ok { // owner/repo:branch
+			src = o
+		}
+	}
 	var filter url.Values
 	switch srv.Kind {
 	case GitHub:
-		owner, _, _ := strings.Cut(r.Path, "/")
-		filter = url.Values{"head": {owner + ":" + p.Head}, "base": {p.Base}}
+		filter = url.Values{"head": {src + ":" + ref}, "base": {p.Base}}
 	case GitLab:
-		filter = url.Values{"source_branch": {p.Head}, "target_branch": {p.Base}}
+		filter = url.Values{"source_branch": {ref}, "target_branch": {p.Base}}
 	}
 	list, lerr := c.listPulls(ctx, srv, r, "open", filter)
 	if lerr != nil {
-		return Pull{}, err
+		return Pull{}, lerr
 	}
 	for _, x := range list.Items {
-		if x.Head == p.Head && x.Base == p.Base {
+		from, _, _ := strings.Cut(x.HeadRepo, "/")
+		if srv.Kind == GitLab {
+			from = map[bool]string{true: src}[x.HeadRepo == r.Path] // a fork's MR is not this one
+		}
+		if x.Head == ref && x.Base == p.Base && strings.EqualFold(from, src) {
 			x.Existing = true
 			return x, nil
 		}

@@ -18,13 +18,13 @@ func TestOpenPullFindsTheOneOpen(t *testing.T) {
 		open             any
 	}{
 		{GitHub, "POST /api/v3/repos/o/r/pulls", "GET /api/v3/repos/o/r/pulls", 422,
-			[]map[string]any{{"number": 7, "state": "open", "html_url": "u7", "head": map[string]string{"ref": "feat"}, "base": map[string]string{"ref": "main"}}}},
+			[]map[string]any{{"number": 7, "state": "open", "html_url": "u7", "head": map[string]any{"ref": "feat", "repo": map[string]string{"full_name": "o/r"}}, "base": map[string]string{"ref": "main"}}}},
 		{Forgejo, "POST /api/v1/repos/o/r/pulls", "GET /api/v1/repos/o/r/pulls", 409,
 			[]map[string]any{
-				{"number": 6, "state": "open", "html_url": "u6", "head": map[string]string{"ref": "other"}, "base": map[string]string{"ref": "main"}},
-				{"number": 7, "state": "open", "html_url": "u7", "head": map[string]string{"ref": "feat"}, "base": map[string]string{"ref": "main"}}}},
+				{"number": 6, "state": "open", "html_url": "u6", "head": map[string]any{"ref": "other", "repo": map[string]string{"full_name": "o/r"}}, "base": map[string]string{"ref": "main"}},
+				{"number": 7, "state": "open", "html_url": "u7", "head": map[string]any{"ref": "feat", "repo": map[string]string{"full_name": "o/r"}}, "base": map[string]string{"ref": "main"}}}},
 		{GitLab, "POST /api/v4/projects/o%2Fr/merge_requests", "GET /api/v4/projects/o%2Fr/merge_requests", 409,
-			[]map[string]any{{"iid": 7, "state": "opened", "web_url": "u7", "source_branch": "feat", "target_branch": "main"}}},
+			[]map[string]any{{"iid": 7, "state": "opened", "web_url": "u7", "source_branch": "feat", "target_branch": "main", "source_project_id": 1, "target_project_id": 1}}},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			var query string

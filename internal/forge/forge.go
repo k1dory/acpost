@@ -378,15 +378,17 @@ func (c *Client) anonymous() *Client {
 
 // Pull is a pull (merge) request.
 type Pull struct {
-	Number  int       `json:"number"`
-	Title   string    `json:"title"`
-	State   string    `json:"state"` // open, closed, merged
-	Draft   bool      `json:"draft,omitempty"`
-	Author  string    `json:"author"`
-	Head    string    `json:"head"` // branch
-	Base    string    `json:"base"`
-	URL     string    `json:"url"`
-	Updated time.Time `json:"updated"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	State  string `json:"state"` // open, closed, merged
+	Draft  bool   `json:"draft,omitempty"`
+	Author string `json:"author"`
+	Head   string `json:"head"` // branch
+	// HeadRepo is the repository the head branch is in (owner/name; a fork's, not the base's).
+	HeadRepo string    `json:"head_repo,omitempty"`
+	Base     string    `json:"base"`
+	URL      string    `json:"url"`
+	Updated  time.Time `json:"updated"`
 	// Existing: opening it found it already open (a repeat of the same open), nothing new made.
 	Existing bool `json:"existing,omitempty"`
 }
