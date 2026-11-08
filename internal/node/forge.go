@@ -158,6 +158,12 @@ func (n *Node) OpenPull(ctx context.Context, p Principal, q ForgeQuery, r forge.
 	if r.Head == "" {
 		r.Head = info.Branch
 	}
+	if r.Base == "" { // the repository's own (main, master, develop…), not a guess
+		c, _ := n.forgeClient()
+		if r.Base, err = c.DefaultBranch(ctx, info.Server, info.Repo); err != nil {
+			return forge.Pull{}, forgeErr(err)
+		}
+	}
 	what := fmt.Sprintf("Open a pull request on %s: %q (%s → %s)", info.Repo.Web, r.Title, r.Head, r.Base)
 	if err := n.approve(ctx, p, what, r.Body, map[string]any{"forge": "open_pull", "repo": info.Repo.Web, "head": r.Head, "base": r.Base, "title": r.Title, "draft": r.Draft}); err != nil {
 		return forge.Pull{}, err

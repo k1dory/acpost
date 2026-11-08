@@ -641,3 +641,21 @@ func (c *Client) alreadyOpen(ctx context.Context, srv Server, r Repo, p PullRequ
 	}
 	return Pull{}, err
 }
+
+// DefaultBranch is the branch a repository's pull requests go into unless told otherwise.
+func (c *Client) DefaultBranch(ctx context.Context, srv Server, r Repo) (string, error) {
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	path := "/repos/" + r.Path
+	if srv.Kind == GitLab {
+		path = "/projects/" + glProject(r.Path)
+	}
+	if _, err := c.get(ctx, srv, r.Host, path, &repo, listMax); err != nil {
+		return "", err
+	}
+	if repo.DefaultBranch == "" {
+		return "", fmt.Errorf("%s: the forge names no default branch: --base names it", r.Web)
+	}
+	return repo.DefaultBranch, nil
+}

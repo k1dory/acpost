@@ -225,7 +225,7 @@ func forgeCmd(g *globals) *cobra.Command {
 		},
 	}
 	open.Flags().StringVar(&pr.Title, "title", "", "its title")
-	open.Flags().StringVar(&pr.Base, "base", "main", "the branch it goes into")
+	open.Flags().StringVar(&pr.Base, "base", "", "the branch it goes into (default: the repository's default branch)")
 	open.Flags().StringVar(&pr.Head, "head", "", "the branch it comes from (default: the repository's)")
 	open.Flags().StringVar(&pr.Body, "body", "", "its description")
 	open.Flags().BoolVar(&pr.Draft, "draft", false, "a draft")

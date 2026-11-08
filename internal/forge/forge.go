@@ -4,6 +4,7 @@
 package forge
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -149,10 +150,41 @@ func (c *Client) get(ctx context.Context, srv Server, host, path string, out any
 }
 
 func (c *Client) do(ctx context.Context, method string, srv Server, host, path string, body, out any, max int64) (http.Header, error) {
+	h, err := c.do1(ctx, method, srv, host, path, body, out, max)
+	// Rate-limited (429, or GitHub's secondary limit: 403 with Retry-After): asked again once, after
+	// the wait it names when that is short; else the refusal as it was.
+	if fe, ok := err.(*Error); ok && (fe.Status == 429 || fe.Status == 403) {
+		if wait, ok := retryAfter(h); ok && wait <= maxRetryWait {
+			select {
+			case <-time.After(wait):
+				return c.do1(ctx, method, srv, host, path, body, out, max)
+			case <-ctx.Done():
+			}
+		}
+	}
+	return h, err
+}
+
+// maxRetryWait is the longest Retry-After a request waits out.
+const maxRetryWait = 10 * time.Second
+
+// retryAfter is the wait a Retry-After header names (seconds), if any.
+func retryAfter(h http.Header) (time.Duration, bool) {
+	if h == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After")))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return time.Duration(n) * time.Second, true
+}
+
+func (c *Client) do1(ctx context.Context, method string, srv Server, host, path string, body, out any, max int64) (http.Header, error) {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
-		rd = strings.NewReader(string(b))
+		rd = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, srv.API+path, rd)
 	if err != nil {
