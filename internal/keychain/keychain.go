@@ -41,7 +41,11 @@ func (s *Store) read() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return out, json.Unmarshal(b, &out)
+	if json.Unmarshal(b, &out) != nil {
+		// Not json's own words: they quote what the file holds.
+		return nil, fmt.Errorf("%s: not a secrets file", s.file())
+	}
+	return out, nil
 }
 
 func (s *Store) write(m map[string]string) error {
@@ -110,25 +114,8 @@ func (s *Store) Set(account, value string) error {
 	})
 }
 
-// Get is a secret ("" when none).
-func (s *Store) Get(account string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.File {
-		cmd := exec.Command("security", "find-generic-password", "-s", s.Service, "-a", account, "-w")
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		out, err := cmd.Output()
-		if err != nil {
-			return ""
-		}
-		return strings.TrimRight(string(out), "\n")
-	}
-	m, _ := s.read()
-	return m[account]
-}
-
-// Lookup is a secret, whether one is kept, and an error when the store could not be read (Get
-// says "" for both).
+// Lookup is a secret, whether one is kept, and an error when the store could not be read (a
+// locked keychain, a headless session, a broken file): never "" in place of a secret not read.
 func (s *Store) Lookup(account string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
