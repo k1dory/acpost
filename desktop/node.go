@@ -200,23 +200,11 @@ func (n *Node) Conversations(before string) (ConversationPage, error) {
 	})
 }
 
-// Thread is a conversation's messages, the oldest first, with their bodies and replies.
+// Thread is a conversation's messages, the oldest first, with their bodies and replies: the
+// whole thread, or its last threadMax messages. A message that cannot be read fails it.
 func (n *Node) Thread(thread string) ([]store.Message, error) {
-	return call(n, func(ctx context.Context, c *client.Client) ([]store.Message, error) {
-		page, err := c.List(ctx, client.ListFilter{Thread: thread, Limit: 200})
-		if err != nil {
-			return nil, err
-		}
-		out := make([]store.Message, 0, len(page.Items))
-		for _, m := range page.Items {
-			full, err := c.Get(ctx, m.ID)
-			if err != nil {
-				full = m
-			}
-			out = append(out, full)
-		}
-		sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-		return out, nil
+	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) ([]store.Message, error) {
+		return threadOf(ctx, c, thread)
 	})
 }
 
@@ -504,3 +492,65 @@ func (n *Node) emit(name string, data any) {
 
 // follow is a message's stream; its own goroutine removes it, when it is still the one there.
 type follow struct{ cancel context.CancelFunc }
+
+// threadMax bounds what a thread shows: its latest messages.
+const threadMax = 2000
+
+func threadOf(ctx context.Context, c *client.Client, thread string) ([]store.Message, error) {
+	// The list pages by id, the oldest first: read to the end, keep the end.
+	var list []store.Message
+	after := ""
+	for {
+		page, err := c.List(ctx, client.ListFilter{Thread: thread, After: after, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, page.Items...)
+		if len(list) > threadMax {
+			list = list[len(list)-threadMax:]
+		}
+		if page.Next == "" || page.Next == after || len(page.Items) == 0 {
+			break
+		}
+		after = page.Next
+	}
+	// The list has no bodies: each message read, a few at a time; the first failure ends it.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	out := make([]store.Message, len(list))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for range min(8, len(list)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				m, err := c.Get(ctx, list[i].ID)
+				if err != nil {
+					cancel(fmt.Errorf("message %s: %w", list[i].ID, err))
+					continue
+				}
+				out[i] = m
+			}
+		}()
+	}
+feed:
+	for i := range list {
+		select {
+		case next <- i:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(next)
+	wg.Wait()
+	if err := context.Cause(ctx); err != nil {
+		var e *client.Error
+		if errors.As(err, &e) {
+			return nil, &client.Error{Status: e.Status, Code: e.Code, Message: err.Error(), Hint: e.Hint}
+		}
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
