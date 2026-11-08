@@ -438,6 +438,8 @@ class App {
   // The composer's drafts, one per chat ("new": the new task's). A Map, not state: a draft is made
   // where it is first read (in a $derived), and a new task's draft moving to its thread bumps drafts.
   private draftMap = new Map<string, ComposerDraft>();
+  /** Keys whose draft moved (a session's to its thread): an editor still on the old key gets it. */
+  private draftAlias = new Map<string, string>();
   private drafts = $state(0);
   /** The key of the open chat's draft: its thread's, once it has one (a session or a cloud
    * conversation continued here becomes a thread), else the chat's, else the new task's. */
@@ -449,7 +451,10 @@ class App {
    * draft the thread has already keeps what it holds, and gets what was left of this one. */
   private moveDraft(d: ComposerDraft, to: string) {
     if (this.draftMap.get(to) === d) return;
-    if (this.draftMap.get(d.key) === d) this.draftMap.delete(d.key);
+    if (this.draftMap.get(d.key) === d) {
+      this.draftMap.delete(d.key);
+      if (d.key !== "new") this.draftAlias.set(d.key, to); // a new task's next draft is a new one
+    }
     const there = this.draftMap.get(to);
     if (there && there !== d) {
       there.text = [there.text, d.text].filter(Boolean).join("\n");
@@ -479,6 +484,7 @@ class App {
 
   draftOf(key = this.draftKey()): ComposerDraft {
     this.drafts;
+    for (let i = 0; this.draftAlias.has(key) && i < 16; i++) key = this.draftAlias.get(key)!;
     let d = this.draftMap.get(key);
     if (!d) { d = new ComposerDraft(key); this.draftMap.set(key, d); }
     return d;

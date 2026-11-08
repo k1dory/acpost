@@ -380,6 +380,50 @@ describe("send, review round 3", () => {
   });
 });
 
+describe("send, review round 4", () => {
+  it("the open session's editor keeps its draft when a list refresh moves it to the thread (R4.1)", async () => {
+    const app = await load();
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [S] });
+    await app.loadChats();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S);
+    app.draftOf().text = "go on";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")); // taken, answer lost
+    expect(await app.submit(app.draftOf())).toBe(false);
+    fake.Node.Chats.mockResolvedValue({ items: [T] });
+    await app.loadChats();                                         // no open(T): the session stays on screen
+    expect(app.chat?.key).toBe(S.key);
+    expect(app.draftOf().text).toBe("go on");
+    fake.Node.SendTask.mockResolvedValueOnce(msg("m1", "T1", "done"));
+    expect(await app.submit(app.draftOf())).toBe(true);
+    const [first, again] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(again.idem).toBe(first.idem);                           // the same task, not a second one
+  });
+
+  it("reads started in two drafts that merge stay within max_files (R4.2)", async () => {
+    const app = await load();
+    const lim = { max_body: 1 << 20, max_files: 1, max_files_size: 1 << 20 };
+    const slow = (name: string) => { const r = deferred<ArrayBuffer>(); return { r, f: { name, type: "text/plain", size: 1, arrayBuffer: () => r.promise } }; };
+    const fails: string[] = [];
+    const there = app.draftOf("thread:T1");
+    const a = slow("a.txt"), b = slow("b.txt");
+    const pa = there.add([a.f], lim, w => fails.push(w));
+    const d = app.draftOf();
+    d.text = "task";
+    const pb = d.add([b.f], lim, w => fails.push(w));
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "T1"));
+    there.text = "x";                                              // the thread has a draft: d merges into it
+    await app.submit(d);
+    a.r.resolve(new Uint8Array([97]).buffer);
+    b.r.resolve(new Uint8Array([98]).buffer);
+    await Promise.all([pa, pb]);
+    expect(there.files.map(f => f.name)).toEqual(["a.txt"]);
+    expect(fails).toEqual(["count"]);
+  });
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");

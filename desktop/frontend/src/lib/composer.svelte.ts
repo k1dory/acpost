@@ -55,8 +55,11 @@ export class ComposerDraft {
       for (const f of files) {
         if (overLimits(this.live().files, f, limits)) { fail(overLimits(this.live().files, f, limits) as "count" | "size"); return; }
         const data = b64bytes(new Uint8Array(await f.arrayBuffer()));
-        // Read into whichever draft this one is by now (a new task, the thread it moved into).
+        // Read into whichever draft this one is by now (a new task, the thread it moved into),
+        // checked again there: that one may have filled up meanwhile.
         const d = this.live();
+        const over = overLimits(d.files, f, limits);
+        if (over) { fail(over); return; }
         d.files = [...d.files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data }];
       }
     }).catch(() => {});
