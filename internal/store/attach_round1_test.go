@@ -41,3 +41,22 @@ func TestAttachReplyRepeat(t *testing.T) {
 		t.Fatalf("same name, other content: %v", err)
 	}
 }
+
+// The repeat writes nothing, so a store grown full since the first attach does not refuse it.
+func TestAttachReplyRepeatOnAFullStore(t *testing.T) {
+	s := openTest(t, Options{})
+	mustInsert(t, s, msg("agent:r", "x"))
+	c, _, _ := s.Claim(ctx, "agent:r", time.Minute)
+	lim := FileLimits{Count: 4, Size: 1 << 20}
+	f := []File{{Name: "out.txt", Type: "text/plain", Data: []byte("out")}}
+	if err := s.AttachReply(ctx, c.ID, c.LeaseID, f, lim); err != nil {
+		t.Fatal(err)
+	}
+	s.opt.MaxStore = 1 // the store has grown past max_store meanwhile
+	if err := s.AttachReply(ctx, c.ID, c.LeaseID, []File{{Name: "new.txt", Data: []byte("new")}}, lim); !errors.Is(err, ErrStoreFull) {
+		t.Fatalf("a new file on a full store: %v", err)
+	}
+	if err := s.AttachReply(ctx, c.ID, c.LeaseID, f, lim); err != nil {
+		t.Fatalf("the repeat on a full store: %v", err)
+	}
+}

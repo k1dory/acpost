@@ -276,8 +276,8 @@ func (s *Store) AttachReply(ctx context.Context, id, lease string, files []File,
 		if err != nil {
 			return err
 		}
-		if files, err = notAttached(ctx, t, seq, files); err != nil {
-			return err
+		if files, err = notAttached(ctx, t, seq, files); err != nil || len(files) == 0 {
+			return err // all of them attached already: nothing to weigh against the limits
 		}
 		var count int
 		var size int64
