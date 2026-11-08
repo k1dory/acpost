@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/store"
 )
 
 // Artifacts: what agents hand back — files attached to a reply, or files on this Mac a reply
@@ -39,18 +40,27 @@ const oNoFollowAny = 0x20000000
 
 var errArtifact = errors.New("not a file the app shows: a file of this Mac, outside hidden folders, up to 20 MiB")
 
-// MessageFile is a file of a message (a reply's attachment).
+// MessageFile is a file of a message: the reply's when the reply and the message both have one
+// of that name (an agent sends back a file it was given, changed).
 func (n *Node) MessageFile(id, name string) (Artifact, error) {
-	files, err := call(n, func(ctx context.Context, c *client.Client) ([]storeFile, error) { return filesOf(ctx, c, id) })
+	files, err := call(n, func(ctx context.Context, c *client.Client) ([]store.File, error) { return c.Files(ctx, id) })
 	if err != nil {
 		return Artifact{}, err
 	}
-	for _, f := range files {
-		if f.Name == name && len(f.Data) > 0 {
-			return Artifact{Name: f.Name, Type: typeOf(f.Name, f.Type, f.Data), Size: len(f.Data), Data: base64.StdEncoding.EncodeToString(f.Data)}, nil
+	var found *store.File
+	for i, f := range files {
+		// A link has no content here; an empty file is a file.
+		if f.Name != name || f.Link() || len(f.Data) == 0 && f.Size > 0 {
+			continue
+		}
+		if found == nil || f.Reply && !found.Reply {
+			found = &files[i]
 		}
 	}
-	return Artifact{}, errors.New("no such file in the message")
+	if found == nil {
+		return Artifact{}, errors.New("no such file in the message")
+	}
+	return Artifact{Name: found.Name, Type: typeOf(found.Name, found.Type, found.Data), Size: len(found.Data), Data: base64.StdEncoding.EncodeToString(found.Data)}, nil
 }
 
 // LocalFile is a file of this Mac a chat links to: path absolute, or relative to base (the
@@ -187,24 +197,4 @@ func typeOf(name, said string, b []byte) string {
 		return said
 	}
 	return http.DetectContentType(b)
-}
-
-// storeFile is a message's file as the node gives it.
-type storeFile struct {
-	Name  string
-	Type  string
-	Reply bool
-	Data  []byte
-}
-
-func filesOf(ctx context.Context, c *client.Client, id string) ([]storeFile, error) {
-	fs, err := c.Files(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]storeFile, 0, len(fs))
-	for _, f := range fs {
-		out = append(out, storeFile{Name: f.Name, Type: f.Type, Reply: f.Reply, Data: f.Data})
-	}
-	return out, nil
 }
