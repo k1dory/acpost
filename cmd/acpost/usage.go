@@ -22,6 +22,9 @@ func usageCmd(g *globals) *cobra.Command {
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+			if err := nonNegative(map[string]time.Duration{"--since": since}); err != nil {
+				return err
+			}
 			var err error
 			if f.From, err = day(from); err != nil {
 				return usageErr(fmt.Errorf("--from: %w", err))

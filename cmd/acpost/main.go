@@ -411,6 +411,22 @@ func sendCmd(g *globals) *cobra.Command {
 			if save != "" && !wait {
 				return usageErr(errors.New("--save goes with --wait"))
 			}
+			// Every flag is checked before anything happens: no node started, no file read for a
+			// send that a typo refuses.
+			if err := nonNegative(map[string]time.Duration{"--ttl": ttl, "--timeout": timeout}); err != nil {
+				return err
+			}
+			var metas map[string]string
+			for _, kv := range meta {
+				k, v, found := strings.Cut(kv, "=")
+				if !found || k == "" {
+					return usageErr(fmt.Errorf("--meta %q: k=v", kv))
+				}
+				if metas == nil {
+					metas = map[string]string{}
+				}
+				metas[k] = v
+			}
 			text, ok, err := readBody(cmd, body, bodyFile)
 			if err != nil {
 				return err
@@ -433,17 +449,7 @@ func sendCmd(g *globals) *cobra.Command {
 			}
 			files = append(files, linked...)
 			req := client.SendRequest{To: to, Body: text, Task: task, Thread: thread, Session: session, Files: files,
-				Cwd: cwd, Model: model, Effort: effort, Mode: mode}
-			for _, kv := range meta {
-				k, v, found := strings.Cut(kv, "=")
-				if !found || k == "" {
-					return usageErr(fmt.Errorf("--meta %q: k=v", kv))
-				}
-				if req.Meta == nil {
-					req.Meta = map[string]string{}
-				}
-				req.Meta[k] = v
-			}
+				Cwd: cwd, Model: model, Effort: effort, Mode: mode, Meta: metas}
 			if ttl > 0 {
 				req.TTL = ttl.String()
 			}
@@ -601,6 +607,9 @@ func waitCmd(g *globals) *cobra.Command {
 		Short: "Wait for messages to be answered and print the replies",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, ids []string) error {
+			if err := nonNegative(map[string]time.Duration{"--timeout": timeout}); err != nil {
+				return err
+			}
 			c, err := g.connect(cmd.Context())
 			if err != nil {
 				return err
@@ -787,6 +796,9 @@ func recvCmd(g *globals) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if as == "" {
 				return usageErr(errors.New("--as is required"))
+			}
+			if err := nonNegative(map[string]time.Duration{"--wait": wait, "--lease": lease}); err != nil {
+				return err
 			}
 			ctx := cmd.Context()
 			c, err := g.connect(ctx)
@@ -1021,4 +1033,14 @@ func requestBudget(body string, files []store.File) time.Duration {
 		n += len(f.Data)
 	}
 	return quickTimeout + time.Duration(n/(256<<10))*time.Second
+}
+
+// nonNegative refuses a negative duration flag: -5s is a typo, not "no limit" (what 0 says).
+func nonNegative(flags map[string]time.Duration) error {
+	for name, d := range flags {
+		if d < 0 {
+			return usageErr(fmt.Errorf("%s %s: a duration of 0 or more", name, d))
+		}
+	}
+	return nil
 }
