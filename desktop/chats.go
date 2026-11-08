@@ -29,8 +29,9 @@ import (
 // runNode runs the app's own node (a stub in tests).
 var runNode = server.Run
 
-// nodeStartWait is how long the app's own node has to get ready.
-var nodeStartWait = 20 * time.Second
+// nodeStartWait is how long the app's own node has to get ready; nodeStopWait how long a start
+// that did not is waited for once cancelled.
+var nodeStartWait, nodeStopWait = 20 * time.Second, 5 * time.Second
 
 // ensureNode answers whether a node serves now, starting one in the app when none does. Calls
 // are serialized (Wails runs each binding call in its own goroutine, and Status is called at
@@ -50,8 +51,13 @@ func (n *Node) ensureNode() error {
 }
 
 func (n *Node) startNode() error {
-	if n.ownNodeRunning() {
+	switch n.ownNode() {
+	case nodeUp:
 		return nil
+	case nodeStopping:
+		// A start that failed or timed out is still stopping: not a node that runs, and none
+		// starts beside it. The error stays, so the next Status tries again.
+		return errors.New("the last start of the node is still stopping: try again in a moment")
 	}
 	c, err := n.client()
 	if err == nil {
@@ -93,7 +99,7 @@ func (n *Node) startNode() error {
 		logf.Close()
 		return errors.New("the app is quitting")
 	}
-	n.stopNode, n.nodeDone = cancel, done
+	n.stopNode, n.nodeDone, n.nodeOK = cancel, done, false
 	n.mu.Unlock()
 	go func() {
 		defer close(done)
@@ -105,6 +111,7 @@ func (n *Node) startNode() error {
 	case <-ready:
 		n.mu.Lock()
 		n.c = nil // reconnect to the node now listening
+		n.nodeOK = true
 		n.mu.Unlock()
 		return nil
 	case err := <-result: // one channel: the cause is not lost to a "stopped" picked first
@@ -118,27 +125,37 @@ func (n *Node) startNode() error {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(nodeStopWait):
 		}
 		return fmt.Errorf("the node did not start in %s (log %s)", nodeStartWait, logPath)
 	}
 }
 
-// ownNodeRunning says whether the node the app started still runs.
-func (n *Node) ownNodeRunning() bool {
+// ownNode is the state of the node the app started: none (never started, or stopped), up (it
+// got ready and runs), or stopping (it never got ready, and has not ended yet).
+func (n *Node) ownNode() int {
 	n.mu.Lock()
-	done := n.nodeDone
+	done, ready := n.nodeDone, n.nodeOK
 	n.mu.Unlock()
 	if done == nil {
-		return false
+		return nodeNone
 	}
 	select {
 	case <-done:
-		return false
+		return nodeNone
 	default:
-		return true
 	}
+	if ready {
+		return nodeUp
+	}
+	return nodeStopping
 }
+
+const (
+	nodeNone = iota
+	nodeUp
+	nodeStopping
+)
 
 // writeDefaultConfig writes a node for this Mac: the ACP agents found, and a cloud when an
 // agent-sandbox env file is there.
@@ -173,7 +190,7 @@ func writeDefaultConfig(path string) error {
 		return err
 	}
 	// Written whole, and only where there is none: a configuration that appeared meanwhile is kept.
-	if err := writeAtomic(path, []byte(b.String()), 0o600, false); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := writeAtomic(path, []byte(b.String()), 0o600, 0, false); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	return nil

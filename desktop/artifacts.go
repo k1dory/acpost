@@ -4,9 +4,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"os"
@@ -115,11 +118,11 @@ func (n *Node) SaveArtifact(name, data string) (string, error) {
 
 // saveFile replaces dest whole, keeping its mode when it exists.
 func saveFile(dest string, b []byte) error {
-	perm := os.FileMode(0o644)
+	keep := os.FileMode(0)
 	if st, err := os.Stat(dest); err == nil {
-		perm = st.Mode().Perm()
+		keep = st.Mode().Perm()
 	}
-	return writeAtomic(dest, b, perm, true)
+	return writeAtomic(dest, b, 0o644, keep, true)
 }
 
 // OpenArtifact opens an attachment in its own app (a copy in a temporary folder).
@@ -208,18 +211,28 @@ func typeOf(name, said string, b []byte) string {
 
 // writeAtomic writes path whole or not at all: a temporary file beside it, synced, then renamed
 // over it (replace) or linked in only where there is no file yet (else fs.ErrExist). A
-// failure or a crash midway leaves what was there.
-func writeAtomic(path string, b []byte, perm os.FileMode, replace bool) error {
+// failure or a crash midway leaves what was there. A new file gets perm under the umask, as
+// os.WriteFile gives it; keep (when not 0) is an existing file's mode, kept as it was.
+func writeAtomic(path string, b []byte, perm, keep os.FileMode, replace bool) error {
 	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	var f *os.File
+	var err error
+	for range 100 {
+		var r [8]byte
+		rand.Read(r[:])
+		f, err = os.OpenFile(filepath.Join(dir, "."+filepath.Base(path)+".tmp-"+hex.EncodeToString(r[:])), os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if !errors.Is(err, fs.ErrExist) {
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp) // gone once renamed; after a link, the extra name
 	_, err = f.Write(b)
-	if err == nil {
-		err = f.Chmod(perm)
+	if err == nil && keep != 0 {
+		err = f.Chmod(keep)
 	}
 	if err == nil {
 		err = f.Sync()

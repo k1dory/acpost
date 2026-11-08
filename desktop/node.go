@@ -36,6 +36,7 @@ type Node struct {
 	terms    map[string]*term
 	stopNode context.CancelFunc // the node the app runs itself, if it does
 	nodeDone chan struct{}      // closed when that node has stopped
+	nodeOK   bool               // that node got ready (else it is starting or stopping)
 	startMu  sync.Mutex         // one ensureNode at a time
 	closed   bool               // the app is quitting: no node starts, no terminal opens
 	opening  sync.WaitGroup     // terminals being opened
@@ -449,7 +450,7 @@ func (n *Node) TermAttach(id string, from int64) error {
 		for {
 			final, err := c.TermOutput(ctx, id, from, func(next int64, b []byte) error {
 				from, lost, wait = next, false, time.Second
-				n.emit("term:"+id, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
+				n.emitTerm(id, me, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
 				return nil
 			})
 			if ctx.Err() != nil {
@@ -458,16 +459,16 @@ func (n *Node) TermAttach(id string, from int64) error {
 			switch termOutcome(err) {
 			case termEnded:
 				ended = true
-				n.emit("term:"+id, map[string]any{"exit": true, "code": final.ExitCode})
+				n.emitTerm(id, me, map[string]any{"exit": true, "code": final.ExitCode})
 				return
 			case termGone:
 				ended = true
-				n.emit("term:"+id, map[string]any{"exit": true, "error": withHint(err).Error()})
+				n.emitTerm(id, me, map[string]any{"exit": true, "error": withHint(err).Error()})
 				return
 			case termRetry:
 				if !lost {
 					lost = true
-					n.emit("term:"+id, map[string]any{"lost": true, "error": withHint(err).Error()})
+					n.emitTerm(id, me, map[string]any{"lost": true, "error": withHint(err).Error()})
 				}
 				select {
 				case <-ctx.Done():
@@ -476,7 +477,7 @@ func (n *Node) TermAttach(id string, from int64) error {
 				}
 				wait = min(2*wait, 10*time.Second)
 			default: // refused, invalid: said, and the terminal still closed with the app
-				n.emit("term:"+id, map[string]any{"exit": true, "error": withHint(err).Error()})
+				n.emitTerm(id, me, map[string]any{"exit": true, "error": withHint(err).Error()})
 				return
 			}
 		}
@@ -682,4 +683,15 @@ func termOutcome(err error) int {
 		}
 	}
 	return termFailed
+}
+
+// emitTerm emits a terminal stream's event only while the stream is the one attached: a chunk
+// of a stream replaced meanwhile would interleave with the new one's (terminal output has no
+// seq to drop it by).
+func (n *Node) emitTerm(id string, me *term, ev map[string]any) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.terms[id] == me {
+		n.emit("term:"+id, ev)
+	}
 }
