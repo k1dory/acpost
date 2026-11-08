@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
@@ -100,5 +101,30 @@ func TestForgeLoginThroughTheNode(t *testing.T) {
 	e.ok("", "forge", "logout", host)
 	if b, _ := os.ReadFile(tokens); strings.Contains(string(b), "good") {
 		t.Fatal("the token outlived logout")
+	}
+}
+
+// Over TCP every token is a client, an agent or a node, and the node keeps forge accounts for its
+// own user only: login and logout over --node say so at once (no token asked for, none sent), with
+// where to run them instead.
+func TestForgeLoginOverTCPIsRefusedFirst(t *testing.T) {
+	port := freePort(t)
+	e := newEnv(t, inbox+"tokens:\n  - {name: ci, sha256: "+sha("ci-token")+"}\n")
+	cfg, _ := os.ReadFile(e.config)
+	os.WriteFile(e.config, []byte(strings.Replace(string(cfg), "listen: [unix://"+e.sock+"]",
+		fmt.Sprintf("listen: [unix://%s, tcp://127.0.0.1:%d]", e.sock, port), 1)), 0o600)
+	e.serve()
+	node := fmt.Sprintf("http://127.0.0.1:%d", port)
+	if r := e.run("", "--node", node, "--token", "ci-token", "agents"); r.code != 0 {
+		t.Fatalf("the node over TCP: %+v", r)
+	}
+	for _, args := range [][]string{{"forge", "login", "git.example"}, {"forge", "logout", "git.example"}} {
+		r := e.run("s3cret-token\n", append([]string{"--node", node, "--token", "ci-token"}, args...)...)
+		if r.code != exitRefused || !strings.Contains(r.err, "on the node's machine") || strings.Contains(r.err, "token for") {
+			t.Fatalf("%v over TCP: exit %d %s", args, r.code, r.err)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.dir, ".config", "acpost", "forge-tokens.json")); len(b) > 0 {
+		t.Fatalf("kept: %s", b)
 	}
 }

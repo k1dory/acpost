@@ -282,15 +282,9 @@ func rootCmd(g *globals) *cobra.Command {
 // connect returns a client for the node, starting the local node first if it is not running and
 // none was named explicitly.
 func (g *globals) connect(ctx context.Context) (*client.Client, error) {
-	url := g.node
-	var cfg *config.Config
-	if url == "" {
-		var err error
-		cfg, err = config.Load(g.configPath())
-		if err != nil {
-			return nil, usageErr(err)
-		}
-		url = localURL(cfg)
+	url, cfg, err := g.nodeURL()
+	if err != nil {
+		return nil, err
 	}
 	c, err := client.New(url, g.token, "")
 	if err != nil {
@@ -1085,4 +1079,17 @@ func nonNegative(flags map[string]time.Duration) error {
 		}
 	}
 	return nil
+}
+
+// nodeURL is the node commands talk to: --node / ACPOST_NODE, else the local node's own address
+// from its configuration (cfg, then, is that configuration).
+func (g *globals) nodeURL() (string, *config.Config, error) {
+	if g.node != "" {
+		return g.node, nil, nil
+	}
+	cfg, err := config.Load(g.configPath())
+	if err != nil {
+		return "", nil, usageErr(err)
+	}
+	return localURL(cfg), cfg, nil
 }

@@ -38,9 +38,12 @@ func forgeCmd(g *globals) *cobra.Command {
 	var kind string
 	login := &cobra.Command{
 		Use:   "login HOST",
-		Short: "Keep a token for a forge host on the node, once the forge accepts it (macOS: in the keychain); read from the terminal or stdin",
+		Short: "Keep a token for a forge host on this machine's node, once the forge accepts it (macOS: in the keychain); read from the terminal or stdin",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := g.ownerOnly(); err != nil {
+				return err // before a token is asked for
+			}
 			var token string
 			if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
 				fmt.Fprintf(os.Stderr, "token for %s: ", args[0])
@@ -82,6 +85,9 @@ func forgeCmd(g *globals) *cobra.Command {
 		Short:       "Forget a forge host's token (on the node)",
 		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := g.ownerOnly(); err != nil {
+				return err
+			}
 			c, err := g.connect(cmd.Context())
 			if err != nil {
 				return err
@@ -286,4 +292,19 @@ func nonNil[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+// ownerOnly refuses forge accounts over anything but the node's unix socket: the node keeps them
+// for its own user only, and over TCP every token is a client, an agent or a node (refused there
+// in any case, after a token was typed for nothing).
+func (g *globals) ownerOnly() error {
+	url, _, err := g.nodeURL()
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(url, "unix://") {
+		return &exitErr{code: exitRefused, name: "refused", err: fmt.Errorf("forge accounts are kept by the node for its own user, over its unix socket, not over %s", url),
+			hint: "run `acpost forge login` on the node's machine (or in its app's Settings)"}
+	}
+	return nil
 }
