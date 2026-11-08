@@ -3,6 +3,8 @@
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
   import TaskSetup from "./TaskSetup.svelte";
+  import { afterSent, overLimits } from "../lib/draft";
+  import { bytes } from "../lib/names";
 
   let text = $state("");
   let files = $state<{ name: string; type: string; size: number; data: string }[]>([]);
@@ -57,13 +59,14 @@
     return items.filter(i => i.name.toLowerCase().startsWith(q));
   });
 
-  function current(o: typeof model, draft: string) {
+  // The settings are the agent's own: a Claude model is never sent to Codex.
+  function current(o: typeof model, k: "model" | "effort" | "mode") {
     if (!o) return "";
-    const v = draft || o.current;
+    const v = app.setting(agent, k) || o.current;
     return o.values.find(x => x.value === v)?.name ?? v;
   }
   function setDraft(k: "model" | "effort" | "mode", v: string) {
-    app.draft[k] = v;
+    app.setSetting(agent, k, v);
     pickerFor = "";
     ta?.focus();
   }
@@ -80,14 +83,19 @@
   const running = $derived(!isNew && app.runningHere().length > 0);
   const stopMode = $derived(running && !text.trim() && !files.length);
 
+  // The text and files go as they are now; they leave the composer only once the node has them
+  // (a failed send keeps them to send again), and what was typed meanwhile stays.
   async function send() {
-    const body = text.trim();
+    const sent = text, sentFiles = files;
+    const body = sent.trim();
     if (!body || busy) return;
     busy = true;
-    await app.send(body, files.map(({ name, type, data }) => ({ name, type, data })));
+    const ok = await app.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })));
     busy = false;
-    text = "";
-    files = [];
+    if (ok) {
+      text = afterSent(text, sent);
+      files = files.filter(f => !sentFiles.includes(f));
+    }
     ta?.focus();
   }
   function key(e: KeyboardEvent) {
@@ -99,15 +107,22 @@
     if (e.key === "Escape") pickerFor = "";
     if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); send(); }
   }
+  // A file over the node's limits is said at once, not read (and not found out at sending).
   async function add(list: FileList | null) {
     for (const f of list ?? []) {
+      const over = overLimits(files, f, app.limits);
+      if (over) {
+        app.error = over === "count"
+          ? t("A message takes at most {n} files", { n: app.limits!.max_files })
+          : t("The files are over the node's limit of {n} together", { n: bytes(app.limits!.max_files_size) });
+        return;
+      }
       const buf = new Uint8Array(await f.arrayBuffer());
       let bin = "";
       for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
       files = [...files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data: btoa(bin) }];
     }
   }
-  function kb(n: number) { return n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`; }
   $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } text; });
   $effect(() => { slash.length; slashSel = 0; });
 </script>
@@ -138,7 +153,7 @@
       <div class="menu card pick">
         <div class="mh">{o.name}</div>
         {#each o.values as v (v.value)}
-          <button class="mi" class:sel={(app.draft[pickerFor] || o.current) === v.value} onclick={() => setDraft(pickerFor as any, v.value)}>
+          <button class="mi" class:sel={(app.setting(agent, pickerFor) || o.current) === v.value} onclick={() => setDraft(pickerFor as any, v.value)}>
             <span>{v.name}</span>
           </button>
         {/each}
@@ -148,7 +163,7 @@
   {#if files.length}
     <div class="files">
       {#each files as f, i}
-        <span class="chip"><Icon name="file" size={12} /> {f.name} <span class="muted">{kb(f.size)}</span>
+        <span class="chip"><Icon name="file" size={12} /> {f.name} <span class="muted">{bytes(f.size)}</span>
           <button class="x" onclick={() => (files = files.filter((_, j) => j !== i))}><Icon name="x" size={10} /></button></span>
       {/each}
     </div>
@@ -158,9 +173,9 @@
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />
-    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, app.draft.model)}</button>{/if}
-    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, app.draft.effort)}</button>{/if}
-    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, app.draft.mode)}</button>{/if}
+    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, "model")}</button>{/if}
+    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, "effort")}</button>{/if}
+    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, "mode")}</button>{/if}
     {#if cloud}<span class="chip muted" title={t("A cloud agent runs without asking; opening or merging a pull request waits for you")}>{t("runs without asking")}</span>{/if}
     <span class="sp"></span>
     <span class="hint muted">{stopMode ? "⌃C" : "⌘↵"}</span>

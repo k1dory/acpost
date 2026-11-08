@@ -1,5 +1,7 @@
 import { t, tr } from "./i18n.svelte";
+import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
+import { newId } from "./ids";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -22,8 +24,22 @@ export type Segment = { user: string; turn: Turn };
 
 export const final = (s: string) => s === "done" || s === "failed" || s === "cancelled" || s === "expired";
 
-/** Where a new task runs, which agent, in which directory, with which settings. */
-export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string; cwd: string; repo: string; model: string; effort: string; mode: string };
+/** Where a new task runs, which agent, in which directory. */
+export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string; cwd: string; repo: string };
+/** What the composer sends with, chosen for one agent ("" is the agent's own default). */
+export type Settings = { model: string; effort: string; mode: string };
+/** Which of an agent's options each setting is. */
+const settingCats: Record<keyof Settings, string> = { model: "model", effort: "thought_level", mode: "mode" };
+/** The node's limits on what a message carries (GET /v1/health). */
+export type Limits = { max_body: number; max_files: number; max_files_size: number };
+
+/** A page of a message's events, as the node gives them at most (store.MaxPage): a full page means
+ * there may be more. */
+export const eventsPage = 500;
+/** Codes of a stream that will not come back by asking again. */
+const lasting = new Set(["not_found", "invalid", "refused", "unsupported"]);
+/** How many times a broken stream is asked again (1 s, 2 s, … 30 s apart) before it is given up. */
+const followTries = 6;
 
 export type PreviewEvent = { kind: string; message?: string; source?: string; line?: number; col?: number; stack?: string; url?: string; title?: string; main_frame?: boolean };
 export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview" | "artifacts";
@@ -87,12 +103,19 @@ class App {
   asking = $state<any[]>([]); // approvals waiting
   theme = $state<"light" | "dark" | "system">("light");
   target = $state<string>("");
-  draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "", model: "", effort: "", mode: "" });
+  draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "" });
+  /** Each agent's settings (a Claude model is not a Codex one). */
+  settings = $state<Record<string, Settings>>({});
+  limits = $state<Limits | null>(null);
+  /** Messages whose stream stopped for good (or whose events could not be read): why. */
+  broken = $state<Record<string, string>>({});
   options = $state<Record<string, Options>>({});
   cloudAgents = $state<CloudAgent[]>([]);
   home = $state("");
   error = $state("");
   private unsub = new Map<string, () => void>();
+  /** Bumped each time the screen changes chat: an answer to a call made before is not this chat's. */
+  private gen = 0;
 
   /** When the app first saw each message running (its own times say when it was sent or changed). */
   runningSince = new Map<string, number>();
@@ -110,8 +133,16 @@ class App {
   async connect() {
     let c: any;
     try { c = await Node.Status(); } catch (e) { c = { ok: false, error: errText(e) }; } // the app's side failed: shown as the node down
+    const back = this.conn !== null && !this.conn.ok && c.ok;
     this.conn = { ok: c.ok, error: c.error, url: c.url, node: c.status?.node, you: c.status?.you };
     if (!c.ok) return;
+    if (c.status?.limits) this.limits = c.status.limits;
+    try { await this.connected(); } catch (e) { this.error = errText(e); }
+    // The node back after it was lost: the open chat's turns still running are followed again.
+    if (back) for (const m of this.msgs) if (!final(m.state)) this.watch(m);
+  }
+
+  private async connected() {
     // This node's list as it was last time, at once; its answer replaces it.
     try {
       const saved = JSON.parse(localStorage.getItem(this.chatsKey()) ?? "null");
@@ -128,7 +159,15 @@ class App {
   localAgents() { return this.agents.filter(a => a.driver === "acp"); }
 
   async loadAgents() {
-    try { this.agents = (await Node.Agents()) as any; } catch (e) { this.error = errText(e); }
+    try { this.agents = (await Node.Agents()) as any; } catch (e) { this.failed(e); }
+  }
+
+  /** A call failed: said, and a node that stopped answering is shown as down (the app's polling
+   * then connects again, and follows what still runs). */
+  private failed(e: unknown) {
+    const code = errInfo(e).code;
+    if ((code === "node_down" || code === "unavailable") && this.conn?.ok) this.conn = { ...this.conn, ok: false, error: errText(e) };
+    else this.error = errText(e);
   }
 
   /** The cloud: "" none configured, "ok", or "down" (configured, not answering: cloudError says why;
@@ -173,10 +212,14 @@ class App {
     } catch {}
   }
 
+  private chatsAsked = 0;
   async loadChats() {
+    // Lists asked at once answer in any order: only the last asked is kept.
+    const my = ++this.chatsAsked;
     this.loadingChats = true;
     try {
       const c: any = await Node.Chats();
+      if (my !== this.chatsAsked) return;
       // A thread that ran and does not now: its turn ended.
       for (const ch of (c.items ?? []) as Chat[]) {
         if (ch.kind !== "thread") continue;
@@ -193,8 +236,8 @@ class App {
       }
       this.folders = c.folders ?? [];
       this.partial = c.partial ?? [];
-    } catch (e) { this.error = errText(e); }
-    this.loadingChats = false;
+    } catch (e) { if (my === this.chatsAsked) this.failed(e); }
+    if (my === this.chatsAsked) this.loadingChats = false;
   }
 
   // An agent's choices (model, effort, mode, commands): the ones seen last time at once (asking a
@@ -223,6 +266,9 @@ class App {
   }
 
   private reset() {
+    this.gen++;
+    this.historyLoading = false;
+    this.broken = {};
     this.artifact = null; // artifacts are the chat's
     this.openedArtifacts = [];
     for (const [id, stop] of this.unsub) { stop(); Node.Unfollow(id); }
@@ -256,7 +302,7 @@ class App {
         : await Node.SessionHistory(chat.agent!, chat.session!, chat.cwd ?? "")) as any as Ev[];
       if (this.chat?.key !== chat.key) return;
       this.history = segments(evs ?? []);
-    } catch (e) { this.error = errText(e); }
+    } catch (e) { if (this.chat?.key !== chat.key) return; this.error = errText(e); }
     this.historyLoading = false;
     this.loadOptions(this.target);
   }
@@ -278,23 +324,68 @@ class App {
   watch(m: Msg) {
     if (!m.to.startsWith("agent:")) return;
     const t = (this.turns[m.id] ??= new Turn());
-    const apply = (b: any) => {
-      if (b.events?.length) {
-        t.add(b.events as Ev[]);
+    if (final(m.state)) this.readEvents(m.id, t);
+    else this.follow(m.id, t, 0);
+  }
+
+  /** A finished message's events, page after page (the node gives a page at a time). */
+  private async readEvents(id: string, t: Turn) {
+    const gen = this.gen;
+    try {
+      for (;;) {
+        const from = t.last;
+        const evs = ((await Node.Events(id, from)) ?? []) as any as Ev[];
+        if (gen !== this.gen) return;
+        t.add(evs);
         this.rev++;
-        const cur = this.msgs.find(x => x.id === m.id);
+        if (evs.length < eventsPage || t.last <= from) return;
+      }
+    } catch (e) { if (gen === this.gen) this.broken = { ...this.broken, [id]: errText(e) }; }
+  }
+
+  /** A running message's events as they come; a stream that breaks is asked again from the last
+   * event seen (seen ones are skipped), a few times, then shown as broken. */
+  private follow(id: string, turn: Turn, tries: number) {
+    if (this.unsub.has(id)) return;
+    const gen = this.gen;
+    const off = on("events:" + id, (b: any) => {
+      if (b.events?.length) {
+        tries = 0;
+        turn.add(b.events as Ev[]);
+        this.rev++;
+        const cur = this.msgs.find(x => x.id === id);
         if (cur?.state === "queued") this.replace({ ...cur, state: "running" });
       }
       if (b.final) { this.replace(b.final); this.loadChats(); this.loadAgents(); }
-      if (b.error) this.error = b.error;
-    };
-    if (final(m.state)) {
-      Node.Events(m.id, 0).then(evs => { t.add((evs ?? []) as any); this.rev++; }).catch(() => {});
+      else if (b.error) this.lost(id, turn, off, b.error, tries, gen);
+    });
+    this.unsub.set(id, off);
+    this.broken = without(this.broken, id);
+    Node.Follow(id, turn.last).then(
+      // Another chat opened while it was asked: the stream the node just started is no one's.
+      () => { if (gen !== this.gen && !this.unsub.has(id)) Node.Unfollow(id); },
+      e => this.lost(id, turn, off, e, tries, gen),
+    );
+  }
+
+  /** Follows a message again once its stream was given up (the person asks). */
+  followAgain(m: Msg) {
+    this.broken = without(this.broken, m.id);
+    this.watch(m);
+  }
+
+  private lost(id: string, turn: Turn, off: () => void, e: unknown, tries: number, gen: number) {
+    off();
+    if (this.unsub.get(id) === off) this.unsub.delete(id);
+    if (gen !== this.gen) return;
+    if (lasting.has(errInfo(e).code) || tries + 1 >= followTries) {
+      this.broken = { ...this.broken, [id]: errText(e) || t("The stream of this turn stopped") };
       return;
     }
-    if (this.unsub.has(m.id)) return;
-    this.unsub.set(m.id, on("events:" + m.id, apply));
-    Node.Follow(m.id, t.last).catch(e => (this.error = errText(e)));
+    setTimeout(() => {
+      const m = this.msgs.find(x => x.id === id);
+      if (gen === this.gen && m && !final(m.state)) this.follow(id, turn, tries + 1);
+    }, Math.min(30_000, 1000 * 2 ** tries));
   }
 
   replace(m: Msg) {
@@ -304,46 +395,89 @@ class App {
     if (final(m.state)) { this.unsub.get(m.id)?.(); this.unsub.delete(m.id); }
   }
 
-  /** The settings the composer sends with (the draft's, for an agent of this Mac). */
-  settingsFor(agent: string) {
-    if (!this.localAgents().some(a => a.address === agent)) return {};
-    return { model: this.draft.model, effort: this.draft.effort, mode: this.draft.mode };
+  /** A setting chosen for an agent ("": its default). */
+  setting(agent: string, k: keyof Settings): string {
+    return this.settings[agent]?.[k] ?? "";
+  }
+  setSetting(agent: string, k: keyof Settings, v: string) {
+    const cur = this.settings[agent] ?? { model: "", effort: "", mode: "" };
+    this.settings = { ...this.settings, [agent]: { ...cur, [k]: v } };
   }
 
-  async send(body: string, files: { name: string; type: string; data: string }[]) {
+  /** The settings a message to this agent goes with: those chosen for it that it offers (an agent
+   * of this Mac; another's options are not known). */
+  settingsFor(agent: string): Partial<Settings> {
+    if (!this.localAgents().some(a => a.address === agent)) return {};
+    const opts = this.options[agent]?.options ?? [];
+    const out: Partial<Settings> = {};
+    for (const k of Object.keys(settingCats) as (keyof Settings)[]) {
+      const v = this.setting(agent, k);
+      const o = opts.find(o => o.category === settingCats[k]);
+      if (v && o?.values.some(x => x.value === v)) out[k] = v;
+    }
+    return out;
+  }
+
+  /** A cloud sandbox made for a new task whose first message did not go: the next try sends there
+   * (not to a new one). */
+  private madeSandbox: { for: string; agent: string } | null = null;
+  /** The key of the message being sent: the same message tried again has the same, so the node
+   * runs it once even when its first answer was lost. */
+  private sending: { what: string; key: string } | null = null;
+
+  /** Sends a message: true once the node has it, false if not (said in error; the composer keeps
+   * the text to send again). The chat it was sent from gets it, whichever is open by then. */
+  async send(body: string, files: { name: string; type: string; data: string }[]): Promise<boolean> {
+    // What the message is for, as it was when sent: the screen may change while it goes.
+    const gen = this.gen, chat = this.chat, thread = this.thread, draft = { ...this.draft };
+    let to = this.target;
     try {
-      let to = this.target;
       const task: any = { body, files };
-      if (!this.chat && !this.thread) {
+      if (this.limits && new TextEncoder().encode(body).length > this.limits.max_body) {
+        this.error = t("The text is over the node's limit of {n}", { n: bytes(this.limits.max_body) });
+        return false;
+      }
+      if (!chat && !thread) {
         // A new task: here or in the cloud.
-        if (this.draft.where === "cloud") {
-          if (!this.draft.cloudAgent) { this.error = "choose an agent of the cloud's catalogue"; return; }
-          const sb: any = await Node.CreateCloudTask(this.draft.cloudAgent, this.draft.repo, body.split("\n")[0].slice(0, 40));
-          to = sb.agent;
+        if (draft.where === "cloud") {
+          if (!draft.cloudAgent) { this.error = t("Choose an agent of the cloud's catalogue"); return false; }
+          to = await this.sandboxFor(draft, body);
         } else {
-          to = this.draft.agent;
-          task.cwd = this.draft.cwd;
+          to = draft.agent;
+          task.cwd = draft.cwd;
         }
-      } else if (this.chat?.kind === "session" && !this.thread) {
-        task.session = this.chat.session; // the conversation continues where it was
-      } else if (this.thread) {
-        task.thread = this.thread;
+      } else if (chat?.kind === "session" && !thread) {
+        task.session = chat.session; // the conversation continues where it was
+      } else if (thread) {
+        task.thread = thread;
       }
-      if (!to) { this.error = "choose an agent"; return; }
+      if (!to) { this.error = t("Choose an agent"); return false; }
       Object.assign(task, { to }, this.settingsFor(to));
+      const what = JSON.stringify([to, task.thread, task.session, task.cwd, body, files.map(f => [f.name, f.data.length])]);
+      if (this.sending?.what !== what) this.sending = { what, key: newId() };
+      task.idem = this.sending.key;
       const m = (await Node.SendTask(task)) as any as Msg;
-      const was = this.chat;
-      if (!this.thread) {
-        this.thread = m.thread;
-        this.target = to;
-        // The conversation keeps its folder as it becomes a thread.
-        if (was?.folder) await Node.MoveChat("thread:" + m.thread, was.folder).catch(() => {});
+      this.sending = null;
+      this.madeSandbox = null;
+      // The conversation keeps its folder as it becomes a thread.
+      if (!thread && chat?.folder) await Node.MoveChat("thread:" + m.thread, chat.folder).catch(() => {});
+      if (gen === this.gen) {
+        if (!this.thread) { this.thread = m.thread; this.target = to; }
+        this.msgs = [...this.msgs, m];
+        this.focus = m.id;
+        this.watch(m);
       }
-      this.msgs = [...this.msgs, m];
-      this.focus = m.id;
-      this.watch(m);
       this.loadChats();
-    } catch (e) { this.error = errText(e); }
+      return true;
+    } catch (e) { this.error = errText(e); return false; }
+  }
+
+  private async sandboxFor(draft: Draft, body: string): Promise<string> {
+    const what = draft.cloudAgent + "\u0000" + draft.repo;
+    if (this.madeSandbox?.for === what) return this.madeSandbox.agent;
+    const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40));
+    this.madeSandbox = { for: what, agent: sb.agent };
+    return sb.agent;
   }
 
   async answer(msg: string, req: string, option: string) {
@@ -493,6 +627,12 @@ class App {
 }
 
 /** A replayed conversation split at its user's messages. */
+function without<T>(o: Record<string, T>, k: string): Record<string, T> {
+  if (!(k in o)) return o;
+  const { [k]: _, ...rest } = o;
+  return rest;
+}
+
 function segments(evs: Ev[]): Segment[] {
   const out: Segment[] = [];
   let cur: Segment | null = null;

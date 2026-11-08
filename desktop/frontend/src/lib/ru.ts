@@ -340,6 +340,13 @@ export const ru: Record<string, string> = {
   "#task": "задача|задачи|задач",
   "Open a view": "Открыть вкладку",
   "Nothing open here. The + opens activity, changes, a terminal, pull requests or the preview.": "Здесь ничего не открыто. Через + откройте активность, изменения, терминал, пулл-реквесты или превью.",
+  "The text is over the node's limit of {n}": "Текст больше предела узла: {n}",
+  "Choose an agent of the cloud's catalogue": "Выберите агента из каталога облака",
+  "Choose an agent": "Выберите агента",
+  "The stream of this turn stopped": "Поток этого хода прервался",
+  "This turn is not being followed": "Ход больше не отслеживается",
+  "A message takes at most {n} files": "В сообщении не больше {n} файлов",
+  "The files are over the node's limit of {n} together": "Файлы вместе больше предела узла: {n}",
 };
 
 // The node's messages (English) that have a known form, in Russian.

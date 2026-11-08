@@ -64,8 +64,7 @@
     if (d) app.draft.cwd = d;
   }
   function chooseAgent(a: string) {
-    app.draft.agent = a;
-    app.draft.model = app.draft.effort = app.draft.mode = "";
+    app.draft.agent = a; // its settings are its own (app.settings)
     app.loadOptions(a);
   }
   function focusOnMount(el: HTMLInputElement) { requestAnimationFrame(() => el.focus()); }
