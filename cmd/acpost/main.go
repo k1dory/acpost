@@ -415,23 +415,58 @@ func printJSON(v any) {
 
 // readBody takes the body from --body, --body-file or stdin (when it is not a terminal).
 func readBody(cmd *cobra.Command, body, file string) (string, bool, error) {
+	ctx := cmd.Context()
 	switch {
 	case cmd.Flags().Changed("body"):
 		return body, true, nil
 	case file == "-":
-		b, err := io.ReadAll(os.Stdin)
+		b, err := readCtx(ctx, func() ([]byte, error) { return io.ReadAll(os.Stdin) })
 		return string(b), true, err
 	case file != "":
-		b, err := os.ReadFile(file)
+		b, err := readCtx(ctx, func() ([]byte, error) { return os.ReadFile(file) }) // a FIFO waits too
 		return string(b), true, err
 	case !term.IsTerminal(int(os.Stdin.Fd())):
-		b, err := io.ReadAll(os.Stdin)
+		b, err := readCtx(ctx, func() ([]byte, error) { return io.ReadAll(os.Stdin) })
 		if err != nil {
 			return "", false, err
 		}
 		return string(b), len(b) > 0, nil
 	}
 	return "", false, nil
+}
+
+// readCtx is read, given up when ctx ends (Ctrl-C while stdin is still open): a read of a pipe
+// or a terminal cannot be stopped, so it is left behind for the process's exit to end.
+func readCtx(ctx context.Context, read func() ([]byte, error)) ([]byte, error) {
+	type got struct {
+		b   []byte
+		err error
+	}
+	ch := make(chan got, 1)
+	go func() {
+		b, err := read()
+		ch <- got{b, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.b, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// readSecret reads a line from the terminal without echoing it; given up when ctx ends, the
+// terminal is put back as it was (echo on), not left as the read set it.
+func readSecret(ctx context.Context, fd int) ([]byte, error) {
+	old, err := term.GetState(fd)
+	if err != nil {
+		return nil, err
+	}
+	b, err := readCtx(ctx, func() ([]byte, error) { return term.ReadPassword(fd) })
+	if ctx.Err() != nil {
+		_ = term.Restore(fd, old)
+	}
+	return b, err
 }
 
 func sendCmd(g *globals) *cobra.Command {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,15 +48,24 @@ func forgeCmd(g *globals) *cobra.Command {
 			var token string
 			if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
 				fmt.Fprintf(os.Stderr, "token for %s: ", args[0])
-				b, err := term.ReadPassword(fd)
+				b, err := readSecret(cmd.Context(), fd)
 				fmt.Fprintln(os.Stderr)
 				if err != nil {
 					return err
 				}
 				token = string(b)
 			} else {
-				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-				token = line
+				b, err := readCtx(cmd.Context(), func() ([]byte, error) {
+					line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+					if err == io.EOF {
+						err = nil // a last line without its newline is the token all the same
+					}
+					return []byte(line), err
+				})
+				if err != nil {
+					return err
+				}
+				token = string(b)
 			}
 			if strings.TrimSpace(token) == "" {
 				return usageErr(errors.New("no token given"))
