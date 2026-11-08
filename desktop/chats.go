@@ -232,7 +232,15 @@ type Task struct {
 func (n *Node) SendTask(t Task) (store.Message, error) {
 	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (store.Message, error) {
 		r := client.SendRequest{To: t.To, Body: t.Body, Thread: t.Thread, Session: t.Session, Cwd: t.Cwd, Model: t.Model, Effort: t.Effort, Mode: t.Mode}
-		files, err := decodeUploads(t.Files)
+		var lim *client.Limits
+		if len(t.Files) > 0 {
+			st, err := c.Status(ctx)
+			if err != nil {
+				return store.Message{}, err
+			}
+			lim = st.Limits
+		}
+		files, err := decodeUploads(t.Files, lim)
 		if err != nil {
 			return store.Message{}, err
 		}

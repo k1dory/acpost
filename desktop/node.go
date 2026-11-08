@@ -436,7 +436,23 @@ func (n *Node) CloseTerminal(id string) error {
 	return err
 }
 
-func decodeUploads(files []Upload) ([]store.File, error) {
+// decodeUploads decodes the composer's files, the node's limits (when it says them) checked
+// first on the encoded sizes: what is over them is never decoded.
+func decodeUploads(files []Upload, lim *client.Limits) ([]store.File, error) {
+	if lim != nil {
+		if lim.MaxFiles > 0 && len(files) > lim.MaxFiles {
+			return nil, &client.Error{Code: "invalid", Message: fmt.Sprintf("%d files: the node takes at most %d", len(files), lim.MaxFiles),
+				Hint: "Send fewer files at once."}
+		}
+		var size int64
+		for _, f := range files {
+			size += int64(base64.StdEncoding.DecodedLen(len(f.Data)))
+		}
+		if lim.MaxFilesSize > 0 && size > lim.MaxFilesSize+2*int64(len(files)) { // DecodedLen counts the padding
+			return nil, &client.Error{Code: "invalid", Message: fmt.Sprintf("the files come to %d MiB: the node takes at most %d MiB", size>>20, lim.MaxFilesSize>>20),
+				Hint: "Attach smaller files, or give the agent a path on this Mac instead."}
+		}
+	}
 	var out []store.File
 	for _, f := range files {
 		b, err := base64.StdEncoding.DecodeString(f.Data)
