@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
   import { Marked } from "marked";
-  import DOMPurify from "dompurify";
+  import { cleanHtml, cleanSvg } from "../lib/sanitize";
   import hljs from "highlight.js/lib/common";
   import { Clipboard } from "@wailsio/runtime";
   let { text }: { text: string } = $props();
@@ -50,9 +50,8 @@
       },
     },
   });
-  // No forms or fields in what an agent writes: nothing in a chat may submit anywhere.
-  const html = $derived(DOMPurify.sanitize(md.parse(text ?? "", { async: false }) as string,
-    { FORBID_TAGS: ["form", "input", "button", "textarea", "select", "iframe", "object", "embed", "base", "meta"], FORBID_ATTR: ["formaction", "action", "target"] }));
+  // No forms or fields, nothing loaded from the web as it is shown (lib/sanitize.ts).
+  const html = $derived(cleanHtml(md.parse(text ?? "", { async: false }) as string));
 
   let box: HTMLDivElement;
   let seq = 0;
@@ -74,7 +73,7 @@
           const id = "mm-" + Date.now().toString(36) + "-" + seq++;
           let svg = "";
           try { svg = (await mermaid.render(id, src)).svg; } finally { document.getElementById("d" + id)?.remove(); document.getElementById(id)?.remove(); }
-          b.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
+          b.innerHTML = cleanSvg(svg);
           b.classList.add("drawn");
         } catch (e) { console.warn("diagram not drawn:", (e as Error)?.message?.slice(0, 200)); /* the text stays */ }
       }

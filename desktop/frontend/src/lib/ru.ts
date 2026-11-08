@@ -357,6 +357,9 @@ export const ru: Record<string, string> = {
   "Its result is not known": "Результат неизвестен",
   "A value has no name": "У значения нет имени",
   "The name {name} is there twice": "Имя {name} указано дважды",
+  "Allow scripts": "Разрешить скрипты",
+  "Scripts on": "Скрипты включены",
+  "The page's scripts run in a frame of their own; they reach nothing outside the app": "Скрипты страницы работают в отдельной рамке и не выходят за пределы приложения",
 };
 
 // The node's messages (English) that have a known form, in Russian.
