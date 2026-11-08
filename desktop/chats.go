@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
@@ -25,8 +26,30 @@ import (
 // runNode runs the app's own node (a stub in tests).
 var runNode = server.Run
 
-// ensureNode answers whether a node serves now, starting one in the app when none does.
+// nodeStartWait is how long the app's own node has to get ready.
+var nodeStartWait = 20 * time.Second
+
+// ensureNode answers whether a node serves now, starting one in the app when none does. Calls
+// are serialized (Wails runs each binding call in its own goroutine, and Status is called at
+// start, on a timer and from "Try again"): one node starts, the others find it running. The
+// outcome is kept for Status.
 func (n *Node) ensureNode() error {
+	n.startMu.Lock()
+	defer n.startMu.Unlock()
+	err := n.startNode()
+	n.mu.Lock()
+	n.startErr = ""
+	if err != nil {
+		n.startErr = err.Error()
+	}
+	n.mu.Unlock()
+	return err
+}
+
+func (n *Node) startNode() error {
+	if n.ownNodeRunning() {
+		return nil
+	}
 	c, err := n.client()
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -47,7 +70,7 @@ func (n *Node) ensureNode() error {
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return fmt.Errorf("%s: %w (fix it, or remove it for the app to write one)", path, err)
 	}
 	logPath := filepath.Join(config.StateDir(), "app-node.log")
 	_ = os.MkdirAll(filepath.Dir(logPath), 0o700)
@@ -56,13 +79,18 @@ func (n *Node) ensureNode() error {
 		return err
 	}
 	ready := make(chan struct{})
+	var readyOnce sync.Once
 	failed := make(chan error, 1)
+	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	n.stopNode = cancel
+	n.mu.Lock()
+	n.stopNode, n.nodeDone = cancel, done
+	n.mu.Unlock()
 	go func() {
+		defer close(done)
 		defer logf.Close()
 		log := slog.New(slog.NewTextHandler(logf, nil))
-		if err := runNode(ctx, cfg, log, func() { close(ready) }); err != nil {
+		if err := runNode(ctx, cfg, log, func() { readyOnce.Do(func() { close(ready) }) }); err != nil {
 			failed <- err
 		}
 	}()
@@ -73,9 +101,34 @@ func (n *Node) ensureNode() error {
 		n.mu.Unlock()
 		return nil
 	case err := <-failed:
+		cancel()
 		return fmt.Errorf("the node did not start: %w (log %s)", err, logPath)
-	case <-time.After(20 * time.Second):
-		return fmt.Errorf("the node did not start in 20 s (log %s)", logPath)
+	case <-done:
+		return fmt.Errorf("the node stopped as it started (log %s)", logPath)
+	case <-time.After(nodeStartWait):
+		// Not left starting: the next try would start another beside it.
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+		return fmt.Errorf("the node did not start in %s (log %s)", nodeStartWait, logPath)
+	}
+}
+
+// ownNodeRunning says whether the node the app started still runs.
+func (n *Node) ownNodeRunning() bool {
+	n.mu.Lock()
+	done := n.nodeDone
+	n.mu.Unlock()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return false
+	default:
+		return true
 	}
 }
 

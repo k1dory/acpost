@@ -35,19 +35,21 @@ type Node struct {
 	follows  map[string]*follow
 	terms    map[string]context.CancelFunc
 	stopNode context.CancelFunc // the node the app runs itself, if it does
+	nodeDone chan struct{}      // closed when that node has stopped
+	startMu  sync.Mutex         // one ensureNode at a time
 	notes    *notifications.NotificationService
 	noteOK   int // 0 not asked, 1 allowed, -1 refused
 	startErr string
 	emitFn   func(name string, data any) // tests: where events go instead of the window
 }
 
-// ServiceStartup connects to the node (a failure is told by Status, the app still opens).
+// ServiceStartup connects to the node in the background: the window opens meanwhile (a node
+// that is slow to start held it for up to 20 s), and Status waits for the outcome.
 func (n *Node) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	n.follows = map[string]*follow{}
 	n.terms = map[string]context.CancelFunc{}
-	if err := n.ensureNode(); err != nil {
-		n.startErr = err.Error()
-	}
+	n.startErr = "starting" // Status goes through ensureNode, which waits for this start
+	go n.ensureNode()
 	return nil
 }
 
@@ -63,6 +65,15 @@ func (n *Node) ServiceShutdown() error {
 	}
 	if n.stopNode != nil {
 		n.stopNode()
+	}
+	// The node cleans up (its socket, its pid file) before the app exits.
+	if done := n.nodeDone; done != nil {
+		n.mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+		n.mu.Lock()
 	}
 	return nil
 }
@@ -142,20 +153,25 @@ type Connection struct {
 
 // Status says whether the node answers, and what it is.
 func (n *Node) Status() Connection {
+	n.mu.Lock()
+	failed := n.startErr != ""
+	n.mu.Unlock()
+	if failed {
+		if err := n.ensureNode(); err != nil {
+			return Connection{Error: err.Error()}
+		}
+	}
 	c, err := n.client()
 	if err != nil {
 		return Connection{Error: err.Error()}
 	}
-	if n.startErr != "" {
-		if err := n.ensureNode(); err != nil {
-			return Connection{Error: err.Error()}
-		}
-		n.startErr = ""
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	st, err := c.Status(ctx)
-	out := Connection{URL: n.url, OK: err == nil, Status: st}
+	n.mu.Lock()
+	url := n.url
+	n.mu.Unlock()
+	out := Connection{URL: url, OK: err == nil, Status: st}
 	if err != nil {
 		out.Error = err.Error()
 		if errors.Is(err, client.ErrUnavailable) {
