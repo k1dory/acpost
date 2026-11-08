@@ -968,11 +968,7 @@ func sessionsCmd(g *globals) *cobra.Command {
 				if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {
 					updated = t.Local().Format(time.DateTime)
 				}
-				title := si.Title
-				if len(title) > 60 {
-					title = title[:60] + "…"
-				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", si.ID, updated, si.Cwd, title)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", si.ID, updated, si.Cwd, cut(si.Title, 61)) // by runes: UTF-8 stays whole
 			}
 			w.Flush()
 			if next != "" {
