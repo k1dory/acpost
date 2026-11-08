@@ -375,7 +375,9 @@ func (n *Node) follow(id string) {
 		return // the local copy is gone
 	}
 	for n.ctx.Err() == nil {
-		m, err := n.hub.Wait(n.ctx, id, client.MaxWait)
+		wctx, done := context.WithTimeout(n.ctx, client.MaxWait+hubCallTimeout)
+		m, err := n.hub.Wait(wctx, id, client.MaxWait)
+		done()
 		if err == nil && m.State.Final() && !n.copyHubEvents(id) {
 			err = errors.New("the hub's events did not come") // again, after the pause below
 		} else if n.settleFrom(id, m, err) {
@@ -410,7 +412,10 @@ func (n *Node) startJoin() {
 	n.goLoop(func() {
 		for {
 			next := announceEvery
-			if err := n.hub.Announce(n.ctx, n.Name(), n.announced()); err != nil && n.ctx.Err() == nil {
+			actx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+			err := n.hub.Announce(actx, n.Name(), n.announced())
+			done()
+			if err != nil && n.ctx.Err() == nil {
 				n.log.Warn("announce to hub", "err", err)
 				next = 2 * time.Second // the hub may be starting: try again soon
 			}
@@ -450,7 +455,9 @@ func (n *Node) hubClaimLoop() {
 		case <-n.ctx.Done():
 			return
 		}
-		m, ok, err := n.hub.NodeClaim(n.ctx, n.Name(), 30*time.Second, hubLease)
+		cctx, done := context.WithTimeout(n.ctx, hubClaimWait+hubCallTimeout)
+		m, ok, err := n.hub.NodeClaim(cctx, n.Name(), hubClaimWait, hubLease)
+		done()
 		if err != nil || !ok {
 			<-slots
 		}
@@ -480,7 +487,9 @@ func (n *Node) deliver(m store.Message) {
 	ctx := n.ctx
 	to, err := ParseAddress(m.To)
 	refuse := func(why string) {
-		_ = n.hub.Reply(ctx, m.ID, client.ReplyRequest{Lease: m.LeaseID, Error: why})
+		rctx, done := context.WithTimeout(ctx, hubCallTimeout)
+		_ = n.hub.Reply(rctx, m.ID, client.ReplyRequest{Lease: m.LeaseID, Error: why})
+		done()
 	}
 	if err != nil || to.Node != n.Name() || n.agentCfg(to.Name) == nil {
 		refuse("node " + n.Name() + " has no agent " + m.To)
@@ -608,7 +617,10 @@ func (n *Node) relay(id, lease string) {
 		}
 		if time.Since(extended) >= hubRenew {
 			extended = time.Now()
-			if err := n.hub.Extend(n.ctx, id, lease, hubLease); err != nil && isFinalErr(err) {
+			ectx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+			err := n.hub.Extend(ectx, id, lease, hubLease)
+			done()
+			if err != nil && isFinalErr(err) {
 				n.hubLeaseGone(id, lease)
 				return
 			}
@@ -664,7 +676,7 @@ func (n *Node) takeDelivery(ctx context.Context, local *store.Message, maxQueued
 // another delivery, or the hub's lease ran out and it delivers again: the copy is left as it is (a
 // turn running goes on) for the next delivery to adopt; it is not cancelled for good.
 func (n *Node) hubLeaseGone(id, lease string) {
-	ctx, done := context.WithTimeout(n.ctx, 10*time.Second)
+	ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
 	hm, err := n.hub.Get(ctx, id)
 	done()
 	var ce *client.Error

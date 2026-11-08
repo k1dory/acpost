@@ -27,12 +27,13 @@ type fakeHub struct {
 	down    bool
 	hang    bool // accept and never answer (until the request's context ends)
 	srv     *httptest.Server
+	quit    chan struct{} // closed at the test's end: hung requests end
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
-	f := &fakeHub{lease: lease, state: store.Running, extends: map[string]int{}, calls: map[string]int{}, byLease: map[string]int{}}
+	f := &fakeHub{lease: lease, state: store.Running, extends: map[string]int{}, calls: map[string]int{}, byLease: map[string]int{}, quit: make(chan struct{})}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
-	t.Cleanup(f.srv.Close)
+	t.Cleanup(func() { close(f.quit); f.srv.Close() })
 	return f
 }
 
@@ -56,7 +57,10 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 	down, hang := f.down, f.hang
 	f.mu.Unlock()
 	if hang {
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-f.quit:
+		}
 		return
 	}
 	if down {

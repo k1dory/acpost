@@ -135,15 +135,29 @@ func (n *Node) followHub(id string) (store.Message, error) {
 		return store.Message{}, err
 	}
 	started := false
-	return n.hub.Follow(n.ctx, id, int64(after), func(e store.Event) error {
-		if !started { // the first event: the agent has the message, the local copy says so
-			started = true
-			if m, err := n.hub.Get(n.ctx, id); err == nil && !m.State.Final() {
-				n.settleFrom(id, m, nil)
+	for {
+		// A stream that stays silent past hubStream may be a connection gone dead: opened again,
+		// from the events copied so far.
+		sctx, done := context.WithTimeout(n.ctx, hubStream)
+		m, err := n.hub.Follow(sctx, id, int64(after), func(e store.Event) error {
+			if !started { // the first event: the agent has the message, the local copy says so
+				started = true
+				gctx, gdone := context.WithTimeout(n.ctx, hubCallTimeout)
+				m, err := n.hub.Get(gctx, id)
+				gdone()
+				if err == nil && !m.State.Final() {
+					n.settleFrom(id, m, nil)
+				}
 			}
+			after = int(e.Seq)
+			return n.copyEvent(id, e)
+		})
+		stale := sctx.Err() != nil && n.ctx.Err() == nil
+		done()
+		if !stale {
+			return m, err
 		}
-		return n.copyEvent(id, e)
-	})
+	}
 }
 
 // copyHubEvents copies, page by page, the hub's events of a forwarded message its local copy does
