@@ -29,8 +29,8 @@ func TestBacklog(t *testing.T) {
 	if got.Body != "Fix the parser\n\nit chokes on tabs" {
 		t.Fatalf("%q", got.Body)
 	}
-	if _, err := n.StartBacklogItem(ctx, me, b.ID, ""); code(err) != "not_found" {
-		t.Fatalf("started twice: %v", err)
+	if again, err := n.StartBacklogItem(ctx, me, b.ID, ""); err != nil || again.ID != m.ID {
+		t.Fatalf("started twice: %s %v (the first: %s)", again.ID, err, m.ID)
 	}
 	// Sent, but the node stopped before it left the backlog: started again, the same message.
 	c, _ := n.PutBacklogItem(ctx, me, store.BacklogItem{Title: "Again", Agent: "bot"})

@@ -80,6 +80,10 @@ func (n *Node) StartBacklogItem(ctx context.Context, p Principal, id, agent stri
 	}
 	b, err := n.st.BacklogItemOf(ctx, id)
 	if errors.Is(err, store.ErrNoBacklogItem) {
+		// Started before (the answer was lost): the message it became.
+		if m, err := n.st.ByIdemPrefix(ctx, p.Address(), "bl:"+id+":"); err == nil {
+			return hideLease(m), nil
+		}
 		return store.Message{}, errf("not_found", "%v", err)
 	} else if err != nil {
 		return store.Message{}, errf("unavailable", "%v", err)
@@ -102,7 +106,8 @@ func (n *Node) StartBacklogItem(ctx context.Context, p Principal, id, agent stri
 	if err != nil {
 		return m, err
 	}
-	if err := n.st.DeleteBacklogItem(context.WithoutCancel(ctx), b.ID); err != nil && !errors.Is(err, store.ErrNoBacklogItem) {
+	// Taken off only as it was sent: an edit saved meanwhile stays on the backlog, for its own start.
+	if _, err := n.st.DeleteBacklogItemIf(context.WithoutCancel(ctx), b); err != nil {
 		n.log.Warn("backlog", "id", b.ID, "err", err) // started; it stays listed until the next start returns the same message
 	}
 	return m, nil
