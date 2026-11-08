@@ -355,6 +355,8 @@ type Pull struct {
 	Base    string    `json:"base"`
 	URL     string    `json:"url"`
 	Updated time.Time `json:"updated"`
+	// Existing: opening it found it already open (a repeat of the same open), nothing new made.
+	Existing bool `json:"existing,omitempty"`
 }
 
 // Check is a CI run (GitHub Actions run, GitLab pipeline, Forgejo/Gitea commit status) and its jobs.
@@ -369,6 +371,8 @@ type Check struct {
 	Finished   time.Time `json:"finished,omitempty"`
 	Jobs       []Job     `json:"jobs,omitempty"`
 	LogsByJobs bool      `json:"logs_by_jobs,omitempty"` // logs are read per job
+	// JobsError: its jobs could not be read (all of them, or past the first pages): Jobs is what was.
+	JobsError string `json:"jobs_error,omitempty"`
 }
 
 // Job is a job of a run.

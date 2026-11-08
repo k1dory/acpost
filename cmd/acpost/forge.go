@@ -121,16 +121,17 @@ func forgeCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := c.Pulls(cmd.Context(), query(), state)
+			l, err := c.PullList(cmd.Context(), query(), state)
 			if err != nil {
 				return err
 			}
+			defer noteCut(l.Truncated, len(l.Items), "pull requests")
 			if g.json {
-				printJSON(items)
+				printJSON(nonNil(l.Items))
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			for _, p := range items {
+			for _, p := range l.Items {
 				fmt.Fprintf(w, "#%d\t%s\t%s → %s\t%s\t%s\n", p.Number, p.State, p.Head, p.Base, p.Author, p.Title)
 			}
 			return w.Flush()
@@ -148,19 +149,23 @@ func forgeCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := c.Checks(cmd.Context(), query(), ref)
+			l, err := c.CheckList(cmd.Context(), query(), ref)
 			if err != nil {
 				return err
 			}
+			defer noteCut(l.Truncated, len(l.Items), "runs")
 			if g.json {
-				printJSON(items)
+				printJSON(nonNil(l.Items))
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			for _, ch := range items {
+			for _, ch := range l.Items {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ch.ID, ch.Status, ch.Name, took(ch.Started, ch.Finished))
 				for _, j := range ch.Jobs {
 					fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", j.ID, j.Status, j.Name, took(j.Started, j.Finished))
+				}
+				if ch.JobsError != "" {
+					fmt.Fprintf(w, "  !\t%s\n", ch.JobsError)
 				}
 			}
 			return w.Flush()
@@ -205,6 +210,9 @@ func forgeCmd(g *globals) *cobra.Command {
 			if g.json {
 				printJSON(p)
 				return nil
+			}
+			if p.Existing {
+				fmt.Fprintf(os.Stderr, "· #%d was already open from %s\n", p.Number, p.Head)
 			}
 			fmt.Println(p.URL)
 			return nil
@@ -257,4 +265,19 @@ func took(start, end time.Time) string {
 		return "running " + time.Since(start).Round(time.Second).String()
 	}
 	return end.Sub(start).Round(time.Second).String()
+}
+
+// noteCut says on stderr that a list holds only the first of what the forge has.
+func noteCut(cut bool, n int, what string) {
+	if cut {
+		fmt.Fprintf(os.Stderr, "more: the forge has more %s than these %d\n", what, n)
+	}
+}
+
+// nonNil is a list as JSON shows it: [] for none, not null.
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
