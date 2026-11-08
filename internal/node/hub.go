@@ -525,10 +525,20 @@ func (n *Node) deliver(m store.Message) {
 			if err == nil || errors.As(err, &e) || try == 2 || ctx.Err() != nil {
 				break
 			}
-			time.Sleep(time.Second)
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
+		}
+		var e *Error
+		if errors.As(err, &e) {
+			refuse(fmt.Sprintf("node %s: %v", n.Name(), err)) // over the limits, not what was listed: final
+			return
 		}
 		if err != nil {
-			refuse(fmt.Sprintf("node %s: %v", n.Name(), err))
+			// The hub or the way to it failing is passing: its lease runs out and it delivers again
+			// (an attempt spent, not the message).
+			n.log.Warn("delivery's files did not come; left to the next delivery", "id", m.ID, "err", err)
 			return
 		}
 		if leased.IsZero() || time.Since(leased) > hubLease*2/3 {
