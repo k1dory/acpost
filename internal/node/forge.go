@@ -240,6 +240,9 @@ func (n *Node) approve(ctx context.Context, p Principal, title, text string, inp
 		return errf("unavailable", "the approval could not be asked: %v", err)
 	}
 	reply, ok := pending.Wait(ctx, req.ID, timeout)
+	if !ok && ctx.Err() != nil {
+		return ctx.Err() // the request ended (the node stops): nobody decided, nothing to record
+	}
 	decision, by := "timeout", ""
 	if ok {
 		by = n.answeredBy(req.ID)

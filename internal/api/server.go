@@ -1385,36 +1385,73 @@ var fileFields = func() []string {
 
 // decodeLenient decodes a body from another node into v, ignoring fields this version does not
 // know. A list of files decodes strictly in the store (a misspelt field there is an error), so
-// in it the fields a store.File does not have are dropped first.
+// in it the fields a store.File does not have are dropped first. Nothing here grows with what
+// the sender pads the body with: the object is walked a value at a time and only the files'
+// place in it kept, and the list is walked a file at a time, at most MaxFilesPerRequest of them.
 func decodeLenient(dec *json.Decoder, v any) error {
-	var top map[string]json.RawMessage
-	if err := dec.Decode(&top); err != nil {
+	var body json.RawMessage
+	if err := dec.Decode(&body); err != nil {
 		return err
 	}
-	for key, raw := range top {
-		if !strings.EqualFold(key, "files") || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-			continue
-		}
-		var files []map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &files); err != nil {
-			return err
-		}
-		for _, f := range files {
-			for k := range f {
-				if !slices.ContainsFunc(fileFields, func(n string) bool { return strings.EqualFold(n, k) }) {
-					delete(f, k)
-				}
-			}
-		}
-		b, err := json.Marshal(files)
+	type span struct {
+		start, end int
+		files      []byte
+	}
+	var spans []span
+	walk := json.NewDecoder(bytes.NewReader(body))
+	if t, err := walk.Token(); err != nil || t != json.Delim('{') {
+		return json.Unmarshal(body, v) // not an object: v says what is wrong with it
+	}
+	var val json.RawMessage // one buffer for every value: what is skipped is not kept
+	for walk.More() {
+		t, err := walk.Token()
 		if err != nil {
 			return err
 		}
-		top[key] = b
+		if err := walk.Decode(&val); err != nil {
+			return err
+		}
+		if key, _ := t.(string); strings.EqualFold(key, "files") {
+			files, err := knownFileFields(val)
+			if err != nil {
+				return err
+			}
+			end := int(walk.InputOffset())
+			spans = append(spans, span{end - len(val), end, files})
+		}
 	}
-	b, err := json.Marshal(top)
+	for i := len(spans) - 1; i >= 0; i-- {
+		sp := spans[i]
+		body = append(body[:sp.start:sp.start], append(sp.files, body[sp.end:]...)...)
+	}
+	return json.Unmarshal(body, v)
+}
+
+// knownFileFields is a list of files with only the fields a store.File has.
+func knownFileFields(raw json.RawMessage) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	t, err := dec.Token()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return json.Unmarshal(b, v)
+	if t != json.Delim('[') {
+		return bytes.Clone(raw), nil // null, or not a list: the store says what is wrong with it
+	}
+	var out []map[string]json.RawMessage
+	for dec.More() {
+		if len(out) == store.MaxFilesPerRequest {
+			return nil, fmt.Errorf("files: more than %d", store.MaxFilesPerRequest)
+		}
+		var f map[string]json.RawMessage
+		if err := dec.Decode(&f); err != nil {
+			return nil, err
+		}
+		for k := range f {
+			if !slices.ContainsFunc(fileFields, func(n string) bool { return strings.EqualFold(n, k) }) {
+				delete(f, k)
+			}
+		}
+		out = append(out, f)
+	}
+	return json.Marshal(out)
 }

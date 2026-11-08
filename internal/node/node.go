@@ -785,8 +785,10 @@ func (n *Node) Reply(ctx context.Context, p Principal, id, lease, body, errText 
 // files go with the reply.
 func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, errCode, errText string, files []store.File) error {
 	m, err := n.st.Get(ctx, id)
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return errf("not_found", "no message %s", id)
+	} else if err != nil {
+		return err // a request cut short is not a message gone
 	}
 	if !n.canServe(p, m.To) {
 		return errf("refused", "%s may not answer for %s", p.Address(), m.To)
@@ -826,8 +828,10 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 // Extend makes a claim last d longer.
 func (n *Node) Extend(ctx context.Context, p Principal, id, lease string, d time.Duration) error {
 	m, err := n.st.Get(ctx, id)
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return errf("not_found", "no message %s", id)
+	} else if err != nil {
+		return err // a request cut short is not a message gone
 	}
 	if !n.canServe(p, m.To) {
 		return errf("refused", "%s may not act for %s", p.Address(), m.To)
