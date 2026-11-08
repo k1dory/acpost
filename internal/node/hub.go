@@ -253,14 +253,19 @@ func (n *Node) startFollow(id string) {
 	}
 	n.following[id] = true
 	n.followMu.Unlock()
-	n.goLoop(func() {
+	// From a request: a node closing starts no loop (followSweep picks the message up next start).
+	if !n.goWork(func() {
 		defer func() {
 			n.followMu.Lock()
 			delete(n.following, id)
 			n.followMu.Unlock()
 		}()
 		n.follow(id)
-	})
+	}) {
+		n.followMu.Lock()
+		delete(n.following, id)
+		n.followMu.Unlock()
+	}
 }
 
 func (n *Node) wakeFollow() {
