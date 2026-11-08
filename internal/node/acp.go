@@ -841,6 +841,7 @@ func (s *acpSlot) handle(m store.Message) {
 	turn = p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply), n.cfg.Limits.MaxFiles, int(n.cfg.Limits.MaxFilesSize))
 	turn.mu.Lock()
 	turn.ctx = turnCtx // what waits for a person ends with the turn
+	turn.lease = m.LeaseID
 	turn.mu.Unlock()
 	resp, err := p.conn.Prompt(turnCtx, acp.PromptRequest{SessionId: sid, Prompt: blocks})
 	endCall()
@@ -932,6 +933,7 @@ type acpTurn struct {
 	usage              *acp.SessionUsageUpdate // the agent's last word on the session's context and cost
 	tools              map[string]*toolTrack   // the turn's tool calls as their updates made them
 	ctx                context.Context         // the turn's: ended by its timeout or its message's cancel
+	lease              string                  // the attempt's: its events are taken under it ("" outside a message's turn)
 	history            bool                    // a session's history replayed (session/load): its user's messages too
 }
 
@@ -1042,7 +1044,10 @@ func (c *acpClient) event(t *acpTurn, kind string, data any) { t.stream.event(ki
 func (c *acpClient) record(t *acpTurn, kind string, data any) {
 	b := eventJSON(data)
 	n := c.slot.a.n
-	if err := n.addEvent(n.ctx, t.msgID, kind, b, true); err != nil && n.ctx.Err() == nil {
+	t.mu.Lock()
+	lease := t.lease
+	t.mu.Unlock()
+	if err := n.addLeasedEvent(n.ctx, t.msgID, lease, kind, b); err != nil && n.ctx.Err() == nil {
 		n.log.Debug("event", "err", err)
 	}
 }
@@ -1370,4 +1375,18 @@ func (a *acpAgent) listProc(ctx context.Context) (*acpProc, func(), error) {
 	stop := context.AfterFunc(ctx, slot.stopProc)
 	p, err := slot.ensureProc(ctx)
 	return p, func() { stop(); done() }, err
+}
+
+// addLeasedEvent records an event of a turn under its attempt's lease: an attempt that lost it
+// (reaped, the message taken again) adds nothing to the events of the attempt that runs now.
+// Without a lease (no message's turn), as addEvent does for a turn.
+func (n *Node) addLeasedEvent(ctx context.Context, id, lease, kind, data string) error {
+	if lease == "" {
+		return n.addEvent(ctx, id, kind, data, true)
+	}
+	err := n.st.AddTurnEventLeased(ctx, id, lease, kind, data)
+	if err == nil {
+		n.eventsAdded()
+	}
+	return err
 }

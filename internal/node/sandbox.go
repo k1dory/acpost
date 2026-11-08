@@ -1156,7 +1156,7 @@ func (a *sandboxAgent) handle(m store.Message) {
 		if l := t.label.Load(); l > 0 && strings.HasPrefix(b, "{") && b != "{}" && !strings.Contains(b, `"sandbox_event":`) {
 			b = `{"sandbox_event":` + strconv.FormatInt(l, 10) + "," + b[1:]
 		}
-		if err := n.addEvent(n.ctx, m.ID, kind, b, true); err != nil && n.ctx.Err() == nil {
+		if err := n.addLeasedEvent(n.ctx, m.ID, m.LeaseID, kind, b); err != nil && n.ctx.Err() == nil {
 			n.log.Debug("event", "err", err)
 		}
 	}, budget: max(n.cfg.Limits.MaxEventsPerMessage-had, 0) / 2}

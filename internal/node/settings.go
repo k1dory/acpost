@@ -134,8 +134,8 @@ func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.Session
 			return fmt.Errorf("the mode %s could not be set: %v", set.want, err)
 		}
 		if err != nil {
-			if eventErr := s.a.n.addEvent(s.a.n.ctx, m.ID, "notice", eventJSON(map[string]string{"severity": "warning",
-				"text": set.s.Name + " " + set.want + ": " + err.Error()}), true); eventErr != nil {
+			if eventErr := s.a.n.addLeasedEvent(s.a.n.ctx, m.ID, m.LeaseID, "notice", eventJSON(map[string]string{"severity": "warning",
+				"text": set.s.Name + " " + set.want + ": " + err.Error()})); eventErr != nil {
 				s.a.n.log.Debug("event", "err", eventErr)
 			}
 			continue
