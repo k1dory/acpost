@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -28,14 +29,15 @@ import (
 
 // Exit codes.
 const (
-	exitOK       = 0
-	exitError    = 1
-	exitUsage    = 2
-	exitNotFound = 3
-	exitTimeout  = 4
-	exitFailed   = 5
-	exitNoNode   = 6
-	exitRefused  = 7
+	exitOK          = 0
+	exitError       = 1
+	exitUsage       = 2
+	exitNotFound    = 3
+	exitTimeout     = 4
+	exitFailed      = 5
+	exitNoNode      = 6
+	exitRefused     = 7
+	exitInterrupted = 130 // as a shell says a command ended by SIGINT
 )
 
 type exitErr struct {
@@ -87,7 +89,14 @@ func main() {
 	root := rootCmd(g) // registering the flags sets their defaults
 	// Known before flags are parsed: an error in parsing them is reported in JSON too.
 	g.json = jsonWanted(os.Args[1:], os.Getenv("ACPOST_JSON"))
-	err := root.ExecuteContext(context.Background())
+	// Ctrl-C ends a command through its context: term restores the terminal and closes its own,
+	// a save is not cut midway; a second Ctrl-C ends it at once.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	go func() { <-ctx.Done(); stop() }()
+	err := root.ExecuteContext(ctx)
+	if err != nil && ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		err = &exitErr{code: exitInterrupted, name: "interrupted", err: errors.New("interrupted")}
+	}
 	if err == nil {
 		return
 	}

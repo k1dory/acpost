@@ -341,8 +341,9 @@ text, when it adds something, is in `error` after the explanation.
 | 3 | no such message or agent |
 | 4 | `--timeout` reached; the message keeps going |
 | 5 | the message ended `failed`, `cancelled` or `expired` |
-| 6 | no node to talk to |
+| 6 | no node to talk to, or it does not answer |
 | 7 | refused: not allowed, a limit, a chain too deep |
+| 130 | interrupted (Ctrl-C): what the command opened is closed first; the message keeps going |
 
 `--timeout` defaults to no limit for `wait` and is advisable from an agent, whose shell tool has its
 own. `--idempotency-key` makes a repeated `send` (a retry after a network error) return the first
