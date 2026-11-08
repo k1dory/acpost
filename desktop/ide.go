@@ -73,7 +73,9 @@ type ideServer struct {
 	stopped    bool               // nothing starts any more
 	looked     bool               // the app's look is installed (else tried again on IDEStart)
 	installing bool
-	shown      string // the address the pane has open
+
+	pane  sync.Mutex // the pane's calls, one at a time
+	shown string     // the address the pane has open (under pane)
 
 	// For tests; zero: the real ones.
 	findCLI func() (string, error)
@@ -594,6 +596,8 @@ func endGroup(pid int, freed func() bool) {
 }
 
 // IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.
+// The pane's calls are taken one at a time (pane): each is queued for the main thread in the
+// order taken, with what is open checked and set in the same step.
 func (n *Node) IDEShow(url string, x, y, w, h float64) error {
 	if n.win == nil {
 		return errPreview
@@ -603,37 +607,41 @@ func (n *Node) IDEShow(url string, x, y, w, h float64) error {
 			ideScripts(ideExtDir(data, p.version), p.hash)
 		}
 	}
-	// Focus goes into VS Code when it is opened (a url), not each time the pane is placed.
-	if err := preview.IDEShow(n.win.NativeWindow(), x, y, w, h, strings.TrimSpace(url) != "" && strings.TrimSpace(url) != ide.loaded()); err != nil {
+	ide.pane.Lock()
+	defer ide.pane.Unlock()
+	// The same address again (the IDE shown once more): VS Code stays as it is, not reloaded; focus
+	// goes into VS Code when it is opened, not each time the pane is placed.
+	u := strings.TrimSpace(url)
+	load := u != "" && u != ide.shown
+	if err := preview.IDEShow(n.win.NativeWindow(), x, y, w, h, load); err != nil {
 		return err
 	}
-	// The same address again (the IDE shown once more): VS Code stays as it is, not reloaded.
-	if u := strings.TrimSpace(url); u != "" && u != ide.loaded() {
+	if load {
 		if err := preview.IDELoad(u); err != nil {
 			return err
 		}
-		ide.mu.Lock()
 		ide.shown = u
-		ide.mu.Unlock()
 	}
 	return nil
 }
 
-func (s *ideServer) loaded() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.shown
-}
-
 // IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
 // again if it ended, and its answer is checked against what is shown before anything navigates).
-func (n *Node) IDEReload() { preview.IDEReload() }
+func (n *Node) IDEReload() {
+	ide.pane.Lock()
+	defer ide.pane.Unlock()
+	preview.IDEReload()
+}
 
 // IDETheme gives the IDE the app's theme: VS Code follows light or dark.
 func (n *Node) IDETheme(dark bool) { preview.IDEAppearance(dark) }
 
 // IDEHide hides it; VS Code keeps running.
-func (n *Node) IDEHide() { preview.IDEHide() }
+func (n *Node) IDEHide() {
+	ide.pane.Lock()
+	defer ide.pane.Unlock()
+	preview.IDEHide()
+}
 
 // Menu shows a menu of the system's at x, y (window points) — over the native panes, which an
 // HTML menu would be under — and gives the item chosen, or -1 (closed; or no window: the
