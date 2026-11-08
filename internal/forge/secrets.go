@@ -1,38 +1,62 @@
 package forge
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
+
+	"github.com/k1dory/acpost/internal/keychain"
 )
 
-// Tokens are kept in the macOS keychain (service "acpost-forge", account the host; given to
-// `security` on its stdin, never on a command line) or, elsewhere, in a file only its owner reads
-// (forge-tokens.json, 0600). What kind of forge a host is, and nothing secret, is in forges.json
-// beside it.
+// Tokens are kept by internal/keychain: the macOS keychain (service "acpost-forge", account the
+// host) or, elsewhere, a file only its owner reads (forge-tokens.json, 0600, the name it always
+// had). What kind of forge a host is, and nothing secret, is in forges.json beside it.
 
 const keychainService = "acpost-forge"
+
+// tokenFor is how long a token read from the keychain is used before it is read again: every
+// request to a forge asks for one, and each read there is a process (security(1)).
+const tokenFor = time.Minute
 
 // Store keeps hosts' kinds and tokens.
 type Store struct {
 	Dir  string // ~/.config/acpost
 	File bool   // the file even on macOS (tests)
-	mu   sync.Mutex
+
+	once   sync.Once
+	kc     *keychain.Store
+	mu     sync.Mutex // kinds (with the lock file across processes) and the cache
+	cached map[string]cachedToken
 }
 
-func (s *Store) keychain() bool { return runtime.GOOS == "darwin" && !s.File }
+type cachedToken struct {
+	token string
+	at    time.Time
+}
 
-func (s *Store) kindsFile() string  { return filepath.Join(s.Dir, "forges.json") }
-func (s *Store) tokensFile() string { return filepath.Join(s.Dir, "forge-tokens.json") }
+// DefaultStore is the store of this process: the keychain on macOS unless ACPOST_SECRETS_FILE=1,
+// the file in ~/.config/acpost otherwise. The node and acpost forge login use the same one.
+func DefaultStore() *Store {
+	home, _ := os.UserHomeDir()
+	return &Store{Dir: filepath.Join(home, ".config", "acpost"), File: os.Getenv("ACPOST_SECRETS_FILE") == "1"}
+}
+
+func (s *Store) tokens() *keychain.Store {
+	s.once.Do(func() {
+		s.kc = &keychain.Store{Service: keychainService, Dir: s.Dir, File: s.File || runtime.GOOS != "darwin", FileName: "forge-tokens.json"}
+	})
+	return s.kc
+}
+
+func (s *Store) kindsFile() string { return filepath.Join(s.Dir, "forges.json") }
 
 func readJSON(path string, v any) error {
 	b, err := os.ReadFile(path)
@@ -85,15 +109,6 @@ func (s *Store) locked(fn func() error) error {
 	return fn()
 }
 
-// security runs the macOS security(1) tool outside any terminal: it reads a password from its
-// controlling terminal when it has one, and from stdin (what it is given here) only when not.
-func security(stdin string, args ...string) ([]byte, error) {
-	cmd := exec.Command("security", args...)
-	cmd.Stdin = strings.NewReader(stdin)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	return cmd.CombinedOutput()
-}
-
 // Kind is the kind kept for a host ("" when none).
 func (s *Store) Kind(host string) string {
 	s.mu.Lock()
@@ -110,6 +125,7 @@ func (s *Store) Login(host, kind, token string) error {
 		return fmt.Errorf("a host (no scheme, no path) and a token")
 	}
 	return s.locked(func() error {
+		delete(s.cached, host)
 		// The host is listed (its kind, when given): the accounts are these hosts.
 		kinds := map[string]string{}
 		if err := readJSON(s.kindsFile(), &kinds); err != nil {
@@ -121,19 +137,7 @@ func (s *Store) Login(host, kind, token string) error {
 		if err := writeJSON(s.kindsFile(), kinds, 0o600); err != nil {
 			return err
 		}
-		if s.keychain() {
-			// Asked twice: given twice, on stdin (never on a command line).
-			if out, err := security(token+"\n"+token+"\n", "add-generic-password", "-U", "-s", keychainService, "-a", host, "-w"); err != nil {
-				return fmt.Errorf("keychain: %v %s", err, bytes.TrimSpace(out))
-			}
-			return nil
-		}
-		tokens := map[string]string{}
-		if err := readJSON(s.tokensFile(), &tokens); err != nil {
-			return err
-		}
-		tokens[host] = token
-		return writeJSON(s.tokensFile(), tokens, 0o600)
+		return s.tokens().Set(host, token)
 	})
 }
 
@@ -151,41 +155,46 @@ func (s *Store) Hosts() []string {
 	return out
 }
 
-// Logout forgets a host's token (and the host).
+// Logout forgets a host's token, then the host. A token that could not be forgotten is an error
+// and the host stays listed: a logout said to be done leaves nothing a request could still use.
 func (s *Store) Logout(host string) error {
 	return s.locked(func() error {
-		kinds := map[string]string{}
-		if err := readJSON(s.kindsFile(), &kinds); err == nil {
-			delete(kinds, host)
-			_ = writeJSON(s.kindsFile(), kinds, 0o600)
-		}
-		if s.keychain() {
-			_, _ = security("", "delete-generic-password", "-s", keychainService, "-a", host)
-			return nil
-		}
-		tokens := map[string]string{}
-		if err := readJSON(s.tokensFile(), &tokens); err != nil {
+		delete(s.cached, host)
+		if err := s.tokens().Delete(host); err != nil {
 			return err
 		}
-		delete(tokens, host)
-		return writeJSON(s.tokensFile(), tokens, 0o600)
+		kinds := map[string]string{}
+		if err := readJSON(s.kindsFile(), &kinds); err != nil {
+			return err
+		}
+		if _, ok := kinds[host]; !ok {
+			return nil
+		}
+		delete(kinds, host)
+		return writeJSON(s.kindsFile(), kinds, 0o600)
 	})
 }
 
-// Token is a host's token ("" when none is kept).
+// Token is a host's token ("" when none is kept, or when the store cannot be read). From the
+// keychain, a token read is used for tokenFor; Login and Logout of this store forget it at once.
 func (s *Store) Token(host string) string {
+	kc := s.tokens()
+	if kc.File {
+		v, _, _ := kc.Lookup(host)
+		return strings.TrimSpace(v)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.keychain() {
-		cmd := exec.Command("security", "find-generic-password", "-s", keychainService, "-a", host, "-w")
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		out, err := cmd.Output()
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(out))
+	if c, ok := s.cached[host]; ok && time.Since(c.at) < tokenFor {
+		return c.token
 	}
-	tokens := map[string]string{}
-	_ = readJSON(s.tokensFile(), &tokens)
-	return tokens[host]
+	v, _, err := kc.Lookup(host)
+	if err != nil {
+		return "" // not kept: a locked keychain is asked again next time
+	}
+	if s.cached == nil {
+		s.cached = map[string]cachedToken{}
+	}
+	s.cached[host] = cachedToken{token: strings.TrimSpace(v), at: time.Now()}
+	return strings.TrimSpace(v)
 }

@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -49,8 +47,7 @@ type probed struct {
 
 func (n *Node) forgeClient() (*forge.Client, *forge.Store) {
 	n.forges.once.Do(func() {
-		home, _ := os.UserHomeDir()
-		st := &forge.Store{Dir: filepath.Join(home, ".config", "acpost"), File: os.Getenv("ACPOST_SECRETS_FILE") == "1"}
+		st := forge.DefaultStore()
 		n.forges.store = st
 		n.forges.client = &forge.Client{Token: st.Token, Kind: st.Kind}
 		n.forges.probed = map[string]probed{}

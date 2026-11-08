@@ -21,7 +21,9 @@ type Store struct {
 	Service string
 	Dir     string // for the file
 	File    bool   // the file even on macOS
-	mu      sync.Mutex
+	// FileName is the file's name in Dir ("" : <service>.secrets.json).
+	FileName string
+	mu       sync.Mutex
 }
 
 // Default is the store of a service for this process: the keychain on macOS unless
@@ -30,7 +32,12 @@ func Default(service, dir string) *Store {
 	return &Store{Service: service, Dir: dir, File: runtime.GOOS != "darwin" || os.Getenv("ACPOST_SECRETS_FILE") == "1"}
 }
 
-func (s *Store) file() string { return filepath.Join(s.Dir, s.Service+".secrets.json") }
+func (s *Store) file() string {
+	if s.FileName != "" {
+		return filepath.Join(s.Dir, s.FileName)
+	}
+	return filepath.Join(s.Dir, s.Service+".secrets.json")
+}
 
 func (s *Store) read() (map[string]string, error) {
 	out := map[string]string{}
