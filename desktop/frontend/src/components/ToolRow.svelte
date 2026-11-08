@@ -5,9 +5,9 @@
   import Icon from "./Icon.svelte";
   import DiffLines from "./DiffLines.svelte";
 
-  let { tool, final }: { tool: Tool; final: boolean } = $props();
+  let { tool, msgState }: { tool: Tool; msgState: string } = $props();
   let open = $state(false);
-  const st = $derived(toolState(tool, final));
+  const st = $derived(toolState(tool, msgState));
   const e = $derived(editTotals(tool));
   // A replayed history has no real timing: no duration then.
   const took = $derived(tool.ended && tool.ended - tool.started >= 5 ? dur(tool.ended - tool.started) : "");
@@ -21,6 +21,7 @@
       {#if st === "running"}<span class="spin"></span>
       {:else if st === "failed"}<span class="bad"><Icon name="x" size={12} /></span>
       {:else if st === "pending"}<span class="dot queued"></span>
+      {:else if st === "cancelled" || st === "expired" || st === "unknown"}<span class="muted" title={t(st === "cancelled" ? "Cancelled before it finished" : st === "expired" ? "Expired before it finished" : "Its result is not known")}><Icon name="x" size={12} /></span>
       {:else}<span class="ok"><Icon name="check" size={12} /></span>{/if}
     </span>
     <span class="name mono">{toolName(tool)}</span>

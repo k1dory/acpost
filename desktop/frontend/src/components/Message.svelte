@@ -75,10 +75,11 @@
       {#if m.state === "running"}<Working agent={m.to} view={turn} msg={m.id} />
       {:else if m.state === "queued"}<span class="chip warn">{t("queued")}</span>
       {:else if m.state === "failed"}<span class="chip crit">{t("failed")}</span>
-      {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>{/if}
+      {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>
+      {:else if m.state === "expired"}<span class="chip warn">{t("expired")}</span>{/if}
     </div>
 
-    {#if turn}<TurnBlocks view={turn} msg={m.id} {done} agent={m.to} />{/if}
+    {#if turn}<TurnBlocks view={turn} msg={m.id} msgState={m.state} agent={m.to} />{/if}
     {#if m.files?.some(f => f.reply)}
       <!-- What the agent handed back: each opens in the artifact viewer. -->
       <div class="arts">

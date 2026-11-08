@@ -154,10 +154,21 @@ export function toolName(t: Tool): string {
   return (t.kind || t.title?.split(/[\s:]/)[0] || "tool").toLowerCase();
 }
 
-export function toolState(t: Tool, final: boolean): "running" | "done" | "failed" | "pending" {
+export type ToolState = "running" | "done" | "failed" | "pending" | "cancelled" | "expired" | "unknown";
+
+/** A call's state, its message's state ("queued", "running", "done", …) telling what an unfinished
+ * call came to: a turn done ended its calls with it; one cancelled or expired stopped them; one that
+ * failed leaves their result unknown. */
+export function toolState(t: Tool, msgState: string): ToolState {
   if (t.status === "failed" || (t.exit_code !== undefined && t.exit_code !== 0)) return "failed";
   if (t.status === "completed") return "done";
-  return final ? "done" : t.status === "pending" ? "pending" : "running";
+  switch (msgState) {
+    case "done": return "done";
+    case "cancelled": return "cancelled";
+    case "expired": return "expired";
+    case "failed": return "unknown";
+  }
+  return t.status === "pending" ? "pending" : "running";
 }
 
 export function editTotals(t: Tool): { files: number; added: number; removed: number } {
