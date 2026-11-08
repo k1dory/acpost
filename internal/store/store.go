@@ -702,6 +702,10 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 	if len(recipients) == 0 {
 		return Message{}, false, nil
 	}
+	// A lease of nothing has run out already: the next reap would requeue the message at once.
+	if lease <= 0 {
+		return Message{}, false, fmt.Errorf("store: claim needs a positive lease, not %v", lease)
+	}
 	now := time.Now()
 	var m Message
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(recipients)), ",")
@@ -719,9 +723,17 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 			return err
 		}
 		lid := newLease()
-		if _, err := t.ExecContext(ctx, `UPDATE messages SET state = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ?, updated_at = ?
-			WHERE id = ?`, lid, ms(now.Add(lease)), ms(now), id); err != nil {
+		// Still queued: the one writer and BEGIN IMMEDIATE make it so today; the condition keeps
+		// a second claim of the same message impossible should either change.
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ?, updated_at = ?
+			WHERE id = ? AND state = 'queued'`, lid, ms(now.Add(lease)), ms(now), id)
+		if err != nil {
 			return err
+		}
+		if k, err := res.RowsAffected(); err != nil {
+			return err
+		} else if k == 0 {
+			return sql.ErrNoRows
 		}
 		// What an earlier attempt attached to its reply is not this attempt's.
 		if _, err := t.ExecContext(ctx, "DELETE FROM files WHERE reply = 1 AND msg = (SELECT seq FROM messages WHERE id = ?)", id); err != nil {
