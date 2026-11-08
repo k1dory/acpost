@@ -118,19 +118,11 @@ func (n *Node) SaveArtifact(name, data string) (string, error) {
 
 // saveFile replaces dest whole, keeping its mode when it exists.
 func saveFile(dest string, b []byte) error {
-	// A link is written through, as os.WriteFile does: the file it points to is replaced, in
-	// its own directory, and the link stays.
-	if real, err := filepath.EvalSymlinks(dest); err == nil {
-		dest = real
-	} else if st, lerr := os.Lstat(dest); lerr == nil && st.Mode()&os.ModeSymlink != 0 {
-		to, err := os.Readlink(dest) // a link to nothing yet: the file it names is made
-		if err != nil {
-			return err
-		}
-		if !filepath.IsAbs(to) {
-			to = filepath.Join(filepath.Dir(dest), to)
-		}
-		dest = to
+	// A link is written through, as os.WriteFile does: the file at the end of its chain is
+	// replaced, in its own directory, and every link stays.
+	dest, err := writeTarget(dest)
+	if err != nil {
+		return err
 	}
 	var keep *os.FileMode
 	if st, err := os.Stat(dest); err == nil {
@@ -285,3 +277,34 @@ func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, rep
 
 // afterWrite, in tests, looks at the temporary file once the content is in it.
 var afterWrite func(tmp string)
+
+// writeTarget is the file a write to p reaches: p itself, or the end of its chain of links,
+// followed link by link so that only that last file may be missing (a link to a file not there
+// yet makes it). A cycle, or a chain too long, is an error.
+func writeTarget(p string) (string, error) {
+	for range 40 {
+		st, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(dir, filepath.Base(p)), nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if st.Mode()&os.ModeSymlink == 0 {
+			return filepath.EvalSymlinks(p) // links among its directories resolved too
+		}
+		to, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(filepath.Dir(p), to)
+		}
+		p = to
+	}
+	return "", errors.New(p + ": too many links (a cycle?)")
+}
