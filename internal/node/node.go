@@ -117,7 +117,8 @@ type Node struct {
 
 	closed atomic.Bool
 
-	held heldLeases // the leases of turns running in this process (lease.go)
+	held     heldLeases // the leases of turns running in this process (lease.go)
+	cloudOps sync.Map   // idempotency key → *sync.Mutex: one cloud task made at a time per key (cloud.go)
 }
 
 type agentToken struct {

@@ -176,6 +176,7 @@ type CloudTask struct {
 	Agent string `json:"agent"`
 	Repo  string `json:"repo,omitempty"`
 	Name  string `json:"name,omitempty"`
+	Idem  string `json:"idem,omitempty"` // the same for a retry: the sandbox made the first time is the answer
 }
 
 // CloudAgents lists the cloud tenant's catalogue.

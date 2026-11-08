@@ -422,7 +422,9 @@ names an agent-sandbox tenant: its URL and token from the env file as `sandboxct
 (`SANDBOXD_URL`, `SANDBOXD_TOKEN`; the token is never written out). Each sandbox of the tenant is an
 agent of the node named by its id (`agent:sb_…`), added when the node's user first writes to it;
 it takes messages from the node's user and its own agents only, never through the hub. A new cloud
-task makes a sandbox of an agent of the tenant's catalogue (`POST /v1/cloud/tasks`).
+task makes a sandbox of an agent of the tenant's catalogue (`POST /v1/cloud/tasks`); with `idem`
+in the request (a handoff takes one too), a retry takes the sandbox the first try made instead of
+making another.
 
 **A task's directory and settings.** `acpost send --cwd DIR` starts a task's ACP session in that
 directory (the thread's next messages stay there); `--model`, `--effort`, `--mode` select them in

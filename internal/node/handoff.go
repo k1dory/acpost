@@ -35,6 +35,7 @@ type HandoffRequest struct {
 	Cwd        string `json:"cwd,omitempty"`     // its directory (the repository)
 	CloudAgent string `json:"cloud_agent"`       // the catalogue's agent to start from
 	Note       string `json:"note,omitempty"`    // what to do next, said by the user
+	Idem       string `json:"idem,omitempty"`    // the same for a retry: the sandbox and message of the first are the answer
 }
 
 // HandoffResult is the cloud chat the task goes on in, and what went with it.
@@ -67,6 +68,9 @@ func (n *Node) Handoff(ctx context.Context, p Principal, r HandoffRequest) (Hand
 	if r.CloudAgent == "" {
 		return out, errf("invalid", "the cloud agent to go on with")
 	}
+	if len(r.Idem) > maxLabel-len("handoff:") {
+		return out, errf("invalid", "the idempotency key is %d bytes, over %d", len(r.Idem), maxLabel-len("handoff:"))
+	}
 	if r.Cwd == "" {
 		return out, errf("invalid", "the chat's directory: a git repository")
 	}
@@ -83,15 +87,28 @@ func (n *Node) Handoff(ctx context.Context, p Principal, r HandoffRequest) (Hand
 		return out, err
 	}
 
-	chat, err := n.CreateCloudTask(ctx, p, client.CloudTask{Agent: r.CloudAgent, Repo: rs.remote, Name: path.Base(dir)})
-	if err != nil {
-		return out, err
-	}
+	// What goes is checked before a sandbox is made for it: a message refused after would leave a
+	// sandbox with nothing to do.
 	body := handoffBody(rs, talk, r.Note)
-	req := SendRequest{To: chat.Agent, Body: body, Meta: map[string]string{"handoff": "1"}}
+	req := SendRequest{Body: body, Meta: map[string]string{"handoff": "1"}}
 	if len(rs.patch) > 0 {
 		req.Files = []store.File{{Name: "handoff.patch", Type: "text/x-diff", Data: rs.patch}}
 	}
+	if len(body) > int(n.cfg.Limits.MaxBody) {
+		return out, errh("refused", "hand off a shorter conversation, or raise limits.max_body", "the handoff is %d bytes, over limits.max_body (%d)", len(body), n.cfg.Limits.MaxBody)
+	}
+	if err := n.checkFiles(req.Files, nil, "the handoff"); err != nil {
+		return out, err
+	}
+	task := client.CloudTask{Agent: r.CloudAgent, Repo: rs.remote, Name: path.Base(dir)}
+	if r.Idem != "" {
+		task.Idem, req.IdemKey = "handoff:"+r.Idem, "handoff:"+r.Idem
+	}
+	chat, err := n.CreateCloudTask(ctx, p, task)
+	if err != nil {
+		return out, err
+	}
+	req.To = chat.Agent
 	m, _, err := n.Send(ctx, p, req)
 	if err != nil {
 		return out, err

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
@@ -233,14 +235,39 @@ func (n *Node) CreateCloudTask(ctx context.Context, p Principal, r client.CloudT
 	}
 	b := make([]byte, 3)
 	_, _ = rand.Read(b)
-	name = strings.TrimPrefix(cmpOr(name, "task")+"-"+hex.EncodeToString(b), "-")
-	body := map[string]any{"name": name, "owner": n.login, "agent_ref": r.Agent}
-	if r.Repo != "" {
-		body["repo"] = r.Repo
+	if r.Idem != "" {
+		// A retry names the same sandbox: the one made the first time (its answer lost, or what
+		// came after it failed) is found and taken, not made again.
+		if len(r.Idem) > maxLabel {
+			return client.Chat{}, errf("invalid", "the idempotency key is %d bytes, over %d", len(r.Idem), maxLabel)
+		}
+		sum := sha256.Sum256([]byte(n.login + "\x00" + r.Idem))
+		b = sum[:3]
+		mu, _ := n.cloudOps.LoadOrStore(r.Idem, &sync.Mutex{})
+		mu.(*sync.Mutex).Lock()
+		defer mu.(*sync.Mutex).Unlock()
 	}
+	name = strings.TrimPrefix(cmpOr(name, "task")+"-"+hex.EncodeToString(b), "-")
 	var s cloudSandbox
-	if err := n.cloud.call(ctx, "POST", "/v1/sandboxes", body, &s); err != nil {
-		return client.Chat{}, err
+	if r.Idem != "" {
+		var list []cloudSandbox
+		if err := n.cloud.call(ctx, "GET", "/v1/sandboxes", nil, &list); err != nil {
+			return client.Chat{}, err
+		}
+		for _, it := range list {
+			if it.Name == name && cmpOr(it.AgentRef, it.Slug) == r.Agent {
+				s = it
+			}
+		}
+	}
+	if s.ID == "" {
+		body := map[string]any{"name": name, "owner": n.login, "agent_ref": r.Agent}
+		if r.Repo != "" {
+			body["repo"] = r.Repo
+		}
+		if err := n.cloud.call(ctx, "POST", "/v1/sandboxes", body, &s); err != nil {
+			return client.Chat{}, err
+		}
 	}
 	if !config.ValidName(s.ID) {
 		return client.Chat{}, errf("unavailable", "the cloud named the sandbox %q", s.ID)
