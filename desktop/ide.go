@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -19,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -32,45 +32,80 @@ import (
 // engine is the Mac's: the server, settings and extensions are the app's own (ideDataDir), and
 // it is dressed in the app's colours and fonts (ideTheme).
 
+// ideBudget is the whole of one start: VS Code's server fetched (the first time), started and
+// serving, and the app's look installed. IDEStart waits as long, no longer: a start that has not
+// served by then is ended, not left to succeed after the interface was told it failed.
+const ideBudget = 4 * time.Minute
+
+// idePort is the IDE's address: VS Code keeps its settings and state in the page's storage, which
+// is the address's (another port is another, empty, VS Code).
+const idePort = 47823
+
+var (
+	ideTermWait   = 2 * time.Second // SIGTERM, then SIGKILL
+	ideProbeEvery = time.Second     // the readiness probe's pace
+)
+
+var errIDEQuitting = errors.New("the app is quitting")
+
 // ideStart is one start of the server: its result, ready once it is known.
 type ideStart struct {
 	ready chan struct{}
-	base  string // http://127.0.0.1:PORT/?tkn=… (set before ready is closed)
+	ctx   context.Context // its deadline
+	base  string          // http://127.0.0.1:PORT/?tkn=… (set before ready is closed)
+	run   *ideRun         // its process (when it served)
 	err   error
 }
 
+// ideRun is one process of the server, with what is its own.
+type ideRun struct {
+	cmd  *exec.Cmd
+	out  *ideOutput
+	done chan struct{} // closed once it has ended (its group too) and its files are removed
+}
+
 type ideServer struct {
-	mu      sync.Mutex
-	cur     *ideStart     // the latest start
-	cmd     *exec.Cmd     // the running server
-	done    chan struct{} // closed when it has ended
-	tokFile string
-	app     string // the VS Code app the CLI belongs to (to open folders in it)
-	shown   string // the address the pane has open
-	stopped bool   // the app is quitting: nothing starts, a start under way is ended
+	mu         sync.Mutex
+	cur        *ideStart // the latest start
+	run        *ideRun   // the latest process
+	life       context.Context
+	end        context.CancelFunc // ends life: the app is quitting
+	stopped    bool               // nothing starts any more
+	looked     bool               // the app's look is installed (else tried again on IDEStart)
+	installing bool
+	shown      string // the address the pane has open
+
+	// For tests; zero: the real ones.
+	findCLI func() (string, error)
+	dataDir func() (string, error)
+	install func(ctx context.Context, data string) error
+	port    int
+	budget  time.Duration
 }
 
 var ide ideServer
 
-var ideURL = regexp.MustCompile(`https?://(?:127\.0\.0\.1|localhost):\d+/?\S*`)
+var (
+	ideURL = regexp.MustCompile(`https?://(?:127\.0\.0\.1|localhost):\d+/?\S*`)
+	ideTkn = regexp.MustCompile(`tkn=[^&\s]*`)
+)
 
-// vscodeCLI finds VS Code's command line (the app's code-tunnel, for serve-web) and its app; or
-// code on PATH.
-func vscodeCLI() (cli, app string, err error) {
+// vscodeCLI finds VS Code's command line (the app's code-tunnel, for serve-web); or code on PATH.
+func vscodeCLI() (string, error) {
 	home, _ := os.UserHomeDir()
 	for _, a := range []string{"/Applications/Visual Studio Code.app", filepath.Join(home, "Applications/Visual Studio Code.app"),
 		"/Applications/Visual Studio Code - Insiders.app", filepath.Join(home, "Applications/Visual Studio Code - Insiders.app")} {
 		for _, bin := range []string{"code-tunnel", "code-tunnel-insiders"} {
 			p := filepath.Join(a, "Contents/Resources/app/bin", bin)
 			if st, err := os.Stat(p); err == nil && !st.IsDir() {
-				return p, a, nil
+				return p, nil
 			}
 		}
 	}
 	if p, err := exec.LookPath("code"); err == nil {
-		return p, "Visual Studio Code", nil
+		return p, nil
 	}
-	return "", "", errors.New("VS Code is not installed (Visual Studio Code.app in Applications)")
+	return "", errors.New("VS Code is not installed (Visual Studio Code.app in Applications)")
 }
 
 func closed(c chan struct{}) bool {
@@ -88,180 +123,366 @@ func closed(c chan struct{}) bool {
 // IDEStart gives the address to open folder in, starting VS Code's server once (the first start
 // fetches it: a minute or two). Calls meanwhile wait for that same start and read its result; a
 // server that ended, or a start that failed, is started again.
-func (n *Node) IDEStart(folder string) (string, error) {
-	ide.mu.Lock()
-	if ide.stopped {
-		ide.mu.Unlock()
-		return "", errors.New("the app is quitting")
+func (n *Node) IDEStart(folder string) (string, error) { return ide.open(folder) }
+
+func (s *ideServer) open(folder string) (string, error) {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return "", errIDEQuitting
 	}
-	st := ide.cur
-	if st == nil || (closed(st.ready) && (st.err != nil || closed(ide.done))) {
-		st = &ideStart{ready: make(chan struct{})}
-		ide.cur = st
-		go ide.start(st)
+	if s.life == nil {
+		s.life, s.end = context.WithCancel(context.Background())
 	}
-	ide.mu.Unlock()
+	st := s.cur
+	// st.run is read only once ready is closed (written before it).
+	if st == nil || (closed(st.ready) && (st.err != nil || closed(st.run.done))) {
+		budget := s.budget
+		if budget == 0 {
+			budget = ideBudget
+		}
+		ctx, cancel := context.WithTimeout(s.life, budget)
+		st = &ideStart{ready: make(chan struct{}), ctx: ctx}
+		s.cur = st
+		go func() {
+			defer cancel()
+			st.base, st.run, st.err = s.launch(ctx)
+			close(st.ready)
+		}()
+	} else if closed(st.ready) && !s.looked && !s.installing {
+		// The server is there but the app's look did not install: tried again, beside it.
+		s.installing = true
+		go s.reinstall()
+	}
+	s.mu.Unlock()
 	select {
 	case <-st.ready:
-	case <-time.After(4 * time.Minute):
-		return "", errors.New("VS Code's server did not start in time")
+	case <-st.ctx.Done():
+		// Every wait of the start ends with its deadline; this is only a guard.
+		select {
+		case <-st.ready:
+		case <-time.After(15 * time.Second):
+			return "", errors.New("VS Code's server did not start in time")
+		}
 	}
-	if st.err != nil { // written before ready was closed
+	if st.err != nil {
 		return "", st.err
 	}
 	return withFolder(st.base, folder), nil
 }
 
-// start runs the server and waits — not holding the lock — for its address, its end, or 3 min.
-func (s *ideServer) start(st *ideStart) {
-	fail := func(err error) {
-		st.err = err
-		close(st.ready)
+// launch runs the server and waits for it to serve VS Code, its end, or ctx (the start's
+// deadline, the app quitting); what it started is ended when it fails.
+func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
+	findCLI, dataDir := s.findCLI, s.dataDir
+	if findCLI == nil {
+		findCLI = vscodeCLI
 	}
-	cli, app, err := vscodeCLI()
+	if dataDir == nil {
+		dataDir = ideDataDir
+	}
+	cli, err := findCLI()
 	if err != nil {
-		fail(err)
-		return
-	}
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	token := hex.EncodeToString(b)
-	// A token file of this server's own: created new (never another's, never a link), 0600, removed
-	// when the server stops.
-	f, err := os.CreateTemp("", "acpost-vscode-token-*")
-	if err != nil {
-		fail(err)
-		return
-	}
-	_, werr := f.WriteString(token)
-	f.Close()
-	if werr != nil {
-		os.Remove(f.Name())
-		fail(werr)
-		return
-	}
-	// A fixed port: VS Code keeps its settings and state in the page's storage, which is the
-	// address's (a new port each run would start it from scratch). Taken: any free one.
-	port := "47823"
-	if l, err := net.Listen("tcp", "127.0.0.1:"+port); err == nil {
-		l.Close()
-	} else {
-		port = "0"
+		return "", nil, err
 	}
 	// The app's own VS Code: its server, settings and extensions kept apart from the VS Code of
 	// this Mac (only its engine is used), in the app's support folder.
-	data, err := ideDataDir()
+	data, err := dataDir()
 	if err != nil {
-		os.Remove(f.Name())
-		fail(err)
-		return
+		return "", nil, err
 	}
-	cmd := exec.Command(cli, "serve-web", "--host", "127.0.0.1", "--port", port, "--connection-token-file", f.Name(),
+	// The server before this one ends first: the two would share VS Code's folders and port.
+	s.mu.Lock()
+	prev := s.run
+	s.mu.Unlock()
+	if prev != nil {
+		prev.kill()
+	}
+	port := s.choosePort(data)
+	token, tokFile, err := ideTokenFile()
+	if err != nil {
+		return "", nil, err
+	}
+	out := &ideOutput{token: token, found: make(chan string, 1)}
+	cmd := exec.Command(cli, "serve-web", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--connection-token-file", tokFile,
 		"--accept-server-license-terms", "--disable-telemetry",
 		"--server-data-dir", filepath.Join(data, "server"), "--cli-data-dir", filepath.Join(data, "cli"),
 		"--commit-id", ideCommit)
+	// A group of its own: VS Code's server and its helpers end with it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		os.Remove(f.Name())
-		fail(err)
-		return
-	}
-	cmd.Stderr = cmd.Stdout
+	cmd.Stdout, cmd.Stderr = out, out
+	// Its end is its own process's: output still held open by what it left is not waited for.
+	cmd.WaitDelay = time.Second
 	// Started and published under the lock stop takes: a quit either comes first (nothing starts)
 	// or finds the process to end.
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
-		os.Remove(f.Name())
-		fail(errors.New("the app is quitting"))
-		return
+		os.Remove(tokFile)
+		return "", nil, errIDEQuitting
 	}
 	if err := cmd.Start(); err != nil {
 		s.mu.Unlock()
-		os.Remove(f.Name())
-		fail(err)
-		return
+		os.Remove(tokFile)
+		return "", nil, err
 	}
-	done := make(chan struct{})
-	found := make(chan string, 1)
-	go func() {
-		sc := bufio.NewScanner(out)
-		for sc.Scan() {
-			if m := ideURL.FindString(sc.Text()); m != "" {
-				select {
-				case found <- m:
-				default:
-				}
-			}
-		}
-		_ = cmd.Wait()
-		close(done)
-	}()
-	kill := func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		os.Remove(f.Name())
-	}
-	s.cmd, s.done, s.tokFile, s.app = cmd, done, f.Name(), app
+	run := &ideRun{cmd: cmd, out: out, done: make(chan struct{})}
+	s.run = run
+	pidFile := filepath.Join(data, idePidFile)
+	pid := strconv.Itoa(cmd.Process.Pid)
+	_ = os.WriteFile(pidFile, []byte(pid), 0o600)
 	s.mu.Unlock()
-	deadline := time.Now().Add(3 * time.Minute)
+	go run.wait(tokFile, pidFile, pid)
+
+	fail := func(err error) (string, *ideRun, error) {
+		run.kill()
+		return "", nil, err
+	}
 	select {
-	case u := <-found:
-		pu, err := url.Parse(u)
+	case u := <-out.found:
+		base, err := ideBase(u, token)
 		if err != nil {
-			kill()
-			fail(err)
-			return
+			return fail(err)
 		}
-		q := pu.Query()
-		q.Set("tkn", token)
-		base := pu.Scheme + "://" + pu.Host + "/?" + q.Encode()
 		// The first time the server fetches VS Code itself, and its page says so meanwhile: the
 		// address is given once it serves VS Code (the interface shows its own wait till then).
-		if err := ideServing(base, done, deadline); err != nil {
-			kill()
-			fail(err)
-			return
+		if err := ideServing(ctx, base, run.done); err != nil {
+			return fail(out.with(s.why(ctx, err)))
 		}
 		// The app's look for it, installed (or brought up to date) now that VS Code's server is
-		// there; without it VS Code is plain, not broken.
-		if err := ideInstall(context.Background(), data); err != nil {
-			fmt.Fprintln(os.Stderr, "acpost: IDE:", err)
-		}
-		st.base = base
-		close(st.ready)
-	case <-done:
-		os.Remove(f.Name())
-		fail(errors.New("VS Code's server stopped as it started"))
-	case <-time.After(time.Until(deadline)):
-		kill()
-		fail(errors.New("VS Code's server did not start in 3 minutes"))
+		// there, within the same deadline; without it VS Code is plain, not broken (and it is
+		// tried again on the next IDEStart).
+		s.lookInstall(ctx, data)
+		return base, run, nil
+	case <-run.done:
+		return "", nil, out.with(errors.New("VS Code's server stopped as it started"))
+	case <-ctx.Done():
+		return fail(out.with(s.why(ctx, ctx.Err())))
 	}
 }
 
-// ideServing waits until the server at base serves VS Code (not its "downloading" page), the
-// server ends, or deadline.
-func ideServing(base string, done chan struct{}, deadline time.Time) error {
+// why names a start's failure: the app quitting and the deadline by their names.
+func (s *ideServer) why(ctx context.Context, err error) error {
+	switch {
+	case s.life.Err() != nil:
+		return errIDEQuitting
+	case ctx.Err() != nil:
+		return errors.New("VS Code's server did not start in time")
+	}
+	return err
+}
+
+func (s *ideServer) lookInstall(ctx context.Context, data string) {
+	install := s.install
+	if install == nil {
+		install = ideInstall
+	}
+	err := install(ctx, data)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "acpost: IDE:", err)
+	}
+	s.mu.Lock()
+	s.looked = err == nil
+	s.mu.Unlock()
+}
+
+// reinstall tries the app's look again for the server that is there.
+func (s *ideServer) reinstall() {
+	defer func() {
+		s.mu.Lock()
+		s.installing = false
+		s.mu.Unlock()
+	}()
+	dataDir := s.dataDir
+	if dataDir == nil {
+		dataDir = ideDataDir
+	}
+	data, err := dataDir()
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	life := s.life
+	s.mu.Unlock()
+	s.lookInstall(life, data)
+}
+
+// ideTokenFile writes a token of this run into a file of the server's own: created new (never
+// another's, never a link), 0600, removed when the server has ended.
+func ideTokenFile() (token, name string, err error) {
+	b := make([]byte, 24)
+	_, _ = rand.Read(b)
+	token = hex.EncodeToString(b)
+	f, err := os.CreateTemp("", "acpost-vscode-token-*")
+	if err != nil {
+		return "", "", err
+	}
+	_, werr := f.WriteString(token)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+		return "", "", werr
+	}
+	return token, f.Name(), nil
+}
+
+// ideBase is the server's address u with this run's token (VS Code answers it with a cookie).
+func ideBase(u, token string) (string, error) {
+	pu, err := url.Parse(u)
+	if err != nil {
+		return "", err
+	}
+	q := pu.Query()
+	q.Set("tkn", token)
+	return pu.Scheme + "://" + pu.Host + "/?" + q.Encode(), nil
+}
+
+// wait is the one place a process's end is seen: what is left of its group is ended, its token
+// and pid files removed (the pid file only while it is still this process's), then done closed.
+func (r *ideRun) wait(tokFile, pidFile, pid string) {
+	_ = r.cmd.Wait()
+	_ = syscall.Kill(-r.cmd.Process.Pid, syscall.SIGKILL)
+	os.Remove(tokFile)
+	if b, err := os.ReadFile(pidFile); err == nil && string(b) == pid {
+		os.Remove(pidFile)
+	}
+	close(r.done)
+}
+
+// kill ends the process's group and waits for its end: SIGTERM, then SIGKILL if it is still
+// there after ideTermWait.
+func (r *ideRun) kill() {
+	if closed(r.done) {
+		return
+	}
+	pid := r.cmd.Process.Pid
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	select {
+	case <-r.done:
+		return
+	case <-time.After(ideTermWait):
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	select {
+	case <-r.done:
+	case <-time.After(3 * time.Second):
+	}
+}
+
+// ideOutput reads the server's output: the first address it prints, and its last lines (the
+// token taken out) for a start's error. Lines are kept to ideLineMax; the rest of a longer one is
+// read and dropped, so the pipe never fills.
+type ideOutput struct {
+	mu    sync.Mutex
+	token string
+	found chan string
+	line  []byte
+	tail  []string
+}
+
+const (
+	ideLineMax   = 4 << 10
+	ideTailLines = 20
+)
+
+func (o *ideOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		chunk := p
+		if i >= 0 {
+			chunk = p[:i]
+		}
+		if room := ideLineMax - len(o.line); room > 0 {
+			o.line = append(o.line, chunk[:min(room, len(chunk))]...)
+		}
+		if i < 0 {
+			break
+		}
+		o.addLine(string(bytes.TrimRight(o.line, "\r")))
+		o.line = o.line[:0]
+		p = p[i+1:]
+	}
+	return n, nil
+}
+
+func (o *ideOutput) addLine(l string) {
+	if m := ideURL.FindString(l); m != "" {
+		select {
+		case o.found <- m:
+		default:
+		}
+	}
+	if l = o.redact(l); strings.TrimSpace(l) != "" {
+		if len(l) > 300 {
+			l = l[:300] + "…"
+		}
+		o.tail = append(o.tail, l)
+		if len(o.tail) > ideTailLines {
+			o.tail = o.tail[1:]
+		}
+	}
+}
+
+func (o *ideOutput) redact(l string) string {
+	l = ideTkn.ReplaceAllString(l, "tkn=…")
+	if o.token != "" {
+		l = strings.ReplaceAll(l, o.token, "…")
+	}
+	return l
+}
+
+// with is err with the server's last lines (what it said of why).
+func (o *ideOutput) with(err error) error {
+	o.mu.Lock()
+	lines := append([]string(nil), o.tail...)
+	if l := o.redact(string(o.line)); strings.TrimSpace(l) != "" {
+		lines = append(lines, l[:min(len(l), 300)])
+	}
+	o.mu.Unlock()
+	if len(lines) == 0 || errors.Is(err, errIDEQuitting) {
+		return err
+	}
+	return fmt.Errorf("%w; VS Code said:\n%s", err, strings.Join(lines, "\n"))
+}
+
+// ideServing waits until the server at base serves VS Code's workbench, the server ends, or ctx.
+func ideServing(ctx context.Context, base string, done chan struct{}) error {
 	// VS Code answers the token with a cookie and a redirect to /: kept, as the page keeps it.
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Timeout: 10 * time.Second, Jar: jar}
 	for {
-		if r, err := c.Get(base); err == nil {
-			b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-			r.Body.Close()
-			if r.StatusCode == http.StatusOK && !bytes.Contains(b, []byte("is downloading")) {
-				return nil
+		if req, err := http.NewRequestWithContext(ctx, http.MethodGet, base, nil); err == nil {
+			if r, err := c.Do(req); err == nil {
+				b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+				r.Body.Close()
+				if r.StatusCode == http.StatusOK && ideServes(b) {
+					return nil
+				}
 			}
-		}
-		if time.Now().After(deadline) {
-			return errors.New("VS Code's server did not start in 3 minutes")
 		}
 		select {
 		case <-done:
 			return errors.New("VS Code's server stopped as it started")
-		case <-time.After(time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(ideProbeEvery):
 		}
 	}
+}
+
+// ideServes tells VS Code's page from the "downloading" one the server shows while it fetches
+// VS Code: by the workbench's configuration element; a page without it (VS Code renamed it) is
+// taken as VS Code's unless it says it is downloading.
+func ideServes(page []byte) bool {
+	if bytes.Contains(page, []byte(`id="vscode-workbench-web-configuration"`)) {
+		return true
+	}
+	return !bytes.Contains(page, []byte("is downloading"))
 }
 
 // withFolder is base with folder to open.
@@ -275,19 +496,101 @@ func withFolder(base, folder string) string {
 	return u.String()
 }
 
-// stop ends VS Code's server (with the app) and removes its token file; a start under way ends
-// as soon as it has its process.
+// stop ends VS Code's server (with the app) and waits for its end; a start under way ends with
+// it, and nothing starts after.
 func (s *ideServer) stop() {
 	s.mu.Lock()
 	s.stopped = true
-	cmd, tok := s.cmd, s.tokFile
+	if s.end != nil {
+		s.end()
+	}
+	run := s.run
 	s.mu.Unlock()
-	if cmd != nil && cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	if run != nil {
+		run.kill()
 	}
-	if tok != "" {
-		_ = os.Remove(tok)
+}
+
+// idePidFile, in the IDE's folder, names the server's process while it runs: a server left by an
+// app that did not end it (it crashed, it was killed) is found by it and ended.
+const idePidFile = "serve-web.pid"
+
+// choosePort is the IDE's port, when it is free or taken by a server of this app's left from
+// before (ended then); else, a free one (VS Code's state there is another's: said so).
+func (s *ideServer) choosePort(data string) int {
+	want := s.port
+	if want == 0 {
+		want = idePort
 	}
+	if portFree(want) {
+		return want
+	}
+	if pid := ideOrphan(data); pid > 0 {
+		endGroup(pid, func() bool { return portFree(want) })
+		if portFree(want) {
+			return want
+		}
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return want // the server says why it cannot listen
+	}
+	p := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken; VS Code starts on %d, without its settings and state\n", want, p)
+	return p
+}
+
+func portFree(port int) bool {
+	l, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
+}
+
+// ideOrphan is the process the pid file names when it is this app's server for data (serve-web
+// with this server folder, leading its own group), else 0.
+func ideOrphan(data string) int {
+	b, err := os.ReadFile(filepath.Join(data, idePidFile))
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 1 {
+		return 0
+	}
+	if g, err := syscall.Getpgid(pid); err != nil || g != pid {
+		return 0
+	}
+	cmdline, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0
+	}
+	c := string(cmdline)
+	if !strings.Contains(c, " serve-web ") || !strings.Contains(c, "--server-data-dir "+filepath.Join(data, "server")) {
+		return 0
+	}
+	return pid
+}
+
+// endGroup ends the group pid leads: SIGTERM, then SIGKILL, each followed by a wait for freed.
+func endGroup(pid int, freed func() bool) {
+	waitFor := func(d time.Duration) bool {
+		for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+			if freed() {
+				return true
+			}
+		}
+		return false
+	}
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	if waitFor(3 * time.Second) {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	waitFor(2 * time.Second)
 }
 
 // IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.

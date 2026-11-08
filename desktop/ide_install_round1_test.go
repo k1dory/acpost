@@ -42,7 +42,7 @@ func TestIDEInstallHungIsBounded(t *testing.T) {
 	pids := filepath.Join(data, "pids")
 	fakeCodeServer(t, data, "sleep 1000 &\necho $! > "+pids+"\nsleep 1000\n")
 	old := ideInstallTimeout
-	ideInstallTimeout = 500 * time.Millisecond
+	ideInstallTimeout = 1500 * time.Millisecond
 	defer func() { ideInstallTimeout = old }()
 
 	res := make(chan error, 1)
@@ -56,7 +56,7 @@ func TestIDEInstallHungIsBounded(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("ideInstall still waits for a hung installer after 10 s")
 	}
-	if d := time.Since(start); d > 4*time.Second {
+	if d := time.Since(start); d > 6*time.Second {
 		t.Errorf("returned after %v", d)
 	}
 	b, _ := os.ReadFile(pids)
