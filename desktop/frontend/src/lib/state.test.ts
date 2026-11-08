@@ -148,14 +148,13 @@ describe("send, review round 1", () => {
     app.draft.where = "cloud"; app.draft.cloudAgent = "ref1";
     const made = deferred();
     fake.Node.CreateCloudTask.mockReturnValueOnce(made.promise).mockResolvedValueOnce({ agent: "agent:sb_2" });
-    fake.Node.SendTask.mockResolvedValue(msg("m2", "t2", "queued", "agent:sb_2"));
-    const first = app.send("do it", []);
+    fake.Node.SendTask.mockImplementation(async (t: any) => msg("m-" + t.to, "t-" + t.to, "queued", t.to));
+    const first = app.send("do it", []);          // the first task, still making its sandbox
     app.newTask();
     made.resolve({ agent: "agent:sb_1" });
-    expect(await first).toBe(false);
-    expect(fake.Node.SendTask).not.toHaveBeenCalled();
-    await app.send("do it", []);
-    expect(fake.Node.SendTask.mock.calls[0][0].to).toBe("agent:sb_2");
+    expect(await first).toBe(true);               // the first goes on, to its own sandbox
+    await app.send("do it", []);                  // the new task: a sandbox of its own
+    expect(fake.Node.SendTask.mock.calls.map(c => c[0].to)).toEqual(["agent:sb_1", "agent:sb_2"]);
   });
 
   it("a different file of the same length is another message, with another key (R1.3)", async () => {
@@ -195,6 +194,120 @@ describe("send, review round 1", () => {
     fake.Node.Chats.mockResolvedValue({ items: [] });
     await app.connect();
     expect(app.draftOf().text).toBe("keep me");
+  });
+});
+
+describe("send, review round 2", () => {
+  const file = (name: string) => ({ name, type: "text/plain", size: 1, data: "YQ==" });
+
+  it("a late answer does not edit the new task started meanwhile (R2.1)", async () => {
+    const app = await load();
+    const d = app.draftOf();
+    d.text = "original task"; d.files = [file("a.txt")];
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValue(sent.promise);
+    const going = app.submit(d);
+    app.newTask();
+    const n = app.draftOf();
+    expect(n).not.toBe(d);
+    expect(n.text).toBe(""); // what is being sent is the first task's
+    n.text = "new requirement"; n.files = [file("b.txt")];
+    sent.resolve(msg("m1", "T1"));
+    expect(await going).toBe(true);
+    expect(app.draftOf().text).toBe("new requirement");
+    expect(app.draftOf().files.map(f => f.name)).toEqual(["b.txt"]);
+  });
+
+  it("a new task with nothing being sent keeps what was typed (R2.1)", async () => {
+    const app = await load();
+    app.draftOf().text = "half typed";
+    app.newTask();
+    expect(app.draftOf().text).toBe("half typed");
+  });
+
+  it("a send that fails after a new task was started gives its text back (R2.1)", async () => {
+    const app = await load();
+    const d = app.draftOf();
+    d.text = "first";
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValue(sent.promise);
+    const going = app.submit(d);
+    app.newTask();
+    sent.reject(new Error("down"));
+    expect(await going).toBe(false);
+    expect(app.draftOf().text).toBe("first");
+  });
+
+  it("the answer reaches its chat left and opened again, A to B to A (R2.2)", async () => {
+    const app = await load();
+    const A = { key: "thread:A", kind: "thread" as const, thread: "A", agent: "agent:claude", title: "", updated: "" };
+    const B = { key: "thread:B", kind: "thread" as const, thread: "B", agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Thread.mockResolvedValue([]); // the node has not taken it yet when A loads again
+    await app.open(A);
+    app.draftOf().text = "to A";
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValue(sent.promise);
+    const going = app.submit(app.draftOf());
+    await app.open(B);
+    await app.open(A);
+    sent.resolve(msg("m1", "A", "queued"));
+    expect(await going).toBe(true);
+    expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0);
+    expect(app.draftOf().text).toBe("");
+  });
+
+  it("a session continued here: its draft is the thread's it becomes (R2.3)", async () => {
+    const app = await load();
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S);
+    const d = app.draftOf();
+    expect(d.key).toBe("session:claude/s1");
+    d.text = "go on";
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValue(sent.promise);
+    const going = app.submit(d);
+    d.text = "go on\nthen this";
+    sent.resolve(msg("m1", "T1"));
+    await going;
+    expect(app.draftKey()).toBe("thread:T1");
+    expect(app.draftOf().text).toBe("then this");
+    // The session leaves the list; the thread opened later has the draft.
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T1", "done")]);
+    await app.open({ key: "thread:T1", kind: "thread", thread: "T1", agent: "agent:claude", title: "", updated: "" });
+    expect(app.draftOf().text).toBe("then this");
+  });
+
+  it("a new task left for another chat before its answer: the rest goes to its thread (R2.3)", async () => {
+    const app = await load();
+    const d = app.draftOf();
+    d.text = "task";
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValue(sent.promise);
+    const going = app.submit(d);
+    d.text = "task\nmore";
+    fake.Node.Thread.mockResolvedValue([]);
+    await app.open({ key: "thread:B", kind: "thread", thread: "B", agent: "agent:claude", title: "", updated: "" });
+    sent.resolve(msg("m1", "T1"));
+    await going;
+    expect(app.thread).toBe("B");
+    expect(app.draftOf("thread:T1").text).toBe("more");
+    expect(app.draftOf("new").text).toBe("");
+  });
+
+  it("a thread's own draft is kept when another moves into it (R2.3)", async () => {
+    const app = await load();
+    app.draftOf("thread:T1").text = "already here";
+    const d = app.draftOf();
+    d.text = "task";
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValue(sent.promise);
+    const going = app.submit(d);
+    d.text = "task\nleft";
+    sent.resolve(msg("m1", "T1"));
+    await going;
+    expect(app.draftOf("thread:T1").text).toBe("already here\nleft");
   });
 });
 

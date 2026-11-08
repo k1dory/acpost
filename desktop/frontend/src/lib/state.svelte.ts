@@ -2,7 +2,7 @@ import { t, tr } from "./i18n.svelte";
 import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
-import { ComposerDraft } from "./composer.svelte";
+import { ComposerDraft, type Attachment } from "./composer.svelte";
 import { afterSent } from "./draft";
 import { Turn, type Ev } from "./turn";
 
@@ -293,7 +293,12 @@ class App {
   /** A new task. */
   newTask() {
     this.reset();
-    this.draftOf("new").forget(); // its text stays; not a message tried before
+    // A draft of its own: a send still going owns the last one (its answer edits that, not this).
+    // What was typed carries over, unless it is what is being sent.
+    const old = this.draftMap.get("new"), d = new ComposerDraft("new");
+    if (old && !old.busy) { d.text = old.text; d.files = old.files; }
+    this.draftMap.set("new", d);
+    this.drafts++;
     this.chat = null;
   }
 
@@ -432,9 +437,26 @@ class App {
   // where it is first read (in a $derived), and a new task's draft moving to its thread bumps drafts.
   private draftMap = new Map<string, ComposerDraft>();
   private drafts = $state(0);
-  /** The key of the open chat's draft. */
+  /** The key of the open chat's draft: its thread's, once it has one (a session or a cloud
+   * conversation continued here becomes a thread), else the chat's, else the new task's. */
   draftKey(): string {
-    return this.chat?.key ?? (this.thread ? "thread:" + this.thread : "new");
+    return this.thread ? "thread:" + this.thread : this.chat?.key ?? "new";
+  }
+
+  /** A draft whose message made a thread becomes the thread's (wherever the screen is now); a
+   * draft the thread has already keeps what it holds, and gets what was left of this one. */
+  private moveDraft(d: ComposerDraft, to: string) {
+    if (this.draftMap.get(to) === d) return;
+    if (this.draftMap.get(d.key) === d) this.draftMap.delete(d.key);
+    const there = this.draftMap.get(to);
+    if (there && there !== d) {
+      there.text = [there.text, d.text].filter(Boolean).join("\n");
+      there.files = [...there.files, ...d.files];
+    } else {
+      d.key = to;
+      this.draftMap.set(to, d);
+    }
+    this.drafts++;
   }
   draftOf(key = this.draftKey()): ComposerDraft {
     this.drafts;
@@ -450,20 +472,20 @@ class App {
     const body = sent.trim();
     if (!body || d.busy) return false;
     d.busy = true;
-    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d);
+    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles });
     d.busy = false;
-    if (ok) {
-      d.text = afterSent(d.text, sent);
-      d.files = d.files.filter(f => !sentFiles.includes(f));
-    }
+    // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
+    // put back into the new task's, not lost with the draft no screen shows.
+    if (!ok && ![...this.draftMap.values()].includes(d)) this.moveDraft(d, "new");
     return ok;
   }
 
   /** Sends a message: true once the node has it, false if not (said in error; the draft keeps the
    * text to send again). The chat it was sent from gets it, whichever is open by then. */
-  async send(body: string, files: { name: string; type: string; data: string }[], d = this.draftOf()): Promise<boolean> {
+  async send(body: string, files: { name: string; type: string; data: string }[], d = this.draftOf(),
+    sent?: { text: string; files: Attachment[] }): Promise<boolean> {
     // What the message is for, as it was when sent: the screen may change while it goes.
-    const gen = this.gen, chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
+    const chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
     let to = this.target;
     try {
       const task: any = { body, files };
@@ -495,26 +517,26 @@ class App {
       task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;
       if (d.sending?.key === key) d.forget();
-      // The conversation keeps its folder as it becomes a thread.
-      if (!thread && chat?.folder) await Node.MoveChat("thread:" + m.thread, chat.folder).catch(() => {});
-      if (gen === this.gen) {
-        if (!this.thread) {
-          // The new task's draft (what was typed while it went) is the thread's from now on.
-          if (d.key === "new" && this.draftMap.get("new") === d) {
-            this.draftMap.delete("new");
-            d.key = "thread:" + m.thread;
-            this.draftMap.set(d.key, d);
-            this.drafts++;
-          }
-          this.thread = m.thread;
-          this.target = to;
-        }
+      // The conversation it was sent from is still the one open (not the screen's generation: a
+      // chat left and opened again is still it).
+      const here = !this.thread && (chat ? this.chat?.key === chat.key : !this.chat && this.draftMap.get("new") === d);
+      // What was sent leaves the draft, what was typed meanwhile stays; the draft is the thread's now.
+      if (sent) {
+        d.text = afterSent(d.text, sent.text);
+        d.files = d.files.filter(f => !sent.files.includes(f));
+      }
+      this.moveDraft(d, "thread:" + m.thread);
+      if (here) { this.thread = m.thread; this.target = to; }
+      // Shown wherever its thread is open, now (if it is opened later, the node's list has it).
+      if (this.thread === m.thread) {
         // Sent again after its answer was lost, the node gives the message it has: one, not two.
         if (this.msgs.some(x => x.id === m.id)) this.replace(m);
         else this.msgs = [...this.msgs, m];
         this.focus = m.id;
         this.watch(m);
       }
+      // The conversation keeps its folder as it becomes a thread.
+      if (!thread && chat?.folder) await Node.MoveChat("thread:" + m.thread, chat.folder).catch(() => {});
       this.loadChats();
       return true;
     } catch (e) { this.error = errText(e); return false; }
