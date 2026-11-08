@@ -325,7 +325,8 @@ export function Menu(x: number, y: number, titles: string[], keys: string[], che
 }
 
 /**
- * MessageFile is a file of a message (a reply's attachment).
+ * MessageFile is a file of a message: the reply's when the reply and the message both have one
+ * of that name (an agent sends back a file it was given, changed).
  */
 export function MessageFile(id: string, name: string): $CancellablePromise<$models.Artifact> {
     return $Call.ByID(1039725801, id, name).then(($result: any) => {
