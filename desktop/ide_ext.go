@@ -129,7 +129,31 @@ func ideInstall(ctx context.Context, data string) error {
 	if err != nil {
 		return errors.New("installing the IDE's look: " + err.Error() + ": " + string(bytes.TrimSpace(out)))
 	}
+	// Its exit is not taken for it: the files there are checked against the app's (an install of
+	// the same version that kept, or half wrote, the old files is not marked done, and is tried
+	// again on the next IDEStart).
+	if err := sameFiles(ideExtFS, "ide/extension", dir); err != nil {
+		return errors.New("installing the IDE's look: " + err.Error())
+	}
 	return os.WriteFile(mark, []byte(p.hash), 0o600)
+}
+
+// sameFiles checks that every file under root in fsys is in dir, the same.
+func sameFiles(fsys fs.FS, root, dir string) error {
+	return fs.WalkDir(fsys, root, func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		want, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return err
+		}
+		rel := name[len(root)+1:]
+		if got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))); err != nil || !bytes.Equal(got, want) {
+			return errors.New(rel + " is not the app's after VS Code's installer")
+		}
+		return nil
+	})
 }
 
 // runGroup runs bin in a process group of its own and gives its output (the last 16 KiB). The

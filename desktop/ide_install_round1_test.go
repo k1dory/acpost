@@ -101,3 +101,26 @@ func TestTailBuffer(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// Z6/I9: an installer that exits 0 without putting the files there is not taken at its word: an
+// error, no mark (tried again next time); a run that installs them is marked.
+func TestIDEInstallVerified(t *testing.T) {
+	data := t.TempDir()
+	dir := "$2/extensions/acpost.acpost-ide-" + ideExtension().version
+	fakeCodeServer(t, data, "mkdir -p \""+dir+"\"\necho old > \""+dir+"/workbench.css\"\n")
+	mark := filepath.Join(ideExtDir(data, ideExtension().version), ".acpost-hash")
+	err := ideInstall(context.Background(), data)
+	if err == nil || !strings.Contains(err.Error(), "not the app's") {
+		t.Fatalf("an install that changed nothing: %v", err)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("marked installed")
+	}
+	fakeCodeServer(t, data, "set -e\nt=$(mktemp -d)\nunzip -q \"$4\" -d \"$t\"\nmkdir -p \""+dir+"\"\ncp -R \"$t/extension/.\" \""+dir+"/\"\nrm -rf \"$t\"\n")
+	if err := ideInstall(context.Background(), data); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(mark); err != nil || string(b) != ideExtension().hash {
+		t.Fatalf("mark: %q %v", b, err)
+	}
+}

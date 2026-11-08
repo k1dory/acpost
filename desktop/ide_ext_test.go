@@ -95,7 +95,9 @@ func TestIDEInstallOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := filepath.Join(data, "calls")
-	script := "#!/bin/sh\necho \"$@\" >> " + log + "\nmkdir -p \"$2/extensions/acpost.acpost-ide-" + ideExtension().version + "\"\n"
+	// As VS Code's installer: the .vsix's extension/ unpacked into the extension's folder.
+	dir := "$2/extensions/acpost.acpost-ide-" + ideExtension().version
+	script := "#!/bin/sh\necho \"$@\" >> " + log + "\nset -e\nt=$(mktemp -d)\nunzip -q \"$4\" -d \"$t\"\nmkdir -p \"" + dir + "\"\ncp -R \"$t/extension/.\" \"" + dir + "/\"\nrm -rf \"$t\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "code-server"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
