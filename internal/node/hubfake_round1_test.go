@@ -23,13 +23,14 @@ type fakeHub struct {
 	replies []client.ReplyRequest
 	extends map[string]int
 	calls   map[string]int // by the path's last part
+	byLease map[string]int // reply calls by lease
 	down    bool
 	hang    bool // accept and never answer (until the request's context ends)
 	srv     *httptest.Server
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
-	f := &fakeHub{lease: lease, state: store.Running, extends: map[string]int{}, calls: map[string]int{}}
+	f := &fakeHub{lease: lease, state: store.Running, extends: map[string]int{}, calls: map[string]int{}, byLease: map[string]int{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -78,6 +79,7 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 	case part == "reply":
 		var rr client.ReplyRequest
 		_ = json.NewDecoder(r.Body).Decode(&rr)
+		f.byLease[rr.Lease]++
 		if rr.Lease != f.lease || f.state != store.Running {
 			conflict(w, "lease lost")
 			return
@@ -94,9 +96,23 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]int64{"relayed": rq.After + int64(len(rq.Events))})
 	case r.Method == "GET" && strings.HasPrefix(part, "msg_"):
 		_ = json.NewEncoder(w).Encode(store.Message{ID: part, State: f.state, Error: f.errText})
+	case part == "claim": // nothing to hand: a long poll, short
+		f.mu.Unlock()
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+		f.mu.Lock()
+		w.WriteHeader(204)
 	default:
 		w.WriteHeader(204)
 	}
+}
+
+func (f *fakeHub) replyCalls(lease string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.byLease[lease]
 }
 
 func (f *fakeHub) set(fn func(f *fakeHub)) {
@@ -117,17 +133,23 @@ func (f *fakeHub) count(part string) int {
 	return f.calls[part]
 }
 
-// fastHub makes relays renew the hub's lease every d for this test.
+// fastHub makes relays renew the hub's lease every d, and try a reply again after d/3, for this
+// test.
 func fastHub(t *testing.T, d time.Duration) {
-	old := hubRenew
-	hubRenew = d
-	t.Cleanup(func() { hubRenew = old })
+	oldRenew, oldRetry := hubRenew, hubRetry
+	hubRenew, hubRetry = d, d/3
+	t.Cleanup(func() { hubRenew, hubRetry = oldRenew, oldRetry })
 }
 
 // eventually waits up to 5 s for cond.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	eventuallyWithin(t, 5*time.Second, what, cond)
+}
+
+func eventuallyWithin(t *testing.T, d time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out: " + what)

@@ -25,6 +25,9 @@ import (
 const (
 	originRemote = "remote" // a local copy of a message sent through the hub
 	originHub    = "hub:"   // a message the hub handed to this node; the hub's lease follows
+	// originAcked is a delivered message whose outcome the hub took (or had already): the lease
+	// follows. It is still a delivery (it starts with originHub).
+	originAcked = originHub + "acked:"
 
 	announceEvery = 20 * time.Second
 	announceTTL   = 70 * time.Second
@@ -421,6 +424,8 @@ func (n *Node) startJoin() {
 	n.goLoop(n.hubClaimLoop)
 	// Forwarded messages: the sweep picks up those the last process followed.
 	n.goLoop(n.followSweep)
+	// Outcomes the last process had not handed the hub for certain: handed again.
+	n.goLoop(n.resumeReplies)
 	// Delivered messages: few (local queue limits bound them), each relayed under its hub lease.
 	for after := ""; ; {
 		page, err := n.st.UnsettledPage(n.ctx, originHub, after, store.MaxPage)
@@ -595,18 +600,7 @@ func (n *Node) relay(id, lease string) {
 			if m.Origin != originHub+lease {
 				return
 			}
-			for try := 0; n.ctx.Err() == nil; try++ {
-				err := n.hub.Reply(n.ctx, id, r)
-				if err != nil && len(r.Files) > 0 && filesRefused(err) {
-					// The hub takes no such files: the sender still gets the text, and why the files are missing.
-					r.Files, r.Error, r.ErrorCode = nil, "the reply's files were refused by the hub: "+err.Error(), "files_refused"
-					continue
-				}
-				if err == nil || isFinalErr(err) || try >= 20 {
-					return
-				}
-				time.Sleep(time.Second)
-			}
+			n.replyHub(id, lease, r, extended)
 			return
 		}
 		if m.Origin != originHub+lease {
@@ -689,5 +683,80 @@ func (n *Node) hubLeaseGone(id, lease string) {
 		}
 	default:
 		n.log.Info("hub lease lost; the message is left to the hub's next delivery", "id", id)
+	}
+}
+
+// replyHub hands the hub a delivered message's outcome under its lease (last renewed at
+// extended). It keeps trying while the lease is this delivery's, renewing it between tries, so a
+// hub away for a while gets the outcome when it is back instead of reaping the lease and running
+// the message again; an outcome taken is marked (originAcked) so a restart does not hand it again.
+func (n *Node) replyHub(id, lease string, r client.ReplyRequest, extended time.Time) {
+	pause := hubRetry
+	for n.ctx.Err() == nil {
+		ctx, done := context.WithTimeout(n.ctx, hubReplyTimeout)
+		err := n.hub.Reply(ctx, id, r)
+		done()
+		if err != nil && len(r.Files) > 0 && filesRefused(err) {
+			// The hub takes no such files: the sender still gets the text, and why the files are missing.
+			r.Files, r.Error, r.ErrorCode = nil, "the reply's files were refused by the hub: "+err.Error(), "files_refused"
+			continue
+		}
+		if err == nil || isFinalErr(err) {
+			// Taken, or the hub has an outcome or another delivery of it (which hands its own).
+			_, _ = n.st.SetOriginIf(n.ctx, id, originHub+lease, originAcked+lease)
+			return
+		}
+		if cur, err := n.st.Get(n.ctx, id); err != nil || cur.Origin != originHub+lease {
+			return // gone, or adopted by another delivery: its relay hands the outcome
+		}
+		if time.Since(extended) >= hubRenew {
+			ectx, edone := context.WithTimeout(n.ctx, hubCallTimeout)
+			eerr := n.hub.Extend(ectx, id, lease, hubLease)
+			edone()
+			if eerr == nil {
+				extended = time.Now()
+			} else if isFinalErr(eerr) {
+				return // the lease is gone: the hub delivers again (that delivery hands the outcome) or gave up
+			}
+		}
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+		pause = min(2*pause, hubRenew)
+	}
+}
+
+// hubReplyWindow is how far back a start looks for outcomes the hub did not confirm: past it the
+// hub has delivered the message again or given it up long since.
+const hubReplyWindow = 24 * time.Hour
+
+// resumeReplies hands the hub again, a few at once, the outcomes of delivered messages it did not
+// confirm taking before the last process stopped.
+func (n *Node) resumeReplies() {
+	slots := make(chan struct{}, hubDeliveries)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	since := time.Now().Add(-hubReplyWindow)
+	for after := ""; n.ctx.Err() == nil; {
+		page, err := n.st.FinalOfOrigin(n.ctx, originHub, originAcked, since, after, store.MaxPage)
+		if err != nil || len(page) == 0 {
+			return
+		}
+		for _, it := range page {
+			id, lease := it[0], strings.TrimPrefix(it[1], originHub)
+			select {
+			case slots <- struct{}{}:
+			case <-n.ctx.Done():
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer func() { <-slots; wg.Done() }()
+				n.relay(id, lease)
+			}()
+		}
+		after = page[len(page)-1][0]
 	}
 }
