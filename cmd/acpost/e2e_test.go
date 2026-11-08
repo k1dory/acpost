@@ -32,7 +32,7 @@ func TestMain(m *testing.M) {
 	}
 	binDir = dir
 	for pkg, name := range map[string]string{".": "acpost", "../../internal/acptest/fakeagent": "fakeagent"} {
-		out, err := exec.Command("go", "build", "-o", filepath.Join(dir, name), pkg).CombinedOutput()
+		out, err := exec.Command("go", buildArgs(filepath.Join(dir, name), pkg)...).CombinedOutput()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "build %s: %v\n%s", pkg, err, out)
 			os.Exit(1)
@@ -665,6 +665,7 @@ func TestFollowAcrossHub(t *testing.T) {
 	}
 	start := time.Now()
 	var first time.Duration
+	var runningAtFirst bool
 	var text strings.Builder
 	var kinds []string
 	m, err := c.Follow(context.Background(), id, 0, func(e store.Event) error {
@@ -672,6 +673,10 @@ func TestFollowAcrossHub(t *testing.T) {
 		if e.Kind == "text" {
 			if first == 0 {
 				first = time.Since(start)
+				// Asked now, not timed: the message is still going when its text starts to come.
+				if now, err := c.Get(context.Background(), id); err == nil && !now.State.Final() {
+					runningAtFirst = true
+				}
 			}
 			var d map[string]string
 			json.Unmarshal([]byte(e.Data), &d)
@@ -686,8 +691,8 @@ func TestFollowAcrossHub(t *testing.T) {
 	if len(kinds) < 3 || kinds[0] != "thought" {
 		t.Fatalf("kinds %v", kinds)
 	}
-	if first > total-700*time.Millisecond {
-		t.Fatalf("the first text came at %v of %v: not while the turn ran", first, total)
+	if !runningAtFirst {
+		t.Fatalf("the first text came at %v of %v, once the message was final: not while the turn ran", first, total)
 	}
 	// What came is kept on b's copy: show --follow later prints it whole.
 	if r := b.run("", "show", id, "--follow"); r.code != 0 || r.out != m.Reply+"\n" {
@@ -698,7 +703,7 @@ func TestFollowAcrossHub(t *testing.T) {
 // The sender's node restarted while the agent wrote: the events it missed come from the hub's
 // pages before its copy is final.
 func TestFollowAcrossHubAfterRestart(t *testing.T) {
-	_, b := hubPair(t)
+	a, b := hubPair(t)
 	var id string
 	deadline := time.Now().Add(15 * time.Second)
 	for {
@@ -712,9 +717,15 @@ func TestFollowAcrossHubAfterRestart(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	time.Sleep(time.Second)
+	// Stopped once its text has started to come, started again once the agent wrote more.
+	if !until(15*time.Second, func() bool { return b.textEvents(id) > 0 }) {
+		t.Fatal("no text reached the sender's node")
+	}
+	seen := b.textEvents(id)
 	b.stop()
-	time.Sleep(1500 * time.Millisecond) // the agent writes on meanwhile
+	if !until(15*time.Second, func() bool { return a.textEvents(id) > seen }) {
+		t.Fatalf("the agent's node has %d text events, the sender's had %d", a.textEvents(id), seen)
+	}
 	b.serve()
 	out := b.ok("", "wait", id, "--timeout", "30s")
 	evs := b.ok("", "show", id, "--follow", "--json")

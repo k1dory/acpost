@@ -316,7 +316,8 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if probe(ctx, c) == nil {
-			_ = cmd.Process.Release()
+			// Left running, detached (its own session): not Released, which would race the
+			// goroutine waiting for it (the race detector's find).
 			return nil
 		}
 		select {
