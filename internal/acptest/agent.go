@@ -26,7 +26,8 @@
 // Knobs in its environment: FAKE_HANG_NEW (session/new never answers), FAKE_EXCLUSIVE (with
 // FAKE_STATE: a session open in another live process is busy, as codex-acp's), FAKE_ONE_PROMPT=DIR
 // (a prompt into a session another prompt is in, in any process, fails), FAKE_FAIL_NEW_ONCE=FILE
-// (the first session/new across processes fails; FILE marks it done).
+// (the first session/new across processes fails; FILE marks it done), FAKE_CANCELS=FILE (each
+// session/cancel it gets, a line of FILE).
 package acptest
 
 import (
@@ -215,6 +216,12 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 }
 
 func (a *fakeAgent) Cancel(ctx context.Context, p acp.CancelNotification) error {
+	if file := os.Getenv("FAKE_CANCELS"); file != "" { // each session/cancel, a line
+		if f, err := os.OpenFile(file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			fmt.Fprintln(f, p.SessionId)
+			f.Close()
+		}
+	}
 	a.mu.Lock()
 	if c := a.cancels[p.SessionId]; c != nil {
 		c()

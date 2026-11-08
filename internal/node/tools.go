@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -387,7 +388,4 @@ func cutString(s string, max int) string {
 	return s[:max]
 }
 
-func itoa(n int) string {
-	b, _ := json.Marshal(n)
-	return string(b)
-}
+func itoa(n int) string { return strconv.Itoa(n) }

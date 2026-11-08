@@ -359,7 +359,7 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	p.init = init
 	if m := a.cfg.AuthMethod; m != "" {
 		if _, err := p.conn.Authenticate(ictx, acp.AuthenticateRequest{MethodId: m}); err != nil {
-			return fail(fmt.Errorf("authenticate %s: %w", m, procErr(p, err)))
+			return fail(&authError{fmt.Errorf("authenticate %s: %w", m, procErr(p, err))})
 		}
 	}
 	n.log.Info("agent started", "agent", a.name, "slot", s.idx, "pid", cmd.Process.Pid, "impl", implName(init))
@@ -378,7 +378,7 @@ func implName(init acp.InitializeResponse) string {
 func procErr(p *acpProc, err error) error {
 	select {
 	case <-p.done:
-		return fmt.Errorf("the agent exited (%v)", p.exitErr)
+		return fmt.Errorf("the agent exited (%w)", p.exitErr)
 	case <-time.After(500 * time.Millisecond):
 		return err
 	}
@@ -571,13 +571,15 @@ func (s *acpSlot) freeSession(ctx context.Context, sid string) bool {
 // explainStart says why an agent process did not start.
 func explainStart(err error) Failure {
 	var re *acp.RequestError
-	if errors.As(err, &re) || strings.Contains(err.Error(), "authenticate") {
+	var ae *authError
+	if errors.As(err, &re) || errors.As(err, &ae) {
 		f := explainACP(err, "start the agent", false)
 		if f.Code == "agent_auth" {
 			return f
 		}
 	}
-	if strings.Contains(err.Error(), "exit status 127") {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 127 {
 		// The shell's "command not found": the agent's command, or what it runs (node for the npm
 		// adapters), is not on the PATH the node has.
 		return failf("agent_start", "the agent did not start: its command, or a program it needs (node for claude-agent-acp and codex-acp), was not found on the node's PATH (exit 127)")
@@ -856,6 +858,13 @@ func (s *acpSlot) handle(m store.Message) {
 
 	if err != nil || timedOut {
 		if n.ctx.Err() != nil || lost.Load() {
+			if lost.Load() && !stuck.Load() {
+				// Another attempt owns the message now: the agent is told this turn is over, or it
+				// would go on with it while the next prompts the same session.
+				cctx, done := context.WithTimeout(context.Background(), 2*time.Second)
+				_ = p.conn.Cancel(cctx, acp.CancelNotification{SessionId: sid})
+				done()
+			}
 			return // the node is stopping (the message is requeued at the next start), or the lease is gone
 		}
 		if stuck.Load() {
@@ -1390,3 +1399,9 @@ func (n *Node) addLeasedEvent(ctx context.Context, id, lease, kind, data string)
 	}
 	return err
 }
+
+// authError is an agent's authenticate that failed while its process started.
+type authError struct{ err error }
+
+func (e *authError) Error() string { return e.err.Error() }
+func (e *authError) Unwrap() error { return e.err }
