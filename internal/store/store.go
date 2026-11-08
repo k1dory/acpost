@@ -362,6 +362,8 @@ func (s *Store) migrate() error {
 		{"relayed", "relayed INTEGER NOT NULL DEFAULT 0"}, // events taken from the node running the agent
 		// What Complete ended the message with (completion.go): the holder's repeat is no conflict.
 		{"completion", "completion TEXT NOT NULL DEFAULT ''"},
+		// The last hub event a forwarded message's copy took (hubcursor.go); 0: none taken by number.
+		{"hub_seq", "hub_seq INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var n int
 		if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = ?", c.name).Scan(&n); err != nil {
