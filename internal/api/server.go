@@ -1325,6 +1325,7 @@ func (st *sseStream) fail(err error) {
 	}
 	if !st.started {
 		st.started = true
+		st.closed = true // the answer is this JSON: no heartbeat after it
 		writeStatus(st.w, code, e)
 		return
 	}

@@ -97,7 +97,9 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger, ready func()
 
 	// Requests live in base: stopping ends it, so long polls (wait, claim, follow) return at once
 	// and Shutdown does not sit out its grace on them. Their clients retry against the next node.
-	base, stop := context.WithCancel(ctx)
+	// Only the stop ends it, and always as a cancellation (the API's unavailable), whatever ended
+	// ctx: a deadline of Run's must not reach a handler as one of its own.
+	base, stop := context.WithCancel(context.WithoutCancel(ctx))
 	defer stop()
 	errc := make(chan error, len(lns))
 	var servers []*http.Server

@@ -691,8 +691,11 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 		return resp.StatusCode, respErr(method, path, resp)
 	}
 	if out == nil {
-		// Read what is left of a small answer, so the connection goes back to the pool.
+		// Read what is left of a small answer, so the connection goes back to the pool; not
+		// for long: a body that does not come is cut, and the call has its answer already.
+		cut := time.AfterFunc(drainTimeout, func() { resp.Body.Close() })
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		cut.Stop()
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
 		cr := &capReader{r: resp.Body, left: c.MaxResponse}
@@ -1428,6 +1431,7 @@ var (
 	dialTimeout      = 10 * time.Second
 	handshakeTimeout = 10 * time.Second
 	statusTimeout    = 30 * time.Second
+	drainTimeout     = 2 * time.Second
 )
 
 // followRetry and followRetryMax pace Follow's reconnects.

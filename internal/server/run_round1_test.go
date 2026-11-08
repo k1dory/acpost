@@ -281,3 +281,36 @@ func TestListenUnixKeepsAFileThatIsNotASocket(t *testing.T) {
 	}
 	ln.Close()
 }
+
+// Run's own context ending by a deadline stops it as a cancel does: what was cut is unavailable to
+// its client (not an internal error), and a wait that simply ran out is a normal answer.
+func TestRunStopByDeadlineIsUnavailable(t *testing.T) {
+	dir := shortDir(t)
+	sock := filepath.Join(dir, "s", "a.sock")
+	cfg := testConfig(t, dir, "unix://"+sock)
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	up := make(chan struct{})
+	res := make(chan error, 1)
+	go func() { res <- Run(ctx, cfg, quiet, func() { close(up) }) }()
+	<-up
+	c, _ := client.New("unix://"+sock, "", "")
+	m, _, err := c.Send(context.Background(), client.SendRequest{To: "agent:bot", Body: "x"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Wait(context.Background(), m.ID, 100*time.Millisecond); err != nil || got.ID != m.ID {
+		t.Fatalf("a wait that ran out: %+v %v", got, err)
+	}
+	if _, err := c.Wait(context.Background(), m.ID, 60*time.Second); !errors.Is(err, client.ErrUnavailable) {
+		t.Fatalf("a wait cut by Run's deadline: %v", err)
+	}
+	select {
+	case err := <-res:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+}
