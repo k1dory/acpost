@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -164,7 +166,11 @@ func writeDefaultConfig(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o600)
+	// Written whole, and only where there is none: a configuration that appeared meanwhile is kept.
+	if err := writeAtomic(path, []byte(b.String()), 0o600, false); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return nil
 }
 
 // Chats lists the user's chats (threads, Claude Code and Codex sessions, cloud sandboxes) and folders.

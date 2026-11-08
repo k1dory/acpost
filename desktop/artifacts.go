@@ -110,7 +110,16 @@ func (n *Node) SaveArtifact(name, data string) (string, error) {
 	if err != nil || dest == "" {
 		return "", err
 	}
-	return dest, os.WriteFile(dest, b, 0o644)
+	return dest, saveFile(dest, b)
+}
+
+// saveFile replaces dest whole, keeping its mode when it exists.
+func saveFile(dest string, b []byte) error {
+	perm := os.FileMode(0o644)
+	if st, err := os.Stat(dest); err == nil {
+		perm = st.Mode().Perm()
+	}
+	return writeAtomic(dest, b, perm, true)
 }
 
 // OpenArtifact opens an attachment in its own app (a copy in a temporary folder).
@@ -197,4 +206,43 @@ func typeOf(name, said string, b []byte) string {
 		return said
 	}
 	return http.DetectContentType(b)
+}
+
+// writeAtomic writes path whole or not at all: a temporary file beside it, synced, then renamed
+// over it (replace) or linked in only where there is no file yet (else fs.ErrExist). A
+// failure or a crash midway leaves what was there.
+func writeAtomic(path string, b []byte, perm os.FileMode, replace bool) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // gone once renamed; after a link, the extra name
+	_, err = f.Write(b)
+	if err == nil {
+		err = f.Chmod(perm)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if replace {
+		err = os.Rename(tmp, path)
+	} else {
+		err = os.Link(tmp, path)
+	}
+	if err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil { // the new name itself survives a crash
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
