@@ -181,6 +181,7 @@ func (a *sandboxAgent) start() { a.n.goLoop(a.loop) }
 
 func (a *sandboxAgent) loop() {
 	n := a.n
+	a.loadCursor()
 	for n.ctx.Err() == nil {
 		m, ok, err := n.claim(n.ctx, []string{a.addr}, time.Second, a.cfg.Lease.D())
 		if err != nil {
@@ -194,6 +195,7 @@ func (a *sandboxAgent) loop() {
 			a.busy.Store(true)
 			a.handle(m)
 			a.busy.Store(false)
+			a.saveCursor()
 		}
 	}
 }
@@ -203,13 +205,14 @@ type sandboxError struct {
 	status int
 	msg    string
 	later  bool // sandboxd said when to ask again (Retry-After: an Idempotency-Key still in flight)
+	broken bool // its answer broke off or was not the API's: what was asked may have been done, asked again
 }
 
 func (e *sandboxError) Error() string { return e.msg }
 
 // retryable: sandboxd did not answer, or answered that it could not now.
 func (e *sandboxError) retryable() bool {
-	return e.status == 0 || e.status == http.StatusTooManyRequests || e.status >= 500 || e.later
+	return e.status == 0 || e.status == http.StatusTooManyRequests || e.status >= 500 || e.later || e.broken
 }
 
 func (a *sandboxAgent) path(p string) string {
@@ -231,7 +234,15 @@ func (a *sandboxAgent) call(ctx context.Context, method, p string, hdr http.Head
 		return nil, &sandboxError{msg: fmt.Sprintf("sandboxd: %v", err)}
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, sandboxBodyMax))
+	b, rerr := io.ReadAll(io.LimitReader(resp.Body, sandboxBodyMax+1))
+	switch {
+	case rerr != nil && resp.StatusCode < 300:
+		// Taken (a run may be under way), the answer lost on the way: asked again under the same
+		// Idempotency-Key, it is the same message there.
+		return resp.Header, &sandboxError{status: resp.StatusCode, broken: true, msg: fmt.Sprintf("sandboxd %s %s: the answer broke off (%v)", method, p, rerr)}
+	case len(b) > sandboxBodyMax:
+		return resp.Header, &sandboxError{status: resp.StatusCode, msg: fmt.Sprintf("sandboxd %s %s: an answer over %d bytes", method, p, sandboxBodyMax)}
+	}
 	if resp.StatusCode >= 300 {
 		msg := strings.TrimSpace(string(b[:min(len(b), 300)]))
 		var e struct {
@@ -246,7 +257,8 @@ func (a *sandboxAgent) call(ctx context.Context, method, p string, hdr http.Head
 	}
 	if out != nil {
 		if err := json.Unmarshal(b, out); err != nil {
-			return resp.Header, &sandboxError{status: resp.StatusCode, msg: fmt.Sprintf("sandboxd %s: not the API's answer (%v)", p, err)}
+			// A proxy's page, a body cut short: asked again, as a broken one is.
+			return resp.Header, &sandboxError{status: resp.StatusCode, broken: true, msg: fmt.Sprintf("sandboxd %s: not the API's answer (%v)", p, err)}
 		}
 	}
 	return resp.Header, nil
@@ -1186,7 +1198,11 @@ func (a *sandboxAgent) handle(m store.Message) {
 	}
 	t.mu.Unlock()
 	t.stream.close()
-	a.recordUsage(m.ID, t)
+	if n.ctx.Err() == nil && !tl.lost.Load() {
+		// An attempt that lost its lease (or a node stopping: the message is run again at its
+		// start) leaves the usage to the next, which reads the whole turn again.
+		a.recordUsage(m.ID, t)
+	}
 	reply := t.reply(a.cfg.Reply)
 
 	if err != nil || timedOut {
@@ -1220,7 +1236,9 @@ func (a *sandboxAgent) recordUsage(msgID string, t *sandboxTurn) {
 		return
 	}
 	n := a.n
-	u.Turn, u.At, u.Agent, u.Reported = store.NewID(), time.Now().UTC(), a.addr+"@"+n.Name(), true
+	// The turn's identity is the remote work's: the message and its run. A turn read again by another
+	// attempt is the same turn, counted once.
+	u.Turn, u.At, u.Agent, u.Reported = sandboxUsageID(msgID, t.run.ID), time.Now().UTC(), a.addr+"@"+n.Name(), true
 	u.Session = "sandbox:" + a.cfg.Sandbox.ID
 	if t.run.Session != "" {
 		u.Session += "/" + t.run.Session
@@ -1231,5 +1249,45 @@ func (a *sandboxAgent) recordUsage(msgID string, t *sandboxTurn) {
 	u.Total = u.Input + u.Output + u.CacheRead + u.CacheWrite
 	if err := n.addEvent(n.ctx, msgID, "usage", eventJSON(u), false); err != nil && n.ctx.Err() == nil {
 		n.log.Debug("usage", "err", err)
+	}
+}
+
+// sandboxUsageID is the usage identity of a message's turn in a run of the sandbox.
+func sandboxUsageID(msgID, run string) string {
+	h := sha256.Sum256([]byte(msgID + "\x00" + run))
+	return "sbu_" + hex.EncodeToString(h[:12])
+}
+
+// cursorWhere names the conversation a cursor is of: the sandbox, at its sandboxd.
+func (a *sandboxAgent) cursorWhere() string { return a.cfg.Sandbox.URL + "/" + a.cfg.Sandbox.ID }
+
+// loadCursor starts where the node read the conversation last (before a restart).
+func (a *sandboxAgent) loadCursor() {
+	c, err := a.n.st.SandboxCursor(a.n.ctx, a.addr, a.cursorWhere())
+	if err != nil {
+		a.n.log.Debug("sandbox cursor", "agent", a.name, "err", err)
+		return
+	}
+	a.mu.Lock()
+	a.observed = max(a.observed, c)
+	a.mu.Unlock()
+	a.seen(c)
+}
+
+// saveCursor keeps how far the conversation was read, when every input read was answered: the
+// next start reads on from there with nothing open, as this node has it now. With an input still
+// open it is not moved (the next start reads that input again, and what answers it).
+func (a *sandboxAgent) saveCursor() {
+	a.mu.Lock()
+	at, open := a.observed, false
+	for _, q := range a.open {
+		open = open || len(q) > 0
+	}
+	a.mu.Unlock()
+	if open || at <= 0 {
+		return
+	}
+	if err := a.n.st.PutSandboxCursor(a.n.ctx, a.addr, a.cursorWhere(), at); err != nil && a.n.ctx.Err() == nil {
+		a.n.log.Debug("sandbox cursor", "agent", a.name, "err", err)
 	}
 }
