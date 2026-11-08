@@ -41,13 +41,21 @@ export class Turn {
   add(evs: Ev[]): this {
     for (const e of evs) {
       if (e.seq <= this.last) continue;
+      if (this.last && e.seq > this.last + 1) this.problems.push(`events ${this.last + 1}–${e.seq - 1} not seen`);
       this.last = e.seq;
       this.one(e);
     }
     return this;
   }
 
+  /** Events that could not be applied, and calls whose start was not seen (a gap in the stream). */
+  problems: string[] = [];
+
   private one(e: Ev) {
+    try { this.apply(e); } catch (x) { this.problems.push(`event ${e.seq} (${e.kind}): ${(x as Error)?.message ?? x}`); }
+  }
+
+  private apply(e: Ev) {
     let d: any;
     try { d = JSON.parse(e.data); } catch { d = e.data; }
     const at = Date.parse(e.time) || Date.now();
@@ -71,6 +79,7 @@ export class Turn {
         if (!d?.id) break;
         const prev = this.tools.get(d.id);
         if (!prev) {
+          if (e.kind === "tool_call_update") this.problems.push(`event ${e.seq}: an update of call ${d.id}, whose start was not seen`);
           this.tools.set(d.id, { ...d, started: at });
           this.blocks.push({ t: "tool", id: d.id });
         } else {
@@ -92,7 +101,9 @@ export class Turn {
         break;
       }
       case "plan": {
-        const entries = (Array.isArray(d) ? d : []).map((s: string) => {
+        // Entries are "status: text" strings; anything else in the list is left out (one bad
+        // entry must not throw and lose the rest of the batch).
+        const entries = (Array.isArray(d) ? d : []).filter((s: unknown): s is string => typeof s === "string").map((s: string) => {
           const i = s.indexOf(": ");
           return i > 0 ? { status: s.slice(0, i), content: s.slice(i + 2) } : { status: "", content: s };
         });
@@ -110,6 +121,9 @@ export class Turn {
         break;
       case "changes":
         this.blocks.push({ t: "changes", data: d });
+        break;
+      case "truncated": // the node kept no more events of this message (limits.max_events_per_message)
+        this.blocks.push({ t: "notice", text: typeof d === "string" ? d : "later events were not kept", severity: "warning" });
         break;
     }
   }

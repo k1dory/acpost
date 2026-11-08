@@ -191,7 +191,7 @@ class App {
   }
 
   private wasRunning = new Map<string, number>();
-  private asked = new Set<string>();
+  private asked = new Set<string>(); // approvals notified, of those asking now
 
   /** A notification of the system, when the app is not in front (and the user wants them). */
   notify(title: string, body: string) {
@@ -205,10 +205,15 @@ class App {
     try {
       const reqs = ((await Node.Asking()) ?? []) as any[];
       this.asking = reqs;
+      // Those still asking are remembered (one answered is no longer: the set does not grow).
+      const now = new Set<string>();
       for (const r of reqs) {
         const id = r.request_id ?? r.id;
-        if (id && !this.asked.has(id)) { this.asked.add(id); this.notify(t("Needs approval"), r.title || t("An agent asks")); }
+        if (!id) continue;
+        now.add(id);
+        if (!this.asked.has(id)) this.notify(t("Needs approval"), r.title || t("An agent asks"));
       }
+      this.asked = now;
     } catch {}
   }
 
@@ -220,13 +225,15 @@ class App {
     try {
       const c: any = await Node.Chats();
       if (my !== this.chatsAsked) return;
-      // A thread that ran and does not now: its turn ended.
+      // A thread that ran and does not now: its turn ended. (Only the chats listed now are kept.)
+      const running = new Map<string, number>();
       for (const ch of (c.items ?? []) as Chat[]) {
         if (ch.kind !== "thread") continue;
         const was = this.wasRunning.get(ch.key) ?? 0;
         if (was > 0 && !ch.running && !ch.queued) this.notify(ch.failed ? t("Failed") : t("Done"), ch.title);
-        this.wasRunning.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
+        running.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
       }
+      this.wasRunning = running;
       this.chats = c.items ?? [];
       try { localStorage.setItem(this.chatsKey(), JSON.stringify({ items: this.chats, folders: c.folders ?? [] })); } catch {}
       // A new task's thread, once listed, is the open chat (its session, to fork, comes with it).
@@ -392,7 +399,7 @@ class App {
     const i = this.msgs.findIndex(x => x.id === m.id);
     if (i >= 0) this.msgs[i] = { ...this.msgs[i], ...m };
     else if (m.thread === this.thread) this.msgs = [...this.msgs, m];
-    if (final(m.state)) { this.unsub.get(m.id)?.(); this.unsub.delete(m.id); }
+    if (final(m.state)) { this.unsub.get(m.id)?.(); this.unsub.delete(m.id); this.runningSince.delete(m.id); }
   }
 
   /** A setting chosen for an agent ("": its default). */

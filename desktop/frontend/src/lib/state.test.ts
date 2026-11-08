@@ -27,7 +27,7 @@ beforeEach(() => {
   fake.Node.Chats.mockResolvedValue({ items: [] });
   fake.Node.Agents.mockResolvedValue([]);
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("send", () => {
   it("returns false and keeps nothing sent when the node refuses (F1/Y2)", async () => {
@@ -246,6 +246,27 @@ describe("the chat list", () => {
     await a;
     expect(app.loadingChats).toBe(true);
     second.resolve({ items: [] });
+  });
+});
+
+describe("what the app remembers does not grow without end (P3)", () => {
+  it("forgets approvals answered", async () => {
+    const app = await load();
+    vi.stubGlobal("document", { hasFocus: () => true });
+    fake.Node.Asking.mockResolvedValueOnce([{ request_id: "r1" }, { request_id: "r2" }]).mockResolvedValueOnce([{ request_id: "r2" }]);
+    await app.watchAsking();
+    await app.watchAsking();
+    expect([...(app as any).asked]).toEqual(["r2"]);
+  });
+  it("forgets chats no longer listed, and when a finished message started", async () => {
+    const app = await load();
+    fake.Node.Chats.mockResolvedValueOnce({ items: [{ key: "a", kind: "thread", running: 1, title: "", updated: "" }] }).mockResolvedValueOnce({ items: [] });
+    await app.loadChats();
+    await app.loadChats();
+    expect((app as any).wasRunning.size).toBe(0);
+    app.seenRunning("m1");
+    app.replace(msg("m1", "T", "done"));
+    expect(app.runningSince.has("m1")).toBe(false);
   });
 });
 
