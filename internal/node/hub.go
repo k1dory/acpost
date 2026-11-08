@@ -28,6 +28,8 @@ const (
 	// originAcked is a delivered message whose outcome the hub took (or had already): the lease
 	// follows. It is still a delivery (it starts with originHub).
 	originAcked = originHub + "acked:"
+	// originForwarding is a message stored to be sent through the hub, not known to be there yet.
+	originForwarding = "forwarding"
 
 	announceEvery = 20 * time.Second
 	announceTTL   = 70 * time.Second
@@ -198,25 +200,41 @@ func isFinalErr(err error) bool {
 	return errors.As(err, &ce) && ce.Code == "conflict"
 }
 
-// forward sends a message to the hub and keeps a local copy that follows it.
+// forward sends a message to the hub and keeps a local copy that follows it. The copy is stored
+// first (origin forwarding), under the sender's key: a repeat finds it without the hub, and a
+// request ended (the client gave up, the node stopped) after the hub took the message still
+// leaves the copy, which then follows the hub's.
 func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store.Message, bool, error) {
 	req := client.SendRequest{To: to.String(), Body: m.Body, Task: m.Task, Thread: m.Thread, Meta: m.Meta, Files: m.Files,
 		ID: m.ID, From: n.qualify(m.From), Parent: m.Parent, Depth: m.Depth}
 	if !m.ExpiresAt.IsZero() {
 		req.TTL = time.Until(m.ExpiresAt).Round(time.Millisecond).String()
 	}
-	idem := ""
-	if m.IdemKey != "" {
-		idem = m.IdemKey
-	}
-	sent, created, err := n.hub.Send(ctx, req, idem)
+	lctx := context.WithoutCancel(ctx) // the local copy's writes outlive the request
+	pending := *m
+	pending.To, pending.Origin = to.String(), originForwarding
+	got, created, err := n.st.Insert(lctx, &pending)
 	if err != nil {
+		return store.Message{}, false, n.fileErr(err, m.ID)
+	}
+	if !created {
+		return hideLease(got), false, nil // a repeat of the key, sent at the same time
+	}
+	sent, created, err := n.hub.Send(ctx, req, m.IdemKey)
+	if err != nil {
+		var ce *client.Error
+		if errors.As(err, &ce) && ce.Code != "internal" && ce.Code != "unavailable" {
+			n.failForward(lctx, m.ID, hubErr(err)) // refused: not sent
+		} else {
+			// The hub may have it: asked later (a node closing asks at its next start).
+			_ = n.goWork(func() { n.resolveForward(m.ID) })
+		}
 		return store.Message{}, false, hubErr(err)
 	}
-	files := m.Files
-	if !created {
-		// A repeat: the hub kept the first send, whose files may differ from this one's.
-		files = nil
+	if !created && sent.ID != m.ID {
+		// A repeat: the hub kept the first send of this key (its local copy is gone, or was never
+		// made); that one is followed, this one dropped.
+		var files []store.File
 		if listed := pick(sent.Files, false); len(listed) > 0 {
 			got, err := n.fetchFiles(ctx, sent.ID, false, listed, "the message")
 			var e *Error
@@ -224,23 +242,36 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 				err = hubErr(err)
 			}
 			if err != nil {
+				n.failForward(lctx, m.ID, err)
 				return store.Message{}, false, err
 			}
 			files = got
 		}
-	}
-	local := &store.Message{ID: sent.ID, From: m.From, To: sent.To, Task: sent.Task, Thread: sent.Thread, Parent: sent.Parent,
-		Depth: sent.Depth, Meta: sent.Meta, Body: sent.Body, ExpiresAt: sent.ExpiresAt, Origin: originRemote, Files: files}
-	got, _, err := n.st.Insert(ctx, local)
-	if err != nil {
-		// Sent before (a repeat with the same key): the local copy exists.
-		if existing, gerr := n.st.Get(ctx, sent.ID); gerr == nil {
-			return hideLease(existing), false, nil
+		if err := n.st.DropForward(lctx, m.ID, originForwarding); err != nil {
+			return store.Message{}, false, err
 		}
+		local := &store.Message{ID: sent.ID, From: m.From, To: sent.To, Task: sent.Task, Thread: sent.Thread, Parent: sent.Parent,
+			Depth: sent.Depth, Meta: sent.Meta, Body: sent.Body, ExpiresAt: sent.ExpiresAt, Origin: originRemote, Files: files, IdemKey: m.IdemKey}
+		got, _, err := n.st.Insert(lctx, local)
+		if err != nil {
+			if existing, gerr := n.st.Get(lctx, sent.ID); gerr == nil {
+				return hideLease(existing), false, nil
+			}
+			return store.Message{}, false, err
+		}
+		n.notify()
+		n.startFollow(sent.ID)
+		return hideLease(got), false, nil
+	}
+	if _, err := n.st.FinishForward(lctx, m.ID, originForwarding, originRemote, sent); err != nil {
+		return store.Message{}, false, err
+	}
+	got, err = n.st.Get(lctx, m.ID)
+	if err != nil {
 		return store.Message{}, false, err
 	}
 	n.notify()
-	n.startFollow(sent.ID)
+	n.startFollow(m.ID)
 	return hideLease(got), created, nil
 }
 
@@ -431,6 +462,8 @@ func (n *Node) startJoin() {
 	n.goLoop(n.followSweep)
 	// Outcomes the last process had not handed the hub for certain: handed again.
 	n.goLoop(n.resumeReplies)
+	// Messages it stored to send and did not learn the fate of.
+	n.goLoop(n.resumeForwards)
 	// Delivered messages: few (local queue limits bound them), each relayed under its hub lease.
 	for after := ""; ; {
 		page, err := n.st.UnsettledPage(n.ctx, originHub, after, store.MaxPage)
@@ -768,6 +801,68 @@ func (n *Node) resumeReplies() {
 				defer func() { <-slots; wg.Done() }()
 				n.relay(id, lease)
 			}()
+		}
+		after = page[len(page)-1][0]
+	}
+}
+
+// failForward ends a message that was not sent to the hub.
+func (n *Node) failForward(ctx context.Context, id string, why error) {
+	if err := n.st.Settle(ctx, id, store.Failed, "", "", "not sent through the hub: "+why.Error(), 0); err == nil {
+		n.notify()
+	}
+}
+
+// resolveForward learns whether the hub took a message whose sending did not say (the hub did not
+// answer, the request ended, the node stopped): the local copy follows the hub's, or ends as not
+// sent. It does not send again: the sender was told the send failed.
+func (n *Node) resolveForward(id string) {
+	for pause := hubRetry; n.ctx.Err() == nil; pause = min(2*pause, time.Minute) {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+		ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+		hm, err := n.hub.Get(ctx, id)
+		done()
+		var ce *client.Error
+		switch {
+		case err == nil:
+			local, lerr := n.st.Get(n.ctx, id)
+			if lerr != nil || local.Origin != originForwarding {
+				return
+			}
+			if local.State.Final() { // ended here meanwhile (cancelled, expired): there too
+				cctx, cdone := context.WithTimeout(n.ctx, hubCallTimeout)
+				_, _ = n.hub.Cancel(cctx, id)
+				cdone()
+				return
+			}
+			if ok, _ := n.st.FinishForward(n.ctx, id, originForwarding, originRemote, hm); ok {
+				n.notify()
+				n.startFollow(id)
+			}
+			return
+		case errors.As(err, &ce) && ce.Code == "not_found":
+			n.failForward(n.ctx, id, errors.New("the hub did not take it; send again"))
+			return
+		}
+	}
+}
+
+// resumeForwards settles, one by one, the messages the last process stored to send through the
+// hub without learning whether the hub took them.
+func (n *Node) resumeForwards() {
+	for after := ""; n.ctx.Err() == nil; {
+		page, err := n.st.UnsettledPage(n.ctx, originForwarding, after, store.MaxPage)
+		if err != nil || len(page) == 0 {
+			return
+		}
+		for _, it := range page {
+			if it[1] == originForwarding {
+				n.resolveForward(it[0])
+			}
 		}
 		after = page[len(page)-1][0]
 	}

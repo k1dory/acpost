@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -106,4 +107,45 @@ func (s *Store) FinalOfOrigin(ctx context.Context, prefix, acked string, since t
 		out = append(out, [2]string{id, origin})
 	}
 	return out, rows.Err()
+}
+
+// FinishForward makes a message stored before it was sent to a hub (origin forwarding) the
+// local copy of what the hub took (sent): its origin becomes origin, and what the hub resolved
+// (the recipient's node, its settings) is copied. It reports whether it did: not when the message
+// is no longer a pending forward.
+func (s *Store) FinishForward(ctx context.Context, id, forwarding, origin string, sent Message) (bool, error) {
+	var meta string
+	if len(sent.Meta) > 0 {
+		b, _ := json.Marshal(sent.Meta)
+		meta = string(b)
+	}
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, recipient = ?, task = ?, thread = ?, parent = ?, depth = ?, meta = ?,
+		expires_at = ?, updated_at = ? WHERE id = ? AND origin = ? AND state IN ('queued', 'running')`,
+		origin, sent.To, sent.Task, sent.Thread, sent.Parent, sent.Depth, meta, ms(sent.ExpiresAt), ms(time.Now()), id, forwarding)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// DropForward removes a message stored before it was sent to a hub (origin forwarding), with
+// what it holds: the hub kept another message for it (a repeat of an earlier send).
+func (s *Store) DropForward(ctx context.Context, id, forwarding string) error {
+	return s.tx(ctx, func(t *sql.Tx) error {
+		var seq int64
+		err := t.QueryRowContext(ctx, "SELECT seq FROM messages WHERE id = ? AND origin = ?", id, forwarding).Scan(&seq)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, q := range []string{"DELETE FROM events WHERE msg = ?", "DELETE FROM contents WHERE seq = ?", "DELETE FROM files WHERE msg = ?", "DELETE FROM messages WHERE seq = ?"} {
+			if _, err := t.ExecContext(ctx, q, seq); err != nil {
+				return err
+			}
+		}
+		return dropOrphans(ctx, t)
+	})
 }

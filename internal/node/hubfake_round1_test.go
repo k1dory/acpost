@@ -28,6 +28,9 @@ type fakeHub struct {
 	hang    bool // accept and never answer (until the request's context ends)
 	srv     *httptest.Server
 	quit    chan struct{} // closed at the test's end: hung requests end
+	missing bool          // GET of the message: not_found
+	sent    []client.SendRequest
+	onSend  func() // after a send is answered (the response written)
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
@@ -98,6 +101,27 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 		var rq client.RelayRequest
 		_ = json.NewDecoder(r.Body).Decode(&rq)
 		_ = json.NewEncoder(w).Encode(map[string]int64{"relayed": rq.After + int64(len(rq.Events))})
+	case r.Method == "POST" && part == "messages":
+		var rq client.SendRequest
+		_ = json.NewDecoder(r.Body).Decode(&rq)
+		f.sent = append(f.sent, rq)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(store.Message{ID: rq.ID, From: rq.From, To: rq.To + "@far", Body: rq.Body, Thread: rq.ID, State: store.Queued})
+		w.(http.Flusher).Flush()
+		if f.onSend != nil {
+			f.onSend()
+		}
+	case part == "wait":
+		f.mu.Unlock()
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+		f.mu.Lock()
+		_ = json.NewEncoder(w).Encode(store.Message{ID: r.PathValue("id"), State: f.state})
+	case r.Method == "GET" && strings.HasPrefix(part, "msg_") && f.missing:
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "no message " + part}})
 	case r.Method == "GET" && strings.HasPrefix(part, "msg_"):
 		_ = json.NewEncoder(w).Encode(store.Message{ID: part, State: f.state, Error: f.errText})
 	case part == "claim": // nothing to hand: a long poll, short
@@ -128,7 +152,8 @@ func (f *fakeHub) set(fn func(f *fakeHub)) {
 func (f *fakeHub) get() fakeHub {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return fakeHub{lease: f.lease, state: f.state, replies: append([]client.ReplyRequest(nil), f.replies...)}
+	return fakeHub{lease: f.lease, state: f.state, replies: append([]client.ReplyRequest(nil), f.replies...),
+		sent: append([]client.SendRequest(nil), f.sent...)}
 }
 
 func (f *fakeHub) count(part string) int {
