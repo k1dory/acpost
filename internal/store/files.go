@@ -298,9 +298,13 @@ func (s *Store) HasContent(ctx context.Context, hash string) (bool, error) {
 
 // dropOrphans deletes content no file refers to any more.
 func dropOrphans(ctx context.Context, t *sql.Tx) error {
-	_, err := t.ExecContext(ctx, "DELETE FROM blobs WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.hash = blobs.hash)")
+	_, err := t.ExecContext(ctx, orphanBlobs)
 	return err
 }
+
+// orphanBlobs repeats the partial index's condition (a non-empty hash), or SQLite cannot use
+// files_hash and scans every file for every blob on each collection.
+const orphanBlobs = "DELETE FROM blobs WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.hash = blobs.hash AND f.hash <> '')"
 
 // ReplyFiles counts the files and bytes attached to a message's reply so far.
 func (s *Store) ReplyFiles(ctx context.Context, id string) (count int, size int64, err error) {
