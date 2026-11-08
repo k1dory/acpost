@@ -94,7 +94,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	go func() { <-ctx.Done(); stop() }()
 	err := root.ExecuteContext(ctx)
-	if err != nil && ctx.Err() != nil && errors.Is(err, context.Canceled) {
+	if err != nil && (ctx.Err() != nil && errors.Is(err, context.Canceled) || errors.Is(err, errInterrupted)) {
 		err = &exitErr{code: exitInterrupted, name: "interrupted", err: errors.New("interrupted")}
 	}
 	if err == nil {
@@ -455,19 +455,55 @@ func readCtx(ctx context.Context, read func() ([]byte, error)) ([]byte, error) {
 	}
 }
 
-// readSecret reads a line from the terminal without echoing it; given up when ctx ends, the
-// terminal is put back as it was (echo on), not left as the read set it.
+// readSecret reads a line from the terminal without echoing it. The terminal's mode is changed
+// and put back here, in this goroutine, before and after the read, never by the reader left behind
+// on a cancel: a context already ended changes nothing, and one that ends meanwhile finds the mode
+// set and puts it back. Raw, a typed Ctrl-C is a byte, read as an interrupt too.
 func readSecret(ctx context.Context, fd int) ([]byte, error) {
-	old, err := term.GetState(fd)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	old, err := term.MakeRaw(fd)
 	if err != nil {
 		return nil, err
 	}
-	b, err := readCtx(ctx, func() ([]byte, error) { return term.ReadPassword(fd) })
-	if ctx.Err() != nil {
-		_ = term.Restore(fd, old)
-	}
-	return b, err
+	defer term.Restore(fd, old)
+	return readCtx(ctx, func() ([]byte, error) {
+		var line []byte
+		var b [1]byte
+		for {
+			n, err := syscall.Read(fd, b[:])
+			if err == syscall.EINTR {
+				continue
+			}
+			if err != nil {
+				return line, err
+			}
+			if n == 0 {
+				return line, io.EOF
+			}
+			switch b[0] {
+			case '\r', '\n':
+				return line, nil
+			case 3: // Ctrl-C
+				return nil, errInterrupted
+			case 4: // Ctrl-D
+				if len(line) == 0 {
+					return nil, io.EOF
+				}
+			case 127, 8: // erase
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+				}
+			default:
+				line = append(line, b[0])
+			}
+		}
+	})
 }
+
+// errInterrupted is a Ctrl-C read as a byte (a terminal in raw mode sends no signal).
+var errInterrupted = errors.New("interrupted")
 
 func sendCmd(g *globals) *cobra.Command {
 	var to, body, bodyFile, task, thread, idem, session, save string
