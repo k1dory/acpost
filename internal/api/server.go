@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,6 +132,9 @@ func (s *server) auth(h handler) http.HandlerFunc {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, s.max)
+		if p.Kind == "node" {
+			r = r.WithContext(context.WithValue(r.Context(), lenientKey{}, true))
+		}
 		h(w, r, p)
 	}
 }
@@ -143,23 +145,7 @@ var statusOf = map[string]int{
 }
 
 func writeErr(w http.ResponseWriter, err error) {
-	var e *node.Error
-	if !errors.As(err, &e) {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			e = &node.Error{Code: "refused", Message: "the request is over the size limit"}
-		} else {
-			e = &node.Error{Code: "internal", Message: err.Error()}
-		}
-	}
-	code, ok := statusOf[e.Code]
-	switch {
-	case ok:
-	case strings.HasPrefix(e.Code, "agent_") || strings.HasPrefix(e.Code, "session_"):
-		code = http.StatusBadGateway // the node is fine; the agent behind it is not
-	default:
-		code = http.StatusInternalServerError
-	}
+	code, e := errorOf(err)
 	writeStatus(w, code, e)
 }
 
@@ -175,15 +161,23 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func decode(r *http.Request, v any) error {
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			return err
-		}
-		return &node.Error{Code: "invalid", Message: "bad request body: " + err.Error()}
+	if r.Context().Value(lenientKey{}) == nil {
+		dec.DisallowUnknownFields()
 	}
-	return nil
+	err := dec.Decode(v)
+	if err == nil {
+		// One value is the body: a second one or garbage after it is a broken client, not ignored.
+		if _, err = dec.Token(); err == io.EOF {
+			return nil
+		} else if err == nil {
+			err = errors.New("more than one JSON value")
+		}
+	}
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return err
+	}
+	return &node.Error{Code: "invalid", Message: "bad request body: " + err.Error()}
 }
 
 func duration(r *http.Request, key string, def, max time.Duration) (time.Duration, error) {
@@ -302,9 +296,17 @@ func (s *server) events(w http.ResponseWriter, r *http.Request, p node.Principal
 		s.follow(w, r, p)
 		return
 	}
-	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	evs, err := s.n.Events(r.Context(), p, r.PathValue("id"), after, limit)
+	after, err := intParam(r, "after")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	limit, err := intParam(r, "limit")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	evs, err := s.n.Events(r.Context(), p, r.PathValue("id"), after, int(limit))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -997,7 +999,11 @@ func (s *server) nodeClaim(w http.ResponseWriter, r *http.Request, p node.Princi
 // final message. A comment every 15 s keeps idle connections open.
 func (s *server) follow(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	id := r.PathValue("id")
-	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	after, err := intParam(r, "after")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	if last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
 		after = last
 	}
@@ -1005,67 +1011,22 @@ func (s *server) follow(w http.ResponseWriter, r *http.Request, p node.Principal
 		writeErr(w, err) // before the stream starts: a plain error
 		return
 	}
-	fl, ok := w.(http.Flusher)
+	st, ok := newSSE(w, r)
 	if !ok {
-		writeErr(w, &node.Error{Code: "internal", Message: "streaming is not supported here"})
 		return
 	}
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	fl.Flush()
-
-	var mu sync.Mutex
-	closed := false
-	send := func(format string, args ...any) error {
-		mu.Lock()
-		defer mu.Unlock()
-		if closed {
-			return context.Canceled
-		}
-		if _, err := fmt.Fprintf(w, format, args...); err != nil {
-			return err
-		}
-		fl.Flush()
-		return nil
-	}
-	ctx, cancel := context.WithCancel(r.Context())
-	var beat sync.WaitGroup
-	defer func() { // nothing writes to w once the handler returns
-		cancel()
-		beat.Wait()
-		mu.Lock()
-		closed = true
-		mu.Unlock()
-	}()
-	beat.Add(1)
-	go func() {
-		defer beat.Done()
-		t := time.NewTicker(15 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if send(": ping\n\n") != nil {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-	m, err := s.n.Follow(ctx, p, id, after, func(e store.Event) error {
+	defer st.done()
+	st.start() // at once: the client sees the stream open before the first event
+	m, err := s.n.Follow(st.ctx, p, id, after, func(e store.Event) error {
 		b, _ := json.Marshal(e)
-		return send("id: %d\nevent: %s\ndata: %s\n\n", e.Seq, e.Kind, b)
+		return st.send("id: %d\nevent: %s\ndata: %s\n\n", e.Seq, e.Kind, b)
 	})
 	if err != nil {
-		return // the client went away, or the message is gone
+		st.fail(err)
+		return
 	}
 	b, _ := json.Marshal(m)
-	_ = send("event: end\ndata: %s\n\n", b)
+	_ = st.send("event: end\ndata: %s\n\n", b)
 }
 
 func (s *server) termOpen(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -1129,54 +1090,30 @@ func (s *server) termClose(w http.ResponseWriter, r *http.Request, p node.Princi
 // its id and the bytes in base64, then `event: end` with the terminal when its shell has ended.
 // ?from= (or Last-Event-ID, the offset after the last bytes read) goes on from there.
 func (s *server) termOutput(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	from, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
-	if last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
-		from = last
-	}
-	ts, err := s.n.Terminals(p)
+	from, err := intParam(r, "from")
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	if !slices.ContainsFunc(ts, func(t node.Terminal) bool { return t.ID == r.PathValue("id") }) {
-		writeErr(w, &node.Error{Code: "not_found", Message: "no terminal " + r.PathValue("id")})
-		return
+	if last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
+		from = last
 	}
-	fl, ok := w.(http.Flusher)
+	// The stream starts with the first output: a terminal that is not there, or not this
+	// principal's, is a plain error from the node's own check.
+	st, ok := newSSE(w, r)
 	if !ok {
-		writeErr(w, &node.Error{Code: "internal", Message: "streaming is not supported here"})
 		return
 	}
-	started := false
-	start := func() {
-		if !started {
-			started = true
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(http.StatusOK)
-			fl.Flush()
-		}
-	}
-	start()
-	t, err := s.n.TermOutput(r.Context(), p, r.PathValue("id"), from, func(off int64, b []byte) error {
-		start()
-		if _, err := fmt.Fprintf(w, "id: %d\nevent: data\ndata: %s\n\n", off+int64(len(b)), base64.StdEncoding.EncodeToString(b)); err != nil {
-			return err
-		}
-		fl.Flush()
-		return nil
+	defer st.done()
+	t, err := s.n.TermOutput(st.ctx, p, r.PathValue("id"), from, func(off int64, b []byte) error {
+		return st.send("id: %d\nevent: data\ndata: %s\n\n", off+int64(len(b)), base64.StdEncoding.EncodeToString(b))
 	})
 	if err != nil {
-		if !started {
-			writeErr(w, err)
-		}
+		st.fail(err)
 		return
 	}
-	start()
 	b, _ := json.Marshal(t)
-	fmt.Fprintf(w, "event: end\ndata: %s\n\n", b)
-	fl.Flush()
+	_ = st.send("event: end\ndata: %s\n\n", b)
 }
 
 func forgeQuery(r *http.Request) node.ForgeQuery {
@@ -1262,8 +1199,12 @@ func nonNilSlice[T any](s []T) []T {
 }
 
 func (s *server) conversations(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, next, err := s.n.Conversations(r.Context(), p, r.URL.Query().Get("before"), limit)
+	limit, err := intParam(r, "limit")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	items, next, err := s.n.Conversations(r.Context(), p, r.URL.Query().Get("before"), int(limit))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1291,4 +1232,161 @@ func (s *server) asking(w http.ResponseWriter, r *http.Request, p node.Principal
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+// lenientKey marks a request from another node: its body may carry fields this version does not
+// know (a newer node or hub), which are ignored rather than refused, so versions can differ across
+// a hub. Users, agents and clients talk to their own node's version and are held to it.
+type lenientKey struct{}
+
+// intParam is the query parameter key as a number ≥ 0, 0 when absent: garbage is invalid rather
+// than read as 0 (a stream from the start, a default page).
+func intParam(r *http.Request, key string) (int64, error) {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0, &node.Error{Code: "invalid", Message: key + ": a whole number ≥ 0"}
+	}
+	return n, nil
+}
+
+// errorOf is the API error err is, with its HTTP status.
+func errorOf(err error) (int, *node.Error) {
+	var e *node.Error
+	if !errors.As(err, &e) {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			e = &node.Error{Code: "refused", Message: "the request is over the size limit"}
+		} else {
+			e = &node.Error{Code: "internal", Message: err.Error()}
+		}
+	}
+	code, ok := statusOf[e.Code]
+	switch {
+	case ok:
+	case strings.HasPrefix(e.Code, "agent_") || strings.HasPrefix(e.Code, "session_"):
+		code = http.StatusBadGateway // the node is fine; the agent behind it is not
+	default:
+		code = http.StatusInternalServerError
+	}
+	return code, e
+}
+
+// sseStream writes one Server-Sent Events response. It starts (headers, 200) with its first
+// write, so an error before anything was sent is still a plain JSON error; after the start an
+// error is an `event: error` with the same envelope (and the status), which the client ends on
+// instead of reconnecting to a stream that fails the same way. A comment every ssePing keeps an
+// idle connection open through proxies; once done returns nothing writes to w.
+type sseStream struct {
+	w      http.ResponseWriter
+	fl     http.Flusher
+	ctx    context.Context // the request's; ends when a heartbeat cannot be written
+	cancel context.CancelFunc
+	beat   sync.WaitGroup
+
+	mu      sync.Mutex
+	started bool
+	closed  bool
+}
+
+var ssePing = 15 * time.Second
+
+func newSSE(w http.ResponseWriter, r *http.Request) (*sseStream, bool) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, &node.Error{Code: "internal", Message: "streaming is not supported here"})
+		return nil, false
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	st := &sseStream{w: w, fl: fl, ctx: ctx, cancel: cancel}
+	st.beat.Add(1)
+	go st.ping()
+	return st, true
+}
+
+func (st *sseStream) ping() {
+	defer st.beat.Done()
+	t := time.NewTicker(ssePing)
+	defer t.Stop()
+	for {
+		select {
+		case <-st.ctx.Done():
+			return
+		case <-t.C:
+			if st.send(": ping\n\n") != nil {
+				st.cancel()
+				return
+			}
+		}
+	}
+}
+
+// start sends the headers if nothing has been sent yet.
+func (st *sseStream) start() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !st.closed {
+		st.startLocked()
+	}
+}
+
+func (st *sseStream) startLocked() {
+	if st.started {
+		return
+	}
+	st.started = true
+	h := st.w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no")
+	st.w.WriteHeader(http.StatusOK)
+	st.fl.Flush()
+}
+
+func (st *sseStream) send(format string, args ...any) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed {
+		return context.Canceled
+	}
+	st.startLocked()
+	if _, err := fmt.Fprintf(st.w, format, args...); err != nil {
+		return err
+	}
+	st.fl.Flush()
+	return nil
+}
+
+// fail reports err to the client, unless the client is gone (or the node stops: its clients
+// reconnect to the next one).
+func (st *sseStream) fail(err error) {
+	if st.ctx.Err() != nil {
+		return
+	}
+	code, e := errorOf(err)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed {
+		return
+	}
+	if !st.started {
+		st.started = true
+		writeStatus(st.w, code, e)
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"status": code, "error": e})
+	if _, err := fmt.Fprintf(st.w, "event: error\ndata: %s\n\n", b); err == nil {
+		st.fl.Flush()
+	}
+}
+
+func (st *sseStream) done() {
+	st.cancel()
+	st.beat.Wait()
+	st.mu.Lock()
+	st.closed = true
+	st.mu.Unlock()
 }
