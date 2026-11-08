@@ -116,6 +116,8 @@ type Node struct {
 	turns string
 
 	closed atomic.Bool
+
+	held heldLeases // the leases of turns running in this process (lease.go)
 }
 
 type agentToken struct {
@@ -914,6 +916,7 @@ func (n *Node) maintainLoop() {
 		if k, err := n.st.Expire(ctx, now); err == nil {
 			changed += k
 		}
+		n.held.renew(ctx, n.st) // a turn running here is alive, however long this process stood still
 		if k, err := n.st.ReapLeases(ctx, now, n.cfg.Limits.MaxAttempts); err == nil {
 			changed += k
 		}
