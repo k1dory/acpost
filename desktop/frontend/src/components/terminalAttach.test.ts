@@ -1,7 +1,5 @@
-// node --test tests/ (Node 22.18+ runs TypeScript as it is)
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { attachShell } from "../src/components/terminalAttach.ts";
+import { test, expect } from "vitest";
+import { attachShell } from "./terminalAttach";
 
 test("the terminal's answer to an early query reaches the shell", async () => {
   const sent: string[] = [];
@@ -17,7 +15,7 @@ test("the terminal's answer to an early query reaches the shell", async () => {
       return new Promise<void>(r => { resolveAttach = r; });
     },
   });
-  assert.deepEqual(sent, ["\x1b[1;1R"]);
+  expect(sent).toEqual(["\x1b[1;1R"]);
   resolveAttach();
   await done;
 });

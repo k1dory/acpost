@@ -7,8 +7,7 @@
     "dev": "vite",
     "build:dev": "vite build --minify false --mode development",
     "build": "vite build --mode production",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "node --test 'tests/*.test.ts'"
+    "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
     "@fontsource-variable/onest": "^5.2.8",
