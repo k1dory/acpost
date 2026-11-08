@@ -374,6 +374,8 @@ export const ru: Record<string, string> = {
   "next {when}": "следующий {when}",
   "last {when}": "последний {when}",
   "exit {code}": "код выхода {code}",
+  "exited": "завершён",
+  "exited ({code})": "завершён (код {code})",
 };
 
 // The node's messages (English) that have a known form, in Russian.
