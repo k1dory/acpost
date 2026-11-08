@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -135,9 +137,26 @@ func TestRunRollsBackOnBadTLS(t *testing.T) {
 func TestRunStopEndsLongPolls(t *testing.T) {
 	dir := shortDir(t)
 	sock := filepath.Join(dir, "s", "a.sock")
-	cfg := testConfig(t, dir, "unix://"+sock)
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := free.Addr().String()
+	free.Close()
+	sum := sha256.Sum256([]byte("peer-secret"))
+	y := fmt.Sprintf("node:\n  name: stop1\n  listen: [unix://%s, tcp://%s]\nstore: sqlite://%s/s/store.db\n"+
+		"agents:\n  bot: {driver: inbox}\n  idle: {driver: inbox}\ntokens:\n  - {name: peer, sha256: %s, node: true}\n",
+		sock, addr, dir, hex.EncodeToString(sum[:]))
+	cfg, err := config.Parse([]byte(y), ".yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
 	stop := runServer(t, cfg)
 	c, err := client.New("unix://"+sock, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := client.New("http://"+addr, "peer-secret", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +164,23 @@ func TestRunStopEndsLongPolls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiting := make(chan error, 2)
+	waiting := make(chan error, 4)
+	// A claim with nothing to take, and a joined node's claim (it announced no agents): cut by the
+	// stop, they are not "nothing came", which a consumer takes as a reason to stop asking.
+	go func() {
+		_, got, err := c.Claim(context.Background(), "idle", 60*time.Second, time.Minute)
+		if got {
+			err = errors.New("claimed a message")
+		}
+		waiting <- err
+	}()
+	go func() {
+		_, got, err := peer.NodeClaim(context.Background(), "peer", 60*time.Second, time.Minute)
+		if got {
+			err = errors.New("claimed a message")
+		}
+		waiting <- err
+	}()
 	go func() {
 		_, err := c.Wait(context.Background(), m.ID, 60*time.Second)
 		waiting <- err
@@ -163,11 +198,11 @@ func TestRunStopEndsLongPolls(t *testing.T) {
 		t.Fatalf("stop with an open wait took %v", took)
 	}
 	// Cut by the stop, a wait is what a refused connection is: unavailable, worth asking again.
-	for range 2 {
+	for range 4 {
 		select {
 		case err := <-waiting:
 			if !errors.Is(err, client.ErrUnavailable) {
-				t.Fatalf("a wait cut by the stop: %v", err)
+				t.Fatalf("a wait or claim cut by the stop: %v", err)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("the wait did not end with the node")

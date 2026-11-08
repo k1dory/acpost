@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1371,18 +1369,6 @@ func noContent(w http.ResponseWriter, err error) {
 // by a node), so a name with a dash is never one of them.
 const sseErrorEvent = "acpost-error"
 
-// fileFields are the fields of a file in a body, as store.File spells them.
-var fileFields = func() []string {
-	var out []string
-	t := reflect.TypeFor[store.File]()
-	for i := range t.NumField() {
-		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
-			out = append(out, name)
-		}
-	}
-	return out
-}()
-
 // decodeLenient decodes a body from another node into v, ignoring fields this version does not
 // know. A list of files decodes strictly in the store (a misspelt field there is an error), so
 // in it the fields a store.File does not have are dropped first. Nothing here grows with what
@@ -1431,7 +1417,7 @@ func decodeLenient(dec *json.Decoder, v any) error {
 	return json.Unmarshal(body, v)
 }
 
-// knownFileFields is a list of files with only the fields a store.File has.
+// knownFileFields is a list of files with only the fields a store.File has, read a file at a time.
 func knownFileFields(raw json.RawMessage) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	t, err := dec.Token()
@@ -1441,19 +1427,16 @@ func knownFileFields(raw json.RawMessage) ([]byte, error) {
 	if t != json.Delim('[') {
 		return bytes.Clone(raw), nil // null, or not a list: the store says what is wrong with it
 	}
-	var out []map[string]json.RawMessage
+	var out []store.File
 	for dec.More() {
 		if len(out) == store.MaxFilesPerRequest {
 			return nil, fmt.Errorf("files: more than %d", store.MaxFilesPerRequest)
 		}
-		var f map[string]json.RawMessage
+		// Decoded as a store.File itself, without the store's strictness: a field it does not
+		// have is scanned past, not kept.
+		var f store.File
 		if err := dec.Decode(&f); err != nil {
 			return nil, err
-		}
-		for k := range f {
-			if !slices.ContainsFunc(fileFields, func(n string) bool { return strings.EqualFold(n, k) }) {
-				delete(f, k)
-			}
 		}
 		out = append(out, f)
 	}

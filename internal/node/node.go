@@ -771,7 +771,7 @@ func (n *Node) claim(ctx context.Context, recipients []string, wait, lease time.
 		case <-deadline.C:
 			return store.Message{}, false, nil
 		case <-ctx.Done():
-			return store.Message{}, false, nil
+			return store.Message{}, false, ctx.Err() // cut short (the node stops), not "none came"
 		}
 	}
 }

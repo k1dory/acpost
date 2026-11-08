@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -56,5 +57,36 @@ func TestWriteCutByTheStopIsUnavailable(t *testing.T) {
 		if w.Code != http.StatusServiceUnavailable || errCode(w.Body.String()) != "unavailable" {
 			t.Errorf("%s %s cut short: %d %s", c.method, c.path, w.Code, w.Body.String())
 		}
+	}
+}
+
+// One file padded with a great many fields of no store.File: they are scanned past, not kept
+// (no object per field), and the file goes through with what it has.
+func TestLenientDecodeSkipsUnknownFieldsOfAFile(t *testing.T) {
+	const padded = 200_000
+	var pad strings.Builder
+	for i := range padded {
+		fmt.Fprintf(&pad, `"k%d":0,`, i)
+	}
+	body := []byte(`{"to":"agent:bot","body":"x","files":[{` + pad.String() + `"name":"a.md","data":"eA=="}]}`)
+	var req client.SendRequest
+	var err error
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	allocs := testing.AllocsPerRun(1, func() {
+		req = client.SendRequest{}
+		err = decodeLenient(json.NewDecoder(bytes.NewReader(body)), &req)
+	})
+	runtime.ReadMemStats(&after)
+	if allocs > padded/100 {
+		t.Errorf("%.0f allocations for one file with %d unknown fields", allocs, padded)
+	}
+	// Two runs (AllocsPerRun warms up once): the bytes are a fixed multiple of the body.
+	if got, limit := (after.TotalAlloc-before.TotalAlloc)/2, uint64(20*len(body)); got > limit {
+		t.Errorf("%d bytes allocated for a body of %d (at most %d)", got, len(body), limit)
+	}
+	if err != nil || len(req.Files) != 1 || req.Files[0].Name != "a.md" || string(req.Files[0].Data) != "x" {
+		t.Fatalf("%+v %v", req.Files, err)
 	}
 }
