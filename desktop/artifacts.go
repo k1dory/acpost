@@ -278,33 +278,67 @@ func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, rep
 // afterWrite, in tests, looks at the temporary file once the content is in it.
 var afterWrite func(tmp string)
 
-// writeTarget is the file a write to p reaches: p itself, or the end of its chain of links,
-// followed link by link so that only that last file may be missing (a link to a file not there
-// yet makes it). A cycle, or a chain too long, is an error.
+// writeTarget is the file a write to p reaches, read as the system reads a path: component by
+// component, each link met replaced by its target (read from the directory reached so far), a
+// ".." going up from the directory actually reached, never from the text of the path. Only the
+// last component may be missing (a link to a file not there yet makes it). A cycle, or a chain
+// too long, is an error.
 func writeTarget(p string) (string, error) {
-	for range 40 {
-		st, err := os.Lstat(p)
-		if errors.Is(err, fs.ErrNotExist) {
-			dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if !filepath.IsAbs(p) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		p = wd + string(filepath.Separator) + p
+	}
+	rest := strings.Split(p, string(filepath.Separator))
+	cur, hops := string(filepath.Separator), 0
+	for len(rest) > 0 {
+		c := rest[0]
+		rest = rest[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur) // cur has no links in it: its parent is the real one
+			continue
+		}
+		next := filepath.Join(cur, c)
+		st, err := os.Lstat(next)
+		if errors.Is(err, fs.ErrNotExist) && last(rest) {
+			return next, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if st.Mode()&os.ModeSymlink != 0 {
+			if hops++; hops > 40 {
+				return "", errors.New(p + ": too many links (a cycle?)")
+			}
+			to, err := os.Readlink(next)
 			if err != nil {
 				return "", err
 			}
-			return filepath.Join(dir, filepath.Base(p)), nil
+			if filepath.IsAbs(to) {
+				cur = string(filepath.Separator)
+			}
+			rest = append(strings.Split(to, string(filepath.Separator)), rest...)
+			continue
 		}
-		if err != nil {
-			return "", err
+		if !st.IsDir() && !last(rest) {
+			return "", &fs.PathError{Op: "save", Path: next, Err: syscall.ENOTDIR}
 		}
-		if st.Mode()&os.ModeSymlink == 0 {
-			return filepath.EvalSymlinks(p) // links among its directories resolved too
-		}
-		to, err := os.Readlink(p)
-		if err != nil {
-			return "", err
-		}
-		if !filepath.IsAbs(to) {
-			to = filepath.Join(filepath.Dir(p), to)
-		}
-		p = to
+		cur = next
 	}
-	return "", errors.New(p + ": too many links (a cycle?)")
+	return cur, nil
+}
+
+// last says whether what is left of a path names nothing more.
+func last(rest []string) bool {
+	for _, c := range rest {
+		if c != "" && c != "." {
+			return false
+		}
+	}
+	return true
 }
