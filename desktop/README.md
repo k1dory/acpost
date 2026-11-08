@@ -17,7 +17,11 @@ looking at the interface in a browser. Bindings in `frontend/bindings` are gener
 `wails3 generate bindings -ts -d frontend/bindings ./`.
 
 The IDE view is VS Code (the one installed on the Mac runs `serve-web`, pinned to `ideCommit` in
-`ide.go`; its server, settings and extensions live in `~/Library/Application Support/acpost/vscode`)
+`ide_ext.go`; its server, settings and extensions live in `~/Library/Application Support/acpost/vscode`)
 dressed as the app by the extension in `ide/extension`: colour themes made from the app's tokens,
-Lucide icons in place of VS Code's, the app's fonts and `workbench.css`. Its generated files are
-committed; after changing the tokens or the icon map: `cd ide && npm install && npm run build`.
+Lucide icons in place of VS Code's, the app's fonts and `workbench.css`; the app's VS Code settings
+are the extension's `configurationDefaults` (the user's own win), the few application-wide ones
+written by `ide/page/seed.js`. Its generated files are committed; after changing the tokens or the
+icon map: `cd ide && npm install && npm run build`. VS Code keeps its state in the page, by its
+address `127.0.0.1:47823`: a server left by an app that crashed is ended by the next start; when
+something else holds the port, VS Code starts on another one, without that state.
