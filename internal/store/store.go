@@ -914,7 +914,7 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 			return err
 		}
 		a, _ := res.RowsAffected()
-		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', lease_id = '', lease_until = 0, updated_at = ?
+		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', error_code = 'lease_lost', lease_id = '', lease_until = 0, updated_at = ?
 			WHERE state = 'running' AND lease_id <> '' AND lease_until < ?`, t, t)
 		if err != nil {
 			return err
