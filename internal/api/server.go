@@ -565,11 +565,7 @@ func (s *server) cloudHistory(w http.ResponseWriter, r *http.Request, p node.Pri
 
 func (s *server) forgeAccounts(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.ForgeAccounts(r.Context(), p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) forgeLogin(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -587,20 +583,12 @@ func (s *server) forgeLogin(w http.ResponseWriter, r *http.Request, p node.Princ
 }
 
 func (s *server) forgeLogout(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	if err := s.n.ForgeLogout(r.Context(), p, r.PathValue("host")); err != nil {
-		writeErr(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	noContent(w, s.n.ForgeLogout(r.Context(), p, r.PathValue("host")))
 }
 
 func (s *server) mcpList(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.MCPServers(r.Context(), p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) mcpPut(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -627,11 +615,7 @@ func (s *server) mcpDelete(w http.ResponseWriter, r *http.Request, p node.Princi
 
 func (s *server) backlog(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.Backlog(r.Context(), p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) putBacklog(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -649,11 +633,7 @@ func (s *server) putBacklog(w http.ResponseWriter, r *http.Request, p node.Princ
 }
 
 func (s *server) deleteBacklog(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	if err := s.n.DeleteBacklogItem(r.Context(), p, r.PathValue("id")); err != nil {
-		writeErr(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	noContent(w, s.n.DeleteBacklogItem(r.Context(), p, r.PathValue("id")))
 }
 
 func (s *server) startBacklog(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -676,11 +656,7 @@ func (s *server) startBacklog(w http.ResponseWriter, r *http.Request, p node.Pri
 
 func (s *server) tree(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.Tree(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) fileAt(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -709,11 +685,7 @@ func (s *server) handoff(w http.ResponseWriter, r *http.Request, p node.Principa
 
 func (s *server) wikis(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.Wikis(r.Context(), p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) wikiPages(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -744,20 +716,12 @@ func (s *server) writeWiki(w http.ResponseWriter, r *http.Request, p node.Princi
 }
 
 func (s *server) deleteWiki(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	if err := s.n.DeleteWiki(r.Context(), p, r.URL.Query().Get("repo")); err != nil {
-		writeErr(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	noContent(w, s.n.DeleteWiki(r.Context(), p, r.URL.Query().Get("repo")))
 }
 
 func (s *server) knowledge(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.Knowledge(r.Context(), p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) putNote(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -774,20 +738,12 @@ func (s *server) putNote(w http.ResponseWriter, r *http.Request, p node.Principa
 }
 
 func (s *server) deleteNote(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	if err := s.n.DeleteNote(r.Context(), p, r.PathValue("name")); err != nil {
-		writeErr(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	noContent(w, s.n.DeleteNote(r.Context(), p, r.PathValue("name")))
 }
 
 func (s *server) schedules(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.Schedules(r.Context(), p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) putSchedule(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -805,29 +761,17 @@ func (s *server) putSchedule(w http.ResponseWriter, r *http.Request, p node.Prin
 }
 
 func (s *server) deleteSchedule(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	if err := s.n.DeleteSchedule(r.Context(), p, r.PathValue("id")); err != nil {
-		writeErr(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	noContent(w, s.n.DeleteSchedule(r.Context(), p, r.PathValue("id")))
 }
 
 func (s *server) runSchedule(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	m, err := s.n.RunSchedule(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 201, m)
+	reply(w, http.StatusCreated, m, err)
 }
 
 func (s *server) playbooks(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	out, err := s.n.Playbooks(r.Context(), p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"items": out})
+	items(w, out, err)
 }
 
 func (s *server) putPlaybook(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -845,11 +789,7 @@ func (s *server) putPlaybook(w http.ResponseWriter, r *http.Request, p node.Prin
 }
 
 func (s *server) deletePlaybook(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	if err := s.n.DeletePlaybook(r.Context(), p, r.PathValue("name")); err != nil {
-		writeErr(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	noContent(w, s.n.DeletePlaybook(r.Context(), p, r.PathValue("name")))
 }
 
 func (s *server) chatTitle(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -1389,4 +1329,27 @@ func (st *sseStream) done() {
 	st.mu.Lock()
 	st.closed = true
 	st.mu.Unlock()
+}
+
+// The usual ends of a handler: the node's answer, or its error as the API's.
+
+func reply[T any](w http.ResponseWriter, code int, v T, err error) {
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, code, v)
+}
+
+// items answers {"items":[…]}: an empty list is [], never null.
+func items[T any](w http.ResponseWriter, list []T, err error) {
+	reply(w, http.StatusOK, map[string][]T{"items": nonNilSlice(list)}, err)
+}
+
+func noContent(w http.ResponseWriter, err error) {
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
