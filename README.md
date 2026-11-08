@@ -199,9 +199,10 @@ and its version, it asks the host (`/api/v1/version`, `/api/v4/version`,
 branch with their jobs (GitHub Actions runs, GitLab pipelines, Forgejo/Gitea commit statuses),
 reads a job's log (secrets masked; Forgejo and Gitea before 1.24 give none over their API, and
 the error says so) and opens a pull request from the repository's branch. Tokens are kept by
-`acpost forge login HOST` (read from the terminal or stdin): in the macOS keychain (service
-`acpost-forge`, given to `security` on its stdin), elsewhere in `~/.config/acpost/forge-tokens.json`
-(0600). For the node's user and its agents.
+`acpost forge login HOST` (read from the terminal or stdin) on the node it talks to (`--node`: that
+machine), once the forge says whose the token is (a refused one is not kept): in the macOS keychain
+(service `acpost-forge`, given to `security` on its stdin), elsewhere or with
+`ACPOST_SECRETS_FILE=1` in `~/.config/acpost/forge-tokens.json` (0600). For the node's user and its agents.
 
 **An agent's pull request waits for a person.** An agent that opens or merges a pull request
 (`acpost forge open`, `acpost forge merge N [--method squash] [--sha S]`, the same through the

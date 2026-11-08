@@ -18,11 +18,6 @@ import (
 	"github.com/k1dory/acpost/internal/forge"
 )
 
-func forgeStore() *forge.Store {
-	home, _ := os.UserHomeDir()
-	return &forge.Store{Dir: filepath.Join(home, ".config", "acpost")}
-}
-
 func forgeCmd(g *globals) *cobra.Command {
 	var q client.ForgeQuery
 	cmd := &cobra.Command{
@@ -43,7 +38,7 @@ func forgeCmd(g *globals) *cobra.Command {
 	var kind string
 	login := &cobra.Command{
 		Use:   "login HOST",
-		Short: "Keep a token for a forge host (macOS: in the keychain); it is read from the terminal or stdin",
+		Short: "Keep a token for a forge host on the node, once the forge accepts it (macOS: in the keychain); read from the terminal or stdin",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var token string
@@ -62,20 +57,35 @@ func forgeCmd(g *globals) *cobra.Command {
 			if strings.TrimSpace(token) == "" {
 				return usageErr(errors.New("no token given"))
 			}
-			if err := forgeStore().Login(args[0], kind, token); err != nil {
+			// The node keeps it, where it reads tokens (its keychain or file, its machine for
+			// --node), and only once the forge says whose it is: a wrong token is not kept.
+			c, err := g.connect(cmd.Context())
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "· kept for %s\n", args[0])
+			acc, err := c.ForgeLogin(cmd.Context(), args[0], kind, token)
+			if err != nil {
+				return err
+			}
+			if g.json {
+				printJSON(acc)
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "· kept for %s (%s %s), the token of %s\n", acc.Host, acc.Kind, acc.Version, acc.Login)
 			return nil
 		},
 	}
 	login.Flags().StringVar(&kind, "kind", "", "github, gitlab or forgejo (default: ask the host)")
 	logout := &cobra.Command{
 		Use:   "logout HOST",
-		Short: "Forget a forge host's token",
+		Short: "Forget a forge host's token (on the node)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return forgeStore().Logout(args[0])
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			return c.ForgeLogout(cmd.Context(), args[0])
 		},
 	}
 
