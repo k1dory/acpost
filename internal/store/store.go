@@ -1097,7 +1097,6 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 			kind, data = "notice", unreadableUsage
 		}
 	}
-	marked := false
 	switch {
 	case usage:
 		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
@@ -1114,24 +1113,23 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 		if err := addUsage(ctx, t, id, u, now); err != nil {
 			return n, err
 		}
-		// Usage in the last place would leave no room for the marker: it follows.
-		marked = n == s.opt.MaxEventsPerMessage-1
 	case n >= s.opt.MaxEventsPerMessage:
-		return n, nil
+		// Usage took the last place (it is kept past the limit): the first event dropped gives its
+		// place to the marker. One event for one, so a copy's count never runs ahead of the events
+		// it took (relayevents.go resumes from it).
+		var marked int
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'truncated'", seq).Scan(&marked); err != nil || marked > 0 {
+			return n, err
+		}
+		kind, data = "truncated", truncatedEvents
 	case n == s.opt.MaxEventsPerMessage-1:
 		kind, data = "truncated", truncatedEvents
 	}
 	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(now), kind, data); err != nil {
 		return n, err
 	}
-	if _, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq); err != nil || !marked {
-		return n + 1, err
-	}
-	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, 'truncated', ?)", seq, n+2, ms(now), truncatedEvents); err != nil {
-		return n + 1, err
-	}
 	_, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
-	return n + 2, err
+	return n + 1, err
 }
 
 // RelayedEvent is an event the node running a message's agent hands over: its kind and data.
