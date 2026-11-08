@@ -434,6 +434,18 @@ describe("following a running message", () => {
     expect(app.broken["m1"]).toBeTruthy();
   });
 
+  it("says a stream error sent as the node's envelope in words, not JSON", async () => {
+    const app = await load();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
+    fake.emit("events:m1", { error: JSON.stringify({ code: "not_found", message: "no message m1", hint: "open the chat again" }) });
+    const said = app.broken["m1"];
+    expect(said).toContain("Not found: no message m1");
+    expect(said).toContain("What to do: open the chat again");
+    expect(said).not.toContain("{");
+    expect(app.error).toBe(""); // shown on the message, not as raw text in the toast
+  });
+
   it("stops a stream started for a chat already left (Follow answered after Unfollow)", async () => {
     const app = await load();
     fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
