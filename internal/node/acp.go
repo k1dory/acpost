@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -186,6 +187,9 @@ type turnLocks struct {
 }
 
 func (l *turnLocks) take(ctx context.Context, id string) error {
+	if l == nil {
+		return nil // a session asked for outside a message's turn (tests, tools)
+	}
 	if _, ok := l.held[id]; ok || id == "" {
 		return nil
 	}
@@ -236,8 +240,10 @@ func sessionKey(mode string, m store.Message) string {
 	}
 	// The sessions of the node's own user and agents are theirs: a sender from elsewhere (a client
 	// token, another node) naming the same task or thread gets a session of its own, never theirs.
+	// Its keys are a namespace of their own (from:, never task:/thread:/session:), the sender
+	// length-prefixed: no task label, local or not, spells another sender's key.
 	if !localSender(m.From) {
-		key += "|" + m.From
+		key = "from:" + strconv.Itoa(len(m.From)) + ":" + m.From + "|" + key
 	}
 	return key
 }
@@ -446,6 +452,12 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 
 // sessionIn is session with the working directory of a session the sender named (when known).
 func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd string) (acp.SessionId, error) {
+	return s.sessionFor(ctx, p, key, sessionCwd, nil)
+}
+
+// sessionFor is sessionIn for a turn holding locks: a session it opens new is locked for the turn
+// at once.
+func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd string, locks *turnLocks) (acp.SessionId, error) {
 	a, n := s.a, s.a.n
 	named := strings.HasPrefix(key, "session:")
 	if key != "" {
@@ -507,6 +519,23 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 		sid, st = r.SessionId, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
 		p.costBase[sid] = 0 // a new session: its cost starts here
 		p.fresh[sid] = true
+		// The session is the turn's before it is configured and published (the store, the agent's
+		// list): a message naming it by id (send --session) waits for this turn, whatever the key.
+		if err := locks.take(ctx, "sid:"+string(sid)); err != nil {
+			return "", err
+		}
+		if o := a.ownerOf(string(sid)); o >= 0 && o != s.idx {
+			// It was named and run in another slot while this one waited: what this process has of
+			// it is behind, and it is opened again here.
+			delete(p.costBase, sid)
+			delete(p.fresh, sid)
+			got, err := s.openFreed(ctx, p, sid, cwd)
+			if err != nil {
+				return "", explainACP(procErr(p, err), "open the session "+string(sid), true)
+			}
+			st = got
+		}
+		a.setOwner(string(sid), s.idx)
 	}
 	for _, set := range []struct {
 		s    acpx.Setting
@@ -769,7 +798,7 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		m.Meta[metaSessionCwd] = cwd
 	}
-	sid, err := s.sessionIn(turnCtx, p, key, cwd)
+	sid, err := s.sessionFor(turnCtx, p, key, cwd, locks)
 	if err != nil {
 		if setupFailed("opening the session", true) {
 			return
@@ -788,13 +817,11 @@ func (s *acpSlot) handle(m store.Message) {
 		return
 	}
 	defer s.closeIfOneOff(p, key, sid) // after the reply is stored, on every way out
-	// A session opened just now (the task's first) is the turn's too: a message naming it by id
-	// (send --session) waits for this turn, not prompts beside it.
-	if key != "" {
-		if err := locks.take(turnCtx, "sid:"+string(sid)); err != nil {
-			setupFailed("waiting for the session", false)
-			return
-		}
+	// The session the turn runs in is the turn's, a one-off one (session: message) too: a message
+	// naming it by id (send --session) waits for this turn, not prompts beside it.
+	if err := locks.take(turnCtx, "sid:"+string(sid)); err != nil {
+		setupFailed("waiting for the session", false)
+		return
 	}
 	if err := s.applySettings(turnCtx, p, sid, m); err != nil {
 		if !setupFailed("setting the session up", true) {
@@ -1361,7 +1388,11 @@ func (p *acpProc) forget(sid acp.SessionId) {
 // slot's lock, and the request's context would be its life.
 func (a *acpAgent) listProc(ctx context.Context) (*acpProc, func(), error) {
 	for _, s := range a.slots {
-		s.mu.Lock()
+		// A slot starting its process holds its lock through initialize (up to 2 min): it is passed
+		// over, not waited for; a process is published there only once it is ready.
+		if !s.mu.TryLock() {
+			continue
+		}
 		p := s.proc
 		s.mu.Unlock()
 		if p == nil {

@@ -403,15 +403,19 @@ func wholeFiles(diff string, max int) string {
 	return ""
 }
 
-// capped keeps the first max bytes written to it and drops the rest.
+// capped keeps the first max bytes written to it and drops the rest. The buffer is a field, not
+// embedded: an embedded bytes.Buffer brings its ReadFrom, which io.Copy (os/exec's copy of a
+// process's output) calls instead of Write, past the cap.
 type capped struct {
-	bytes.Buffer
+	buf bytes.Buffer
 	max int
 }
 
 func (c *capped) Write(p []byte) (int, error) {
-	if room := c.max - c.Len(); room > 0 {
-		c.Buffer.Write(p[:min(len(p), room)])
+	if room := c.max - c.buf.Len(); room > 0 {
+		c.buf.Write(p[:min(len(p), room)])
 	}
 	return len(p), nil
 }
+
+func (c *capped) String() string { return c.buf.String() }

@@ -96,6 +96,14 @@ func Run() {
 }
 
 func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
+	if mark := os.Getenv("FAKE_HANG_INIT"); mark != "" {
+		// The first process to start hangs in initialize (until its connection ends); the others do not.
+		if f, err := os.OpenFile(mark, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+			f.Close()
+			<-ctx.Done()
+			return acp.InitializeResponse{}, ctx.Err()
+		}
+	}
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}, Fork: &acp.SessionForkCapabilities{}},
@@ -142,6 +150,17 @@ func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (ac
 	}
 	a.mcp[sid] = strings.Join(mcp, ";")
 	a.mu.Unlock()
+	if log := os.Getenv("FAKE_NEW_LOG"); log != "" {
+		// The new session is known at once (listed, loadable by id, its id in the log), as an agent
+		// that lists its sessions from disk has it before the client has configured it.
+		if dir := os.Getenv("FAKE_STATE"); dir != "" {
+			_ = os.WriteFile(dir+"/"+string(sid), []byte("0"), 0o600)
+		}
+		if f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			fmt.Fprintln(f, sid)
+			f.Close()
+		}
+	}
 	if os.Getenv("FAKE_COMMANDS") != "" {
 		go func() { // what claude-agent-acp does after session/new
 			time.Sleep(10 * time.Millisecond)
@@ -528,6 +547,9 @@ func (a *fakeAgent) SetSessionConfigOption(ctx context.Context, p acp.SetSession
 	v := p.ValueId
 	if v == nil {
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("a value")
+	}
+	if ms, _ := strconv.Atoi(os.Getenv("FAKE_SLOW_SET")); ms > 0 { // a slow session setup
+		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 	if v.ConfigId == "mode" && os.Getenv("FAKE_MODES") == "broken" {
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInternalError(map[string]any{"why": "no modes today"})

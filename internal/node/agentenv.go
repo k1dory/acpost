@@ -69,7 +69,7 @@ func secretEnvNames(cfg *config.Config) map[string]bool {
 func secretValues(cfg *config.Config) map[string]bool {
 	out := map[string]bool{}
 	add := func(v string) {
-		if len(v) >= 8 { // a token, not a word that happens to match
+		if v != "" { // a short token is still a token: config allows it, so it is kept from agents too
 			out[v] = true
 		}
 	}
@@ -93,7 +93,7 @@ func secretValues(cfg *config.Config) map[string]bool {
 // isSecret says whether a value is one of the node's tokens: held in the clear, or a client
 // token the configuration knows by its hash.
 func isSecret(cfg *config.Config, clear map[string]bool, v string) bool {
-	if len(v) < 8 {
+	if v == "" {
 		return false
 	}
 	if clear[v] {
