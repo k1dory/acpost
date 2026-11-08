@@ -215,12 +215,19 @@ func typeOf(name, said string, b []byte) string {
 // os.WriteFile gives it; keep (when not 0) is an existing file's mode, kept as it was.
 func writeAtomic(path string, b []byte, perm, keep os.FileMode, replace bool) error {
 	dir := filepath.Dir(path)
+	mode := perm
+	if keep != 0 {
+		mode = keep
+	}
 	var f *os.File
 	var err error
 	for range 100 {
 		var r [8]byte
 		rand.Read(r[:])
-		f, err = os.OpenFile(filepath.Join(dir, "."+filepath.Base(path)+".tmp-"+hex.EncodeToString(r[:])), os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		// A short name of its own (a destination's name may be as long as a name can be), made
+		// as private as the file it replaces from the start: its content is never readable by
+		// more than the file's was.
+		f, err = os.OpenFile(filepath.Join(dir, ".acpost-tmp-"+hex.EncodeToString(r[:])), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if !errors.Is(err, fs.ErrExist) {
 			break
 		}
@@ -231,6 +238,9 @@ func writeAtomic(path string, b []byte, perm, keep os.FileMode, replace bool) er
 	tmp := f.Name()
 	defer os.Remove(tmp) // gone once renamed; after a link, the extra name
 	_, err = f.Write(b)
+	if afterWrite != nil {
+		afterWrite(tmp)
+	}
 	if err == nil && keep != 0 {
 		err = f.Chmod(keep)
 	}
@@ -257,3 +267,6 @@ func writeAtomic(path string, b []byte, perm, keep os.FileMode, replace bool) er
 	}
 	return nil
 }
+
+// afterWrite, in tests, looks at the temporary file once the content is in it.
+var afterWrite func(tmp string)

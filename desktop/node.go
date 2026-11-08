@@ -76,9 +76,9 @@ func (n *Node) ServiceShutdown() error {
 	n.mu.Unlock()
 	opened := make(chan struct{})
 	go func() { n.opening.Wait(); close(opened) }()
-	select { // a terminal opening now closes itself when its id comes
+	select { // a terminal opening now closes itself when its id comes: waited for as long as an open may take
 	case <-opened:
-	case <-time.After(3 * time.Second):
+	case <-time.After(termOpenTimeout + 3*time.Second):
 	}
 	if len(terms) > 0 {
 		closeTerminals(n, terms)
@@ -394,7 +394,7 @@ func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, erro
 	n.opening.Add(1)
 	n.mu.Unlock()
 	defer n.opening.Done()
-	t, err := call(n, func(ctx context.Context, c *client.Client) (client.Terminal, error) {
+	t, err := callLong(n, termOpenTimeout, func(ctx context.Context, c *client.Client) (client.Terminal, error) {
 		return c.OpenTerminal(ctx, client.TermRequest{Agent: agent, Cols: cols, Rows: rows})
 	})
 	if err != nil {
@@ -695,3 +695,6 @@ func (n *Node) emitTerm(id string, me *term, ev map[string]any) {
 		n.emit("term:"+id, ev)
 	}
 }
+
+// termOpenTimeout bounds an open of a terminal; shutdown waits for opens in flight that long.
+const termOpenTimeout = 30 * time.Second
