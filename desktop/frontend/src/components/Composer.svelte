@@ -5,6 +5,7 @@
   import TaskSetup from "./TaskSetup.svelte";
   import { afterSent, overLimits } from "../lib/draft";
   import { bytes } from "../lib/names";
+  import { b64bytes } from "../lib/api";
 
   let text = $state("");
   let files = $state<{ name: string; type: string; size: number; data: string }[]>([]);
@@ -117,10 +118,8 @@
           : t("The files are over the node's limit of {n} together", { n: bytes(app.limits!.max_files_size) });
         return;
       }
-      const buf = new Uint8Array(await f.arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-      files = [...files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data: btoa(bin) }];
+      const data = b64bytes(new Uint8Array(await f.arrayBuffer()));
+      files = [...files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data }];
     }
   }
   $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } text; });

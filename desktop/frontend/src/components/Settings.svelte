@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { agentLabel, tilde as tildeOf } from "../lib/names";
   import { mcpRequest, type MCP, type MCPEdit } from "../lib/mcp";
   import { t, i18n, type Lang } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
@@ -28,7 +29,7 @@
     const d = await Node.PickDirectory(note.scope || app.home).catch(() => "");
     if (d) note.scope = d;
   }
-  const tilde = (d?: string) => (!d ? "" : app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
+  const tilde = (d?: string) => tildeOf(d, app.home);
   type Sched = { id?: string; name: string; cron: string; agent: string; body: string; cwd?: string; model?: string; effort?: string; enabled: boolean; next_run?: string; last_run?: string; last_msg?: string; last_err?: string };
   let scheds = $state<Sched[] | null>(null);
   let sc = $state<Sched | null>(null);
@@ -126,10 +127,7 @@
   async function remove(name: string) {
     try { await Node.DeleteMCPServer(name); edit = null; await loadServers(); } catch (e) { err = errText(e); }
   }
-  function agentName(a: string) {
-    const n = a.replace(/^agent:/, "");
-    return n === "claude" ? "Claude Code" : n === "codex" ? "Codex" : n;
-  }
+  const agentName = agentLabel;
   let notify = $state(true);
   try { notify = localStorage.getItem("notify") !== "0"; } catch {}
   function setNotify(v: boolean) { notify = v; try { localStorage.setItem("notify", v ? "1" : "0"); } catch {} }
@@ -327,7 +325,7 @@
             <div class="lbl">{t("Agent and directory")}</div>
             <div class="frow">
               <Dropdown bind:value={sc.agent} icon="bot" items={app.localAgents().map(a => ({ value: a.address, label: agentName(a.address) }))} />
-              <button class="chip pickc" onclick={pickSchedDir} title={sc.cwd}><Icon name="file" size={12} /> {sc.cwd && app.home && sc.cwd.startsWith(app.home) ? "~" + sc.cwd.slice(app.home.length) : sc.cwd || "~"}</button>
+              <button class="chip pickc" onclick={pickSchedDir} title={sc.cwd}><Icon name="file" size={12} /> {tilde(sc.cwd) || "~"}</button>
             </div>
             <div class="lbl">{t("Task")}</div>
             {#if app.playbooks.length}
