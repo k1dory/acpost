@@ -424,6 +424,56 @@ describe("send, review round 4", () => {
   });
 });
 
+describe("send, review round 5", () => {
+  it("an edited draft of a session moved to its thread goes on in that thread (R5.1)", async () => {
+    const app = await load();
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [S] });
+    await app.loadChats();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S);
+    app.draftOf().text = "go on";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout"));
+    await app.submit(app.draftOf());
+    fake.Node.Chats.mockResolvedValue({ items: [T] });
+    await app.loadChats();                                   // the session stays on screen
+    app.draftOf().text = "go on, and also this";             // edited: not the same message
+    fake.Node.SendTask.mockResolvedValueOnce(msg("m2", "T1"));
+    expect(await app.submit(app.draftOf())).toBe(true);
+    const again = fake.Node.SendTask.mock.calls[1][0];
+    expect(again.thread).toBe("T1");
+    expect(again.session).toBeUndefined();
+    expect(again.idem).not.toBe(fake.Node.SendTask.mock.calls[0][0].idem);
+    expect(app.thread).toBe("T1");
+  });
+
+  it("a cloud chat whose answer was lost: its thread has the text, files and key (R5.2)", async () => {
+    const app = await load();
+    const C = { key: "cloud:sb_1", kind: "cloud" as const, agent: "agent:sb_1", sandbox: "sb_1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", agent: "agent:sb_1", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [C] });
+    await app.loadChats();
+    fake.Node.CloudHistory.mockResolvedValue([]);
+    await app.open(C);
+    const d = app.draftOf();
+    d.text = "build it"; d.files = [{ name: "spec.md", type: "text/markdown", size: 1, data: "YQ==" }];
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout"));
+    expect(await app.submit(d)).toBe(false);
+    fake.Node.Chats.mockResolvedValue({ items: [T] });
+    await app.loadChats();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T1", "running")]);
+    await app.open(T);
+    expect(app.draftOf().text).toBe("build it");
+    expect(app.draftOf().files.map(f => f.name)).toEqual(["spec.md"]);
+    fake.Node.SendTask.mockResolvedValueOnce({ ...msg("m1", "T1", "running"), to: "agent:sb_1" });
+    expect(await app.submit(app.draftOf())).toBe(true);
+    const [first, again] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(again.idem).toBe(first.idem);
+    expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
+  });
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");

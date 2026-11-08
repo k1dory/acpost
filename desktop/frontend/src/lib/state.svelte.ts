@@ -467,18 +467,21 @@ class App {
     }
     this.drafts++;
   }
-  /** A thread the node made of a session continued here, the session's chat gone from the list
-   * (the answer to its first message may have been lost): the session's draft is the thread's.
-   * While the session's chat is still listed, its draft stays its own. */
+  /** A thread the node made of a session or a cloud sandbox continued here, that conversation's
+   * chat gone from the list (the answer to its first message may have been lost): its draft is the
+   * thread's. While the conversation's own chat is still listed, its draft stays its own. */
   private linkDrafts(chats: Chat[]) {
     for (const c of chats) {
-      if (c.kind !== "thread" || !c.thread || !c.session) continue;
-      const agent = (c.session_agent || c.agent || "").replace(/^agent:/, "");
-      const key = `session:${agent}/${c.session}`;
-      const from = this.draftMap.get(key);
-      if (!from || from.busy || this.chats.some(x => x.key === key)) continue;
-      if (from.sending) from.sending.moved = true;
-      this.moveDraft(from, "thread:" + c.thread);
+      if (c.kind !== "thread" || !c.thread) continue;
+      const from: string[] = [];
+      if (c.session) from.push(`session:${(c.session_agent || c.agent || "").replace(/^agent:/, "")}/${c.session}`);
+      if (c.agent?.startsWith("agent:sb_")) from.push("cloud:" + c.agent.slice("agent:".length)); // a sandbox's thread
+      for (const key of from) {
+        const d = this.draftMap.get(key);
+        if (!d || d.busy || this.chats.some(x => x.key === key)) continue;
+        if (d.sending) d.sending.moved = true;
+        this.moveDraft(d, "thread:" + c.thread);
+      }
     }
   }
 
@@ -511,6 +514,9 @@ class App {
     sent?: { text: string; files: Attachment[] }): Promise<boolean> {
     // What the message is for, as it was when sent: the screen may change while it goes.
     const chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
+    // The draft is a thread's already (its conversation became one, the answer lost): what is
+    // sent from it goes on in that thread, not to a new one.
+    const into = !thread && d.key.startsWith("thread:") ? d.key.slice("thread:".length) : "";
     let to = this.target;
     try {
       let task: any = { body, files };
@@ -527,6 +533,8 @@ class App {
           to = draft.agent;
           task.cwd = draft.cwd;
         }
+      } else if (into) {
+        task.thread = into;
       } else if (chat?.kind === "session" && !thread) {
         task.session = chat.session; // the conversation continues where it was
       } else if (thread) {
