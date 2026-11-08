@@ -69,6 +69,7 @@ func newEnv(t *testing.T, yaml string) *env {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	e := &env{t: t, dir: dir, config: filepath.Join(dir, "config.yaml"), sock: filepath.Join(dir, "s", "acpost.sock")}
+	t.Cleanup(e.checkChildren) // after the nodes stop, before the directory goes
 	full := fmt.Sprintf("node:\n  name: %s\n  listen: [unix://%s]\nstore: sqlite://%s/s/store.db\n%s",
 		"n"+filepath.Base(dir), e.sock, dir, yaml)
 	if strings.Contains(yaml, "node:") {
@@ -125,7 +126,12 @@ func (e *env) serve(extra ...string) {
 		once.Do(func() {
 			cmd.Process.Signal(syscall.SIGTERM)
 			done := make(chan struct{})
-			go func() { cmd.Wait(); close(done) }()
+			go func() {
+				if err := cmd.Wait(); err != nil {
+					e.t.Errorf("the node exited badly: %v (serve.log says why)", err)
+				}
+				close(done)
+			}()
 			select {
 			case <-done:
 			case <-time.After(10 * time.Second):
@@ -475,7 +481,9 @@ tokens:
 	hubCmd.Start()
 	t.Cleanup(func() {
 		hubCmd.Process.Signal(syscall.SIGTERM)
-		hubCmd.Wait()
+		if err := hubCmd.Wait(); err != nil {
+			t.Errorf("the hub exited badly: %v", err)
+		}
 		if t.Failed() {
 			b, _ := os.ReadFile(filepath.Join(hub.dir, "serve.log"))
 			t.Logf("hub log:\n%s", b)
