@@ -22,6 +22,9 @@ import (
 // configuration written first if there is none: Claude Code and Codex over ACP, the cloud of the
 // first agent-sandbox env file found).
 
+// runNode runs the app's own node (a stub in tests).
+var runNode = server.Run
+
 // ensureNode answers whether a node serves now, starting one in the app when none does.
 func (n *Node) ensureNode() error {
 	c, err := n.client()
@@ -59,7 +62,7 @@ func (n *Node) ensureNode() error {
 	go func() {
 		defer logf.Close()
 		log := slog.New(slog.NewTextHandler(logf, nil))
-		if err := server.Run(ctx, cfg, log, func() { close(ready) }); err != nil {
+		if err := runNode(ctx, cfg, log, func() { close(ready) }); err != nil {
 			failed <- err
 		}
 	}()

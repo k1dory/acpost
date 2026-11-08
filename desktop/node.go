@@ -38,6 +38,7 @@ type Node struct {
 	notes    *notifications.NotificationService
 	noteOK   int // 0 not asked, 1 allowed, -1 refused
 	startErr string
+	emitFn   func(name string, data any) // tests: where events go instead of the window
 }
 
 // ServiceStartup connects to the node (a failure is told by Status, the app still opens).
@@ -291,7 +292,7 @@ func (n *Node) Follow(id string, after int64) error {
 			pending = nil
 			mu.Unlock()
 			if len(evs) > 0 {
-				n.app.Event.Emit("events:"+id, EventBatch{ID: id, Events: evs})
+				n.emit("events:"+id, EventBatch{ID: id, Events: evs})
 			}
 		}
 		tick := time.NewTicker(120 * time.Millisecond)
@@ -324,7 +325,7 @@ func (n *Node) Follow(id string, after int64) error {
 		} else {
 			b.Final = &final
 		}
-		n.app.Event.Emit("events:"+id, b)
+		n.emit("events:"+id, b)
 	}()
 	return nil
 }
@@ -408,7 +409,7 @@ func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, erro
 	n.mu.Unlock()
 	go func() {
 		final, err := c.TermOutput(ctx, t.ID, 0, func(_ int64, b []byte) error {
-			n.app.Event.Emit("term:"+t.ID, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
+			n.emit("term:"+t.ID, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
 			return nil
 		})
 		if ctx.Err() == nil {
@@ -416,7 +417,7 @@ func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, erro
 			if err != nil {
 				ev["error"] = err.Error()
 			}
-			n.app.Event.Emit("term:"+t.ID, ev)
+			n.emit("term:"+t.ID, ev)
 		}
 	}()
 	return t, nil
@@ -466,4 +467,13 @@ func decodeUploads(files []Upload) ([]store.File, error) {
 		out = append(out, store.File{Name: f.Name, Type: f.Type, Size: len(b), Data: b})
 	}
 	return out, nil
+}
+
+// emit sends an event to the window (to emitFn in tests).
+func (n *Node) emit(name string, data any) {
+	if n.emitFn != nil {
+		n.emitFn(name, data)
+		return
+	}
+	n.app.Event.Emit(name, data)
 }
