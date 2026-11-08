@@ -81,3 +81,20 @@ func TestNodeStartTimeoutCancels(t *testing.T) {
 	}
 	eventually(t, 2*time.Second, "the timed-out start is cancelled", func() bool { return running.Load() == 0 })
 }
+
+// A start that comes after the app began quitting (a Status in flight) starts nothing: its
+// node would outlive the shutdown that was to stop it.
+func TestNoNodeStartsAfterShutdown(t *testing.T) {
+	var starts atomic.Int32
+	ownNode(t, func(ctx context.Context, ready func()) error {
+		starts.Add(1)
+		ready()
+		<-ctx.Done()
+		return nil
+	})
+	n := &Node{emitFn: func(string, any) {}}
+	n.ServiceShutdown()
+	if err := n.ensureNode(); err == nil || starts.Load() != 0 {
+		t.Fatalf("started %d nodes after shutdown (err %v)", starts.Load(), err)
+	}
+}

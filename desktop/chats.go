@@ -87,6 +87,12 @@ func (n *Node) startNode() error {
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		cancel()
+		logf.Close()
+		return errors.New("the app is quitting")
+	}
 	n.stopNode, n.nodeDone = cancel, done
 	n.mu.Unlock()
 	go func() {

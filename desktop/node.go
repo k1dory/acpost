@@ -36,6 +36,7 @@ type Node struct {
 	stopNode context.CancelFunc // the node the app runs itself, if it does
 	nodeDone chan struct{}      // closed when that node has stopped
 	startMu  sync.Mutex         // one ensureNode at a time
+	closed   bool               // the app is quitting: no node starts
 	notes    notifier
 	noteOK   int // 0 not asked, 1 allowed, -1 refused
 	noteAsk  sync.Once
@@ -53,10 +54,12 @@ func (n *Node) ServiceStartup(ctx context.Context, _ application.ServiceOptions)
 	return nil
 }
 
-// ServiceShutdown stops the streams.
+// ServiceShutdown stops the streams, closes the terminals the app opened (a node of another
+// machine kept their shells) and stops the app's own node, waiting for it to clean up (its
+// socket, its pid file). No node starts after it.
 func (n *Node) ServiceShutdown() error {
 	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.closed = true
 	for _, f := range n.follows {
 		f.cancel()
 	}
@@ -65,23 +68,20 @@ func (n *Node) ServiceShutdown() error {
 		t.stop()
 		terms = append(terms, id)
 	}
+	clear(n.terms)
+	stop, done := n.stopNode, n.nodeDone
+	n.mu.Unlock()
 	if len(terms) > 0 {
-		// The shells the app opened end with it (a node of another machine kept them).
-		n.mu.Unlock()
 		closeTerminals(n, terms)
-		n.mu.Lock()
 	}
-	if n.stopNode != nil {
-		n.stopNode()
+	if stop != nil {
+		stop()
 	}
-	// The node cleans up (its socket, its pid file) before the app exits.
-	if done := n.nodeDone; done != nil {
-		n.mu.Unlock()
+	if done != nil {
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
 		}
-		n.mu.Lock()
 	}
 	return nil
 }
