@@ -858,13 +858,6 @@ func (s *acpSlot) handle(m store.Message) {
 
 	if err != nil || timedOut {
 		if n.ctx.Err() != nil || lost.Load() {
-			if lost.Load() && !stuck.Load() {
-				// Another attempt owns the message now: the agent is told this turn is over, or it
-				// would go on with it while the next prompts the same session.
-				cctx, done := context.WithTimeout(context.Background(), 2*time.Second)
-				_ = p.conn.Cancel(cctx, acp.CancelNotification{SessionId: sid})
-				done()
-			}
 			return // the node is stopping (the message is requeued at the next start), or the lease is gone
 		}
 		if stuck.Load() {

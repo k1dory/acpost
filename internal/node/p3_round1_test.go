@@ -12,7 +12,9 @@ import (
 )
 
 // A turn whose lease was lost (reaped, the message queued again) tells the agent it is over
-// (session/cancel), so the agent does not go on with it while the next attempt prompts.
+// (session/cancel), so the agent does not go on with it while the next attempt prompts: the SDK
+// sends it when Prompt's context ends (acp-go-sdk ClientSideConnection.Prompt), which a lost lease
+// ends. Kept as the contract the review asked about.
 func TestLostLeaseCancelsTheTurn(t *testing.T) {
 	cancels := filepath.Join(t.TempDir(), "cancels")
 	n := roundNode(t, map[string]string{"FAKE_CANCELS": cancels}, "lease: 3s")
