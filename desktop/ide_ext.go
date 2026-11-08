@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -94,9 +95,13 @@ func ideExtDir(data, version string) string {
 	return filepath.Join(data, "server", "extensions", "acpost.acpost-ide-"+version)
 }
 
+// ideInstallTimeout bounds one run of VS Code's installer.
+var ideInstallTimeout = 2 * time.Minute
+
 // ideInstall installs the extension into the app's VS Code unless this very one is there (its
 // hash, kept beside it). With VS Code's own installer: the server's list of extensions stays its.
-func ideInstall(data string) error {
+// ctx ends it early (the app quitting, the start's deadline).
+func ideInstall(ctx context.Context, data string) error {
 	p := ideExtension()
 	if p.err != nil {
 		return p.err
@@ -119,14 +124,59 @@ func ideInstall(data string) error {
 	if werr != nil {
 		return werr
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "--server-data-dir", filepath.Join(data, "server"),
-		"--install-extension", f.Name(), "--force").CombinedOutput()
+	out, err := runGroup(ctx, ideInstallTimeout, bin, "--server-data-dir", filepath.Join(data, "server"),
+		"--install-extension", f.Name(), "--force")
 	if err != nil {
 		return errors.New("installing the IDE's look: " + err.Error() + ": " + string(bytes.TrimSpace(out)))
 	}
 	return os.WriteFile(mark, []byte(p.hash), 0o600)
+}
+
+// runGroup runs bin in a process group of its own and gives its output (the last 16 KiB). The
+// timeout and ctx end the whole group: VS Code's code-server is a shell script that starts Node
+// without exec, so ending the shell alone would leave Node running, holding the output pipe, and
+// the wait for it would not end.
+func runGroup(ctx context.Context, timeout time.Duration, bin string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second // a pipe still held after that is closed, not waited for
+	out := &tailBuffer{max: 16 << 10}
+	cmd.Stdout, cmd.Stderr = out, out
+	err := cmd.Run()
+	if cmd.Process != nil {
+		// What it left behind in its group (it is the group's leader: the group is its own).
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	if ctx.Err() != nil {
+		err = errors.New("did not finish in time")
+	}
+	return out.Bytes(), err
+}
+
+// tailBuffer keeps the last max bytes written to it.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	b   []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if len(t.b) > t.max {
+		t.b = append(t.b[:0], t.b[len(t.b)-t.max:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) Bytes() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]byte(nil), t.b...)
 }
 
 // shortHash is a short hex hash of b.

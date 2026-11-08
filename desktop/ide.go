@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -224,7 +225,7 @@ func (s *ideServer) start(st *ideStart) {
 		}
 		// The app's look for it, installed (or brought up to date) now that VS Code's server is
 		// there; without it VS Code is plain, not broken.
-		if err := ideInstall(data); err != nil {
+		if err := ideInstall(context.Background(), data); err != nil {
 			fmt.Fprintln(os.Stderr, "acpost: IDE:", err)
 		}
 		st.base = base

@@ -5,6 +5,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -99,7 +100,7 @@ func TestIDEInstallOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := ideInstall(data); err != nil {
+		if err := ideInstall(context.Background(), data); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -108,7 +109,7 @@ func TestIDEInstallOnce(t *testing.T) {
 		t.Fatalf("installer ran %d times: %s", n, b)
 	}
 	os.WriteFile(filepath.Join(ideExtDir(data, ideExtension().version), ".acpost-hash"), []byte("old"), 0o600)
-	if err := ideInstall(data); err != nil {
+	if err := ideInstall(context.Background(), data); err != nil {
 		t.Fatal(err)
 	}
 	b, _ = os.ReadFile(log)
