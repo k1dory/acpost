@@ -276,6 +276,9 @@ func (s *Store) AttachReply(ctx context.Context, id, lease string, files []File,
 		if err != nil {
 			return err
 		}
+		if files, err = notAttached(ctx, t, seq, files); err != nil {
+			return err
+		}
 		var count int
 		var size int64
 		if err := t.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(CASE WHEN uri = '' THEN size ELSE 0 END), 0) FROM files WHERE msg = ? AND reply = 1", seq).Scan(&count, &size); err != nil {
@@ -326,4 +329,25 @@ func (s *Store) roomFor(ctx context.Context, t *sql.Tx, n int64) error {
 		return ErrStoreFull
 	}
 	return nil
+}
+
+// notAttached leaves out the files a reply has already, by name and content: the repeat of an
+// attach whose response was lost is no error. The same name with other content still is.
+func notAttached(ctx context.Context, t *sql.Tx, seq int64, files []File) ([]File, error) {
+	out := files[:0:0]
+	for _, f := range files {
+		hash := ""
+		if !f.Link() {
+			hash = Hash(f.Data)
+		}
+		var n int
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM files WHERE msg = ? AND reply = 1 AND name = ? AND type = ? AND hash = ? AND uri = ?",
+			seq, f.Name, f.Type, hash, f.URI).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }
