@@ -90,8 +90,9 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 		}
 		set(metaCwd, dir)
 	case r.Thread != "" && local && r.Session == "":
-		// The thread's directory, as its first message chose it.
-		if root, err := n.st.Get(ctx, r.Thread); err == nil && root.To == "agent:"+to.Name {
+		// The thread's directory, as its first message chose it: for the node's own user and
+		// agents, and for whoever started the thread (a client's own thread), not for anyone else.
+		if root, err := n.st.Get(ctx, r.Thread); err == nil && root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()) {
 			set(metaCwd, root.Meta[metaCwd])
 		}
 	}

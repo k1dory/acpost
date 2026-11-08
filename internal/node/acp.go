@@ -64,7 +64,7 @@ func (a *acpAgent) setOwner(key string, slot int) {
 }
 
 type keyLock struct {
-	mu   sync.Mutex
+	ch   chan struct{} // one token: whoever put it in holds the key
 	refs int
 }
 
@@ -76,6 +76,11 @@ type acpSlot struct {
 	mu       sync.Mutex // guards proc
 	proc     *acpProc
 	lastUsed time.Time
+
+	// turn is held while the slot runs a turn (its session's locks taken): another slot stops this
+	// slot's process, to open a session it holds, only between its turns (freeSession).
+	turn    sync.Mutex
+	freeing atomic.Bool // waiting in freeSession for another slot's turn to end
 }
 
 type acpProc struct {
@@ -132,25 +137,36 @@ func (a *acpAgent) running() bool {
 
 // lockKey serializes turns of one session key across slots.
 func (a *acpAgent) lockKey(key string) func() {
+	unlock, _ := a.lockKeyCtx(context.Background(), key)
+	return unlock
+}
+
+// lockKeyCtx is lockKey that stops waiting when ctx ends (the message cancelled, its lease lost).
+func (a *acpAgent) lockKeyCtx(ctx context.Context, key string) (func(), error) {
 	if key == "" {
-		return func() {}
+		return func() {}, nil
 	}
 	a.keyMu.Lock()
 	k := a.keys[key]
 	if k == nil {
-		k = &keyLock{}
+		k = &keyLock{ch: make(chan struct{}, 1)}
 		a.keys[key] = k
 	}
 	k.refs++
 	a.keyMu.Unlock()
-	k.mu.Lock()
-	return func() {
-		k.mu.Unlock()
+	drop := func() {
 		a.keyMu.Lock()
 		if k.refs--; k.refs == 0 {
 			delete(a.keys, key)
 		}
 		a.keyMu.Unlock()
+	}
+	select {
+	case k.ch <- struct{}{}:
+		return func() { <-k.ch; drop() }, nil
+	case <-ctx.Done():
+		drop()
+		return nil, ctx.Err()
 	}
 }
 
@@ -160,35 +176,76 @@ const (
 	metaSessionCwd = "acp_session_cwd"
 )
 
-// lockID is what serializes a message's turns: the ACP session it runs in when that is known (a
-// task's session and the same session named by id are one), else its session key.
-func (s *acpSlot) lockID(m store.Message) string {
-	key := sessionKey(s.a.cfg.Session, m)
+// turnLocks are the locks a turn holds: its session key's (task:, thread:), then the ACP session's
+// (sid:) it runs in, always in that order. A key's lock does not change when its session is
+// stored, so two turns of one task never run at once; the session's lock makes a message naming
+// the same session (send --session) wait for the task's turn, and the other way round.
+type turnLocks struct {
+	a    *acpAgent
+	held map[string]func()
+}
+
+func (l *turnLocks) take(ctx context.Context, id string) error {
+	if _, ok := l.held[id]; ok || id == "" {
+		return nil
+	}
+	unlock, err := l.a.lockKeyCtx(ctx, id)
+	if err != nil {
+		return err
+	}
+	l.held[id] = unlock
+	return nil
+}
+
+func (l *turnLocks) release() {
+	for id, unlock := range l.held {
+		unlock()
+		delete(l.held, id)
+	}
+}
+
+// lockTurn takes a message's locks: its key's, then (read once the key is held, so it is the one
+// the turn before left) the session stored for it.
+func (s *acpSlot) lockTurn(ctx context.Context, key string) (*turnLocks, error) {
+	l := &turnLocks{a: s.a, held: map[string]func(){}}
 	if id, ok := strings.CutPrefix(key, "session:"); ok {
-		return "sid:" + id
+		return l, l.take(ctx, "sid:"+id)
 	}
-	if key != "" {
-		if sid, _ := s.a.n.st.Session(s.a.n.ctx, s.a.addr, key); sid != "" {
-			return "sid:" + sid
-		}
+	if err := l.take(ctx, key); err != nil || key == "" {
+		return l, err
 	}
-	return key
+	sid, err := s.a.n.st.Session(ctx, s.a.addr, key)
+	if err != nil || sid == "" {
+		return l, err
+	}
+	return l, l.take(ctx, "sid:"+sid)
 }
 
 func sessionKey(mode string, m store.Message) string {
 	if id := m.Meta[metaSession]; id != "" {
 		return "session:" + id
 	}
-	switch mode {
-	case "message":
+	var key string
+	switch {
+	case mode == "message":
 		return ""
-	case "thread":
-		return "thread:" + m.Thread
+	case mode == "thread" || m.Task == "":
+		key = "thread:" + m.Thread
+	default:
+		key = "task:" + m.Task
 	}
-	if m.Task != "" {
-		return "task:" + m.Task
+	// The sessions of the node's own user and agents are theirs: a sender from elsewhere (a client
+	// token, another node) naming the same task or thread gets a session of its own, never theirs.
+	if !localSender(m.From) {
+		key += "|" + m.From
 	}
-	return "thread:" + m.Thread
+	return key
+}
+
+// localSender says whether an address is this node's own user or one of its agents (no node).
+func localSender(from string) bool {
+	a, err := ParseAddress(from)
+	return err == nil && a.Node == "" && (a.Kind == "user" || a.Kind == "agent")
 }
 
 func (s *acpSlot) loop() {
@@ -390,14 +447,20 @@ func (s *acpSlot) session(ctx context.Context, p *acpProc, key string) (acp.Sess
 // sessionIn is session with the working directory of a session the sender named (when known).
 func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd string) (acp.SessionId, error) {
 	a, n := s.a, s.a.n
+	named := strings.HasPrefix(key, "session:")
 	if key != "" {
 		if sid, ok := p.sessions[key]; ok {
-			if a.ownerOf(string(sid)) == s.idx {
+			// This process's session for the key, unless another slot's process advanced it since or
+			// the key has another session now: then it is opened again here.
+			stored := ""
+			if !named {
+				stored, _ = n.st.Session(ctx, a.addr, key)
+			}
+			if a.ownerOf(string(sid)) == s.idx && (stored == "" || stored == string(sid)) {
 				// Retention measures from the last use.
 				_ = n.st.PutSession(ctx, a.addr, key, string(sid))
 				return sid, nil
 			}
-			// Another slot's process advanced this session since: load it again here.
 			delete(p.sessions, key)
 		}
 	}
@@ -408,10 +471,12 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 	if id, ok := strings.CutPrefix(key, "session:"); ok {
 		// A session named by the sender: continue exactly it, or fail. Its mode and model are the
 		// session's own, not the agent's configuration.
-		sid, err := s.continueSession(ctx, p, acp.SessionId(id), cwd)
+		sid := acp.SessionId(id)
+		st, err := s.openFreed(ctx, p, sid, cwd)
 		if err != nil {
 			return "", explainACP(procErr(p, err), "session "+id, true)
 		}
+		a.noteState(p, sid, st)
 		p.sessions[key] = sid
 		a.setOwner(string(sid), s.idx)
 		return sid, nil
@@ -420,17 +485,17 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 	var st acpx.SessionState
 	if key != "" {
 		if prev, _ := n.st.Session(ctx, a.addr, key); prev != "" {
-			caps := p.init.AgentCapabilities
-			if caps.SessionCapabilities.Resume != nil {
-				if r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: acp.SessionId(prev), Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)}); err == nil {
-					sid, st = acp.SessionId(prev), acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
-				}
-			}
-			if sid == "" && caps.LoadSession {
-				// The history the agent replays is not attributed to any turn: no turn is registered yet.
-				if r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: acp.SessionId(prev), Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)}); err == nil {
-					sid, st = acp.SessionId(prev), acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
-				}
+			got, err := s.openFreed(ctx, p, acp.SessionId(prev), cwd)
+			switch {
+			case err == nil:
+				sid, st = acp.SessionId(prev), got
+			case explainACP(err, "", true).Code == "session_not_found":
+				// The agent no longer has it: the key goes on in a new session.
+				n.log.Info("stored session gone: a new one", "agent", a.name, "key", key, "session", prev)
+			default:
+				// Anything else (busy, a failure on the way) keeps the key's session: a new one would
+				// leave the task's conversation behind without a word, and split it between slots.
+				return "", explainACP(procErr(p, err), "open the session "+prev, true)
 			}
 		}
 	}
@@ -465,6 +530,44 @@ func (s *acpSlot) sessionIn(ctx context.Context, p *acpProc, key, sessionCwd str
 	return sid, nil
 }
 
+// openFreed opens a session that exists (openSession); when the agent says another of its
+// processes holds it (codex-acp keeps a session to one), that is another slot's, stopped between
+// its turns, and the session is opened again.
+func (s *acpSlot) openFreed(ctx context.Context, p *acpProc, id acp.SessionId, cwd string) (acpx.SessionState, error) {
+	st, err := s.openSession(ctx, p, id, cwd)
+	if err != nil && explainACP(err, "", true).Code == "session_busy" && s.freeSession(ctx, string(id)) {
+		st, err = s.openSession(ctx, p, id, cwd)
+	}
+	return st, err
+}
+
+// freeSession stops the process of the slot that last ran a session, once that slot is between
+// turns, so another process can open the session. It says whether it did. Two slots each waiting
+// for the other: the higher one gives up (its message is retried).
+func (s *acpSlot) freeSession(ctx context.Context, sid string) bool {
+	o := s.a.ownerOf(sid)
+	if s.idx < 0 || o < 0 || o == s.idx || o >= len(s.a.slots) {
+		return false
+	}
+	other := s.a.slots[o]
+	s.freeing.Store(true)
+	defer s.freeing.Store(false)
+	for !other.turn.TryLock() {
+		if other.freeing.Load() && other.idx < s.idx {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	defer other.turn.Unlock()
+	s.a.n.log.Info("stopping a slot's process: another slot opens its session", "agent", s.a.name, "slot", o, "session", sid)
+	other.stopProc()
+	return true
+}
+
 // explainStart says why an agent process did not start.
 func explainStart(err error) Failure {
 	var re *acp.RequestError
@@ -482,35 +585,38 @@ func explainStart(err error) Failure {
 	return failf("agent_start", "the agent did not start: %v", err)
 }
 
-// continueSession resumes a session (session/resume) or loads it (session/load), whichever the
-// agent offers.
-func (s *acpSlot) continueSession(ctx context.Context, p *acpProc, id acp.SessionId, cwd string) (acp.SessionId, error) {
+// openSession resumes a session (session/resume) or loads it (session/load), whichever the agent
+// offers, and returns its state.
+func (s *acpSlot) openSession(ctx context.Context, p *acpProc, id acp.SessionId, cwd string) (acpx.SessionState, error) {
 	caps := p.init.AgentCapabilities
 	var errs []error
 	if caps.SessionCapabilities.Resume != nil {
 		r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
 		if err == nil {
-			s.a.noteState(p, id, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
-			return id, nil
+			return acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}, nil
 		}
 		errs = append(errs, err)
 	}
 	if caps.LoadSession {
+		// The history the agent replays is not attributed to any turn: no turn is registered yet.
 		r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
 		if err == nil {
-			s.a.noteState(p, id, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions})
-			return id, nil
+			return acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}, nil
 		}
 		errs = append(errs, err)
 	}
 	if len(errs) == 0 {
-		return "", errors.New("it offers neither session/resume nor session/load")
+		return acpx.SessionState{}, errors.New("it offers neither session/resume nor session/load")
 	}
-	// resume and load usually fail for the same reason: say it once.
+	// resume and load usually fail for the same reason: say it once. When both failed, load's
+	// reason is the one that classifies (resume may only be unfinished in the agent).
 	if len(errs) == 2 && errs[0].Error() == errs[1].Error() {
-		return "", errs[0]
+		return acpx.SessionState{}, errs[0]
 	}
-	return "", errors.Join(errs...)
+	if len(errs) == 2 {
+		return acpx.SessionState{}, errors.Join(errs[1], errs[0])
+	}
+	return acpx.SessionState{}, errs[0]
 }
 
 func (s *acpSlot) prompt(m store.Message, files []attached) string {
@@ -550,19 +656,27 @@ func (s *acpSlot) prompt(m store.Message, files []attached) string {
 // handle runs one message as one turn.
 func (s *acpSlot) handle(m store.Message) {
 	a, n := s.a, s.a.n
-	unlock := a.lockKey(s.lockID(m))
-	defer unlock()
-	n.setCurrent(s.token, m.ID, m.LeaseID)
-	defer n.setCurrent(s.token, "", "")
-
-	// The claim may have waited for the session key's lock longer than its lease: if it was reaped
-	// (and maybe taken again) meanwhile, it is not ours to run.
-	if err := n.st.Extend(n.ctx, m.ID, m.LeaseID, a.cfg.Lease.D()); err != nil {
-		return
-	}
+	// The lease is kept from the claim on, through the wait for the session's locks (another slot
+	// runs a turn of the same task): waiting is not a stalled attempt, and a cancel ends it.
 	tl := n.watchTurn(m, a.cfg.Lease.D())
 	defer tl.stop()
 	ctx, cancelled, lost := tl.ctx, &tl.cancelled, &tl.lost
+	key := sessionKey(a.cfg.Session, m)
+	locks, err := s.lockTurn(ctx, key)
+	defer locks.release()
+	if err != nil {
+		return // cancelled, the lease lost or the node stopping: nothing of the turn ran
+	}
+	s.turn.Lock()
+	defer s.turn.Unlock()
+	n.setCurrent(s.token, m.ID, m.LeaseID)
+	defer n.setCurrent(s.token, "", "")
+
+	// The claim may have been reaped (and maybe taken again) while the node stalled: then it is not
+	// ours to run.
+	if err := n.st.Extend(n.ctx, m.ID, m.LeaseID, a.cfg.Lease.D()); err != nil {
+		return
+	}
 
 	var turn *acpTurn
 	var tf *turnFiles
@@ -602,19 +716,60 @@ func (s *acpSlot) handle(m store.Message) {
 		time.Sleep(time.Second) // do not spin on a broken command
 		return
 	}
-	key := sessionKey(a.cfg.Session, m)
+	// One deadline for the whole attempt: opening and configuring the session, the knowledge, the
+	// prompt. The SDK writes a request before it watches the context: an agent that stopped reading
+	// its stdin holds a call in that write. If the call has not returned shortly after the deadline,
+	// the process is killed, which ends the write.
+	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
+	defer turnCancel()
+	callDone := make(chan struct{})
+	endCall := sync.OnceFunc(func() { close(callDone) })
+	defer endCall()
+	var stuck atomic.Bool
+	stopWatch := context.AfterFunc(turnCtx, func() {
+		select {
+		case <-callDone:
+		case <-time.After(300 * time.Millisecond):
+			stuck.Store(true)
+			s.mu.Lock()
+			if s.proc == p {
+				s.proc = nil
+			}
+			s.mu.Unlock()
+			killGroupNow(p)
+		}
+	})
+	defer stopWatch()
+	pastDeadline := func() bool { return errors.Is(turnCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil }
+	// setupFailed ends an attempt that did not reach its prompt: false when it was not over (yet).
+	// agent: what ran past the deadline was a call to the agent, which may still be at it.
+	setupFailed := func(what string, agent bool) bool {
+		endCall()
+		switch {
+		case n.ctx.Err() != nil || cancelled.Load() || lost.Load():
+		case pastDeadline():
+			if agent && !stuck.Load() {
+				s.dropProc(p) // the call it did not answer in time may still hold the session
+			}
+			complete(store.Failed, "", failf("turn_timeout", "%s ran past %s (turn_timeout)", what, a.cfg.TurnTimeout.D()))
+		default:
+			return false
+		}
+		return true
+	}
+
 	cwd := taskCwd(m)
 	if cwd == "" && m.Meta[metaSession] != "" {
 		// A session named without its directory (through a hub): the agent's own list says it.
-		cwd = a.sessionCwdApart(ctx, m.Meta[metaSession])
+		cwd = a.sessionCwdApart(turnCtx, m.Meta[metaSession])
 		if m.Meta == nil {
 			m.Meta = map[string]string{}
 		}
 		m.Meta[metaSessionCwd] = cwd
 	}
-	sid, err := s.sessionIn(ctx, p, key, cwd)
+	sid, err := s.sessionIn(turnCtx, p, key, cwd)
 	if err != nil {
-		if n.ctx.Err() != nil || cancelled.Load() {
+		if setupFailed("opening the session", true) {
 			return
 		}
 		select {
@@ -622,12 +777,27 @@ func (s *acpSlot) handle(m store.Message) {
 			s.dropProc(p)
 			release(failf("agent_crashed", "the agent exited (%v)", p.exitErr))
 		default:
-			complete(store.Failed, "", explainACP(err, "open the session", strings.HasPrefix(key, "session:")))
+			if f, final := openFailure(err, key); final {
+				complete(store.Failed, "", f)
+			} else {
+				release(f)
+			}
 		}
 		return
 	}
-	if err := s.applySettings(ctx, p, sid, m); err != nil {
-		complete(store.Failed, "", failf("agent_error", "%v", err))
+	defer s.closeIfOneOff(p, key, sid) // after the reply is stored, on every way out
+	// A session opened just now (the task's first) is the turn's too: a message naming it by id
+	// (send --session) waits for this turn, not prompts beside it.
+	if key != "" {
+		if err := locks.take(turnCtx, "sid:"+string(sid)); err != nil {
+			setupFailed("waiting for the session", false)
+			return
+		}
+	}
+	if err := s.applySettings(turnCtx, p, sid, m); err != nil {
+		if !setupFailed("setting the session up", true) {
+			complete(store.Failed, "", failf("agent_error", "%v", err))
+		}
 		return
 	}
 	// Knowledge: in a new session's first prompt, for a message of this node's own user or agents.
@@ -637,9 +807,9 @@ func (s *acpSlot) handle(m store.Message) {
 		if dir == "" {
 			dir = s.cwd()
 		}
-		k, err := n.knowledgeFor(ctx, dir)
+		k, err := n.knowledgeFor(turnCtx, dir)
 		if err != nil {
-			if n.ctx.Err() == nil && !cancelled.Load() {
+			if !setupFailed("reading the knowledge", false) {
 				release(failf("agent_error", "the knowledge: %v", err))
 			}
 			return
@@ -650,14 +820,14 @@ func (s *acpSlot) handle(m store.Message) {
 			m.Body = readerNote + m.Body
 		}
 	}
-	blocks, tfiles, cleanup, err := s.promptBlocks(ctx, m, p.init.AgentCapabilities.PromptCapabilities)
+	blocks, tfiles, cleanup, err := s.promptBlocks(turnCtx, m, p.init.AgentCapabilities.PromptCapabilities)
 	if err == nil && fresh {
 		delete(p.fresh, sid) // prompted: what it was given stays with it
 	}
 	tf = tfiles
 	defer cleanup()
 	if err != nil {
-		if n.ctx.Err() == nil && !cancelled.Load() {
+		if !setupFailed("reading the message's files", false) {
 			release(failf("agent_error", "the message's files: %v", err))
 		}
 		return
@@ -669,34 +839,15 @@ func (s *acpSlot) handle(m store.Message) {
 	}
 	before := snapshot(ctx, dir)
 	turn = p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply), n.cfg.Limits.MaxFiles, int(n.cfg.Limits.MaxFilesSize))
-	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
 	turn.mu.Lock()
 	turn.ctx = turnCtx // what waits for a person ends with the turn
 	turn.mu.Unlock()
-	// The SDK writes a request before it watches the context: an agent that stopped reading its
-	// stdin holds Prompt in that write. If Prompt has not returned shortly after the turn ended,
-	// the process is killed, which ends the write.
-	promptDone := make(chan struct{})
-	var stuck atomic.Bool
-	stopWatch := context.AfterFunc(turnCtx, func() {
-		select {
-		case <-promptDone:
-		case <-time.After(300 * time.Millisecond):
-			stuck.Store(true)
-			s.mu.Lock()
-			if s.proc == p {
-				s.proc = nil
-			}
-			s.mu.Unlock()
-			killGroupNow(p)
-		}
-	})
 	resp, err := p.conn.Prompt(turnCtx, acp.PromptRequest{SessionId: sid, Prompt: blocks})
-	close(promptDone)
+	endCall()
 	s.recordUsage(m.ID, p, sid, turn, resp.Usage) // whatever the outcome: a failed turn may have cost too
 	stopWatch()
 	cleanup() // the copies go with the turn, before anyone learns it ended
-	timedOut := errors.Is(turnCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+	timedOut := pastDeadline()
 	turnCancel()
 	p.cl.end(sid)
 	n.recordChanges(m, a.addr+"@"+n.Name(), before, dir) // after the turn's deadline was read
@@ -737,7 +888,6 @@ func (s *acpSlot) handle(m store.Message) {
 			}
 			complete(store.Failed, reply, explainACP(err, "the turn", false))
 		}
-		s.closeIfOneOff(p, key, sid)
 		return
 	}
 	switch resp.StopReason {
@@ -750,12 +900,15 @@ func (s *acpSlot) handle(m store.Message) {
 	default:
 		complete(store.Failed, reply, failf("agent_stopped", "the agent stopped the turn: %s", resp.StopReason))
 	}
-	s.closeIfOneOff(p, key, sid)
 }
 
-// closeIfOneOff closes a session no later message will use (session: message).
+// closeIfOneOff closes a session no later message will use (session: message), and forgets it.
 func (s *acpSlot) closeIfOneOff(p *acpProc, key string, sid acp.SessionId) {
-	if key != "" || p.init.AgentCapabilities.SessionCapabilities.Close == nil {
+	if key != "" {
+		return
+	}
+	p.forget(sid)
+	if p.init.AgentCapabilities.SessionCapabilities.Close == nil {
 		return
 	}
 	ctx, done := context.WithTimeout(s.a.n.ctx, 5*time.Second)
@@ -1036,8 +1189,8 @@ func (n *Node) Sessions(ctx context.Context, p Principal, agent, cwd, cursor str
 	if err := canUseSessions(p, agent, cfg); err != nil {
 		return nil, "", err
 	}
-	slot := n.acp[agent].slots[0]
-	proc, err := slot.ensureProc(ctx)
+	proc, done, err := n.acp[agent].listProc(ctx)
+	defer done()
 	if err != nil {
 		f := explainStart(err)
 		return nil, "", errh(f.Code, HintFor(f.Code), "%s", f.Message)
@@ -1168,4 +1321,53 @@ func modelName(opt *acp.SessionConfigOptionSelect) string {
 		}
 	}
 	return value
+}
+
+// openFailure is why a session could not be opened, and whether trying again would change it. No
+// such session, the agent not logged in, what it does not offer: final; so is anything about a
+// session the sender named (another client holds it: they close it there). A task's or thread's
+// session busy in another process, or a failure on the way, is retried within max_attempts.
+func openFailure(err error, key string) (Failure, bool) {
+	named := strings.HasPrefix(key, "session:")
+	f := explainACP(err, "open the session", named)
+	switch f.Code {
+	case "session_not_found", "agent_auth", "unsupported":
+		return f, true
+	}
+	return f, named
+}
+
+// forget drops what a process keeps of a session it is done with.
+func (p *acpProc) forget(sid acp.SessionId) {
+	delete(p.models, sid)
+	delete(p.states, sid)
+	delete(p.costBase, sid)
+	delete(p.fresh, sid)
+	p.cl.mu.Lock()
+	delete(p.cl.loadedCost, sid)
+	p.cl.mu.Unlock()
+}
+
+// listProc is a process to ask for the agent's sessions: a working slot's that is up already (an
+// agent answers requests beside a turn), else a spare one stopped by done (or when ctx ends: a
+// stuck agent holds nothing). A working slot's process is never started for it: its start holds the
+// slot's lock, and the request's context would be its life.
+func (a *acpAgent) listProc(ctx context.Context) (*acpProc, func(), error) {
+	for _, s := range a.slots {
+		s.mu.Lock()
+		p := s.proc
+		s.mu.Unlock()
+		if p == nil {
+			continue
+		}
+		select {
+		case <-p.done:
+		default:
+			return p, func() {}, nil
+		}
+	}
+	slot, done := a.spare()
+	stop := context.AfterFunc(ctx, slot.stopProc)
+	p, err := slot.ensureProc(ctx)
+	return p, func() { stop(); done() }, err
 }
