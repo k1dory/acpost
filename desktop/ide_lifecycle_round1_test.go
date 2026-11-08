@@ -547,3 +547,64 @@ func TestIDEOneInstallAtATime(t *testing.T) {
 		t.Fatalf("at most %d installs at once, %d in all", most, calls)
 	}
 }
+
+// Review 2.1: a server left on another port (the IDE's was taken when it started) by an app that
+// crashed is ended by the next start even when the IDE's port is free again; that start takes it.
+func TestIDEOrphanOnOtherPortEnded(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	l, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(f.port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base1, err := f.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if portOf(t, base1) == f.port {
+		t.Fatal("started on the taken port")
+	}
+	orphan := f.current()
+	f.disown() // the app crashed
+	l.Close()  // the IDE's port is free again
+	g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+	t.Cleanup(g.stop)
+	base2, err := g.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !waitClosed(orphan.done, 3*time.Second) {
+		t.Fatal("the server left on the other port still runs")
+	}
+	if portOf(t, base2) != f.port {
+		t.Fatalf("port %d, want %d", portOf(t, base2), f.port)
+	}
+}
+
+// Review 2.2: with the IDE's port taken, the server picks its own port as it listens: a port
+// picked beforehand and taken by someone else before the start cannot fail it.
+func TestIDEFallbackPortNotRaced(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	l, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(f.port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	var thief net.Listener
+	f.ideServer.starts = func(port int) {
+		if port != 0 && port != f.port { // a port picked here: someone takes it first
+			thief, _ = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+		}
+	}
+	defer func() {
+		if thief != nil {
+			thief.Close()
+		}
+	}()
+	base, err := f.open("")
+	if err != nil {
+		t.Fatalf("a start on the fallback port: %v", err)
+	}
+	if p := portOf(t, base); p == f.port || p == 0 {
+		t.Fatalf("port %d", p)
+	}
+}

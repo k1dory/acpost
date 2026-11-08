@@ -85,6 +85,7 @@ type ideServer struct {
 	install func(ctx context.Context, data string) error
 	port    int
 	budget  time.Duration
+	starts  func(port int) // called just before the server starts on port
 }
 
 var ide ideServer
@@ -226,6 +227,9 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 		os.Remove(tokFile)
 		return "", nil, errIDEQuitting
 	}
+	if s.starts != nil {
+		s.starts(port)
+	}
 	if err := cmd.Start(); err != nil {
 		s.mu.Unlock()
 		os.Remove(tokFile)
@@ -250,6 +254,9 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 		base, err := ideBase(u, token)
 		if err != nil {
 			return fail(err)
+		}
+		if port == 0 {
+			fmt.Fprintln(os.Stderr, "acpost: IDE: VS Code is on", strings.SplitN(strings.TrimPrefix(base, "http://"), "/", 2)[0])
 		}
 		// The first time the server fetches VS Code itself, and its page says so meanwhile: the
 		// address is given once it serves VS Code (the interface shows its own wait till then).
@@ -572,30 +579,25 @@ func (s *ideServer) choosePort(data string) int {
 	if want == 0 {
 		want = idePort
 	}
+	// A server no running app owns (its app crashed) is ended first, whatever port it is on (it
+	// may have started on another one; its folder is this one): its group waited for. Only the
+	// lock's holder does so: another instance's server (an installed app and a build of it, two
+	// launches) is live and stays.
 	owner := s.own(data)
+	if pid := ideOrphan(data); owner && pid > 0 {
+		endGroup(pid, func() bool { return syscall.Kill(-pid, 0) == syscall.ESRCH })
+	}
 	if portFree(want) {
 		return want
 	}
-	// Only a server no running app owns is ended: another instance's (an installed app and a
-	// build of it, two launches) is live and stays.
-	if pid := ideOrphan(data); owner && pid > 0 {
-		endGroup(pid, func() bool { return portFree(want) })
-		if portFree(want) {
-			return want
-		}
-	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return want // the server says why it cannot listen
-	}
-	p := l.Addr().(*net.TCPAddr).Port
-	l.Close()
+	// Taken: the server picks a free port itself as it listens (one picked here could be taken
+	// before it starts); its address says which.
 	who := "something else"
 	if !owner {
 		who = "another acpost"
 	}
-	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by %s; VS Code starts on %d, without its settings and state\n", want, who, p)
-	return p
+	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by %s; VS Code starts on another, without its settings and state\n", want, who)
+	return 0
 }
 
 func portFree(port int) bool {
