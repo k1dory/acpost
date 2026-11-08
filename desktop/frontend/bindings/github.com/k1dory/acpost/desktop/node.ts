@@ -359,8 +359,8 @@ export function OpenLocal(path: string, base: string): $CancellablePromise<void>
 }
 
 /**
- * OpenTerminal opens a shell (in the agent's working directory when one is named) and streams
- * its output as "term:<id>" (base64 chunks).
+ * OpenTerminal opens a shell (in the agent's working directory when one is named). Its output
+ * comes once the window attaches (TermAttach): the window subscribes to "term:<id>" first.
  */
 export function OpenTerminal(agent: string, cols: number, rows: number): $CancellablePromise<client$0.Terminal> {
     return $Call.ByID(2110126032, agent, cols, rows).then(($result: any) => {
@@ -522,6 +522,16 @@ export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
         return $$createType34($result);
     });
+}
+
+/**
+ * TermAttach streams a terminal's output from offset from as "term:<id>": {data} (base64),
+ * {lost, error} while the connection is down (it comes back where it stopped), {exit, code}
+ * when the shell ends, {exit, error} when the node says the terminal is gone. Attaching again
+ * restarts the stream.
+ */
+export function TermAttach(id: string, $from: number): $CancellablePromise<void> {
+    return $Call.ByID(3316137483, id, $from);
 }
 
 /**

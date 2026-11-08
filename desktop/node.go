@@ -33,7 +33,7 @@ type Node struct {
 	c        *client.Client
 	url      string
 	follows  map[string]*follow
-	terms    map[string]context.CancelFunc
+	terms    map[string]*term
 	stopNode context.CancelFunc // the node the app runs itself, if it does
 	nodeDone chan struct{}      // closed when that node has stopped
 	startMu  sync.Mutex         // one ensureNode at a time
@@ -47,7 +47,7 @@ type Node struct {
 // that is slow to start held it for up to 20 s), and Status waits for the outcome.
 func (n *Node) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	n.follows = map[string]*follow{}
-	n.terms = map[string]context.CancelFunc{}
+	n.terms = map[string]*term{}
 	n.startErr = "starting" // Status goes through ensureNode, which waits for this start
 	go n.ensureNode()
 	return nil
@@ -60,8 +60,16 @@ func (n *Node) ServiceShutdown() error {
 	for _, f := range n.follows {
 		f.cancel()
 	}
-	for _, stop := range n.terms {
-		stop()
+	var terms []string
+	for id, t := range n.terms {
+		t.stop()
+		terms = append(terms, id)
+	}
+	if len(terms) > 0 {
+		// The shells the app opened end with it (a node of another machine kept them).
+		n.mu.Unlock()
+		closeTerminals(n, terms)
+		n.mu.Lock()
 	}
 	if n.stopNode != nil {
 		n.stopNode()
@@ -372,8 +380,8 @@ func (n *Node) CILog(agent, job, target string) (string, error) {
 	})
 }
 
-// OpenTerminal opens a shell (in the agent's working directory when one is named) and streams
-// its output as "term:<id>" (base64 chunks).
+// OpenTerminal opens a shell (in the agent's working directory when one is named). Its output
+// comes once the window attaches (TermAttach): the window subscribes to "term:<id>" first.
 func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, error) {
 	t, err := call(n, func(ctx context.Context, c *client.Client) (client.Terminal, error) {
 		return c.OpenTerminal(ctx, client.TermRequest{Agent: agent, Cols: cols, Rows: rows})
@@ -381,25 +389,70 @@ func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, erro
 	if err != nil {
 		return t, err
 	}
-	c, _ := n.client()
-	ctx, cancel := context.WithCancel(context.Background())
 	n.mu.Lock()
-	n.terms[t.ID] = cancel
+	if n.terms[t.ID] == nil {
+		n.terms[t.ID] = &term{}
+	}
+	n.mu.Unlock()
+	return t, nil
+}
+
+// TermAttach streams a terminal's output from offset from as "term:<id>": {data} (base64),
+// {lost, error} while the connection is down (it comes back where it stopped), {exit, code}
+// when the shell ends, {exit, error} when the node says the terminal is gone. Attaching again
+// restarts the stream.
+func (n *Node) TermAttach(id string, from int64) error {
+	c, err := n.client()
+	if err != nil {
+		return withHint(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	me := &term{cancel: cancel}
+	n.mu.Lock()
+	if old := n.terms[id]; old != nil {
+		old.stop()
+	}
+	n.terms[id] = me
 	n.mu.Unlock()
 	go func() {
-		final, err := c.TermOutput(ctx, t.ID, 0, func(_ int64, b []byte) error {
-			n.emit("term:"+t.ID, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
-			return nil
-		})
-		if ctx.Err() == nil {
-			ev := map[string]any{"exit": true, "code": final.ExitCode}
-			if err != nil {
-				ev["error"] = err.Error()
+		defer func() {
+			n.mu.Lock()
+			if n.terms[id] == me && ctx.Err() == nil { // the shell ended
+				delete(n.terms, id)
 			}
-			n.emit("term:"+t.ID, ev)
+			n.mu.Unlock()
+		}()
+		lost := false
+		for {
+			final, err := c.TermOutput(ctx, id, from, func(next int64, b []byte) error {
+				from, lost = next, false
+				n.emit("term:"+id, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
+				return nil
+			})
+			if ctx.Err() != nil {
+				return
+			}
+			switch {
+			case err == nil:
+				n.emit("term:"+id, map[string]any{"exit": true, "code": final.ExitCode})
+				return
+			case errors.Is(err, client.ErrUnavailable):
+				if !lost {
+					lost = true
+					n.emit("term:"+id, map[string]any{"lost": true, "error": withHint(err).Error()})
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+				}
+			default:
+				n.emit("term:"+id, map[string]any{"exit": true, "error": withHint(err).Error()})
+				return
+			}
 		}
 	}()
-	return t, nil
+	return nil
 }
 
 // TermInput types into a terminal (base64).
@@ -425,8 +478,8 @@ func (n *Node) TermResize(id string, cols, rows int) error {
 // CloseTerminal ends a terminal.
 func (n *Node) CloseTerminal(id string) error {
 	n.mu.Lock()
-	if stop := n.terms[id]; stop != nil {
-		stop()
+	if t := n.terms[id]; t != nil {
+		t.stop()
 		delete(n.terms, id)
 	}
 	n.mu.Unlock()
@@ -536,4 +589,29 @@ feed:
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
+}
+
+// term is a terminal the app opened; cancel stops its output stream, once attached.
+type term struct{ cancel context.CancelFunc }
+
+func (t *term) stop() {
+	if t.cancel != nil {
+		t.cancel()
+	}
+}
+
+// closeTerminals ends terminals on the node, all at once, for at most two seconds.
+func closeTerminals(n *Node, ids []string) {
+	c, err := n.client()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = c.CloseTerminal(ctx, id) }()
+	}
+	wg.Wait()
 }
