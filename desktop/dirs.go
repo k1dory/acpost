@@ -61,9 +61,7 @@ func (n *Node) SearchDirs(q string) []string {
 	if q == "" {
 		return []string{}
 	}
-	if strings.HasPrefix(q, "~") {
-		q = home + q[1:]
-	}
+	q = expandHome(q)
 	var out []string
 	if strings.HasPrefix(q, "/") {
 		parent, base := filepath.Dir(q), filepath.Base(q)
@@ -124,4 +122,19 @@ func (n *Node) SearchDirs(q string) []string {
 		out = []string{}
 	}
 	return out
+}
+
+// expandHome reads "~" and "~/…" as the home directory; "~name" stays as it is.
+func expandHome(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(home, p[2:])
+	}
+	return p
 }

@@ -169,9 +169,7 @@ func artifactTemp() (string, error) {
 
 func artifactPath(path, base string) (string, error) {
 	path = strings.TrimSpace(strings.TrimPrefix(path, "file://"))
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, "~/") {
-		path = filepath.Join(home, path[2:])
-	}
+	path = expandHome(path)
 	if !filepath.IsAbs(path) {
 		if base == "" || !filepath.IsAbs(base) {
 			return "", errArtifact

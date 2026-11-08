@@ -20,7 +20,6 @@ import (
 	"github.com/k1dory/acpost/internal/store"
 	"github.com/k1dory/acpx"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 // Node is the app's link to the local acpost node: what the interface calls (bindings) and the
@@ -37,8 +36,9 @@ type Node struct {
 	stopNode context.CancelFunc // the node the app runs itself, if it does
 	nodeDone chan struct{}      // closed when that node has stopped
 	startMu  sync.Mutex         // one ensureNode at a time
-	notes    *notifications.NotificationService
+	notes    notifier
 	noteOK   int // 0 not asked, 1 allowed, -1 refused
+	noteAsk  sync.Once
 	startErr string
 	emitFn   func(name string, data any) // tests: where events go instead of the window
 }
@@ -124,15 +124,7 @@ func localURL(cfg *config.Config) string {
 }
 
 func call[T any](n *Node, fn func(ctx context.Context, c *client.Client) (T, error)) (T, error) {
-	var zero T
-	c, err := n.client()
-	if err != nil {
-		return zero, withHint(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	out, err := fn(ctx, c)
-	return out, withHint(err)
+	return callLong(n, 30*time.Second, fn)
 }
 
 // withHint hands the interface the node's error whole — its code, message and hint (what to do

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -297,11 +298,13 @@ func (n *Node) Home() string {
 	return h
 }
 
+// callLong calls the node with a deadline of d; its errors come whole (withHint), the
+// client's own too.
 func callLong[T any](n *Node, d time.Duration, fn func(ctx context.Context, c *client.Client) (T, error)) (T, error) {
 	var zero T
 	c, err := n.client()
 	if err != nil {
-		return zero, err
+		return zero, withHint(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
@@ -361,5 +364,5 @@ func (n *Node) StartBacklogItem(id, agent string) (string, error) {
 	m, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) {
 		return c.StartBacklogItem(ctx, id, agent)
 	})
-	return cmpOr(m.Thread, m.ID), err
+	return cmp.Or(m.Thread, m.ID), err
 }
