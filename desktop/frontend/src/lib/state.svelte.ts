@@ -237,6 +237,7 @@ class App {
       }
       this.wasRunning = running;
       this.chats = c.items ?? [];
+      this.linkDrafts(this.chats);
       try { localStorage.setItem(this.chatsKey(), JSON.stringify({ items: this.chats, folders: c.folders ?? [] })); } catch {}
       // A new task's thread, once listed, is the open chat (its session, to fork, comes with it).
       if (this.thread && (!this.chat || this.chat.key === "thread:" + this.thread)) {
@@ -296,13 +297,14 @@ class App {
     // A draft of its own: a send still going owns the last one (its answer edits that, not this).
     // What was typed carries over, unless it is what is being sent.
     const old = this.draftMap.get("new"), d = new ComposerDraft("new");
-    if (old && !old.busy) { d.text = old.text; d.files = old.files; }
+    if (old && !old.busy) { d.text = old.text; d.files = old.files; old.forward(d); }
     this.draftMap.set("new", d);
     this.drafts++;
     this.chat = null;
   }
 
   async open(chat: Chat) {
+    this.linkDrafts([chat]);
     this.reset();
     this.chat = chat;
     this.target = chat.agent ?? "";
@@ -452,12 +454,29 @@ class App {
     if (there && there !== d) {
       there.text = [there.text, d.text].filter(Boolean).join("\n");
       there.files = [...there.files, ...d.files];
+      if (!there.sending && d.sending) there.sending = d.sending;
+      d.forward(there);
     } else {
       d.key = to;
       this.draftMap.set(to, d);
     }
     this.drafts++;
   }
+  /** A thread the node made of a session continued here, the session's chat gone from the list
+   * (the answer to its first message may have been lost): the session's draft is the thread's.
+   * While the session's chat is still listed, its draft stays its own. */
+  private linkDrafts(chats: Chat[]) {
+    for (const c of chats) {
+      if (c.kind !== "thread" || !c.thread || !c.session) continue;
+      const agent = (c.session_agent || c.agent || "").replace(/^agent:/, "");
+      const key = `session:${agent}/${c.session}`;
+      const from = this.draftMap.get(key);
+      if (!from || from.busy || this.chats.some(x => x.key === key)) continue;
+      if (from.sending) from.sending.moved = true;
+      this.moveDraft(from, "thread:" + c.thread);
+    }
+  }
+
   draftOf(key = this.draftKey()): ComposerDraft {
     this.drafts;
     let d = this.draftMap.get(key);
@@ -488,7 +507,7 @@ class App {
     const chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
     let to = this.target;
     try {
-      const task: any = { body, files };
+      let task: any = { body, files };
       if (this.limits && new TextEncoder().encode(body).length > this.limits.max_body) {
         this.error = t("The text is over the node's limit of {n}", { n: bytes(this.limits.max_body) });
         return false;
@@ -510,9 +529,17 @@ class App {
       if (!to) { this.error = t("Choose an agent"); return false; }
       Object.assign(task, { to }, this.settingsFor(to));
       // The same message is all of it the same (files' bytes and types, settings): only then the same key.
-      const what = JSON.stringify(task);
+      let what = JSON.stringify(task);
+      const { to: _to, thread: _th, session: _se, cwd: _cwd, ...rest } = task;
+      const content = JSON.stringify(rest);
       if (d.epoch !== epoch) return false; // a new task meanwhile: this one is not it
-      if (d.sending?.what !== what) d.sending = { what, key: newId() };
+      // Its draft moved to the thread the node made of it (its answer lost): the same message is
+      // the request as it was first made, with its key — the node gives back what it has.
+      if (d.sending?.moved && d.sending.content === content) {
+        task = { ...d.sending.task };
+        what = d.sending.what;
+      }
+      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task } };
       const key = d.sending.key;
       task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;

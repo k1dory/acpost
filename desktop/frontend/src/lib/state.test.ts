@@ -311,6 +311,75 @@ describe("send, review round 2", () => {
   });
 });
 
+describe("send, review round 3", () => {
+  const later = () => { const r = deferred<ArrayBuffer>(); return { r, f: { name: "late.txt", type: "text/plain", size: 1, arrayBuffer: () => r.promise } }; };
+
+  it("a file still being read when a new task starts lands in the new task's draft (R3.1)", async () => {
+    const app = await load();
+    const d = app.draftOf();
+    const { r, f } = later();
+    const adding = d.add([f], null, () => {});
+    app.newTask();
+    r.resolve(new Uint8Array([97]).buffer);
+    await adding;
+    expect(app.draftOf()).not.toBe(d);
+    expect(app.draftOf().files.map(x => x.name)).toEqual(["late.txt"]);
+  });
+
+  it("a file still being read when its draft merges into a thread's lands there (R3.1)", async () => {
+    const app = await load();
+    app.draftOf("thread:T1").text = "already here";
+    const d = app.draftOf();
+    d.text = "task";
+    const { r, f } = later();
+    const adding = d.add([f], null, () => {});
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "T1"));
+    expect(await app.submit(d)).toBe(true);   // merged into thread:T1's draft
+    r.resolve(new Uint8Array([97]).buffer);
+    await adding;
+    expect(app.draftOf("thread:T1").files.map(x => x.name)).toEqual(["late.txt"]);
+  });
+
+  it("a session continued here whose answer was lost: its thread has the draft, resent as first made (R3.2)", async () => {
+    const app = await load();
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [S] });
+    await app.loadChats();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S);
+    const d = app.draftOf();
+    d.text = "go on";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")); // the node took it; the answer was lost
+    expect(await app.submit(d)).toBe(false);
+    d.text = "go on\nmore";
+    fake.Node.Chats.mockResolvedValue({ items: [T] });              // the session is a thread now
+    await app.loadChats();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T1", "done")]);
+    await app.open(T);
+    expect(app.draftOf().text).toBe("go on\nmore");
+    // The same text sent again goes as first made, with its key: the node gives back m1.
+    app.draftOf().text = "go on";
+    fake.Node.SendTask.mockResolvedValueOnce(msg("m1", "T1", "done"));
+    expect(await app.submit(app.draftOf())).toBe(true);
+    const [first, again] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(again.idem).toBe(first.idem);
+    expect(again.session).toBe("s1");
+    expect(again.thread).toBeUndefined();
+    expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
+  });
+
+  it("a session still listed keeps its own draft (R3.2)", async () => {
+    const app = await load();
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    app.draftOf("session:claude/s1").text = "mine";
+    fake.Node.Chats.mockResolvedValue({ items: [S, T] });
+    await app.loadChats();
+    expect(app.draftOf("session:claude/s1").text).toBe("mine");
+  });
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");

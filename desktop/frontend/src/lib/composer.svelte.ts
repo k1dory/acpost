@@ -16,9 +16,27 @@ export class ComposerDraft {
   /** The cloud sandbox made for this draft when its send failed after it: the next try goes there. */
   sandbox: { for: string; agent: string } | null = null;
   /** The message being sent (all of it but its key) and its idempotency key: the same message
-   * tried again has the same key, so the node runs it once even when its first answer was lost. */
-  sending: { what: string; key: string } | null = null;
-  private adding: Promise<void> = Promise.resolve();
+   * tried again has the same key, so the node runs it once even when its first answer was lost.
+   * content is the message without where it goes; task, the request as it was made. */
+  sending: { what: string; key: string; content: string; task: any; moved?: boolean } | null = null;
+  /** Where this draft went (a new task's, a thread's it merged into): what is still being read
+   * into it goes there. */
+  movedTo: ComposerDraft | null = null;
+  adding: Promise<void> = Promise.resolve();
+
+  /** The draft that holds this one's text now. */
+  live(): ComposerDraft {
+    let d: ComposerDraft = this;
+    for (let i = 0; d.movedTo && i < 64; i++) d = d.movedTo;
+    return d;
+  }
+  /** This draft continues in `to`: reads still going land there, and its adds queue after them. */
+  forward(to: ComposerDraft) {
+    if (to === this) return;
+    this.movedTo = to;
+    const mine = this.adding, theirs = to.adding;
+    to.adding = Promise.all([mine, theirs]).then(() => {});
+  }
 
   constructor(public key: string) {}
 
@@ -32,14 +50,16 @@ export class ComposerDraft {
    * check made before either was read. A file over the limits is said (fail) and not read. */
   add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size") => void): Promise<void> {
     const files = [...list];
-    this.adding = this.adding.then(async () => {
+    const at = this.live();
+    at.adding = at.adding.then(async () => {
       for (const f of files) {
-        const over = overLimits(this.files, f, limits);
-        if (over) { fail(over); return; }
+        if (overLimits(this.live().files, f, limits)) { fail(overLimits(this.live().files, f, limits) as "count" | "size"); return; }
         const data = b64bytes(new Uint8Array(await f.arrayBuffer()));
-        this.files = [...this.files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data }];
+        // Read into whichever draft this one is by now (a new task, the thread it moved into).
+        const d = this.live();
+        d.files = [...d.files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data }];
       }
     }).catch(() => {});
-    return this.adding;
+    return at.adding;
   }
 }
