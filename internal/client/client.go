@@ -618,12 +618,16 @@ type Client struct {
 // caFile, when set, is the CA bundle a https node's certificate is checked against.
 func New(nodeURL, token, caFile string) (*Client, error) {
 	c := &Client{token: token, URL: nodeURL}
-	tr := &http.Transport{MaxIdleConnsPerHost: 16, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 0}
+	// Reaching the node is bounded: a host that drops the connect or stalls the TLS handshake is
+	// unavailable within seconds. The answer is not: long polls hold it up to MaxWait, and an
+	// agent's forge request waits for a person's approval (ask_timeout); callers bound those.
+	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	tr := &http.Transport{MaxIdleConnsPerHost: 16, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: handshakeTimeout,
+		DialContext: d.DialContext}
 	switch {
 	case strings.HasPrefix(nodeURL, "unix://"):
 		sock := strings.TrimPrefix(nodeURL, "unix://")
 		tr.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
 			return d.DialContext(ctx, "unix", sock)
 		}
 		c.base = "http://acpost"
@@ -685,6 +689,10 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return resp.StatusCode, respErr(method, path, resp)
+	}
+	if out == nil {
+		// Read what is left of a small answer, so the connection goes back to the pool.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
 		cr := &capReader{r: resp.Body, left: c.MaxResponse}
@@ -749,9 +757,11 @@ func (c *Client) WaitFinal(ctx context.Context, id string, timeout time.Duration
 			step = 0
 		}
 		// The request itself is bounded: a node that stalls cannot hold the caller past its timeout.
-		rctx, done := context.WithTimeout(ctx, step+5*time.Second)
-		if !deadline.IsZero() {
-			done()
+		var rctx context.Context
+		var done context.CancelFunc
+		if deadline.IsZero() {
+			rctx, done = context.WithTimeout(ctx, step+5*time.Second)
+		} else {
 			rctx, done = context.WithDeadline(ctx, deadline.Add(50*time.Millisecond))
 		}
 		m, err := c.Wait(rctx, id, step)
@@ -890,9 +900,19 @@ func (c *Client) Agents(ctx context.Context) ([]AgentInfo, error) {
 	return out, err
 }
 
+// Status is cheap for a node that works: one that does not answer it within statusTimeout is
+// unavailable (unless ctx has a deadline of its own).
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	var s Status
+	if _, ok := ctx.Deadline(); !ok {
+		var done context.CancelFunc
+		ctx, done = context.WithTimeout(ctx, statusTimeout)
+		defer done()
+	}
 	_, err := c.do(ctx, "GET", "/v1/health", nil, nil, &s, nil)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
+		return s, fmt.Errorf("%w: %s: no answer to a health check within %v", ErrUnavailable, c.URL, statusTimeout)
+	}
 	return s, err
 }
 
@@ -928,16 +948,24 @@ func respErr(method, path string, resp *http.Response) *Error {
 // that seq. A broken stream is reopened where it stopped (Last-Event-ID); an API error or fn's
 // error ends it.
 func (c *Client) Follow(ctx context.Context, id string, after int64, fn func(store.Event) error) (store.Message, error) {
+	pause := followRetry
 	for {
+		seen := after
 		m, done, err := c.followOnce(ctx, id, &after, fn)
 		if done || err != nil && (ctx.Err() != nil || !errors.Is(err, ErrUnavailable)) {
 			return m, err
 		}
-		select { // the connection dropped: again, from the last event seen
+		// The connection dropped: again, from the last event seen; sooner when it was moving, ever
+		// later (to a ceiling) while a node that is down stays down.
+		if after > seen {
+			pause = followRetry
+		}
+		select {
 		case <-ctx.Done():
 			return m, ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(pause):
 		}
+		pause = min(2*pause, followRetryMax)
 	}
 }
 
@@ -986,6 +1014,9 @@ func (c *Client) followOnce(ctx context.Context, id string, after *int64, fn fun
 			if data.Len() == 0 {
 				kind = ""
 				continue
+			}
+			if kind == "error" {
+				return store.Message{}, false, streamErr(data.String())
 			}
 			if kind == "end" {
 				var m store.Message
@@ -1159,11 +1190,11 @@ func (c *Client) TermInput(ctx context.Context, id string, b []byte) error {
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+		return c.unreachable(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return respErr("POST", "/v1/terminals/input", resp)
+		return respErr("POST", "/v1/terminals/"+id+"/input", resp)
 	}
 	return nil
 }
@@ -1193,7 +1224,7 @@ func (c *Client) TermOutput(ctx context.Context, id string, from int64, fn func(
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return Terminal{}, fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+		return Terminal{}, c.unreachable(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -1227,6 +1258,8 @@ func (c *Client) TermOutput(ctx context.Context, id string, from int64, fn func(
 					return t, fmt.Errorf("%w: terminal end: %w", ErrBadResponse, err)
 				}
 				return t, nil
+			case "error":
+				return Terminal{}, streamErr(data)
 			}
 			kind, data = "", ""
 		case strings.HasPrefix(line, "event:"):
@@ -1310,7 +1343,7 @@ func (c *Client) CILog(ctx context.Context, q ForgeQuery, job, target string) (s
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+		return "", c.unreachable(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -1377,4 +1410,40 @@ func (c *Client) Asking(ctx context.Context) ([]AskingRequest, error) {
 func (c *Client) Answer(ctx context.Context, msgID string, reply acpx.Reply) error {
 	_, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(msgID)+"/permission", nil, reply, nil, nil)
 	return err
+}
+
+// The bounds on reaching a node and on its health check; variables so tests need not wait them out.
+var (
+	dialTimeout      = 10 * time.Second
+	handshakeTimeout = 10 * time.Second
+	statusTimeout    = 30 * time.Second
+)
+
+// followRetry and followRetryMax pace Follow's reconnects.
+var followRetry, followRetryMax = time.Second, 30 * time.Second
+
+// unreachable is the error of a request that got no response: ctx's own when ctx ended (the
+// caller gave up: not the node's fault), else ErrUnavailable.
+func (c *Client) unreachable(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+}
+
+// streamErr is the error an `event: error` of a stream carries: the node's own, which ends the
+// stream for good, unless the node says it is unavailable (then reopening it may work).
+func streamErr(data string) error {
+	var eb struct {
+		Status int   `json:"status"`
+		Error  Error `json:"error"`
+	}
+	if json.Unmarshal([]byte(data), &eb) != nil || eb.Error.Code == "" {
+		return fmt.Errorf("%w: a stream error: %.200s", ErrBadResponse, data)
+	}
+	eb.Error.Status = eb.Status
+	if eb.Error.Code == "unavailable" {
+		return fmt.Errorf("%w: %w", ErrUnavailable, &eb.Error)
+	}
+	return &eb.Error
 }
