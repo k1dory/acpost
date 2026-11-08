@@ -803,6 +803,15 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 	} else {
 		errCode = ""
 	}
+	body = capReply(body, int(n.cfg.Limits.MaxReply))
+	// The holder repeating a reply already recorded (its response was lost) is told it is: its
+	// files are attached already, and checked against them they would be refused.
+	if same, err := n.st.RepeatsCompletion(ctx, id, lease, state, body, errCode, errText, files); err != nil || same {
+		return err
+	}
+	if m.State != store.Running || m.LeaseID == "" || m.LeaseID != lease {
+		return errf("conflict", "%v", store.ErrLeaseLost) // another answer under a lease gone: before its files are weighed
+	}
 	if err := n.checkFiles(files, replyFiles(m.Files), "the reply"); err != nil {
 		return err
 	}
@@ -812,7 +821,6 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 			return err
 		}
 	}
-	body = capReply(body, int(n.cfg.Limits.MaxReply))
 	if err := n.st.Complete(ctx, id, lease, state, body, errCode, errText, files...); err != nil {
 		if errors.Is(err, store.ErrLeaseLost) {
 			return errf("conflict", "%v", err)

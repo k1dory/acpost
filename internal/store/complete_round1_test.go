@@ -67,14 +67,14 @@ func TestCompleteRepeatConcurrent(t *testing.T) {
 	}
 }
 
-// A store made before closed_lease existed gains the column on open.
+// A store made before the completion column existed gains the column on open.
 func TestCompleteRepeatAfterMigration(t *testing.T) {
 	path := t.TempDir() + "/s/store.db"
 	s, err := Open("sqlite://"+path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.w.Exec("ALTER TABLE messages DROP COLUMN closed_lease"); err != nil {
+	if _, err := s.w.Exec("ALTER TABLE messages DROP COLUMN completion"); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -88,6 +88,36 @@ func TestCompleteRepeatAfterMigration(t *testing.T) {
 	for range 2 {
 		if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "answer", "", ""); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// A repeat is the whole answer again: a file added, or another error text with the same code, is
+// another answer under that lease and a conflict, not a success that drops it silently.
+func TestCompleteRepeatMustMatch(t *testing.T) {
+	s := openTest(t, Options{})
+	mustInsert(t, s, msg("agent:r", "x"))
+	c, _, _ := s.Claim(ctx, "agent:r", time.Minute)
+	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "answer", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "answer", "", "", File{Name: "report.txt", Data: []byte("r")}); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a file added: %v", err)
+	}
+	mustInsert(t, s, msg("agent:f", "y"))
+	f, _, _ := s.Claim(ctx, "agent:f", time.Minute)
+	if err := s.Complete(ctx, f.ID, f.LeaseID, Failed, "", "failed", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Complete(ctx, f.ID, f.LeaseID, Failed, "", "failed", "bang"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("another error text: %v", err)
+	}
+	if err := s.Complete(ctx, f.ID, f.LeaseID, Failed, "", "failed", "boom"); err != nil {
+		t.Fatalf("the same failure: %v", err)
+	}
+	for _, id := range []string{c.ID, f.ID} {
+		if got, _ := s.Get(ctx, id); len(got.Files) != 0 || (got.State == Failed && got.Error != "boom") {
+			t.Fatalf("%+v", got)
 		}
 	}
 }
