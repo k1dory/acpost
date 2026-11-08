@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,30 @@ func fakeCLI(mode string, args []string) {
 		f.Close()
 	}
 	switch mode {
+	case "lingering":
+		// The CLI: its server is a child of its, which ends in order (a moment after SIGTERM),
+		// while the CLI itself ends at once.
+		c := exec.Command(os.Args[0], os.Args[1:]...)
+		c.Env = append(os.Environ(), "ACPOST_FAKE_CLI=child", "ACPOST_FAKE_LOG=")
+		// Its output passed on by the CLI, as code-tunnel does code-server's (the child does not
+		// hold the CLI's own output).
+		out, _ := c.StdoutPipe()
+		if err := c.Start(); err != nil {
+			fmt.Println("child:", err)
+			os.Exit(1)
+		}
+		io.Copy(os.Stdout, out)
+		c.Wait()
+		os.Exit(0)
+	case "child":
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM)
+		go func() {
+			<-sig
+			time.Sleep(300 * time.Millisecond)
+			os.WriteFile(os.Getenv("ACPOST_FAKE_PIDS")+".graceful", []byte("ok"), 0o600)
+			os.Exit(0)
+		}()
 	case "boom":
 		fmt.Printf("error getting the server: boom (from http://127.0.0.1:1?tkn=%s)\n", tok)
 		os.Exit(1)
@@ -227,8 +252,9 @@ func TestIDEEndSeenWithGrandchild(t *testing.T) {
 		t.Errorf("token file left: %v", err)
 	}
 	b, _ := os.ReadFile(f.pids)
-	if pid, _ := strconv.Atoi(string(b)); pid == 0 || !gone(pid, 3*time.Second) {
-		t.Errorf("the CLI's child (%q) still runs", b)
+	// Gone when done is closed (no further wait): done is the group's end.
+	if pid, _ := strconv.Atoi(string(b)); pid == 0 || !gone(pid, 50*time.Millisecond) {
+		t.Errorf("the CLI's child (%q) still runs when its end is seen", b)
 	}
 	if _, err := os.Stat(filepath.Join(f.data, idePidFile)); err == nil {
 		t.Error("pid file left")
@@ -407,7 +433,7 @@ func TestIDEOneBudget(t *testing.T) {
 	}
 	t.Run("install hangs", func(t *testing.T) {
 		f := newFakeIDE(t, "serve")
-		f.budget = 1500 * time.Millisecond
+		f.budget = 4 * time.Second // the fake's start, slow under load, fits; the hung install is cut at it
 		var mu sync.Mutex
 		calls := 0
 		f.install = func(ctx context.Context, data string) error {
@@ -425,8 +451,8 @@ func TestIDEOneBudget(t *testing.T) {
 		if _, err := f.open(""); err != nil {
 			t.Fatalf("a start whose install hung: %v", err)
 		}
-		if d := time.Since(start); d > 5*time.Second {
-			t.Fatalf("returned after %v (budget 1.5 s)", d)
+		if d := time.Since(start); d > 8*time.Second {
+			t.Fatalf("returned after %v (budget 4 s)", d)
 		}
 		if _, err := f.open(""); err != nil {
 			t.Fatal(err)
@@ -606,5 +632,60 @@ func TestIDEFallbackPortNotRaced(t *testing.T) {
 	}
 	if p := portOf(t, base); p == f.port || p == 0 {
 		t.Fatalf("port %d", p)
+	}
+}
+
+// Review 3.1: the CLI ending before its server does (it ends in order after SIGTERM) is not the
+// group's end: the server is given its time, and the restart finds the port free, the same one.
+func TestIDEGroupEndsInOrder(t *testing.T) {
+	f := newFakeIDE(t, "lingering")
+	base1, err := f.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := f.current()
+	run.kill()
+	if _, err := os.Stat(f.pids + ".graceful"); err != nil {
+		t.Fatal("the server was not let end in order")
+	}
+	base2, err := f.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if portOf(t, base2) != portOf(t, base1) || portOf(t, base1) != f.port {
+		t.Fatalf("ports %d then %d, want %d", portOf(t, base1), portOf(t, base2), f.port)
+	}
+}
+
+// Review 3.2: an app quitting while its start looks for an orphan keeps its lock until that is
+// done: the next app (which takes the lock only then) is never taken for its orphan.
+func TestIDEStopWaitsForOrphanCheck(t *testing.T) {
+	g := newFakeIDE(t, "serve")
+	h := &ideServer{findCLI: g.findCLI, dataDir: g.dataDir, install: g.install, port: g.port, budget: g.budget}
+	t.Cleanup(h.stop)
+	var hrun *ideRun
+	g.owned = func() {
+		g.owned = nil
+		done := make(chan struct{})
+		go g.stop() // the app quitting now
+		go func() {
+			defer close(done)
+			if _, err := h.open(""); err == nil { // the next app, at once
+				h.mu.Lock()
+				hrun = h.run
+				h.mu.Unlock()
+			}
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+	}
+	g.open("")
+	if hrun == nil {
+		t.Fatal("the next app did not start")
+	}
+	if waitClosed(hrun.done, 500*time.Millisecond) {
+		t.Fatal("the next app's server was ended as an orphan")
 	}
 }

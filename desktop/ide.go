@@ -75,6 +75,7 @@ type ideServer struct {
 	installing bool
 	inst       chan struct{} // one install at a time, the first's and any again
 	owner      *os.File      // the IDE folder's lock, held while this app owns its server
+	claim      sync.Mutex    // held from taking the lock to the end of the orphan's removal; stop waits for it
 
 	pane  sync.Mutex // the pane's calls, one at a time
 	shown string     // the address the pane has open (under pane)
@@ -86,6 +87,7 @@ type ideServer struct {
 	port    int
 	budget  time.Duration
 	starts  func(port int) // called just before the server starts on port
+	owned   func()         // called once the lock is taken (or not), before the orphan is looked for
 }
 
 var ide ideServer
@@ -366,7 +368,17 @@ func ideBase(u, token string) (string, error) {
 // and pid files removed (the pid file only while it is still this process's), then done closed.
 func (r *ideRun) wait(tokFile, pidFile, pid string) {
 	_ = r.cmd.Wait()
-	_ = syscall.Kill(-r.cmd.Process.Pid, syscall.SIGKILL)
+	// The CLI's end is not its group's: VS Code's own server may still be ending (or, the CLI
+	// gone by itself, running on). The group gets the same time to end in order, then is killed;
+	// done is closed once it is gone, its port free.
+	pg := r.cmd.Process.Pid
+	if !groupGone(pg, 0) {
+		_ = syscall.Kill(-pg, syscall.SIGTERM)
+		if !groupGone(pg, ideTermWait) {
+			_ = syscall.Kill(-pg, syscall.SIGKILL)
+			groupGone(pg, 3*time.Second)
+		}
+	}
 	os.Remove(tokFile)
 	if b, err := os.ReadFile(pidFile); err == nil && string(b) == pid {
 		os.Remove(pidFile)
@@ -390,7 +402,19 @@ func (r *ideRun) kill() {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	select {
 	case <-r.done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(ideTermWait + 5*time.Second): // wait's own steps, all bounded
+	}
+}
+
+// groupGone waits up to d for the process group pg to have no process left.
+func groupGone(pg int, d time.Duration) bool {
+	for end := time.Now().Add(d); ; time.Sleep(20 * time.Millisecond) {
+		if syscall.Kill(-pg, 0) == syscall.ESRCH {
+			return true
+		}
+		if !time.Now().Before(end) {
+			return false
+		}
 	}
 }
 
@@ -528,7 +552,9 @@ func (s *ideServer) stop() {
 	if run != nil {
 		run.kill()
 	}
+	s.claim.Lock() // an orphan's removal under the lock finishes first
 	s.disown()
+	s.claim.Unlock()
 }
 
 // own takes the IDE folder's lock for this app's life, when no other running app of this kind
@@ -583,10 +609,17 @@ func (s *ideServer) choosePort(data string) int {
 	// may have started on another one; its folder is this one): its group waited for. Only the
 	// lock's holder does so: another instance's server (an installed app and a build of it, two
 	// launches) is live and stays.
+	// The lock is held throughout (stop lets it go only after): the pid file read is the one this
+	// app's lock covers, never one another app wrote after taking the lock.
+	s.claim.Lock()
 	owner := s.own(data)
-	if pid := ideOrphan(data); owner && pid > 0 {
-		endGroup(pid, func() bool { return syscall.Kill(-pid, 0) == syscall.ESRCH })
+	if s.owned != nil {
+		s.owned()
 	}
+	if pid := ideOrphan(data); owner && pid > 0 {
+		endGroup(pid, func() bool { return groupGone(pid, 0) })
+	}
+	s.claim.Unlock()
 	if portFree(want) {
 		return want
 	}
