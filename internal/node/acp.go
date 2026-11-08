@@ -221,15 +221,7 @@ func (s *acpSlot) loop() {
 }
 
 func (s *acpSlot) env() []string {
-	var env []string
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "ACPOST_") {
-			env = append(env, kv)
-		}
-	}
-	for k, v := range s.a.cfg.Env {
-		env = append(env, k+"="+v)
-	}
+	env := agentEnv(s.a.n.cfg, os.Environ(), s.a.cfg.Env) // never the node's secrets (agentenv.go)
 	return append(env, "ACPOST_NODE="+s.a.n.LocalURL(), "ACPOST_TOKEN="+s.token)
 }
 
