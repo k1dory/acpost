@@ -128,6 +128,89 @@ describe("send", () => {
   });
 });
 
+describe("send, review round 1", () => {
+  it("a new task does not reuse the previous attempt's sandbox or key (R1.2)", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1";
+    fake.Node.CreateCloudTask.mockResolvedValueOnce({ agent: "agent:sb_1" }).mockResolvedValueOnce({ agent: "agent:sb_2" });
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost")).mockResolvedValueOnce(msg("m2", "t2", "queued", "agent:sb_2"));
+    expect(await app.send("do it", [])).toBe(false);
+    app.newTask();
+    expect(await app.send("do it", [])).toBe(true);
+    expect(fake.Node.CreateCloudTask).toHaveBeenCalledTimes(2);
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(b.to).toBe("agent:sb_2");
+    expect(b.idem).not.toBe(a.idem);
+  });
+
+  it("a sandbox made after a new task was started is not given to it (R1.2)", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1";
+    const made = deferred();
+    fake.Node.CreateCloudTask.mockReturnValueOnce(made.promise).mockResolvedValueOnce({ agent: "agent:sb_2" });
+    fake.Node.SendTask.mockResolvedValue(msg("m2", "t2", "queued", "agent:sb_2"));
+    const first = app.send("do it", []);
+    app.newTask();
+    made.resolve({ agent: "agent:sb_1" });
+    expect(await first).toBe(false);
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    await app.send("do it", []);
+    expect(fake.Node.SendTask.mock.calls[0][0].to).toBe("agent:sb_2");
+  });
+
+  it("a different file of the same length is another message, with another key (R1.3)", async () => {
+    const app = await load();
+    fake.Node.SendTask.mockRejectedValue(new Error("lost"));
+    await app.send("see", [{ name: "f", type: "text/plain", data: "YQ==" }]);
+    await app.send("see", [{ name: "f", type: "text/plain", data: "Yg==" }]);
+    await app.send("see", [{ name: "f", type: "text/csv", data: "Yg==" }]);
+    const keys = fake.Node.SendTask.mock.calls.map(c => c[0].idem);
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it("a retry whose message the chat already shows does not show it twice (R1.4)", async () => {
+    const app = await load();
+    const chat = { key: "thread:T", kind: "thread" as const, thread: "T", agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Thread.mockResolvedValueOnce([]).mockResolvedValueOnce([msg("m1", "T", "running")]);
+    await app.open(chat);
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")).mockResolvedValueOnce(msg("m1", "T", "running"));
+    expect(await app.send("hi", [])).toBe(false); // the node took it; its answer was lost
+    await app.open(chat);                          // reopened: the thread has m1
+    expect(await app.send("hi", [])).toBe(true);   // same key: the node gives m1 back
+    expect(fake.Node.SendTask.mock.calls[1][0].idem).toBe(fake.Node.SendTask.mock.calls[0][0].idem);
+    expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
+  });
+
+  it("a draft outlives an outage of the node (R1.1)", async () => {
+    const app = await load();
+    app.thread = "T"; app.target = "agent:claude";
+    const d = app.draftOf();
+    d.text = "keep me";
+    fake.Node.SendTask.mockRejectedValue(new Error(JSON.stringify({ code: "node_down", message: "down", hint: "" })));
+    expect(await app.submit(d)).toBe(false);
+    fake.Node.Chats.mockRejectedValue(new Error(JSON.stringify({ code: "node_down", message: "down", hint: "" })));
+    await app.loadChats();
+    expect(app.conn?.ok).toBe(false);
+    fake.Node.Status.mockResolvedValue({ ok: true, status: {} });
+    fake.Node.Chats.mockResolvedValue({ items: [] });
+    await app.connect();
+    expect(app.draftOf().text).toBe("keep me");
+  });
+});
+
+describe("attaching files (R1.6)", () => {
+  it("two drops at once do not both pass max_files", async () => {
+    const { ComposerDraft } = await import("./composer.svelte");
+    const d = new ComposerDraft("new");
+    const slow = (name: string) => ({ name, type: "text/plain", size: 1, arrayBuffer: () => new Promise<ArrayBuffer>(r => setTimeout(() => r(new Uint8Array([97]).buffer), 5)) });
+    const fails: string[] = [];
+    const lim = { max_body: 1 << 20, max_files: 1, max_files_size: 1 << 20 };
+    await Promise.all([d.add([slow("a")], lim, w => fails.push(w)), d.add([slow("b")], lim, w => fails.push(w))]);
+    expect(d.files.map(f => f.name)).toEqual(["a"]);
+    expect(fails).toEqual(["count"]);
+  });
+});
+
 describe("following a running message", () => {
   it("asks again from the last event seen when the stream breaks (F2/Y16)", async () => {
     vi.useFakeTimers();

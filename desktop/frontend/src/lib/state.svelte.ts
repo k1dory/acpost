@@ -2,6 +2,8 @@ import { t, tr } from "./i18n.svelte";
 import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
+import { ComposerDraft } from "./composer.svelte";
+import { afterSent } from "./draft";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -291,6 +293,7 @@ class App {
   /** A new task. */
   newTask() {
     this.reset();
+    this.draftOf("new").forget(); // its text stays; not a message tried before
     this.chat = null;
   }
 
@@ -425,18 +428,42 @@ class App {
     return out;
   }
 
-  /** A cloud sandbox made for a new task whose first message did not go: the next try sends there
-   * (not to a new one). */
-  private madeSandbox: { for: string; agent: string } | null = null;
-  /** The key of the message being sent: the same message tried again has the same, so the node
-   * runs it once even when its first answer was lost. */
-  private sending: { what: string; key: string } | null = null;
+  // The composer's drafts, one per chat ("new": the new task's). A Map, not state: a draft is made
+  // where it is first read (in a $derived), and a new task's draft moving to its thread bumps drafts.
+  private draftMap = new Map<string, ComposerDraft>();
+  private drafts = $state(0);
+  /** The key of the open chat's draft. */
+  draftKey(): string {
+    return this.chat?.key ?? (this.thread ? "thread:" + this.thread : "new");
+  }
+  draftOf(key = this.draftKey()): ComposerDraft {
+    this.drafts;
+    let d = this.draftMap.get(key);
+    if (!d) { d = new ComposerDraft(key); this.draftMap.set(key, d); }
+    return d;
+  }
 
-  /** Sends a message: true once the node has it, false if not (said in error; the composer keeps
-   * the text to send again). The chat it was sent from gets it, whichever is open by then. */
-  async send(body: string, files: { name: string; type: string; data: string }[]): Promise<boolean> {
+  /** Sends a draft: what was sent leaves it once the node has it; what was typed meanwhile stays
+   * (with the chat a new task becomes). True when sent. */
+  async submit(d: ComposerDraft): Promise<boolean> {
+    const sent = d.text, sentFiles = d.files;
+    const body = sent.trim();
+    if (!body || d.busy) return false;
+    d.busy = true;
+    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d);
+    d.busy = false;
+    if (ok) {
+      d.text = afterSent(d.text, sent);
+      d.files = d.files.filter(f => !sentFiles.includes(f));
+    }
+    return ok;
+  }
+
+  /** Sends a message: true once the node has it, false if not (said in error; the draft keeps the
+   * text to send again). The chat it was sent from gets it, whichever is open by then. */
+  async send(body: string, files: { name: string; type: string; data: string }[], d = this.draftOf()): Promise<boolean> {
     // What the message is for, as it was when sent: the screen may change while it goes.
-    const gen = this.gen, chat = this.chat, thread = this.thread, draft = { ...this.draft };
+    const gen = this.gen, chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
     let to = this.target;
     try {
       const task: any = { body, files };
@@ -448,7 +475,7 @@ class App {
         // A new task: here or in the cloud.
         if (draft.where === "cloud") {
           if (!draft.cloudAgent) { this.error = t("Choose an agent of the cloud's catalogue"); return false; }
-          to = await this.sandboxFor(draft, body);
+          to = await this.sandboxFor(d, draft, body);
         } else {
           to = draft.agent;
           task.cwd = draft.cwd;
@@ -460,17 +487,31 @@ class App {
       }
       if (!to) { this.error = t("Choose an agent"); return false; }
       Object.assign(task, { to }, this.settingsFor(to));
-      const what = JSON.stringify([to, task.thread, task.session, task.cwd, body, files.map(f => [f.name, f.data.length])]);
-      if (this.sending?.what !== what) this.sending = { what, key: newId() };
-      task.idem = this.sending.key;
+      // The same message is all of it the same (files' bytes and types, settings): only then the same key.
+      const what = JSON.stringify(task);
+      if (d.epoch !== epoch) return false; // a new task meanwhile: this one is not it
+      if (d.sending?.what !== what) d.sending = { what, key: newId() };
+      const key = d.sending.key;
+      task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;
-      this.sending = null;
-      this.madeSandbox = null;
+      if (d.sending?.key === key) d.forget();
       // The conversation keeps its folder as it becomes a thread.
       if (!thread && chat?.folder) await Node.MoveChat("thread:" + m.thread, chat.folder).catch(() => {});
       if (gen === this.gen) {
-        if (!this.thread) { this.thread = m.thread; this.target = to; }
-        this.msgs = [...this.msgs, m];
+        if (!this.thread) {
+          // The new task's draft (what was typed while it went) is the thread's from now on.
+          if (d.key === "new" && this.draftMap.get("new") === d) {
+            this.draftMap.delete("new");
+            d.key = "thread:" + m.thread;
+            this.draftMap.set(d.key, d);
+            this.drafts++;
+          }
+          this.thread = m.thread;
+          this.target = to;
+        }
+        // Sent again after its answer was lost, the node gives the message it has: one, not two.
+        if (this.msgs.some(x => x.id === m.id)) this.replace(m);
+        else this.msgs = [...this.msgs, m];
         this.focus = m.id;
         this.watch(m);
       }
@@ -479,11 +520,12 @@ class App {
     } catch (e) { this.error = errText(e); return false; }
   }
 
-  private async sandboxFor(draft: Draft, body: string): Promise<string> {
+  private async sandboxFor(d: ComposerDraft, draft: Draft, body: string): Promise<string> {
     const what = draft.cloudAgent + "\u0000" + draft.repo;
-    if (this.madeSandbox?.for === what) return this.madeSandbox.agent;
+    if (d.sandbox?.for === what) return d.sandbox.agent;
+    const epoch = d.epoch;
     const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40));
-    this.madeSandbox = { for: what, agent: sb.agent };
+    if (d.epoch === epoch) d.sandbox = { for: what, agent: sb.agent };
     return sb.agent;
   }
 
