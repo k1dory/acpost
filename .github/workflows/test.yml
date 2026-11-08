@@ -1,15 +1,32 @@
 name: test
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
+      fail-fast: false # one OS failing still shows the other's result
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # Under -race the end-to-end tests build race-detecting nodes: minutes, not hours.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: go.mod and go.sum are tidy
+        if: matrix.os == 'ubuntu-latest'
+        run: go mod tidy -diff
+      - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          out=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$out" ]; then echo "not gofmt'ed:"; echo "$out"; exit 1; fi
+      - name: no compiled binaries in git
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          if git ls-files -z | xargs -0 file | grep -E 'Mach-O|ELF'; then echo "a compiled binary is tracked"; exit 1; fi
       - run: go vet ./...
       - run: go test -race -count=1 ./...
