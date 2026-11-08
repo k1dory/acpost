@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { mcpRequest, type MCP, type MCPEdit } from "../lib/mcp";
   import { t, i18n, type Lang } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText, errInfo } from "../lib/api";
@@ -6,7 +7,6 @@
   import Dropdown from "./Dropdown.svelte";
 
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
-  type MCP = { name: string; kind: "stdio" | "http"; command?: string; args?: string[]; url?: string; env?: string[]; headers?: string[]; agents?: string[]; enabled: boolean };
 
   let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "general">("git");
   type Note = { name: string; body: string; scope?: string; enabled: boolean; isNew?: boolean };
@@ -79,8 +79,7 @@
   let token = $state("");
 
   // MCP: the server being edited (null: none).
-  type Pair = { name: string; value: string; kept: boolean };
-  let edit = $state<{ isNew: boolean; name: string; kind: "stdio" | "http"; command: string; args: string; url: string; env: Pair[]; headers: Pair[]; agents: string[]; enabled: boolean } | null>(null);
+  let edit = $state<MCPEdit | null>(null);
 
   async function loadAccounts() {
     try { accounts = ((await Node.ForgeAccounts()) ?? []) as any; } catch (e) { err = errText(e); accounts = []; }
@@ -116,16 +115,9 @@
   async function save() {
     if (!edit) return;
     err = ""; busy = true;
-    const e = edit;
-    const secrets: Record<string, string> = {};
-    for (const p of e.env) if (p.name && (!p.kept || p.value)) secrets["env/" + p.name] = p.value;
-    for (const p of e.headers) if (p.name && (!p.kept || p.value)) secrets["header/" + p.name] = p.value;
-    const m: MCP = {
-      name: e.name.trim(), kind: e.kind, command: e.command.trim(), url: e.url.trim(), enabled: e.enabled, agents: e.agents,
-      args: e.args.split("\n").map(s => s.trim()).filter(Boolean),
-      env: e.env.map(p => p.name.trim()).filter(Boolean), headers: e.headers.map(p => p.name.trim()).filter(Boolean),
-    };
-    try { await Node.PutMCPServer(m as any, secrets); edit = null; await loadServers(); } catch (x) { err = errText(x); }
+    const r = mcpRequest(edit);
+    if ("error" in r) { err = t(r.error, { name: r.name ?? "" }); busy = false; return; }
+    try { await Node.PutMCPServer(r.server as any, r.secrets); edit = null; await loadServers(); } catch (x) { err = errText(x); }
     busy = false;
   }
   async function toggle(m: MCP) {

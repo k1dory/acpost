@@ -355,6 +355,8 @@ export const ru: Record<string, string> = {
   "Cancelled before it finished": "Отменено, не завершившись",
   "Expired before it finished": "Срок истёк, не завершившись",
   "Its result is not known": "Результат неизвестен",
+  "A value has no name": "У значения нет имени",
+  "The name {name} is there twice": "Имя {name} указано дважды",
 };
 
 // The node's messages (English) that have a known form, in Russian.
