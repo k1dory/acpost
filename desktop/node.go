@@ -186,20 +186,6 @@ func (n *Node) Agents() ([]client.AgentInfo, error) {
 	return call(n, func(ctx context.Context, c *client.Client) ([]client.AgentInfo, error) { return c.Agents(ctx) })
 }
 
-// ConversationPage is a page of conversations.
-type ConversationPage struct {
-	Items []store.Conversation `json:"items"`
-	Next  string               `json:"next,omitempty"`
-}
-
-// Conversations lists threads, the most recently active first.
-func (n *Node) Conversations(before string) (ConversationPage, error) {
-	return call(n, func(ctx context.Context, c *client.Client) (ConversationPage, error) {
-		items, next, err := c.Conversations(ctx, before, 50)
-		return ConversationPage{Items: items, Next: next}, err
-	})
-}
-
 // Thread is a conversation's messages, the oldest first, with their bodies and replies: the
 // whole thread, or its last threadMax messages. A message that cannot be read fails it.
 func (n *Node) Thread(thread string) ([]store.Message, error) {
@@ -208,30 +194,11 @@ func (n *Node) Thread(thread string) ([]store.Message, error) {
 	})
 }
 
-// Message is one message as it is now.
-func (n *Node) Message(id string) (store.Message, error) {
-	return call(n, func(ctx context.Context, c *client.Client) (store.Message, error) { return c.Get(ctx, id) })
-}
-
 // Upload is a file the composer attaches.
 type Upload struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Data string `json:"data"` // base64
-}
-
-// Send sends a message: to an agent, in a thread (a new one when empty).
-func (n *Node) Send(to, body, thread string, files []Upload) (store.Message, error) {
-	return call(n, func(ctx context.Context, c *client.Client) (store.Message, error) {
-		r := client.SendRequest{To: to, Body: body, Thread: thread}
-		fs, err := decodeUploads(files)
-		if err != nil {
-			return store.Message{}, err
-		}
-		r.Files = fs
-		m, _, err := c.Send(ctx, r, "")
-		return m, err
-	})
 }
 
 // Cancel cancels a message.

@@ -223,6 +223,9 @@ type Task struct {
 	Effort  string   `json:"effort,omitempty"`
 	Mode    string   `json:"mode,omitempty"`
 	Files   []Upload `json:"files,omitempty"`
+	// Idem is the send's idempotency key, the composer's for this one message: a retry after a
+	// lost answer gets the message already made instead of a second run.
+	Idem string `json:"idem,omitempty"`
 }
 
 // SendTask sends a message with its directory and settings.
@@ -234,7 +237,7 @@ func (n *Node) SendTask(t Task) (store.Message, error) {
 			return store.Message{}, err
 		}
 		r.Files = files
-		m, _, err := c.Send(ctx, r, "")
+		m, _, err := c.Send(ctx, r, t.Idem)
 		return m, err
 	})
 }
