@@ -22,7 +22,7 @@ func TestIDEPaneOrder(t *testing.T) {
 	}
 	f := filepath.Join(t.TempDir(), "pane.mjs")
 	if err := os.WriteFile(f, []byte(`import assert from "node:assert/strict";
-import { Pane, paneRect } from `+"\""+mod+"\""+`;
+import { Pane, paneRect, paneOwners } from `+"\""+mod+"\""+`;
 
 // A native side whose calls stay out until let go (in order or not).
 function fake() {
@@ -79,6 +79,20 @@ const R = (h) => ({ x: 0, y: 0, w: 100, h });
   assert.deepEqual(paneRect(box, 1, { x: 10, y: 680, w: 200, h: 50 }), box);
   assert.deepEqual(paneRect(box, 2, null), { x: 600, y: 100, w: 1200, h: 1400 });
   assert.equal(paneRect({ x: 0, y: 0, w: 3, h: 100 }, 1, null), null);
+}
+{ // Review 3: a view leaving with a show out, and the view coming back at once: the pane ends shown.
+  for (const closeFirst of [true, false]) {
+    const n = fake(), owner = paneOwners(n.calls);
+    const a = owner();
+    a.show("A", R(1));                 // out
+    let b;
+    if (closeFirst) { a.close(); b = owner(); } else { b = owner(); a.close(); }
+    b.show("B", R(2));
+    a.show("late", R(9));              // the old view's late call: dropped
+    while (n.out.length) await n.next();
+    assert.equal(n.log.at(-1), "show B 2", closeFirst + ": " + n.log.join(", "));
+    assert.ok(!n.log.includes("show late 9"));
+  }
 }
 console.log("ok");
 `), 0o600); err != nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -310,8 +311,8 @@ func TestIDEStopDuringStart(t *testing.T) {
 	}
 }
 
-// I1/Z8: a server left by an app that did not end it (crashed) is ended by the next app's start,
-// which takes the same port (VS Code's settings and state are the port's).
+// I1/Z8: a server left by an app that did not end it (crashed: its lock gone with it) is ended
+// by the next app's start, which takes the same port (VS Code's settings and state are the port's).
 func TestIDEOrphanEndedSamePort(t *testing.T) {
 	f := newFakeIDE(t, "serve")
 	base1, err := f.open("")
@@ -319,6 +320,7 @@ func TestIDEOrphanEndedSamePort(t *testing.T) {
 		t.Fatal(err)
 	}
 	orphan := f.current()
+	f.disown() // the first app crashed: its lock went with it, its server stays
 	// The next app: the same folder and port, no memory of the first.
 	g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
 	t.Cleanup(g.stop)
@@ -331,6 +333,33 @@ func TestIDEOrphanEndedSamePort(t *testing.T) {
 	}
 	if portOf(t, base2) != f.port || portOf(t, base1) != f.port {
 		t.Fatalf("ports %d, %d; want %d", portOf(t, base1), portOf(t, base2), f.port)
+	}
+}
+
+// Review 1 (P1): a second app running beside the first (an installed app and a build, two
+// launches) leaves the first's live server alone and starts its own on another port.
+func TestIDELiveOwnerKept(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	if _, err := f.open(""); err != nil {
+		t.Fatal(err)
+	}
+	first := f.current()
+	g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+	t.Cleanup(g.stop)
+	base, err := g.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed(first.done) || waitClosed(first.done, 500*time.Millisecond) {
+		t.Fatal("the other app's live server was ended")
+	}
+	if portOf(t, base) == f.port {
+		t.Fatal("the second app took the first's port")
+	}
+	// The pid file still names the owner's server, not the second's.
+	b, _ := os.ReadFile(filepath.Join(f.data, idePidFile))
+	if string(b) != strconv.Itoa(first.cmd.Process.Pid) {
+		t.Fatalf("pid file %q, owner's server %d", b, first.cmd.Process.Pid)
 	}
 }
 
@@ -422,10 +451,99 @@ func TestIDEServes(t *testing.T) {
 	for page, want := range map[string]bool{
 		`<meta id="vscode-workbench-web-configuration">`:                     true,
 		"The latest version of the Visual Studio Code Server is downloading": false,
-		"<html>VS Code</html>": true,
+		"<html>VS Code</html>": false,
+		"":                     false,
 	} {
 		if ideServes([]byte(page)) != want {
 			t.Errorf("%q: %v", page, !want)
 		}
+	}
+}
+
+// Review 5: ready only on a whole page with the workbench's element: an empty, foreign or cut
+// body is not VS Code serving.
+func TestIDEServingStrict(t *testing.T) {
+	old := ideProbeEvery
+	ideProbeEvery = 20 * time.Millisecond
+	defer func() { ideProbeEvery = old }()
+	marker := `<meta id="vscode-workbench-web-configuration" data-settings="{}">`
+	for name, h := range map[string]http.HandlerFunc{
+		"empty":   func(w http.ResponseWriter, r *http.Request) {},
+		"foreign": func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "<html>something else</html>") },
+		"cut": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "100000")
+			fmt.Fprint(w, marker)
+		},
+		"served": func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, marker) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(h)
+			defer srv.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			err := ideServing(ctx, srv.URL+"/?tkn=x", make(chan struct{}))
+			if (err == nil) != (name == "served") {
+				t.Fatalf("%s: %v", name, err)
+			}
+		})
+	}
+}
+
+// Review 4: one install at a time: the server ending while a repeat install hangs, and the new
+// server's own install, do not run together.
+func TestIDEOneInstallAtATime(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	var mu sync.Mutex
+	running, most, calls := 0, 0, 0
+	release := make(chan struct{})
+	f.install = func(ctx context.Context, data string) error {
+		mu.Lock()
+		calls++
+		n := calls
+		running++
+		most = max(most, running)
+		mu.Unlock()
+		defer func() { mu.Lock(); running--; mu.Unlock() }()
+		switch n {
+		case 1:
+			return errors.New("first install failed")
+		case 2: // the repeat, hanging until let go
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		return nil
+	}
+	base, err := f.open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.open("") // starts the repeat install (call 2), which hangs
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		mu.Lock()
+		n := calls
+		mu.Unlock()
+		if n == 2 {
+			break
+		}
+	}
+	run := f.current()
+	u, _ := url.Parse(base)
+	http.Get("http://" + u.Host + "/exit")
+	if !waitClosed(run.done, 4*time.Second) {
+		t.Fatal("server did not end")
+	}
+	res := make(chan error, 1)
+	go func() { _, err := f.open(""); res <- err }() // a new server, its own install waits for the repeat
+	time.Sleep(500 * time.Millisecond)
+	close(release)
+	if err := <-res; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if most != 1 || calls != 3 {
+		t.Fatalf("at most %d installs at once, %d in all", most, calls)
 	}
 }

@@ -1,3 +1,10 @@
+<script lang="ts" module>
+  import { paneOwners as owners } from "./idePane";
+  import { Node as N } from "../lib/api";
+  // One native pane: one queue for every IDE view, made once.
+  const newPaneOwner = owners({ show: (u, r) => N.IDEShow(u, r.x, r.y, r.w, r.h), hide: () => N.IDEHide() });
+</script>
+
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { t } from "../lib/i18n.svelte";
@@ -7,7 +14,7 @@
   import Icon from "./Icon.svelte";
   import ViewSwitch from "./ViewSwitch.svelte";
   import Logo from "./Logo.svelte";
-  import { Pane, paneRect, type Rect } from "./idePane";
+  import { paneRect, type Rect } from "./idePane";
 
   // The IDE: VS Code (the one installed on this Mac, its web server) in a native view over this
   // box, opened in the chat's folder; the chat stays beside it.
@@ -23,8 +30,9 @@
   // What covers the box: menus drawn in HTML (the pane would be over them). A toast does not: the
   // pane is made shorter to leave it its place, VS Code keeps its focus.
   const covered = $derived(app.palette || app.viewMenu);
-  // The native pane's calls, in order, the latest winning (a late answer never shows it again).
-  const pane = new Pane({ show: (u, r) => Node.IDEShow(u, r.x, r.y, r.w, r.h), hide: () => Node.IDEHide() });
+  // The native pane's calls, in order, the latest winning; this view is the pane's newest owner (an
+  // earlier one's late calls are dropped).
+  const pane = newPaneOwner();
 
   // Opens dir's address (again: reloads the page when the address is the one shown). The server is
   // made sure of first (started again if it ended); an answer for a folder no longer asked for is

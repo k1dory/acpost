@@ -23,5 +23,6 @@ Lucide icons in place of VS Code's, the app's fonts and `workbench.css`; the app
 are the extension's `configurationDefaults` (the user's own win), the few application-wide ones
 written by `ide/page/seed.js`. Its generated files are committed; after changing the tokens or the
 icon map: `cd ide && npm install && npm run build`. VS Code keeps its state in the page, by its
-address `127.0.0.1:47823`: a server left by an app that crashed is ended by the next start; when
-something else holds the port, VS Code starts on another one, without that state.
+address `127.0.0.1:47823`: a server left by an app that crashed is ended by the next start (the
+running app holds `serve-web.lock` beside it); when another running acpost, or anything else,
+holds the port, VS Code starts on another one, without that state.

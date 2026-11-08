@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
@@ -138,7 +139,9 @@ func ideInstall(ctx context.Context, data string) error {
 	return os.WriteFile(mark, []byte(p.hash), 0o600)
 }
 
-// sameFiles checks that every file under root in fsys is in dir, the same.
+// sameFiles checks that every file under root in fsys is in dir, the same: byte for byte, and
+// package.json as JSON without the __metadata VS Code's installer adds to it (it writes the
+// manifest anew, its own way).
 func sameFiles(fsys fs.FS, root, dir string) error {
 	return fs.WalkDir(fsys, root, func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -149,11 +152,25 @@ func sameFiles(fsys fs.FS, root, dir string) error {
 			return err
 		}
 		rel := name[len(root)+1:]
-		if got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))); err != nil || !bytes.Equal(got, want) {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		same := err == nil && bytes.Equal(got, want)
+		if err == nil && !same && rel == "package.json" {
+			same = sameManifest(got, want)
+		}
+		if !same {
 			return errors.New(rel + " is not the app's after VS Code's installer")
 		}
 		return nil
 	})
+}
+
+func sameManifest(installed, ours []byte) bool {
+	var a, b map[string]any
+	if json.Unmarshal(installed, &a) != nil || json.Unmarshal(ours, &b) != nil {
+		return false
+	}
+	delete(a, "__metadata")
+	return reflect.DeepEqual(a, b)
 }
 
 // runGroup runs bin in a process group of its own and gives its output (the last 16 KiB). The

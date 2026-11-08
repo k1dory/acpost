@@ -73,6 +73,8 @@ type ideServer struct {
 	stopped    bool               // nothing starts any more
 	looked     bool               // the app's look is installed (else tried again on IDEStart)
 	installing bool
+	inst       chan struct{} // one install at a time, the first's and any again
+	owner      *os.File      // the IDE folder's lock, held while this app owns its server
 
 	pane  sync.Mutex // the pane's calls, one at a time
 	shown string     // the address the pane has open (under pane)
@@ -135,6 +137,7 @@ func (s *ideServer) open(folder string) (string, error) {
 	}
 	if s.life == nil {
 		s.life, s.end = context.WithCancel(context.Background())
+		s.inst = make(chan struct{}, 1)
 	}
 	st := s.cur
 	// st.run is read only once ready is closed (written before it).
@@ -232,7 +235,9 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	s.run = run
 	pidFile := filepath.Join(data, idePidFile)
 	pid := strconv.Itoa(cmd.Process.Pid)
-	_ = os.WriteFile(pidFile, []byte(pid), 0o600)
+	if s.owner != nil { // another app's server is not this one's to name
+		_ = os.WriteFile(pidFile, []byte(pid), 0o600)
+	}
 	s.mu.Unlock()
 	go run.wait(tokFile, pidFile, pid)
 
@@ -274,12 +279,21 @@ func (s *ideServer) why(ctx context.Context, err error) error {
 	return err
 }
 
+// lookInstall installs the app's look, one install at a time (the start's and a later one again:
+// two of VS Code's installers would replace the same folder under each other).
 func (s *ideServer) lookInstall(ctx context.Context, data string) {
 	install := s.install
 	if install == nil {
 		install = ideInstall
 	}
+	select {
+	case s.inst <- struct{}{}:
+	case <-ctx.Done():
+		fmt.Fprintln(os.Stderr, "acpost: IDE: the app's look not installed:", ctx.Err())
+		return // looked stays as it was: tried again on the next IDEStart
+	}
 	err := install(ctx, data)
+	<-s.inst
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "acpost: IDE:", err)
 	}
@@ -460,9 +474,9 @@ func ideServing(ctx context.Context, base string, done chan struct{}) error {
 	for {
 		if req, err := http.NewRequestWithContext(ctx, http.MethodGet, base, nil); err == nil {
 			if r, err := c.Do(req); err == nil {
-				b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+				b, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 				r.Body.Close()
-				if r.StatusCode == http.StatusOK && ideServes(b) {
+				if err == nil && r.StatusCode == http.StatusOK && ideServes(b) {
 					return nil
 				}
 			}
@@ -478,13 +492,9 @@ func ideServing(ctx context.Context, base string, done chan struct{}) error {
 }
 
 // ideServes tells VS Code's page from the "downloading" one the server shows while it fetches
-// VS Code: by the workbench's configuration element; a page without it (VS Code renamed it) is
-// taken as VS Code's unless it says it is downloading.
+// VS Code, or any other: by the pinned workbench's configuration element.
 func ideServes(page []byte) bool {
-	if bytes.Contains(page, []byte(`id="vscode-workbench-web-configuration"`)) {
-		return true
-	}
-	return !bytes.Contains(page, []byte("is downloading"))
+	return bytes.Contains(page, []byte(`id="vscode-workbench-web-configuration"`))
 }
 
 // withFolder is base with folder to open.
@@ -511,11 +521,49 @@ func (s *ideServer) stop() {
 	if run != nil {
 		run.kill()
 	}
+	s.disown()
+}
+
+// own takes the IDE folder's lock for this app's life, when no other running app of this kind
+// holds it: the one that holds it owns the server the pid file names. The lock ends with the
+// process, so a crashed app's server is no one's: the next app takes the lock and ends it.
+func (s *ideServer) own(data string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owner != nil {
+		return true
+	}
+	if s.stopped { // quitting: nothing to own
+		return false
+	}
+	f, err := os.OpenFile(filepath.Join(data, ideLockFile), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return false
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return false
+	}
+	s.owner = f
+	return true
+}
+
+// disown lets the lock go (the app quitting; its server has ended).
+func (s *ideServer) disown() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owner != nil {
+		s.owner.Close()
+		s.owner = nil
+	}
 }
 
 // idePidFile, in the IDE's folder, names the server's process while it runs: a server left by an
 // app that did not end it (it crashed, it was killed) is found by it and ended.
 const idePidFile = "serve-web.pid"
+
+// ideLockFile, beside it, is held by the app whose server that is (see own).
+const ideLockFile = "serve-web.lock"
 
 // choosePort is the IDE's port, when it is free or taken by a server of this app's left from
 // before (ended then); else, a free one (VS Code's state there is another's: said so).
@@ -524,10 +572,13 @@ func (s *ideServer) choosePort(data string) int {
 	if want == 0 {
 		want = idePort
 	}
+	owner := s.own(data)
 	if portFree(want) {
 		return want
 	}
-	if pid := ideOrphan(data); pid > 0 {
+	// Only a server no running app owns is ended: another instance's (an installed app and a
+	// build of it, two launches) is live and stays.
+	if pid := ideOrphan(data); owner && pid > 0 {
 		endGroup(pid, func() bool { return portFree(want) })
 		if portFree(want) {
 			return want
@@ -539,7 +590,11 @@ func (s *ideServer) choosePort(data string) int {
 	}
 	p := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken; VS Code starts on %d, without its settings and state\n", want, p)
+	who := "something else"
+	if !owner {
+		who = "another acpost"
+	}
+	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by %s; VS Code starts on %d, without its settings and state\n", want, who, p)
 	return p
 }
 

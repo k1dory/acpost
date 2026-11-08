@@ -1,7 +1,8 @@
 // The IDE's native pane, driven from the interface: its calls one at a time and the latest wins.
 // Each call returns once the native side has queued it (in order, on the main thread), so with
 // one in flight the pane ends as the interface last asked; a state asked for while another call
-// is out replaces any not sent yet; after close nothing is shown again.
+// is out replaces any not sent yet. There is one pane: one queue for it (paneOwner), whichever
+// IDE view asks.
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -67,4 +68,30 @@ export function paneRect(box: Rect, f: number, toast: Rect | null): Rect | null 
   if (toast && toast.x < box.x + box.w && toast.x + toast.w > box.x && toast.y < box.y + box.h) h = Math.max(0, toast.y - 8 - box.y);
   if (box.w < 4 || h < 4) return null;
   return { x: box.x * f, y: box.y * f, w: box.w * f, h: h * f };
+}
+
+export type PaneOwner = {
+  show(url: string, r: Rect): Promise<boolean>;
+  hide(): Promise<boolean>;
+  /** The owner gone (its view unmounted): it hides the pane unless a newer owner has it; nothing it asks after is sent. */
+  close(): Promise<boolean>;
+};
+
+/**
+ * Owners of one pane, over one queue: the latest owner is the pane's; an older one's calls are
+ * dropped (a view leaving with a show still out must not hide the view that came after it).
+ */
+export function paneOwners(calls: PaneCalls): () => PaneOwner {
+  const q = new Pane(calls);
+  let last = 0;
+  return () => {
+    const me = ++last;
+    let closed = false;
+    const mine = () => !closed && me === last;
+    return {
+      show: (url, r) => (mine() ? q.show(url, r) : Promise.resolve(false)),
+      hide: () => (mine() ? q.hide() : Promise.resolve(false)),
+      close: () => { const p = mine() ? q.hide() : Promise.resolve(false); closed = true; return p; },
+    };
+  };
 }

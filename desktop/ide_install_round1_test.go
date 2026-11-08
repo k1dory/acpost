@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -122,5 +123,33 @@ func TestIDEInstallVerified(t *testing.T) {
 	}
 	if b, err := os.ReadFile(mark); err != nil || string(b) != ideExtension().hash {
 		t.Fatalf("mark: %q %v", b, err)
+	}
+}
+
+// Review 2: VS Code's installer writes the manifest anew (its own indentation, __metadata added):
+// still the app's, marked installed.
+func TestIDEInstallManifestRewritten(t *testing.T) {
+	data := t.TempDir()
+	b, _ := ideExtFS.ReadFile("ide/extension/package.json")
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["__metadata"] = map[string]any{"installedTimestamp": 1, "source": "vsix", "size": 123}
+	rewritten, _ := json.MarshalIndent(m, "", "\t")
+	mf := filepath.Join(data, "manifest.json")
+	os.WriteFile(mf, rewritten, 0o600)
+	dir := "$2/extensions/acpost.acpost-ide-" + ideExtension().version
+	fakeCodeServer(t, data, "set -e\nt=$(mktemp -d)\nunzip -q \"$4\" -d \"$t\"\nmkdir -p \""+dir+"\"\ncp -R \"$t/extension/.\" \""+dir+"/\"\ncp "+mf+" \""+dir+"/package.json\"\nrm -rf \"$t\"\n")
+	if err := ideInstall(context.Background(), data); err != nil {
+		t.Fatalf("an install with VS Code's manifest: %v", err)
+	}
+	// Another change to it is not the app's.
+	m["version"] = "9.9.9"
+	rewritten, _ = json.MarshalIndent(m, "", "\t")
+	os.WriteFile(mf, rewritten, 0o600)
+	os.Remove(filepath.Join(ideExtDir(data, ideExtension().version), ".acpost-hash"))
+	if err := ideInstall(context.Background(), data); err == nil {
+		t.Fatal("a different manifest taken for the app's")
 	}
 }
