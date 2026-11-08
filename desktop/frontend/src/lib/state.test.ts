@@ -210,6 +210,19 @@ describe("a finished message's events", () => {
   });
 });
 
+describe("opening a thread (F5)", () => {
+  it("of fifty messages asks the thread once and each message's events once, no trees", async () => {
+    const app = await load();
+    fake.Node.Thread.mockResolvedValue(Array.from({ length: 50 }, (_, i) => msg("m" + i, "T", "done")));
+    fake.Node.Events.mockResolvedValue(evs(1, 3));
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
+    await flush();
+    expect(fake.Node.Thread).toHaveBeenCalledTimes(1);
+    expect(fake.Node.Events).toHaveBeenCalledTimes(50);
+    expect(fake.Node.Tree).not.toHaveBeenCalled();
+  });
+});
+
 describe("the chat list", () => {
   it("keeps the latest answer when two lists answer out of order (Y12)", async () => {
     const app = await load();

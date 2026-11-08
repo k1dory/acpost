@@ -4,6 +4,7 @@
   import { Node } from "../lib/api";
   import { who, ago } from "../lib/format";
   import AgentMark from "./AgentMark.svelte";
+  import { inView } from "../lib/visible";
 
   // What the agent asked other agents while on this message (and what they asked in turn): a
   // tree, each to open in its own chat.
@@ -26,11 +27,13 @@
     walk(msg, new Set());
     return out;
   });
-  // Refreshed while the message or any of what it asked still runs or waits.
+  // Asked once the message is on screen (a thread of many messages asks only for those seen), and
+  // refreshed while it is and it, or any of what it asked, still runs or waits.
+  let seen = $state(false), visible = $state(false);
   const live = $derived(running || items.some(n => n.state === "running" || n.state === "queued"));
-  $effect(() => { msg; running; load(); }); // and again when the message ends: what it asked last shows
+  $effect(() => { msg; running; if (seen) load(); }); // and again when the message ends: what it asked last shows
   $effect(() => {
-    if (!live) return;
+    if (!live || !visible) return;
     const id = setInterval(load, 4000);
     return () => clearInterval(id);
   });
@@ -40,6 +43,7 @@
   }
 </script>
 
+<div class="anchor" use:inView={v => { visible = v; if (v) seen = true; }}></div>
 {#if ordered.length}
   <div class="st">
     <button class="sh" onclick={() => (open = !open)}>
@@ -60,6 +64,7 @@
 {/if}
 
 <style>
+  .anchor { height: 0; }
   .st { margin-top: 8px; border: 1px solid var(--line-soft); border-radius: 12px; padding: 4px; display: grid; }
   .sh { border: 0; background: transparent; text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 5px 8px; display: flex; gap: 6px; align-items: center; }
   .chev { display: inline-block; transition: transform .15s; }
