@@ -557,10 +557,20 @@ class App {
     d.busy = true;
     // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
     // are part of it: waited for, not left for the next message.
-    const at = this.sendAt(d), owned = sendFiles(d);
+    const at = this.sendAt(d), lim = at.limits, owned = sendFiles(d, lim);
     await owned.wait;
-    const sentFiles = owned.files();
-    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles }, at);
+    const { files: sentFiles, refused } = owned.files();
+    owned.done();
+    let ok = false;
+    if (refused) {
+      // Nothing goes in part (by the limits of the click, against the send's own files): the
+      // draft stays as it is, and why is said.
+      this.error = refused.why === "read" ? t("Could not read {name}", { name: refused.file })
+        : refused.why === "count" ? t("A message takes at most {n} files", { n: lim?.max_files ?? 0 })
+        : t("The files are over the node's limit of {n} together", { n: bytes(lim?.max_files_size ?? 0) });
+    } else {
+      ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles }, at);
+    }
     d.busy = false;
     // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
     // put back into the new task's, not lost with the draft no screen shows.
@@ -582,12 +592,12 @@ class App {
     const { chat, thread, draft, epoch, dest } = at;
     // The draft is a thread's already (its conversation became one, the answer lost): what is
     // sent from it goes on in that thread, not to a new one.
-    const into = !thread && d.key.startsWith("thread:") ? d.key.slice("thread:".length) : "";
+    const into = !thread && at.key.startsWith("thread:") ? at.key.slice("thread:".length) : "";
     let to = at.target;
     try {
       let task: any = { body, files };
-      if (this.limits && new TextEncoder().encode(body).length > this.limits.max_body) {
-        this.error = t("The text is over the node's limit of {n}", { n: bytes(this.limits.max_body) });
+      if (at.limits && new TextEncoder().encode(body).length > at.limits.max_body) {
+        this.error = t("The text is over the node's limit of {n}", { n: bytes(at.limits.max_body) });
         return false;
       }
       if (!chat && !thread) {
@@ -669,6 +679,7 @@ class App {
     // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
     return {
       chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target,
+      key: d.key, limits: this.limits, // the draft's chat, and the node's limits, as they were
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
       settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,
     };

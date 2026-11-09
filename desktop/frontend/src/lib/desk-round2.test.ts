@@ -1,6 +1,7 @@
 // Round 2 of the review (codex-second-desk): the app's state against a mocked node.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fakeNode, deferred, flush, type Fake } from "../test/fake";
+import { overLimits } from "./draft";
 
 let fake: Fake;
 vi.mock("./api", async () => {
@@ -433,11 +434,52 @@ describe("a send owns its attachments from the click (review round 4)", () => {
     expect(b).toEqual(a);
   });
 
+  it("max_files 2: a.txt ready, b.txt read, Send, the preview's report attached before the read ends: a.txt and b.txt go, the report stays", async () => {
+    const { app, d, sent } = await setupSend();
+    app.limits = { max_body: 1 << 20, max_files: 2, max_files_size: 1 << 20 };
+    d.files = [attach({ name: "a.txt", type: "text/plain", size: 1, data: "YQ==" })];
+    const b = slow("b.txt", "b");
+    d.add([b.f], app.limits, () => {});
+    const going = app.submit(d);
+    d.take([{ name: "preview-problems.md", type: "text/markdown", size: 1, data: "cA==" }]); // the next message's
+    b.done();
+    expect(await going).toBe(true);
+    expect(sent()).toEqual(["a.txt", "b.txt"]);
+    expect(d.files.map(f => f.name)).toEqual(["preview-problems.md"]);
+  });
+
+  it("the send's own files over the click's limits: nothing goes, the draft stays, and why is said", async () => {
+    const { app, d } = await setupSend();
+    app.limits = { max_body: 1 << 20, max_files: 2, max_files_size: 1 << 20 };
+    const x = slow("x.txt", "x"), y = slow("y.txt", "y"), z = slow("z.txt", "z");
+    d.add([x.f], app.limits, () => {});
+    d.add([y.f, z.f], app.limits, () => {});  // its files' turn comes after the click: the send judges them
+    const going = app.submit(d);
+    x.done(); y.done(); z.done();
+    expect(await going).toBe(false);
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(d.text).toBe("these");
+    expect(app.error).toContain("2");
+  });
+
+  it("a file the send has that cannot be read: nothing goes, the draft stays", async () => {
+    const { app, d } = await setupSend();
+    const bad = { name: "bad.txt", type: "text/plain", size: 1, arrayBuffer: () => Promise.reject(new Error("gone")) };
+    const ok = slow("ok.txt", "o");
+    d.add([ok.f, bad], null, () => {});
+    const going = app.submit(d);
+    ok.done();
+    expect(await going).toBe(false);
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(d.text).toBe("these");
+  });
+
   it("any reads, removals and pastes before and after the click: what goes is the click's files and what the reads of then brought after it, named apart; a retry is the first request", async () => {
     const { pasteName, freeName } = await import("./paste");
     let seed = 11;
     const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return Math.floor(seed / 2 ** 31 * n); }; // high bits: the low ones of this generator repeat
-    for (let run = 0; run < 80; run++) {
+    const outcomes = { whole: 0, refused: 0 };
+    for (let run = 0; run < 120; run++) {
       vi.resetModules();
       fake = fakeNode();
       fake.Node.Chats.mockResolvedValue({ items: [] });
@@ -449,7 +491,13 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       let d = rnd(2) ? other : main, merged = false;
       const retry = run % 2 === 0; // half the runs: the first answer lost, nothing done after the click, sent again
       if (retry) fake.Node.SendTask.mockRejectedValueOnce(new Error("lost"));
-      let n = 0;
+      // A third of the runs with the node's limits (small: they are met): the composer judges what
+      // it is given, a send judges its own files, and goes whole or not at all.
+      const limits = run % 3 === 1 ? { max_body: 1 << 20, max_files: 1 + rnd(4), max_files_size: rnd(2) ? 1 << 20 : 2 + rnd(4) } : null;
+      app.limits = limits;
+      let n = 0, clicked = false;
+      const afterClick: string[] = [];      // files of reads asked before the click, delivered after it
+      const formOver: string[] = [];        // a file the composer took past its limits
       const reads: { s: ReturnType<typeof slow>; v: string; ended: boolean }[] = [];
       const delivered = new Set<string>(); // the namer runs as a read's file is put in the form
       const deliveryOrder: string[] = [];
@@ -462,8 +510,14 @@ describe("a send owns its attachments from the click (review round 4)", () => {
           reads.push(r);
           return { ...s.f, type: paste ? "image/png" : "text/plain", v };
         });
-        const mark = (f: any) => { delivered.add(f.v); deliveryOrder.push(f.v); return f; };
-        d.add(group, null, () => {}, paste ? (f, t) => pasteName(mark(f), t) : (f, t) => freeName(mark(f).name, t));
+        const late = clicked;
+        const mark = (f: any) => {
+          delivered.add(f.v); deliveryOrder.push(f.v);
+          if (clicked && !late) afterClick.push(f.v);
+          if (late && overLimits(main.files, f, limits)) formOver.push(f.v); // the composer's own limit, after the click
+          return f;
+        };
+        d.add(group, limits, () => {}, paste ? (f, t) => pasteName(mark(f), t) : (f, t) => freeName(mark(f).name, t));
       };
       const end = (r: (typeof reads)[number]) => { r.s.done(); r.ended = true; };
       // A file handed over whole (the preview's report): the same report again is another attachment.
@@ -485,12 +539,13 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       if (!reads.length) addSome();
       const atClick = d.files.map(f => atob(f.data));
       const clickRids = new Set(d.files.map(f => f.rid));
+      const clickSizes = d.files.map(f => ({ size: f.size }));
       let formAtSend: { rid: number; data: string }[] = [];
       // The node answers once all is done (the composer as it is then is what the answer cleans).
       let answer = () => {};
       if (!retry) fake.Node.SendTask.mockImplementation(() => new Promise(r => { answer = () => { formAtSend = d.files.map(f => ({ rid: f.rid, data: f.data })); r(msg("m1", "T")); }; }));
+      clicked = true;
       const going = app.submit(d);
-      const pendingAtClick = reads.filter(r => !delivered.has(r.v)).map(r => r.v); // not in the form yet
       // After the click: none of this is the message's.
       for (let step = 0; step < 6; step++) {
         const k = rnd(4);
@@ -503,7 +558,19 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       for (const r of reads) end(r);
       for (let i = 0; i < 5; i++) await flush();
       answer();
-      await going;
+      const ok = await going;
+      expect(formOver).toEqual([]);
+      const pendingAtClick = afterClick;
+      // Over the click's limits, the send's own files: nothing goes, the draft stays.
+      const sizes = [...clickSizes, ...pendingAtClick.map(() => ({ size: 1 }))];
+      const over = sizes.some((f, i) => overLimits(sizes.slice(0, i), f, limits));
+      if (limits) outcomes[over ? "refused" : "whole"]++;
+      if (over) {
+        expect(ok).toBe(false);
+        expect(fake.Node.SendTask).not.toHaveBeenCalled();
+        expect(d.text).toBe("these");
+        continue;
+      }
       const want = [...atClick, ...pendingAtClick].sort();
       const firstReq = fake.Node.SendTask.mock.calls[0][0];
       const files = firstReq.files ?? [];
@@ -524,5 +591,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         expect(fake.Node.SendTask.mock.calls[1][0]).toEqual(firstReq);
       }
     }
+    expect(outcomes.whole).toBeGreaterThan(0);   // under limits, both ways come up
+    expect(outcomes.refused).toBeGreaterThan(0);
   });
 });

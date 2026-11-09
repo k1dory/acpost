@@ -23,21 +23,40 @@ type Namer = (f: { name: string; type: string }, taken: string[]) => string;
 
 /** One add(): the files it read, in order, as they were read (whatever the form does with them
  * after). done: settled once all are read (or refused). */
-type ReadJob = { results: Attachment[]; done: Promise<void> };
+type ReadJob = { results: Attachment[]; failed: string[]; captured: number; done: Promise<void> };
+
+/** Why a send's files cannot go: over the node's limits, or a file its reads could not read. */
+export type FilesRefused = { why: "count" | "size" | "read"; file: string };
 
 /** The files a send takes, owned by it from the click: the form's list then, and what the reads
  * still going then bring after it (each read delivers to the send too, not only to the form; what
  * they brought before the click is in that list, or was removed from it). A read's file keeps the
  * name it was given once, when read (a pasted picture's pasted-…-n is not made again); one that
- * the send's own list has already is told apart there (freeName). The form after the click is not
- * asked. wait() is when those reads end. */
-export function sendFiles(d: ComposerDraft): { wait: Promise<void>; files: () => Attachment[] } {
-  const had = [...d.files], jobs = [...d.reading].map(j => ({ j, from: j.results.length }));
+ * the send's own list has already is told apart there. The limits are the click's and are judged
+ * against the send's own list: a read the send has is read for it whatever room the form has
+ * after the click (captured), and what does not fit, or could not be read, refuses the whole send
+ * (refused): nothing goes in part. The form after the click is not asked. wait() is when those
+ * reads end; done() lets the reads go (the form judges them again). */
+export function sendFiles(d: ComposerDraft, limits: Limits | null): {
+  wait: Promise<void>; files: () => { files: Attachment[]; refused?: FilesRefused }; done: () => void;
+} {
+  const had = [...d.files], jobs = [...d.reading].map(j => ({ j, from: j.results.length, failed: j.failed.length }));
+  for (const { j } of jobs) j.captured++;
   return {
     wait: Promise.all(jobs.map(({ j }) => j.done)).then(() => {}),
     files: () => {
-      return withReads(had, jobs.flatMap(({ j, from }) => j.results.slice(from)));
+      const failed = jobs.flatMap(({ j, failed }) => j.failed.slice(failed));
+      if (failed.length) return { files: [], refused: { why: "read", file: failed[0] } };
+      const reads = jobs.flatMap(({ j, from }) => j.results.slice(from)).sort((a, b) => a.rid - b.rid);
+      const fit: Attachment[] = had.map(f => ({ ...f }));
+      for (const r of reads) {
+        const over = overLimits(fit, r, limits);
+        if (over) return { files: [], refused: { why: over, file: r.name } };
+        fit.push(r);
+      }
+      return { files: withReads(had, reads) };
     },
+    done: () => { for (const { j } of jobs) j.captured--; },
   };
 }
 
@@ -137,22 +156,24 @@ export class ComposerDraft {
     name: Namer = f => f.name): Promise<void> {
     const files = [...list];
     const at = this.live();
-    const job: ReadJob = { results: [], done: Promise.resolve() };
+    const job: ReadJob = { results: [], failed: [], captured: 0, done: Promise.resolve() };
     at.reading.add(job);
     at.adding = at.adding.then(async () => {
       for (const f of files) {
-        if (overLimits(this.live().files, f, limits)) { fail(overLimits(this.live().files, f, limits) as "count" | "size", f.name); return; }
+        // A read a send has (captured) is the send's to judge, against its own list: the form's
+        // room after the click does not refuse it. One no send has is the form's.
+        if (!job.captured) { const over = overLimits(this.live().files, f, limits); if (over) { fail(over, f.name); return; } }
         let data: string;
-        try { data = b64bytes(new Uint8Array(await f.arrayBuffer())); } catch { fail("read", f.name); continue; }
+        try { data = b64bytes(new Uint8Array(await f.arrayBuffer())); } catch { job.failed.push(f.name); fail("read", f.name); continue; }
         // Read into whichever draft this one is by now (a new task, the thread it moved into),
         // checked again there: that one may have filled up meanwhile.
         const d = this.live();
         const over = overLimits(d.files, f, limits);
-        if (over) { fail(over, f.name); return; }
+        if (over && !job.captured) { fail(over, f.name); return; }
         // Its name, chosen here: against all attached by now, those added just before it included.
         const a = attachment({ name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data });
         job.results.push({ ...a });
-        d.files = withReads(d.files, [a]);
+        if (!over) d.files = withReads(d.files, [a]); // (no room in the form: the send has it)
       }
     }).catch(() => {}) // what failed was said: the queue goes on
       .finally(() => { for (let x: ComposerDraft | null = this; x; x = x.movedTo) x.reading.delete(job); });
