@@ -239,17 +239,19 @@ type EventBatch struct {
 	Events []store.Event  `json:"events,omitempty"`
 	Final  *store.Message `json:"final,omitempty"`
 	Error  string         `json:"error,omitempty"`
+	Sub    string         `json:"sub,omitempty"` // the subscription it is of (Follow's sub)
 }
 
 // Follow streams a message's events after seq `after` as "events:<id>" until it is final (or
-// Unfollow). Following it again restarts the stream.
-func (n *Node) Follow(id string, after int64) error {
+// Unfollow). Following it again restarts the stream. sub names this subscription (the window
+// makes it): an Unfollow of another one, late, leaves it alone.
+func (n *Node) Follow(id string, after int64, sub string) error {
 	c, err := n.client()
 	if err != nil {
 		return withHint(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	me := &follow{cancel: cancel}
+	me := &follow{cancel: cancel, sub: sub}
 	n.mu.Lock()
 	if old := n.follows[id]; old != nil {
 		old.cancel()
@@ -318,11 +320,13 @@ func (n *Node) Follow(id string, after int64) error {
 	return nil
 }
 
-// Unfollow stops a message's stream.
-func (n *Node) Unfollow(id string) {
+// Unfollow stops a message's stream, when it is still the subscription sub ("": whichever). Wails
+// runs each call in its own goroutine: an Unfollow sent before a Follow may run after it, and
+// must not stop the stream that Follow started.
+func (n *Node) Unfollow(id, sub string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if f := n.follows[id]; f != nil {
+	if f := n.follows[id]; f != nil && (sub == "" || f.sub == sub) {
 		f.cancel()
 		delete(n.follows, id)
 	}
@@ -557,7 +561,10 @@ func (n *Node) emit(name string, data any) {
 }
 
 // follow is a message's stream; its own goroutine removes it, when it is still the one there.
-type follow struct{ cancel context.CancelFunc }
+type follow struct {
+	cancel context.CancelFunc
+	sub    string
+}
 
 // threadMax bounds what a thread shows: its latest messages.
 const threadMax = 2000
@@ -652,6 +659,7 @@ func (n *Node) emitFollow(id string, me *follow, b EventBatch) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.follows[id] == me {
+		b.Sub = me.sub
 		n.emit("events:"+id, b)
 	}
 }

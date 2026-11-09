@@ -76,3 +76,31 @@ describe("what the app creates is created once (finding 1)", () => {
     expect(keys[1]).not.toBe(keys[0]);
   });
 });
+
+describe("one owner per subscription (finding 2)", () => {
+  it("A, another chat, A again: the Unfollow of the first names the first, the new Follow another", async () => {
+    const app = await load();
+    fake.Node.Thread.mockImplementation(async (th: string) => th === "A" ? [msg("m1", "A", "running")] : []);
+    const A = { key: "thread:A", kind: "thread" as const, thread: "A", title: "A", updated: "" };
+    await app.open(A);
+    await app.open({ key: "thread:B", kind: "thread", thread: "B", title: "B", updated: "" });
+    await app.open(A);
+    const follows = fake.Node.Follow.mock.calls.map(c => c[2]);
+    const unfollows = fake.Node.Unfollow.mock.calls.filter(c => c[0] === "m1").map(c => c[1]);
+    expect(follows.length).toBe(2);
+    expect(follows[0]).toMatch(/^[0-9a-f]{32}$/);
+    expect(follows[1]).not.toBe(follows[0]);
+    expect(unfollows).toEqual([follows[0]]); // only the first: the node keeps the second, whenever it runs
+  });
+
+  it("a batch of another subscription of the same message is not this one's", async () => {
+    const app = await load();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
+    const sub = fake.Node.Follow.mock.calls[0][2];
+    fake.emit("events:m1", { id: "m1", sub: "someone-else", events: evs(1, 2) });
+    expect(app.turns.m1.last).toBe(0);
+    fake.emit("events:m1", { id: "m1", sub, events: evs(1, 2) });
+    expect(app.turns.m1.last).toBe(2);
+  });
+});

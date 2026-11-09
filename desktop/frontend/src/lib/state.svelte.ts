@@ -116,7 +116,9 @@ class App {
   cloudAgents = $state<CloudAgent[]>([]);
   home = $state("");
   error = $state("");
-  private unsub = new Map<string, () => void>();
+  /** The messages followed: the listener's off, and the subscription's name (Follow/Unfollow
+   * carry it: a late Unfollow of one stops only that one, not the stream that followed it). */
+  private unsub = new Map<string, { off: () => void; sub: string }>();
   /** Bumped each time the screen changes chat: an answer to a call made before is not this chat's. */
   private gen = 0;
 
@@ -282,7 +284,7 @@ class App {
     this.broken = {};
     this.artifact = null; // artifacts are the chat's
     this.openedArtifacts = [];
-    for (const [id, stop] of this.unsub) { stop(); Node.Unfollow(id); }
+    for (const [id, { off, sub }] of this.unsub) { off(); Node.Unfollow(id, sub); }
     this.unsub.clear();
     this.msgs = [];
     this.history = [];
@@ -368,7 +370,9 @@ class App {
   private follow(id: string, turn: Turn, tries: number) {
     if (this.unsub.has(id)) return;
     const gen = this.gen;
+    const sub = newId();
     const off = on("events:" + id, (b: any) => {
+      if (b.sub && b.sub !== sub) return; // another subscription's
       if (b.events?.length) {
         tries = 0;
         turn.add(b.events as Ev[]);
@@ -379,11 +383,11 @@ class App {
       if (b.final) { this.replace(b.final); this.loadChats(); this.loadAgents(); }
       else if (b.error) this.lost(id, turn, off, b.error, tries, gen);
     });
-    this.unsub.set(id, off);
+    this.unsub.set(id, { off, sub });
     this.broken = without(this.broken, id);
-    Node.Follow(id, turn.last).then(
+    Node.Follow(id, turn.last, sub).then(
       // Another chat opened while it was asked: the stream the node just started is no one's.
-      () => { if (gen !== this.gen && !this.unsub.has(id)) Node.Unfollow(id); },
+      () => { if (this.unsub.get(id)?.sub !== sub) Node.Unfollow(id, sub); },
       e => this.lost(id, turn, off, e, tries, gen),
     );
   }
@@ -396,7 +400,7 @@ class App {
 
   private lost(id: string, turn: Turn, off: () => void, e: unknown, tries: number, gen: number) {
     off();
-    if (this.unsub.get(id) === off) this.unsub.delete(id);
+    if (this.unsub.get(id)?.off === off) this.unsub.delete(id);
     if (gen !== this.gen) return;
     if (lasting.has(errInfo(e).code) || tries + 1 >= followTries) {
       this.broken = { ...this.broken, [id]: errText(e) || t("The stream of this turn stopped") };
@@ -412,7 +416,7 @@ class App {
     const i = this.msgs.findIndex(x => x.id === m.id);
     if (i >= 0) this.msgs[i] = { ...this.msgs[i], ...m };
     else if (m.thread === this.thread) this.msgs = [...this.msgs, m];
-    if (final(m.state)) { this.unsub.get(m.id)?.(); this.unsub.delete(m.id); this.runningSince.delete(m.id); }
+    if (final(m.state)) { this.unsub.get(m.id)?.off(); this.unsub.delete(m.id); this.runningSince.delete(m.id); }
   }
 
   /** A setting chosen for an agent ("": its default). */

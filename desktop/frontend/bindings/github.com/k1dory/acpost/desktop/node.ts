@@ -194,10 +194,11 @@ export function FileAt(repo: string, tree: string, path: string): $CancellablePr
 
 /**
  * Follow streams a message's events after seq `after` as "events:<id>" until it is final (or
- * Unfollow). Following it again restarts the stream.
+ * Unfollow). Following it again restarts the stream. sub names this subscription (the window
+ * makes it): an Unfollow of another one, late, leaves it alone.
  */
-export function Follow(id: string, after: number): $CancellablePromise<void> {
-    return $Call.ByID(1045125245, id, after);
+export function Follow(id: string, after: number, sub: string): $CancellablePromise<void> {
+    return $Call.ByID(1045125245, id, after, sub);
 }
 
 /**
@@ -573,10 +574,12 @@ export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
 }
 
 /**
- * Unfollow stops a message's stream.
+ * Unfollow stops a message's stream, when it is still the subscription sub ("": whichever). Wails
+ * runs each call in its own goroutine: an Unfollow sent before a Follow may run after it, and
+ * must not stop the stream that Follow started.
  */
-export function Unfollow(id: string): $CancellablePromise<void> {
-    return $Call.ByID(553991142, id);
+export function Unfollow(id: string, sub: string): $CancellablePromise<void> {
+    return $Call.ByID(553991142, id, sub);
 }
 
 /**
