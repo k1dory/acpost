@@ -132,6 +132,7 @@ func (n *Node) NodeClaim(ctx context.Context, p Principal, node string, wait, le
 		select {
 		case <-time.After(min(wait, time.Second)):
 		case <-ctx.Done():
+			return store.Message{}, false, ctx.Err() // cut short, not "none came"
 		}
 		return store.Message{}, false, nil
 	}

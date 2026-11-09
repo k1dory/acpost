@@ -36,7 +36,7 @@ func (n *Node) PutNote(ctx context.Context, p Principal, k store.Note) error {
 		k.Scope = dir
 	}
 	if err := n.st.PutNote(ctx, k); err != nil {
-		return errf("invalid", "%v", err)
+		return invalidOr(err)
 	}
 	return nil
 }

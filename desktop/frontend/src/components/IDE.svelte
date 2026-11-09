@@ -1,3 +1,10 @@
+<script lang="ts" module>
+  import { paneOwners as owners } from "./idePane";
+  import { Node as N } from "../lib/api";
+  // One native pane: one queue for every IDE view, made once.
+  const newPaneOwner = owners({ show: (u, r) => N.IDEShow(u, r.x, r.y, r.w, r.h), hide: () => N.IDEHide() });
+</script>
+
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { t } from "../lib/i18n.svelte";
@@ -7,6 +14,7 @@
   import Icon from "./Icon.svelte";
   import ViewSwitch from "./ViewSwitch.svelte";
   import Logo from "./Logo.svelte";
+  import { paneRect, type Rect } from "./idePane";
 
   // The IDE: VS Code (the one installed on this Mac, its web server) in a native view over this
   // box, opened in the chat's folder; the chat stays beside it.
@@ -19,49 +27,51 @@
   let alive = true;
   const folder = $derived(app.chatCwd() || app.draft.cwd || app.home);
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
-  const covered = $derived(app.palette || app.viewMenu || !!app.toast);
+  // What covers the box: menus drawn in HTML (the pane would be over them). A toast does not: the
+  // pane is made shorter to leave it its place, VS Code keeps its focus.
+  const covered = $derived(app.palette || app.viewMenu);
+  // The native pane's calls, in order, the latest winning; this view is the pane's newest owner (an
+  // earlier one's late calls are dropped).
+  const pane = newPaneOwner();
 
-  async function open(dir: string) {
+  // Opens dir's address (again: reloads the page when the address is the one shown). The server is
+  // made sure of first (started again if it ended); an answer for a folder no longer asked for is
+  // dropped.
+  async function request(dir: string, again: boolean) {
     if (!dir) return;
     const my = ++gen;
     starting = true; err = "";
     try {
       const u = await Node.IDEStart(dir);
       if (!alive || my !== gen) return;
-      url = u; pending = u; place();
+      if (again && u === url) Node.IDEReload().catch(() => {});
+      else { url = u; pending = u; place(); }
     } catch (e) { if (alive && my === gen) err = errText(e); }
-    if (alive && my === gen) starting = false;
+    finally { if (alive && my === gen) starting = false; }
   }
+  const open = (dir: string) => request(dir, false);
+  const reload = () => request(folder, true);
+  const rectOf = (e: Element): Rect => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
   // The box in window points (the text size zoom taken into account, as the preview does).
   function place() {
     if (!alive) return;
-    if (!box || covered || !url) { Node.IDEHide().catch(() => {}); return; }
-    const r = box.getBoundingClientRect();
-    if (r.width < 4 || r.height < 4) { Node.IDEHide().catch(() => {}); return; }
+    const hide = () => { pane.hide().catch(() => {}); };
+    if (!box || covered || !url) return hide();
     const z = app.textSize, k = screenScale();
     const f = Math.abs(k - z) < 0.01 ? 1 : z;
+    const toast = app.toast ? document.querySelector('[role="alert"]') : null;
+    const r = paneRect(rectOf(box), f, toast ? rectOf(toast) : null);
+    if (!r) return hide();
     const load = pending; // loaded once shown; kept while covered
-    Node.IDEShow(load, r.left * f, r.top * f, r.width * f, r.height * f)
-      .then(() => { if (pending === load) pending = ""; })
-      .catch(e => (err = errText(e)));
+    pane.show(load, r)
+      .then(ok => { if (ok && pending === load) pending = ""; })
+      .catch(e => { if (alive) err = errText(e); });
   }
   const onResize = () => place();
-  // Reload: the server made sure of (started again if it ended), then — if this is still the folder
-  // asked for — the page loaded again, or the new address loaded.
-  async function reload() {
-    const my = ++gen, dir = folder;
-    err = "";
-    try {
-      const u = await Node.IDEStart(dir);
-      if (!alive || my !== gen) return;
-      if (u === url) Node.IDEReload();
-      else { url = u; pending = u; place(); }
-    } catch (e) { if (alive && my === gen) err = errText(e); }
-  }
   let opened = "";
   $effect(() => { const d = folder; if (d && d !== opened) { opened = d; open(d); } });
   $effect(() => {
-    covered; app.textSize;
+    covered; app.textSize; app.toast;
     if (!box) return;
     const ro = new ResizeObserver(() => place());
     ro.observe(box);
@@ -79,7 +89,7 @@
     mq.addEventListener("change", later);
     return () => mq.removeEventListener("change", later);
   });
-  onDestroy(() => { alive = false; gen++; Node.IDEHide().catch(() => {}); });
+  onDestroy(() => { alive = false; gen++; pane.close().catch(() => {}); });
 </script>
 
 <section class="ide">
@@ -91,7 +101,7 @@
     <span class="sp"></span>
     <!-- Agents waiting for an answer (the sidebar, which shows them, is hidden here). -->
     {#if app.asking.length}<button class="btn ghost sm nodrag ask" onclick={() => (app.view = "board")}>{t("{n} waiting for an answer", { n: app.asking.length })}</button>{/if}
-    <button class="btn ghost sm nodrag" onclick={reload} title={t("Reload")}><Icon name="refresh" size={13} /></button>
+    <button class="btn ghost sm nodrag" onclick={reload} disabled={starting} title={starting ? t("Starting VS Code… the first time it takes a minute or two.") : t("Reload")}><Icon name="refresh" size={13} /></button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
   <div class="box" bind:this={box}>

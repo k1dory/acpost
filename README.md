@@ -461,8 +461,12 @@ Paths starting with `~` are expanded. Durations are Go durations (`90s`, `30m`, 
 ## HTTP API
 
 The command line is a client of this API; a backend uses it the same way. JSON in and out; errors
-are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `invalid`, `not_found`, `refused`,
-`conflict`, `timeout`, `unavailable`.
+are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `invalid` (400), `refused` (401
+without or with an unknown token, else 403), `not_found` (404), `timeout` (408), `conflict` (409),
+`internal` (500), `unsupported` (501), `agent_…`/`session_…` (502: the agent behind the node failed) and
+`unavailable` (503). A body is one JSON object; fields it does not know are refused, except in a
+request from another node (versions may differ across a hub). A stream that fails after it started
+ends with `event: acpost-error` carrying the same envelope and `status` (event kinds have no dash, so it is never an event of the message). A request cut short because the node stops answers `unavailable`.
 
 | | |
 |---|---|
@@ -493,6 +497,21 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/chats` | every chat of the node's user, the most recently active first: threads, the ACP agents' sessions (not already a thread's), the cloud's sandboxes; with the folders |
 | `GET/POST /v1/folders` · `PATCH/DELETE /v1/folders/{id}` · `PUT /v1/chats/folder` | the app's folders of chats (`thread:<id>`, `session:<agent>/<id>`, `cloud:<sandbox>`); a chat is in one or none |
 | `GET /v1/cloud/agents` · `POST /v1/cloud/tasks` · `GET /v1/cloud/sandboxes/{id}/history` | the cloud tenant's catalogue; a new cloud task (a sandbox of a catalogue agent; its messages go to `agent:<sandbox id>`); a sandbox's conversation |
+| `PATCH /v1/messages/{id}` | `{"body":"…"}`: a queued message's body, before an agent takes it |
+| `GET /v1/messages/{id}/tree` | the messages under it (sent by its turn, and by theirs) that the caller may see, in the order they came |
+| `GET /v1/file-at?repo=&tree=&path=` | a file as a turn left it (`{"text"}`), from the tree recorded with its changes |
+| `POST /v1/agents/{name}/sessions/{id}/fork` | `{"cwd"}` (optional): a new session from that one's conversation; 201 `{"session"}` |
+| `PUT /v1/chats/title` | `{"chat","title"}`: a chat's title in the app |
+| `GET/POST /v1/forge/accounts` · `DELETE /v1/forge/accounts/{host}` | the node user's forge logins: `{"host","kind","token"}`, kept once the forge accepts the token (never sent back) |
+| `POST /v1/handoff` | a thread or an agent's session (`thread` or `agent`+`session`, `cwd`, `note`) handed to a new cloud task of `cloud_agent`; 201 |
+| `GET/PUT /v1/backlog` · `DELETE /v1/backlog/{id}` · `POST /v1/backlog/{id}/start` | tasks put aside (`title`, `body`, `agent`, `cwd`); start sends one (`{"agent"}` optional), 201 with the message |
+| `GET/POST/DELETE /v1/wiki` · `GET /v1/wiki/pages?repo=` | repositories' wikis: list, have an agent write one (`{"repo","agent","lang"}`, 201 with its message), delete (`?repo=`), its pages |
+| `GET/PUT /v1/knowledge` · `DELETE /v1/knowledge/{name}` | the user's notes, given to an agent at the start of each new session (`name`, `body`, `scope`: a directory or everywhere, `enabled`) |
+| `GET/PUT /v1/schedules` · `DELETE /v1/schedules/{id}` · `POST /v1/schedules/{id}/run` | messages sent on a cron (`name`, `cron`, `agent`, `body`, `cwd`); run sends one now, 201 |
+| `GET /v1/playbooks` · `PUT/DELETE /v1/playbooks/{name}` | named prompts (`{"body"}`) |
+| `GET /v1/mcp` · `PUT/DELETE /v1/mcp/{name}` | MCP servers given to the node's agents; their secrets are listed by name, never by value |
+| `POST /v1/nodes/{name}/announce` | (a joined node, to its hub) `{"agents":[…]}`: the agents it serves; 204 |
+| `POST /v1/nodes/{name}/claim?wait=30s&lease=2m` | (a joined node, to its hub) take a message for one of its agents (200) or none came (204) |
 | `GET /v1/health` | |
 
 Who sends is decided by the node, never by the request body: a request with the token of an agent

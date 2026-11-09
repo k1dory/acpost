@@ -35,6 +35,9 @@ func (n *Node) RelayEvents(ctx context.Context, p Principal, id, lease string, a
 		return 0, errf("refused", "only a joined node relays events")
 	}
 	m, err := n.st.Get(ctx, id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return 0, err // a request cut short is not a message gone
+	}
 	if err != nil || !n.canServe(p, m.To) {
 		return 0, errf("not_found", "no message %s", id)
 	}

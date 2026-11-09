@@ -662,7 +662,7 @@ func (n *Node) Conversations(ctx context.Context, p Principal, before string, li
 	}
 	out, next, err := n.st.Conversations(ctx, party, before, limit)
 	if err != nil {
-		return nil, "", errf("invalid", "%v", err)
+		return nil, "", invalidOr(err)
 	}
 	return out, next, nil
 }
@@ -787,7 +787,7 @@ func (n *Node) claim(ctx context.Context, recipients []string, wait, lease time.
 		case <-deadline.C:
 			return store.Message{}, false, nil
 		case <-ctx.Done():
-			return store.Message{}, false, nil
+			return store.Message{}, false, ctx.Err() // cut short (the node stops), not "none came"
 		}
 	}
 }
@@ -801,8 +801,10 @@ func (n *Node) Reply(ctx context.Context, p Principal, id, lease, body, errText 
 // files go with the reply.
 func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, errCode, errText string, files []store.File) error {
 	m, err := n.st.Get(ctx, id)
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return errf("not_found", "no message %s", id)
+	} else if err != nil {
+		return err // a request cut short is not a message gone
 	}
 	if !n.canServe(p, m.To) {
 		return errf("refused", "%s may not answer for %s", p.Address(), m.To)
@@ -842,8 +844,10 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 // Extend makes a claim last d longer.
 func (n *Node) Extend(ctx context.Context, p Principal, id, lease string, d time.Duration) error {
 	m, err := n.st.Get(ctx, id)
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return errf("not_found", "no message %s", id)
+	} else if err != nil {
+		return err // a request cut short is not a message gone
 	}
 	if !n.canServe(p, m.To) {
 		return errf("refused", "%s may not act for %s", p.Address(), m.To)
@@ -960,6 +964,15 @@ func clientParty(p Principal) *store.Party {
 		party.Recipients = append(party.Recipients, "agent:"+a)
 	}
 	return party
+}
+
+// invalidOr is a store's refusal as invalid, unless the request was cut short (the node stops and
+// ends every request): that stays itself, so the API answers unavailable and the client asks again.
+func invalidOr(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errf("invalid", "%v", err)
 }
 
 // MessageByIdem returns the message a joined node's sender sent here with an idempotency key: the
