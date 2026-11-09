@@ -350,7 +350,13 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(self, "serve", "--config", g.configPath())
+	// --config only when one was named: the child finds the implicit default as this command did,
+	// and may find it absent (a named file must exist).
+	args := []string{"serve"}
+	if g.config != "" {
+		args = append(args, "--config", g.configPath())
+	}
+	cmd := exec.Command(self, args...)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Dir = "/"
@@ -1178,9 +1184,18 @@ func (g *globals) nodeURL() (string, *config.Config, error) {
 	if g.node != "" {
 		return g.node, nil, nil
 	}
-	cfg, err := config.Load(g.configPath())
+	cfg, err := g.loadConfig()
 	if err != nil {
 		return "", nil, usageErr(err)
 	}
 	return localURL(cfg), cfg, nil
+}
+
+// loadConfig reads the configuration: a file named by --config or ACPOST_CONFIG must exist (a
+// typo is an error, not a node on defaults); only the implicit default may be absent.
+func (g *globals) loadConfig() (*config.Config, error) {
+	if g.config != "" {
+		return config.LoadNamed(g.configPath())
+	}
+	return config.Load(g.configPath())
 }
