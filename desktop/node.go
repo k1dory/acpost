@@ -165,7 +165,7 @@ func (n *Node) Status() Connection {
 	n.mu.Lock()
 	failed := n.startErr != ""
 	n.mu.Unlock()
-	if failed {
+	if failed || n.ownNodeEnded() { // the app's own node stopped after it got ready: started again
 		if err := n.ensureNode(); err != nil {
 			return Connection{Error: err.Error()}
 		}

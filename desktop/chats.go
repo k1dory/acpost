@@ -65,6 +65,7 @@ func (n *Node) startNode() error {
 		_, err = c.Status(ctx)
 		cancel()
 		if err == nil {
+			n.forgetEndedNode() // a node answers that is not the app's (or is, still): nothing to start
 			return nil
 		}
 	}
@@ -389,4 +390,36 @@ func (n *Node) StartBacklogItem(id, agent string) (string, error) {
 		return c.StartBacklogItem(ctx, id, agent)
 	})
 	return cmp.Or(m.Thread, m.ID), err
+}
+
+// ownNodeEnded says whether the node the app ran itself has ended (after it got ready: a start
+// that failed keeps startErr). Status then starts one again, through ensureNode; not once the
+// app is quitting.
+func (n *Node) ownNodeEnded() bool {
+	n.mu.Lock()
+	done, closed := n.nodeDone, n.closed
+	n.mu.Unlock()
+	if done == nil || closed {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+// forgetEndedNode lets the app's ended node go (another answers on its address now).
+func (n *Node) forgetEndedNode() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.nodeDone == nil {
+		return
+	}
+	select {
+	case <-n.nodeDone:
+		n.nodeDone, n.stopNode, n.nodeOK = nil, nil, false
+	default:
+	}
 }
