@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,8 @@ type fakeHub struct {
 	reply      string        // its copy's reply
 	files      int           // GETs of files
 	hangFiles  int           // the next GETs of files never answer
+	events     []store.Event // the message's events, numbered from 1
+	eventsFrom []int64       // the after of each GET of events
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
@@ -113,6 +116,16 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 			f.state = store.Failed
 		}
 		w.WriteHeader(204)
+	case r.Method == "GET" && part == "events":
+		after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+		f.eventsFrom = append(f.eventsFrom, after)
+		items := []store.Event{}
+		for _, e := range f.events {
+			if e.Seq > after {
+				items = append(items, e)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	case part == "events":
 		var rq client.RelayRequest
 		_ = json.NewDecoder(r.Body).Decode(&rq)
@@ -251,7 +264,8 @@ func (f *fakeHub) get() fakeHub {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return fakeHub{lease: f.lease, state: f.state, replies: append([]client.ReplyRequest(nil), f.replies...),
-		sent: append([]client.SendRequest(nil), f.sent...), cancels: append([]string(nil), f.cancels...), msgs: maps.Clone(f.msgs), files: f.files}
+		sent: append([]client.SendRequest(nil), f.sent...), cancels: append([]string(nil), f.cancels...), msgs: maps.Clone(f.msgs), files: f.files,
+		eventsFrom: append([]int64(nil), f.eventsFrom...)}
 }
 
 func (f *fakeHub) count(part string) int {
