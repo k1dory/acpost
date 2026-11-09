@@ -1,5 +1,9 @@
 import { t, tr } from "./i18n.svelte";
+import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
+import { newId } from "./ids";
+import { ComposerDraft, type Attachment } from "./composer.svelte";
+import { afterSent } from "./draft";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -22,8 +26,22 @@ export type Segment = { user: string; turn: Turn };
 
 export const final = (s: string) => s === "done" || s === "failed" || s === "cancelled" || s === "expired";
 
-/** Where a new task runs, which agent, in which directory, with which settings. */
-export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string; cwd: string; repo: string; model: string; effort: string; mode: string };
+/** Where a new task runs, which agent, in which directory. */
+export type Draft = { where: "mac" | "cloud"; agent: string; cloudAgent: string; cwd: string; repo: string };
+/** What the composer sends with, chosen for one agent ("" is the agent's own default). */
+export type Settings = { model: string; effort: string; mode: string };
+/** Which of an agent's options each setting is. */
+const settingCats: Record<keyof Settings, string> = { model: "model", effort: "thought_level", mode: "mode" };
+/** The node's limits on what a message carries (GET /v1/health). */
+export type Limits = { max_body: number; max_files: number; max_files_size: number };
+
+/** A page of a message's events, as the node gives them at most (store.MaxPage): a full page means
+ * there may be more. */
+export const eventsPage = 500;
+/** Codes of a stream that will not come back by asking again. */
+const lasting = new Set(["not_found", "invalid", "refused", "unsupported"]);
+/** How many times a broken stream is asked again (1 s, 2 s, … 30 s apart) before it is given up. */
+const followTries = 6;
 
 export type PreviewEvent = { kind: string; message?: string; source?: string; line?: number; col?: number; stack?: string; url?: string; title?: string; main_frame?: boolean };
 export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview" | "artifacts";
@@ -87,12 +105,19 @@ class App {
   asking = $state<any[]>([]); // approvals waiting
   theme = $state<"light" | "dark" | "system">("light");
   target = $state<string>("");
-  draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "", model: "", effort: "", mode: "" });
+  draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "" });
+  /** Each agent's settings (a Claude model is not a Codex one). */
+  settings = $state<Record<string, Settings>>({});
+  limits = $state<Limits | null>(null);
+  /** Messages whose stream stopped for good (or whose events could not be read): why. */
+  broken = $state<Record<string, string>>({});
   options = $state<Record<string, Options>>({});
   cloudAgents = $state<CloudAgent[]>([]);
   home = $state("");
   error = $state("");
   private unsub = new Map<string, () => void>();
+  /** Bumped each time the screen changes chat: an answer to a call made before is not this chat's. */
+  private gen = 0;
 
   /** When the app first saw each message running (its own times say when it was sent or changed). */
   runningSince = new Map<string, number>();
@@ -110,8 +135,16 @@ class App {
   async connect() {
     let c: any;
     try { c = await Node.Status(); } catch (e) { c = { ok: false, error: errText(e) }; } // the app's side failed: shown as the node down
+    const back = this.conn !== null && !this.conn.ok && c.ok;
     this.conn = { ok: c.ok, error: c.error, url: c.url, node: c.status?.node, you: c.status?.you };
     if (!c.ok) return;
+    if (c.status?.limits) this.limits = c.status.limits;
+    try { await this.connected(); } catch (e) { this.error = errText(e); }
+    // The node back after it was lost: the open chat's turns still running are followed again.
+    if (back) for (const m of this.msgs) if (!final(m.state)) this.watch(m);
+  }
+
+  private async connected() {
     // This node's list as it was last time, at once; its answer replaces it.
     try {
       const saved = JSON.parse(localStorage.getItem(this.chatsKey()) ?? "null");
@@ -128,7 +161,15 @@ class App {
   localAgents() { return this.agents.filter(a => a.driver === "acp"); }
 
   async loadAgents() {
-    try { this.agents = (await Node.Agents()) as any; } catch (e) { this.error = errText(e); }
+    try { this.agents = (await Node.Agents()) as any; } catch (e) { this.failed(e); }
+  }
+
+  /** A call failed: said, and a node that stopped answering is shown as down (the app's polling
+   * then connects again, and follows what still runs). */
+  private failed(e: unknown) {
+    const code = errInfo(e).code;
+    if ((code === "node_down" || code === "unavailable") && this.conn?.ok) this.conn = { ...this.conn, ok: false, error: errText(e) };
+    else this.error = errText(e);
   }
 
   /** The cloud: "" none configured, "ok", or "down" (configured, not answering: cloudError says why;
@@ -152,7 +193,7 @@ class App {
   }
 
   private wasRunning = new Map<string, number>();
-  private asked = new Set<string>();
+  private asked = new Set<string>(); // approvals notified, of those asking now
 
   /** A notification of the system, when the app is not in front (and the user wants them). */
   notify(title: string, body: string) {
@@ -166,25 +207,37 @@ class App {
     try {
       const reqs = ((await Node.Asking()) ?? []) as any[];
       this.asking = reqs;
+      // Those still asking are remembered (one answered is no longer: the set does not grow).
+      const now = new Set<string>();
       for (const r of reqs) {
         const id = r.request_id ?? r.id;
-        if (id && !this.asked.has(id)) { this.asked.add(id); this.notify(t("Needs approval"), r.title || t("An agent asks")); }
+        if (!id) continue;
+        now.add(id);
+        if (!this.asked.has(id)) this.notify(t("Needs approval"), r.title || t("An agent asks"));
       }
+      this.asked = now;
     } catch {}
   }
 
+  private chatsAsked = 0;
   async loadChats() {
+    // Lists asked at once answer in any order: only the last asked is kept.
+    const my = ++this.chatsAsked;
     this.loadingChats = true;
     try {
       const c: any = await Node.Chats();
-      // A thread that ran and does not now: its turn ended.
+      if (my !== this.chatsAsked) return;
+      // A thread that ran and does not now: its turn ended. (Only the chats listed now are kept.)
+      const running = new Map<string, number>();
       for (const ch of (c.items ?? []) as Chat[]) {
         if (ch.kind !== "thread") continue;
         const was = this.wasRunning.get(ch.key) ?? 0;
         if (was > 0 && !ch.running && !ch.queued) this.notify(ch.failed ? t("Failed") : t("Done"), ch.title);
-        this.wasRunning.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
+        running.set(ch.key, (ch.running ?? 0) + (ch.queued ?? 0));
       }
+      this.wasRunning = running;
       this.chats = c.items ?? [];
+      this.linkDrafts(this.chats);
       try { localStorage.setItem(this.chatsKey(), JSON.stringify({ items: this.chats, folders: c.folders ?? [] })); } catch {}
       // A new task's thread, once listed, is the open chat (its session, to fork, comes with it).
       if (this.thread && (!this.chat || this.chat.key === "thread:" + this.thread)) {
@@ -193,8 +246,8 @@ class App {
       }
       this.folders = c.folders ?? [];
       this.partial = c.partial ?? [];
-    } catch (e) { this.error = errText(e); }
-    this.loadingChats = false;
+    } catch (e) { if (my === this.chatsAsked) this.failed(e); }
+    if (my === this.chatsAsked) this.loadingChats = false;
   }
 
   // An agent's choices (model, effort, mode, commands): the ones seen last time at once (asking a
@@ -223,6 +276,9 @@ class App {
   }
 
   private reset() {
+    this.gen++;
+    this.historyLoading = false;
+    this.broken = {};
     this.artifact = null; // artifacts are the chat's
     this.openedArtifacts = [];
     for (const [id, stop] of this.unsub) { stop(); Node.Unfollow(id); }
@@ -238,10 +294,17 @@ class App {
   /** A new task. */
   newTask() {
     this.reset();
+    // A draft of its own: a send still going owns the last one (its answer edits that, not this).
+    // What was typed carries over, unless it is what is being sent.
+    const old = this.draftMap.get("new"), d = new ComposerDraft("new");
+    if (old && !old.busy) { d.text = old.text; d.files = old.files; old.forward(d); }
+    this.draftMap.set("new", d);
+    this.drafts++;
     this.chat = null;
   }
 
   async open(chat: Chat) {
+    this.linkDrafts([chat]);
     this.reset();
     this.chat = chat;
     this.target = chat.agent ?? "";
@@ -256,7 +319,7 @@ class App {
         : await Node.SessionHistory(chat.agent!, chat.session!, chat.cwd ?? "")) as any as Ev[];
       if (this.chat?.key !== chat.key) return;
       this.history = segments(evs ?? []);
-    } catch (e) { this.error = errText(e); }
+    } catch (e) { if (this.chat?.key !== chat.key) return; this.error = errText(e); }
     this.historyLoading = false;
     this.loadOptions(this.target);
   }
@@ -266,8 +329,10 @@ class App {
     try {
       const ms = ((await Node.Thread(thread)) ?? []) as any as Msg[];
       if (this.thread !== thread) return;
-      this.msgs = ms;
-      for (const m of ms) this.watch(m);
+      // What the screen got meanwhile (a message sent, a state streamed) is newer than a list
+      // asked before it: merged, never dropped.
+      this.msgs = mergeMsgs(ms, this.msgs);
+      for (const m of this.msgs) this.watch(m);
       this.focus = ms[ms.length - 1]?.id ?? "";
       const to = ms.find(m => m.to.startsWith("agent:"))?.to;
       if (to) this.target = to;
@@ -278,72 +343,308 @@ class App {
   watch(m: Msg) {
     if (!m.to.startsWith("agent:")) return;
     const t = (this.turns[m.id] ??= new Turn());
-    const apply = (b: any) => {
-      if (b.events?.length) {
-        t.add(b.events as Ev[]);
+    if (final(m.state)) this.readEvents(m.id, t);
+    else this.follow(m.id, t, 0);
+  }
+
+  /** A finished message's events, page after page (the node gives a page at a time). */
+  private async readEvents(id: string, t: Turn) {
+    const gen = this.gen;
+    try {
+      for (;;) {
+        const from = t.last;
+        const evs = ((await Node.Events(id, from)) ?? []) as any as Ev[];
+        if (gen !== this.gen) return;
+        t.add(evs);
         this.rev++;
-        const cur = this.msgs.find(x => x.id === m.id);
+        if (evs.length < eventsPage || t.last <= from) return;
+      }
+    } catch (e) { if (gen === this.gen) this.broken = { ...this.broken, [id]: errText(e) }; }
+  }
+
+  /** A running message's events as they come; a stream that breaks is asked again from the last
+   * event seen (seen ones are skipped), a few times, then shown as broken. */
+  private follow(id: string, turn: Turn, tries: number) {
+    if (this.unsub.has(id)) return;
+    const gen = this.gen;
+    const off = on("events:" + id, (b: any) => {
+      if (b.events?.length) {
+        tries = 0;
+        turn.add(b.events as Ev[]);
+        this.rev++;
+        const cur = this.msgs.find(x => x.id === id);
         if (cur?.state === "queued") this.replace({ ...cur, state: "running" });
       }
       if (b.final) { this.replace(b.final); this.loadChats(); this.loadAgents(); }
-      if (b.error) this.error = b.error;
-    };
-    if (final(m.state)) {
-      Node.Events(m.id, 0).then(evs => { t.add((evs ?? []) as any); this.rev++; }).catch(() => {});
+      else if (b.error) this.lost(id, turn, off, b.error, tries, gen);
+    });
+    this.unsub.set(id, off);
+    this.broken = without(this.broken, id);
+    Node.Follow(id, turn.last).then(
+      // Another chat opened while it was asked: the stream the node just started is no one's.
+      () => { if (gen !== this.gen && !this.unsub.has(id)) Node.Unfollow(id); },
+      e => this.lost(id, turn, off, e, tries, gen),
+    );
+  }
+
+  /** Follows a message again once its stream was given up (the person asks). */
+  followAgain(m: Msg) {
+    this.broken = without(this.broken, m.id);
+    this.watch(m);
+  }
+
+  private lost(id: string, turn: Turn, off: () => void, e: unknown, tries: number, gen: number) {
+    off();
+    if (this.unsub.get(id) === off) this.unsub.delete(id);
+    if (gen !== this.gen) return;
+    if (lasting.has(errInfo(e).code) || tries + 1 >= followTries) {
+      this.broken = { ...this.broken, [id]: errText(e) || t("The stream of this turn stopped") };
       return;
     }
-    if (this.unsub.has(m.id)) return;
-    this.unsub.set(m.id, on("events:" + m.id, apply));
-    Node.Follow(m.id, t.last).catch(e => (this.error = errText(e)));
+    setTimeout(() => {
+      const m = this.msgs.find(x => x.id === id);
+      if (gen === this.gen && m && !final(m.state)) this.follow(id, turn, tries + 1);
+    }, Math.min(30_000, 1000 * 2 ** tries));
   }
 
   replace(m: Msg) {
     const i = this.msgs.findIndex(x => x.id === m.id);
     if (i >= 0) this.msgs[i] = { ...this.msgs[i], ...m };
     else if (m.thread === this.thread) this.msgs = [...this.msgs, m];
-    if (final(m.state)) { this.unsub.get(m.id)?.(); this.unsub.delete(m.id); }
+    if (final(m.state)) { this.unsub.get(m.id)?.(); this.unsub.delete(m.id); this.runningSince.delete(m.id); }
   }
 
-  /** The settings the composer sends with (the draft's, for an agent of this Mac). */
-  settingsFor(agent: string) {
+  /** A setting chosen for an agent ("": its default). */
+  setting(agent: string, k: keyof Settings): string {
+    return this.settings[agent]?.[k] ?? "";
+  }
+  setSetting(agent: string, k: keyof Settings, v: string) {
+    const cur = this.settings[agent] ?? { model: "", effort: "", mode: "" };
+    this.settings = { ...this.settings, [agent]: { ...cur, [k]: v } };
+  }
+
+  /** The settings a message to this agent goes with: those chosen for it that it offers (an agent
+   * of this Mac; another's options are not known). */
+  settingsFor(agent: string): Partial<Settings> {
     if (!this.localAgents().some(a => a.address === agent)) return {};
-    return { model: this.draft.model, effort: this.draft.effort, mode: this.draft.mode };
+    const opts = this.options[agent]?.options ?? [];
+    const out: Partial<Settings> = {};
+    for (const k of Object.keys(settingCats) as (keyof Settings)[]) {
+      const v = this.setting(agent, k);
+      const o = opts.find(o => o.category === settingCats[k]);
+      if (v && o?.values.some(x => x.value === v)) out[k] = v;
+    }
+    return out;
   }
 
-  async send(body: string, files: { name: string; type: string; data: string }[]) {
-    try {
-      let to = this.target;
-      const task: any = { body, files };
-      if (!this.chat && !this.thread) {
-        // A new task: here or in the cloud.
-        if (this.draft.where === "cloud") {
-          if (!this.draft.cloudAgent) { this.error = "choose an agent of the cloud's catalogue"; return; }
-          const sb: any = await Node.CreateCloudTask(this.draft.cloudAgent, this.draft.repo, body.split("\n")[0].slice(0, 40));
-          to = sb.agent;
-        } else {
-          to = this.draft.agent;
-          task.cwd = this.draft.cwd;
-        }
-      } else if (this.chat?.kind === "session" && !this.thread) {
-        task.session = this.chat.session; // the conversation continues where it was
-      } else if (this.thread) {
-        task.thread = this.thread;
+  // The composer's drafts, one per chat ("new": the new task's). A Map, not state: a draft is made
+  // where it is first read (in a $derived), and a new task's draft moving to its thread bumps drafts.
+  private draftMap = new Map<string, ComposerDraft>();
+  /** Keys whose draft moved (a session's to its thread): an editor still on the old key gets it. */
+  private draftAlias = new Map<string, string>();
+  private drafts = $state(0);
+  /** The key of the open chat's draft: its thread's, once it has one (a session or a cloud
+   * conversation continued here becomes a thread), else the chat's, else the new task's. */
+  draftKey(): string {
+    return this.thread ? "thread:" + this.thread : this.chat?.key ?? "new";
+  }
+
+  /** A draft whose message made a thread becomes the thread's (wherever the screen is now); a
+   * draft the thread has already keeps what it holds, and gets what was left of this one. */
+  private moveDraft(d: ComposerDraft, to: string) {
+    if (this.draftMap.get(to) === d) return;
+    if (this.draftMap.get(d.key) === d) {
+      this.draftMap.delete(d.key);
+      if (d.key !== "new") this.draftAlias.set(d.key, to); // a new task's next draft is a new one
+    }
+    const there = this.draftMap.get(to);
+    if (there && there !== d) {
+      there.text = [there.text, d.text].filter(Boolean).join("\n");
+      there.files = [...there.files, ...d.files];
+      if (!there.sending && d.sending) there.sending = d.sending;
+      if (!there.sandbox && d.sandbox) there.sandbox = d.sandbox;
+      d.forward(there);
+    } else {
+      d.key = to;
+      this.draftMap.set(to, d);
+    }
+    this.drafts++;
+  }
+  /** Where a new task goes as the draft says now: the place, and this Mac's agent and directory or
+   * the cloud's catalogue agent and repository. */
+  destNow(): string {
+    const d = this.draft;
+    return d.where === "cloud" ? `cloud\u0000${d.cloudAgent}\u0000${d.repo}` : `mac\u0000${d.agent}\u0000${d.cwd}`;
+  }
+
+  /** Whether a draft still describes the message sent from it to `dest`. A chat's draft always
+   * does (the chat is where it goes); a new task's while its place, agent, directory or repository
+   * are as they were when it was sent. Every outcome of a send and every automatic link of a draft
+   * asks this before it moves the draft, keeps its sandbox or key, or changes the screen. */
+  stillFor(d: ComposerDraft, dest: string | undefined): boolean {
+    if (d.key !== "new" || !dest) return true;
+    // A draft a new task replaced is no one's editor now: it is still the task it sent (the new
+    // task has a draft and settings of its own). Only the draft being edited follows the settings.
+    if (this.draftMap.get("new") !== d) return true;
+    return dest === this.destNow();
+  }
+
+  /** A thread the node made of a session or a cloud sandbox continued here, that conversation's
+   * chat gone from the list (the answer to its first message may have been lost): its draft is the
+   * thread's. While the conversation's own chat is still listed, its draft stays its own. */
+  private linkDrafts(chats: Chat[]) {
+    for (const c of chats) {
+      if (c.kind !== "thread" || !c.thread) continue;
+      const from: string[] = [];
+      if (c.session) from.push(`session:${(c.session_agent || c.agent || "").replace(/^agent:/, "")}/${c.session}`);
+      if (c.agent?.startsWith("agent:sb_")) from.push("cloud:" + c.agent.slice("agent:".length)); // a sandbox's thread
+      for (const key of from) {
+        const d = this.draftMap.get(key);
+        if (!d || d.busy || this.chats.some(x => x.key === key) || !this.stillFor(d, d.sending?.dest)) continue;
+        if (d.sending) d.sending.moved = true;
+        this.moveDraft(d, "thread:" + c.thread);
       }
-      if (!to) { this.error = "choose an agent"; return; }
+      // A new cloud task whose sandbox was made and whose message the node took (its answer lost):
+      // the thread of that sandbox is the task's, and the new task's screen becomes it — while the
+      // draft still describes that task (in the cloud, the same catalogue agent and repository).
+      // Once the person chose another place, agent or repository, the draft is a new task of its
+      // own: it stays, and lets that sandbox go. (A session's or cloud chat's draft has no such
+      // choice: where it goes is the chat itself.)
+      const n = this.draftMap.get("new");
+      if (n && !n.busy && n.sending && n.sandbox && n.sandbox.agent === c.agent) {
+        if (!this.stillFor(n, n.sending.dest)) {
+          n.forget();
+          continue;
+        }
+        const shown = !this.chat && !this.thread;
+        n.sending.moved = true;
+        this.moveDraft(n, "thread:" + c.thread);
+        if (shown) { this.target = c.agent ?? ""; this.openThread(c.thread); }
+      }
+    }
+  }
+
+  draftOf(key = this.draftKey()): ComposerDraft {
+    this.drafts;
+    for (let i = 0; this.draftAlias.has(key) && i < 16; i++) key = this.draftAlias.get(key)!;
+    let d = this.draftMap.get(key);
+    if (!d) { d = new ComposerDraft(key); this.draftMap.set(key, d); }
+    return d;
+  }
+
+  /** Sends a draft: what was sent leaves it once the node has it; what was typed meanwhile stays
+   * (with the chat a new task becomes). True when sent. */
+  async submit(d: ComposerDraft): Promise<boolean> {
+    const sent = d.text, sentFiles = d.files;
+    const body = sent.trim();
+    if (!body || d.busy) return false;
+    d.busy = true;
+    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles });
+    d.busy = false;
+    // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
+    // put back into the new task's, not lost with the draft no screen shows.
+    if (!ok && ![...this.draftMap.values()].includes(d)) {
+      // The text comes back into the new task's draft: its key and sandbox go with it only if that
+      // task goes where this one went.
+      if (d.sending?.dest && d.sending.dest !== this.destNow()) d.forget();
+      this.moveDraft(d, "new");
+    }
+    return ok;
+  }
+
+  /** Sends a message: true once the node has it, false if not (said in error; the draft keeps the
+   * text to send again). The chat it was sent from gets it, whichever is open by then. */
+  async send(body: string, files: { name: string; type: string; data: string }[], d = this.draftOf(),
+    sent?: { text: string; files: Attachment[] }): Promise<boolean> {
+    // What the message is for, as it was when sent: the screen may change while it goes.
+    const chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
+    const dest = d.key === "new" ? this.destNow() : ""; // where this new task goes, as it was sent
+    // The draft is a thread's already (its conversation became one, the answer lost): what is
+    // sent from it goes on in that thread, not to a new one.
+    const into = !thread && d.key.startsWith("thread:") ? d.key.slice("thread:".length) : "";
+    let to = this.target;
+    try {
+      let task: any = { body, files };
+      if (this.limits && new TextEncoder().encode(body).length > this.limits.max_body) {
+        this.error = t("The text is over the node's limit of {n}", { n: bytes(this.limits.max_body) });
+        return false;
+      }
+      if (!chat && !thread) {
+        // A new task: here or in the cloud.
+        if (draft.where === "cloud") {
+          if (!draft.cloudAgent) { this.error = t("Choose an agent of the cloud's catalogue"); return false; }
+          to = await this.sandboxFor(d, draft, body, dest);
+        } else {
+          to = draft.agent;
+          task.cwd = draft.cwd;
+        }
+      } else if (into) {
+        task.thread = into;
+      } else if (chat?.kind === "session" && !thread) {
+        task.session = chat.session; // the conversation continues where it was
+      } else if (thread) {
+        task.thread = thread;
+      }
+      if (!to) { this.error = t("Choose an agent"); return false; }
       Object.assign(task, { to }, this.settingsFor(to));
+      // The same message is all of it the same (files' bytes and types, settings): only then the same key.
+      let what = JSON.stringify(task);
+      const { to: _to, thread: _th, session: _se, cwd: _cwd, ...rest } = task;
+      const content = JSON.stringify(rest);
+      if (d.epoch !== epoch) return false; // a new task meanwhile: this one is not it
+      // Its draft moved to the thread the node made of it (its answer lost): the same message is
+      // the request as it was first made, with its key — the node gives back what it has.
+      if (d.sending?.moved && d.sending.content === content) {
+        task = { ...d.sending.task };
+        what = d.sending.what;
+      }
+      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest };
+      const key = d.sending.key;
+      task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;
-      const was = this.chat;
-      if (!this.thread) {
+      if (d.sending?.key === key) d.forget();
+      // The conversation it was sent from is still the one open (not the screen's generation: a
+      // chat left and opened again is still it).
+      // The draft may have been edited into another task while it went (another place, agent,
+      // repository): then it stays the new task's, and the screen stays where it is.
+      const same = this.stillFor(d, dest);
+      const here = !this.thread && (chat ? this.chat?.key === chat.key : !this.chat && this.draftMap.get("new") === d && same);
+      // What was sent leaves the draft, what was typed meanwhile stays; the draft is the thread's now.
+      // A draft edited into another task keeps all it holds: it is that task, sent text and all.
+      if (sent && same) {
+        d.text = afterSent(d.text, sent.text);
+        d.files = d.files.filter(f => !sent.files.includes(f));
+      }
+      if (same) this.moveDraft(d, "thread:" + m.thread);
+      else d.forget();
+      if (here) {
         this.thread = m.thread;
         this.target = to;
-        // The conversation keeps its folder as it becomes a thread.
-        if (was?.folder) await Node.MoveChat("thread:" + m.thread, was.folder).catch(() => {});
+        // A thread that was there before this message (the draft had moved to it): its earlier
+        // turns are shown and followed too, not just this one.
+        if (into) await this.openThread(m.thread);
       }
-      this.msgs = [...this.msgs, m];
-      this.focus = m.id;
-      this.watch(m);
+      // Shown wherever its thread is open, now (if it is opened later, the node's list has it).
+      if (this.thread === m.thread) {
+        // Sent again after its answer was lost, the node gives the message it has: one, not two.
+        if (this.msgs.some(x => x.id === m.id)) this.replace(m);
+        else this.msgs = [...this.msgs, m];
+        this.focus = m.id;
+        this.watch(m);
+      }
+      // The conversation keeps its folder as it becomes a thread.
+      if (!thread && chat?.folder) await Node.MoveChat("thread:" + m.thread, chat.folder).catch(() => {});
       this.loadChats();
-    } catch (e) { this.error = errText(e); }
+      return true;
+    } catch (e) { this.error = errText(e); return false; }
+  }
+
+  private async sandboxFor(d: ComposerDraft, draft: Draft, body: string, what: string): Promise<string> {
+    if (d.sandbox?.for === what) return d.sandbox.agent;
+    const epoch = d.epoch;
+    const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40));
+    if (d.epoch === epoch) d.sandbox = { for: what, agent: sb.agent };
+    return sb.agent;
   }
 
   async answer(msg: string, req: string, option: string) {
@@ -441,6 +742,21 @@ class App {
     if (this.view !== "chat") this.view = "chat";
     this.openTab("artifacts");
   }
+  /** The preview's problems cleared: the page is not fixed by it (a reload shows them again). */
+  clearPreview() {
+    const p = this.preview;
+    p.events = []; p.cleared = true; p.clearedAt = Date.now(); p.clearedUrl = p.url;
+  }
+  /** The preview's page loaded again (fresh: its problems listed anew). */
+  previewReload(fresh = false) {
+    if (fresh) this.preview.events = [];
+    this.preview.loadAt = Date.now();
+    Node.PreviewReload().catch(e => (this.error = errText(e)));
+  }
+  previewBack() {
+    this.preview.loadAt = Date.now();
+    Node.PreviewBack().catch(e => (this.error = errText(e)));
+  }
   notePreview(e: PreviewEvent) {
     // A page loaded that was asked for after the list was cleared (a reload, another address): what it
     // shows from now on is the truth. A load already under way when it was cleared changes nothing.
@@ -493,6 +809,30 @@ class App {
 }
 
 /** A replayed conversation split at its user's messages. */
+const stage: Record<string, number> = { queued: 0, running: 1, done: 2, failed: 2, cancelled: 2, expired: 2 };
+
+/** A thread's messages as loaded, with those the screen already has: one per id, the later of the
+ * two (by updated_at, then by state: a finished one is past a running one), in the loaded order
+ * and then those the load did not have yet. */
+export function mergeMsgs(loaded: Msg[], shown: Msg[]): Msg[] {
+  const byId = new Map(shown.map(m => [m.id, m]));
+  const later = (a: Msg, b: Msg) => {
+    const ta = Date.parse(a.updated_at) || 0, tb = Date.parse(b.updated_at) || 0;
+    if (ta !== tb) return ta > tb ? a : b;
+    return (stage[a.state] ?? 0) >= (stage[b.state] ?? 0) ? a : b;
+  };
+  const out = loaded.map(m => { const s = byId.get(m.id); return s ? later(m, s) : m; });
+  const have = new Set(loaded.map(m => m.id));
+  for (const m of shown) if (!have.has(m.id)) out.push(m);
+  return out;
+}
+
+function without<T>(o: Record<string, T>, k: string): Record<string, T> {
+  if (!(k in o)) return o;
+  const { [k]: _, ...rest } = o;
+  return rest;
+}
+
 function segments(evs: Ev[]): Segment[] {
   const out: Segment[] = [];
   let cur: Segment | null = null;

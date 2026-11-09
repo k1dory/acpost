@@ -3,10 +3,11 @@
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
   import TaskSetup from "./TaskSetup.svelte";
+  import { bytes } from "../lib/names";
 
-  let text = $state("");
-  let files = $state<{ name: string; type: string; size: number; data: string }[]>([]);
-  let busy = $state(false);
+  // The text and files are the chat's draft, kept by the app (they outlive this composer: a new
+  // task becoming a chat, the node going down and coming back).
+  const d = $derived(app.draftOf(app.draftKey()));
   let ta: HTMLTextAreaElement;
   let picker: HTMLInputElement;
   let pickerFor = $state<"" | "model" | "effort" | "mode">("");
@@ -27,20 +28,20 @@
   $effect(() => {
     if (app.pendingFiles.length) {
       const names = new Set(app.pendingFiles.map(f => f.name)); // a file of the same name: replaced
-      files = [...files.filter(f => !names.has(f.name)), ...app.pendingFiles];
+      d.files = [...d.files.filter(f => !names.has(f.name)), ...app.pendingFiles];
       app.pendingFiles = [];
       requestAnimationFrame(() => ta?.focus());
     }
   });
   // ⌘L and playbooks put text here.
   $effect(() => {
-    if (app.quote) { text = (text ? text + "\n" : "") + app.quote; app.quote = ""; requestAnimationFrame(() => ta?.focus()); }
+    if (app.quote) { d.text = (d.text ? d.text + "\n" : "") + app.quote; app.quote = ""; requestAnimationFrame(() => ta?.focus()); }
   });
 
   // The slash menu: the settings, then the agent's own commands.
   const slash = $derived.by(() => {
-    if (!text.startsWith("/") || text.includes(" ") || text.includes("\n")) return [];
-    const q = text.slice(1).toLowerCase();
+    if (!d.text.startsWith("/") || d.text.includes(" ") || d.text.includes("\n")) return [];
+    const q = d.text.slice(1).toLowerCase();
     const items: { name: string; description: string; pick?: "model" | "effort" | "mode" }[] = [];
     if (model) items.push({ name: "model", description: t("Choose the model"), pick: "model" });
     if (effort) items.push({ name: "effort", description: t("Choose the reasoning effort"), pick: "effort" });
@@ -57,37 +58,33 @@
     return items.filter(i => i.name.toLowerCase().startsWith(q));
   });
 
-  function current(o: typeof model, draft: string) {
+  // The settings are the agent's own: a Claude model is never sent to Codex.
+  function current(o: typeof model, k: "model" | "effort" | "mode") {
     if (!o) return "";
-    const v = draft || o.current;
+    const v = app.setting(agent, k) || o.current;
     return o.values.find(x => x.value === v)?.name ?? v;
   }
   function setDraft(k: "model" | "effort" | "mode", v: string) {
-    app.draft[k] = v;
+    app.setSetting(agent, k, v);
     pickerFor = "";
     ta?.focus();
   }
   function takeSlash(i: number) {
     const it = slash[i];
     if (!it) return;
-    if (it.pick) { text = ""; pickerFor = it.pick; return; }
-    if ((it as any).playbook) { text = (it as any).playbook; ta?.focus(); return; }
-    text = "/" + it.name + " ";
+    if (it.pick) { d.text = ""; pickerFor = it.pick; return; }
+    if ((it as any).playbook) { d.text = (it as any).playbook; ta?.focus(); return; }
+    d.text = "/" + it.name + " ";
     ta?.focus();
   }
 
   // While a turn runs and nothing is typed, the send button stops it (and ⌃C does, anywhere).
   const running = $derived(!isNew && app.runningHere().length > 0);
-  const stopMode = $derived(running && !text.trim() && !files.length);
+  const stopMode = $derived(running && !d.text.trim() && !d.files.length);
 
+  // The text and files leave the draft only once the node has them (app.submit).
   async function send() {
-    const body = text.trim();
-    if (!body || busy) return;
-    busy = true;
-    await app.send(body, files.map(({ name, type, data }) => ({ name, type, data })));
-    busy = false;
-    text = "";
-    files = [];
+    await app.submit(d);
     ta?.focus();
   }
   function key(e: KeyboardEvent) {
@@ -99,16 +96,15 @@
     if (e.key === "Escape") pickerFor = "";
     if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); send(); }
   }
-  async function add(list: FileList | null) {
-    for (const f of list ?? []) {
-      const buf = new Uint8Array(await f.arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-      files = [...files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data: btoa(bin) }];
-    }
+  // A file over the node's limits is said at once, not read (and not found out at sending).
+  function add(list: FileList | null) {
+    d.add(list ?? [], app.limits, over => {
+      app.error = over === "count"
+        ? t("A message takes at most {n} files", { n: app.limits!.max_files })
+        : t("The files are over the node's limit of {n} together", { n: bytes(app.limits!.max_files_size) });
+    });
   }
-  function kb(n: number) { return n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`; }
-  $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } text; });
+  $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } d.text; });
   $effect(() => { slash.length; slashSel = 0; });
 </script>
 
@@ -138,36 +134,36 @@
       <div class="menu card pick">
         <div class="mh">{o.name}</div>
         {#each o.values as v (v.value)}
-          <button class="mi" class:sel={(app.draft[pickerFor] || o.current) === v.value} onclick={() => setDraft(pickerFor as any, v.value)}>
+          <button class="mi" class:sel={(app.setting(agent, pickerFor) || o.current) === v.value} onclick={() => setDraft(pickerFor as any, v.value)}>
             <span>{v.name}</span>
           </button>
         {/each}
       </div>
     {/if}
   {/if}
-  {#if files.length}
+  {#if d.files.length}
     <div class="files">
-      {#each files as f, i}
-        <span class="chip"><Icon name="file" size={12} /> {f.name} <span class="muted">{kb(f.size)}</span>
-          <button class="x" onclick={() => (files = files.filter((_, j) => j !== i))}><Icon name="x" size={10} /></button></span>
+      {#each d.files as f, i}
+        <span class="chip"><Icon name="file" size={12} /> {f.name} <span class="muted">{bytes(f.size)}</span>
+          <button class="x" onclick={() => (d.files = d.files.filter((_, j) => j !== i))}><Icon name="x" size={10} /></button></span>
       {/each}
     </div>
   {/if}
-  <textarea bind:this={ta} bind:value={text} onkeydown={key} rows="1"
+  <textarea bind:this={ta} bind:value={d.text} onkeydown={key} rows="1"
     placeholder={isNew ? t("/ for the model, effort and commands") : t("Reply…")}></textarea>
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />
-    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, app.draft.model)}</button>{/if}
-    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, app.draft.effort)}</button>{/if}
-    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, app.draft.mode)}</button>{/if}
+    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, "model")}</button>{/if}
+    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, "effort")}</button>{/if}
+    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, "mode")}</button>{/if}
     {#if cloud}<span class="chip muted" title={t("A cloud agent runs without asking; opening or merging a pull request waits for you")}>{t("runs without asking")}</span>{/if}
     <span class="sp"></span>
     <span class="hint muted">{stopMode ? "⌃C" : "⌘↵"}</span>
     {#if stopMode}
       <button class="btn primary send stop" title={t("Stop (⌃C)")} onclick={() => app.stopHere()}><span class="sq"></span></button>
     {:else}
-      <button class="btn primary send" disabled={!text.trim() || busy} onclick={send} title={running ? t("Queue after the running turn") : t("Send")}><Icon name="send" size={14} /></button>
+      <button class="btn primary send" disabled={!d.text.trim() || d.busy} onclick={send} title={running ? t("Queue after the running turn") : t("Send")}><Icon name="send" size={14} /></button>
     {/if}
   </div>
 </div>

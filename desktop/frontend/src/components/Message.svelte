@@ -25,6 +25,7 @@
   import TurnBlocks from "./TurnBlocks.svelte";
   import Icon from "./Icon.svelte";
   import { Node, errText } from "../lib/api";
+  import { bytes } from "../lib/names";
 
   let { m }: { m: Msg } = $props();
   const turn = $derived.by(() => { app.rev; return app.turns[m.id]?.view(); });
@@ -74,16 +75,17 @@
       {#if m.state === "running"}<Working agent={m.to} view={turn} msg={m.id} />
       {:else if m.state === "queued"}<span class="chip warn">{t("queued")}</span>
       {:else if m.state === "failed"}<span class="chip crit">{t("failed")}</span>
-      {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>{/if}
+      {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>
+      {:else if m.state === "expired"}<span class="chip warn">{t("expired")}</span>{/if}
     </div>
 
-    {#if turn}<TurnBlocks view={turn} msg={m.id} {done} agent={m.to} />{/if}
+    {#if turn}<TurnBlocks view={turn} msg={m.id} msgState={m.state} agent={m.to} />{/if}
     {#if m.files?.some(f => f.reply)}
       <!-- What the agent handed back: each opens in the artifact viewer. -->
       <div class="arts">
         {#each m.files.filter(f => f.reply && f.size > 0 && !(f as any).uri) as f}
           <button class="art" onclick={() => app.openArtifact({ msg: m.id, name: f.name })} title={f.name}>
-            <Icon name="file" size={13} /><span class="an">{f.name}</span><span class="muted as">{f.size < 1024 ? f.size + " B" : f.size < 1 << 20 ? Math.round(f.size / 1024) + " KB" : (f.size / (1 << 20)).toFixed(1) + " MB"}</span>
+            <Icon name="file" size={13} /><span class="an">{f.name}</span><span class="muted as">{bytes(f.size)}</span>
           </button>
         {/each}
       </div>
@@ -95,6 +97,11 @@
     {/if}
     {#if !done && !streamed && !(turn?.blocks.length)}
       <div class="wait"><span class="sk" style="width:60%"></span><span class="sk" style="width:40%"></span></div>
+    {/if}
+    {#if app.broken[m.id]}
+      <!-- The stream stopped (or the events could not be read): what is shown may be behind. -->
+      <div class="err selectable"><b>{t("This turn is not being followed")}</b><div>{app.broken[m.id]}</div>
+        <div><button class="btn sm" onclick={() => app.followAgain(m)}>{t("Retry")}</button></div></div>
     {/if}
     {#if m.state === "failed" && m.error}
       <div class="err selectable"><b>{t(failTitles[m.error_code ?? ""] ?? "The turn failed")}</b><div>{tr(m.error ?? "")}</div>{#if m.hint}<div class="hint">{t("What to do")}: {tr(m.hint)}</div>{/if}</div>

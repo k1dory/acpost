@@ -3,6 +3,7 @@
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import { ago, dur } from "../lib/format";
+  import { latest } from "../lib/latest";
   import Icon from "./Icon.svelte";
 
   let info = $state<any>(null);
@@ -14,19 +15,25 @@
   let busy = $state(false);
   const agent = $derived(app.focusAgent());
 
+  // The repository, its pull requests and checks are one agent's, asked together: another agent
+  // focused meanwhile makes the answer stale (never repository A with B's pull requests).
+  const forge = latest();
   async function load() {
+    const a = agent;
     err = ""; busy = true;
-    try {
-      info = await Node.Forge(agent);
-      [pulls, checks] = await Promise.all([Node.Pulls(agent, "open") as any, Node.Checks(agent, "") as any]);
-    } catch (e) { err = errText(e); }
-    busy = false;
+    const done = await forge(async () => {
+      const i = await Node.Forge(a);
+      const [p, c] = await Promise.all([Node.Pulls(a, "open") as any, Node.Checks(a, "") as any]);
+      return { i, p, c };
+    }, v => { info = v.i; pulls = v.p; checks = v.c; }, e => (err = errText(e)));
+    if (done) busy = false;
   }
   $effect(() => { if (agent) load(); });
 
+  const logs = latest();
   async function openLog(job: any, check: any) {
     log = { name: job.name, text: "" };
-    try { log = { name: job.name, text: await Node.CILog(agent, job.id, check.url ?? "") }; } catch (e) { log = { name: job.name, text: "", error: errText(e) }; }
+    await logs(() => Node.CILog(agent, job.id, check.url ?? ""), text => (log = { name: job.name, text }), e => (log = { name: job.name, text: "", error: errText(e) }));
   }
   // Levels as CI writes them: ##[error], ERROR, ANSI red; ##[warning], WARN, yellow.
   function lv(l: string): "error" | "warn" | "info" {
@@ -85,7 +92,7 @@
       {:else}<div class="none muted">{t("No open pull requests")}</div>{/each}
     </div>
 
-    <div class="h">Checks {#if info.branch}<span class="muted">on {info.branch}</span>{/if}</div>
+    <div class="h">{t("Checks")} {#if info.branch}<span class="muted">{t("on {branch}", { branch: info.branch })}</span>{/if}</div>
     <div class="inner">
       {#each checks as c (c.id)}
         <div class="check">

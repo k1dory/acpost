@@ -5,9 +5,9 @@
   import Icon from "./Icon.svelte";
   import DiffLines from "./DiffLines.svelte";
 
-  let { tool, final }: { tool: Tool; final: boolean } = $props();
+  let { tool, msgState }: { tool: Tool; msgState: string } = $props();
   let open = $state(false);
-  const st = $derived(toolState(tool, final));
+  const st = $derived(toolState(tool, msgState));
   const e = $derived(editTotals(tool));
   // A replayed history has no real timing: no duration then.
   const took = $derived(tool.ended && tool.ended - tool.started >= 5 ? dur(tool.ended - tool.started) : "");
@@ -21,12 +21,13 @@
       {#if st === "running"}<span class="spin"></span>
       {:else if st === "failed"}<span class="bad"><Icon name="x" size={12} /></span>
       {:else if st === "pending"}<span class="dot queued"></span>
+      {:else if st === "cancelled" || st === "expired" || st === "unknown"}<span class="muted" title={t(st === "cancelled" ? "Cancelled before it finished" : st === "expired" ? "Expired before it finished" : "Its result is not known")}><Icon name="x" size={12} /></span>
       {:else}<span class="ok"><Icon name="check" size={12} /></span>{/if}
     </span>
     <span class="name mono">{toolName(tool)}</span>
     <span class="what">{intent(tool)}</span>
     {#if e.files}<span class="stat mono"><span class="plus">+{e.added}</span> <span class="minus">−{e.removed}</span></span>{/if}
-    {#if tool.exit_code !== undefined && tool.exit_code !== 0}<span class="chip crit">exit {tool.exit_code}</span>{/if}
+    {#if tool.exit_code !== undefined && tool.exit_code !== 0}<span class="chip crit">{t("exit {code}", { code: tool.exit_code })}</span>{/if}
     <span class="took muted num">{took}</span>
     {#if hasMore}<span class="chev" class:rot={open}><Icon name="chev" size={12} /></span>{/if}
   </button>

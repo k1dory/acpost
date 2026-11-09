@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
-  import { app } from "../lib/state.svelte";
+  import { app, final } from "../lib/state.svelte";
   import type { Turn } from "../lib/turn";
   import Markdown from "./Markdown.svelte";
   import ToolRow from "./ToolRow.svelte";
@@ -10,7 +10,9 @@
   import Icon from "./Icon.svelte";
 
   // A turn's blocks as the agent did them: text, thinking, tool calls, requests, plan, notices.
-  let { view, msg = "", done, agent = "" }: { view: ReturnType<Turn["view"]>; msg?: string; done: boolean; agent?: string } = $props();
+  // msgState: the message's (a replayed history is "done").
+  let { view, msg = "", msgState, agent = "" }: { view: ReturnType<Turn["view"]>; msg?: string; msgState: string; agent?: string } = $props();
+  const done = $derived(final(msgState));
 </script>
 
 {#each view.blocks as b, i}
@@ -20,7 +22,7 @@
     <Thought text={b.text} ms={b.end - b.start} live={!done && i === view.blocks.length - 1} {agent} />
   {:else if b.t === "tool"}
     {@const t = view.tools.get(b.id)}
-    {#if t}<ToolRow tool={t} final={done} />{/if}
+    {#if t}<ToolRow tool={t} {msgState} />{/if}
   {:else if b.t === "request"}
     {@const r = view.requests.get(b.id)}
     {#if r}<Approval req={r} msg={msg} />{/if}

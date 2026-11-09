@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { agentLabel, tilde } from "../lib/names";
+  import { focusOnMount } from "../lib/actions";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node } from "../lib/api";
@@ -15,13 +17,8 @@
   let timer: ReturnType<typeof setTimeout> | undefined;
   let seq = 0;
 
-  function label(addr: string) {
-    const n = addr.replace(/^agent:/, "");
-    return n === "claude" ? "Claude Code" : n === "codex" ? "Codex" : n;
-  }
-  function short(dir: string) {
-    return app.home && dir.startsWith(app.home) ? "~" + dir.slice(app.home.length) : dir;
-  }
+  const label = agentLabel;
+  const short = (dir: string) => tilde(dir, app.home);
   // What the menu shows: the recent directories that match, then what the search found.
   const shown = $derived.by(() => {
     const q = typed.trim().toLowerCase();
@@ -64,11 +61,9 @@
     if (d) app.draft.cwd = d;
   }
   function chooseAgent(a: string) {
-    app.draft.agent = a;
-    app.draft.model = app.draft.effort = app.draft.mode = "";
+    app.draft.agent = a; // its settings are its own (app.settings)
     app.loadOptions(a);
   }
-  function focusOnMount(el: HTMLInputElement) { requestAnimationFrame(() => el.focus()); }
 </script>
 
 <svelte:window onclick={e => { if (dirsOpen && !(e.target as HTMLElement).closest(".dir")) dirsOpen = false; }} />
