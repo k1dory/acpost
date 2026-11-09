@@ -6,19 +6,20 @@ import { b64bytes } from "./base64";
 import type { Limits } from "./state.svelte";
 import { OpKey } from "./opkey";
 
-export type Attachment = { name: string; type: string; size: number; data: string };
+/** A file attached; asked: the read that brought it (a send takes the reads asked before it).
+ * Kept in the attachment: the $state array gives back proxies, not the objects put in. */
+export type Attachment = { name: string; type: string; size: number; data: string; asked?: number };
 /** A file to attach (a File, or what a test gives). */
 export type FileLike = { name: string; type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
 
 /** Reads asked so far (any draft): a send takes the files of the reads asked before it. */
 let asked = 0;
-const askedAt = new WeakMap<Attachment, number>();
 
 /** The files a send made now takes, once the reads asked before it are done (`adding`): those
  * attached then, and those those reads bring. What is attached after it is the next message's. */
 export function filesAsOf(d: ComposerDraft): () => Attachment[] {
   const had = new Set(d.files), upto = asked;
-  return () => d.files.filter(f => had.has(f) || (askedAt.get(f) ?? Infinity) <= upto);
+  return () => d.files.filter(f => had.has(f) || (f.asked ?? Infinity) <= upto);
 }
 
 export class ComposerDraft {
@@ -82,9 +83,7 @@ export class ComposerDraft {
         const over = overLimits(d.files, f, limits);
         if (over) { fail(over, f.name); return; }
         // Its name, chosen here: against all attached by now, those added just before it included.
-        const a = { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data };
-        askedAt.set(a, ticket);
-        d.files = [...d.files, a];
+        d.files = [...d.files, { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data, asked: ticket }];
       }
     }).catch(() => {}); // what failed was said: the queue goes on
     return at.adding;

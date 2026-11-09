@@ -175,3 +175,13 @@ describe("a send waits for the files being read (finding 4)", () => {
     expect(d.files.map(f => f.name)).toEqual(["ok.txt"]);
   });
 });
+
+describe("the suite runs the state as the app does", () => {
+  it("a $state array gives back proxies (Svelte's client build, not the server's plain objects)", async () => {
+    const { ComposerDraft } = await import("./composer.svelte");
+    const d = new ComposerDraft("new");
+    const a = { name: "a", type: "", size: 0, data: "" };
+    d.files = [a];
+    expect(d.files[0]).not.toBe(a);
+  });
+});

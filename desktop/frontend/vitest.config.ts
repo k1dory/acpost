@@ -1,10 +1,12 @@
 import { defineConfig } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
-// Unit tests of the app's logic and components (happy-dom where a file asks): the bindings are
-// mocked (src/test/fake.ts), no Wails. Svelte's browser build, to mount components.
+// Unit tests of the app's logic and components, the bindings mocked (src/test/fake.ts), no Wails.
+// All of them in happy-dom with Svelte's browser build: the .svelte.ts state is compiled as the
+// app's is ($state arrays and objects are proxies). In node it was the server build, plain
+// objects, and a test could pass that the app fails.
 export default defineConfig({
   plugins: [svelte()],
   resolve: { conditions: ["browser"] },
-  test: { include: ["src/**/*.test.ts"], environment: "node" },
+  test: { include: ["src/**/*.test.ts"], environment: "happy-dom" },
 });
