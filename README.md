@@ -43,7 +43,7 @@ the node runs, `client:<token>` for a program authenticated by a token.
 |---|---|
 | `id` | `msg_` + a ULID: sortable by creation time, unique across nodes |
 | `from`, `to` | addresses |
-| `task` | free-form label (`TASK-42`, a ticket URL). Messages with the same task to the same agent share its ACP session |
+| `task` | free-form label (`TASK-42`, a ticket URL). Messages with the same task to the same agent share its ACP session; a sender from elsewhere (a client token, another node) gets sessions of its own, never those of the node's user and agents |
 | `thread` | conversation id; a new message starts its own (`thread = id`) |
 | `parent`, `depth` | the message during whose handling this one was sent, and how deep the chain is |
 | `body` | text, up to `limits.max_body` (1 MiB); Markdown goes as it is |
@@ -556,7 +556,9 @@ The tests check each of these claims: `go test ./internal/store -run 'Concurrent
 - TCP refuses to start on a non-loopback address without TLS. Every TCP request needs a token; a
   token can send only where `send_to` allows and act only as the agents in `act_as`.
 - An `acp` agent runs as the node's user, in its `cwd`, with the node's environment (its API keys,
-  `PATH`, `HOME`) plus the agent's `env` and the node's own `ACPOST_NODE` and `ACPOST_TOKEN`.
+  `PATH`, `HOME`, proxies) plus the agent's `env` and the node's own `ACPOST_NODE` and `ACPOST_TOKEN`.
+  The node's own secrets stay out of it: every `ACPOST_*`, `SANDBOXD_*` and `HUB_*` variable, every
+  variable a `token_env` names, and any variable holding one of the node's tokens under another name.
   Give an agent its own `HOME`/`CODEX_HOME` through `env` to keep it apart. `permissions: allow` lets it do whatever its
   own sandbox allows: give such an agent to senders you trust (`allow_from`).
 - A message from another node is a prompt for your agent: joining a hub means trusting everyone who

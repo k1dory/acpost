@@ -17,9 +17,37 @@ export type Request = {
   decision?: string; by?: string; at: number;
 };
 export type Usage = {
-  input?: number; output?: number; cache_read?: number; cache_write?: number; total?: number;
+  turn?: string;
+  input?: number; output?: number; cache_read?: number; cache_write?: number; thought?: number; total?: number;
   cost?: number; currency?: string; context_used?: number; context_size?: number; model?: string;
 };
+
+/** The turn a usage event's id belongs to: a delta (turn#2, turn#3, …: what the turn's count grew
+ * by after it was published) names its turn before the "#"; any other id is a turn of its own. */
+export function usageTurn(id: string | undefined): { turn: string; delta: boolean } {
+  const s = id ?? "";
+  const i = s.lastIndexOf("#");
+  const k = i > 0 ? s.slice(i + 1) : "";
+  if (/^[1-9][0-9]*$/.test(k) && Number(k) >= 2) return { turn: s.slice(0, i), delta: true };
+  return { turn: s, delta: false };
+}
+
+/** A usage event folded into what the turn has: a delta of the same turn adds to it (tokens and
+ * cost; the context as the delta says it); anything else is the turn's usage as it now stands. */
+export function foldUsage(prev: Usage | null, d: Usage): Usage {
+  const at = usageTurn(d?.turn);
+  if (!prev || !at.delta || usageTurn(prev.turn).turn !== at.turn) return d;
+  const sum = (a?: number, b?: number) => (a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0));
+  return {
+    ...prev,
+    turn: at.turn,
+    input: sum(prev.input, d.input), output: sum(prev.output, d.output),
+    cache_read: sum(prev.cache_read, d.cache_read), cache_write: sum(prev.cache_write, d.cache_write),
+    thought: sum(prev.thought, d.thought), total: sum(prev.total, d.total),
+    cost: sum(prev.cost, d.cost), currency: prev.currency || d.currency, model: prev.model || d.model,
+    context_used: d.context_used || prev.context_used, context_size: d.context_size || prev.context_size,
+  };
+}
 
 export type Block =
   | { t: "text"; text: string }
@@ -114,7 +142,7 @@ export class Turn {
         break;
       }
       case "usage":
-        this.usage = d;
+        this.usage = foldUsage(this.usage, d); // a turn's delta adds to it, never replaces it
         break;
       case "notice":
         this.blocks.push({ t: "notice", text: typeof d === "string" ? d : d?.text ?? d?.title ?? "", severity: d?.severity });

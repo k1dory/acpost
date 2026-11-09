@@ -90,8 +90,9 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 		}
 		set(metaCwd, dir)
 	case r.Thread != "" && local && r.Session == "":
-		// The thread's directory, as its first message chose it.
-		if root, err := n.st.Get(ctx, r.Thread); err == nil && root.To == "agent:"+to.Name {
+		// The thread's directory, as its first message chose it: for the node's own user and
+		// agents, and for whoever started the thread (a client's own thread), not for anyone else.
+		if root, err := n.st.Get(ctx, r.Thread); err == nil && root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()) {
 			set(metaCwd, root.Meta[metaCwd])
 		}
 	}
@@ -129,12 +130,17 @@ func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.Session
 			continue
 		}
 		next, err := acpx.Configure(ctx, p.conn, sid, st, set.s, set.want)
+		if err != nil && ctx.Err() != nil {
+			// Cut short by the attempt's end: the setting may still be applied by the agent, so the
+			// turn ends here (and its process with it), not as if the setting were only refused.
+			return fmt.Errorf("%s %s: %w", set.s.Name, set.want, err)
+		}
 		if err != nil && set.s.Name == acpx.ModeSetting.Name && m.Meta[metaModeStrict] == "1" {
 			return fmt.Errorf("the mode %s could not be set: %v", set.want, err)
 		}
 		if err != nil {
-			if eventErr := s.a.n.addEvent(s.a.n.ctx, m.ID, "notice", eventJSON(map[string]string{"severity": "warning",
-				"text": set.s.Name + " " + set.want + ": " + err.Error()}), true); eventErr != nil {
+			if eventErr := s.a.n.addLeasedEvent(s.a.n.ctx, m.ID, m.LeaseID, "notice", eventJSON(map[string]string{"severity": "warning",
+				"text": set.s.Name + " " + set.want + ": " + err.Error()})); eventErr != nil {
 				s.a.n.log.Debug("event", "err", eventErr)
 			}
 			continue

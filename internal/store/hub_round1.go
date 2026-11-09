@@ -71,13 +71,17 @@ func (s *Store) AdoptDelivery(ctx context.Context, id, from, to, prefix, origin 
 // plain cancel). It reports whether it cancelled.
 func (s *Store) CancelIfOrigin(ctx context.Context, id, origin, code, why string) (bool, error) {
 	now := ms(time.Now())
-	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'cancelled', error = ?, error_code = ?, lease_id = '', lease_until = 0,
+	var n int64
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'cancelled', error = ?, error_code = ?, lease_id = '', lease_until = 0,
 		updated_at = ?, finished_at = ? WHERE id = ? AND origin = ? AND state IN ('queued', 'running')`, why, code, now, now, id, origin)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return s.publishFinalized(ctx, t) // usage_round1.go: a copy that ran here may have counted usage waiting
+	})
+	return n == 1, err
 }
 
 // SetOriginIf changes a message's origin from old to origin, only if it is still old; it reports
@@ -167,16 +171,20 @@ func (s *Store) DropForward(ctx context.Context, id, forwarding string) error {
 func (s *Store) ForwardNotSent(ctx context.Context, id, forwarding, unsent, why string) (bool, error) {
 	now := ms(time.Now())
 	// A cancel asked for meanwhile is what it ends as: nothing was sent to undo.
-	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, idem_key = NULL,
+	var n int64
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		res, err := t.ExecContext(ctx, `UPDATE messages SET origin = ?, idem_key = NULL,
 		error = CASE WHEN state IN ('queued', 'running') AND cancel_wanted = 0 THEN ? ELSE error END,
 		finished_at = CASE WHEN state IN ('queued', 'running') THEN ? ELSE finished_at END,
 		state = CASE WHEN state NOT IN ('queued', 'running') THEN state WHEN cancel_wanted = 1 THEN 'cancelled' ELSE 'failed' END,
 		cancel_wanted = 0, lease_id = '', lease_until = 0, updated_at = ? WHERE id = ? AND origin = ?`, unsent, why, now, now, id, forwarding)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return s.publishFinalized(ctx, t) // usage_round1.go: every way a message turns final publishes what waits
+	})
+	return n == 1, err
 }
 
 // IdemKeyOf is a message's idempotency key ("" none).
