@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tilde } from "../lib/names";
+  import { headerIcon } from "../lib/ui";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { tick } from "svelte";
@@ -76,7 +77,7 @@
     {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
     {#if canHand}
       <div class="hand nodrag">
-        <button class="btn ghost sm" class:on={handing} title={t("Continue in the cloud")} onclick={openHand}><Icon name="cloud" size={14} /></button>
+        <button class="btn ghost icon" class:on={handing} title={t("Continue in the cloud")} aria-label={t("Continue in the cloud")} onclick={openHand}><Icon name="cloud" size={headerIcon} /></button>
         {#if handing}
           <div class="pop card">
             <div class="ph">{t("Continue in the cloud")}</div>
@@ -92,8 +93,8 @@
         {/if}
       </div>
     {/if}
-    {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost sm nodrag" title={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={14} /></button>{/if}
-    <button class="btn ghost sm nodrag" title={t("Right panel (⌘\\)")} onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={14} /></button>
+    {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost icon nodrag" title={t("Fork: the conversation so far, in a new chat")} aria-label={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={headerIcon} /></button>{/if}
+    <button class="btn ghost icon nodrag" title={t("Right panel (⌘\\)")} aria-label={t("Right panel (⌘\\)")} onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={headerIcon} /></button>
   </header>
 
   {#if !app.chat && !app.thread}
