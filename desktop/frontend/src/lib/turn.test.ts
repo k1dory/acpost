@@ -68,9 +68,10 @@ describe("usage of a turn and its deltas", () => {
     ]);
     expect(t.usage?.input).toBe(7);
   });
-  it("only #2 and on are deltas", () => {
-    expect(usageTurn("t1#3")).toEqual({ turn: "t1", delta: true });
-    expect(usageTurn("t1#1")).toEqual({ turn: "t1#1", delta: false });
-    expect(usageTurn("a#b")).toEqual({ turn: "a#b", delta: false });
+  it("only #2 and on are deltas, digits only (the same cases as the store's TestDeltaOfRule)", () => {
+    const cases: Record<string, string> = { "t1#2": "t1", "t1#10": "t1", "t1#1": "", "t1#+2": "", "t1#02": "", "t1#": "", "#2": "", "a#b": "", "t1": "" };
+    for (const [id, want] of Object.entries(cases)) {
+      expect(usageTurn(id)).toEqual(want ? { turn: want, delta: true } : { turn: id, delta: false });
+    }
   });
 });

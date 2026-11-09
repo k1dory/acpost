@@ -614,6 +614,7 @@ func (n *Node) Get(ctx context.Context, p Principal, id string) (store.Message, 
 
 // Wait returns the message once it is final, or as it is when timeout passes.
 func (n *Node) Wait(ctx context.Context, p Principal, id string, timeout time.Duration) (store.Message, error) {
+	defer n.noteWait(p, id)() // turnwaits_round1.go: an agent's turn waiting is a dependency
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	for {

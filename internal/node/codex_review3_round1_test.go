@@ -37,6 +37,7 @@ func TestSessionOfItsOwnSenderIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	go n.Wait(ctx, pa, child.ID, 10*time.Second) // the sender waits for it (send --wait)
 	w, err := n.Wait(ctx, me, child.ID, 3*time.Second)
 	if err != nil || w.State != store.Failed || w.ErrorCode != "refused" {
 		t.Fatalf("--session %s from its own turn: %s %s %q %v (want refused at once, not a wait for the sender)", sid, w.State, w.ErrorCode, w.Error, err)

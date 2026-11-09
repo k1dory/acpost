@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -126,12 +125,25 @@ func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Tim
 	if len(had) == 0 {
 		return addUsage(ctx, t, id, u, now)
 	}
+	if owner, err := turnOwner(ctx, t, u.Turn); err != nil || owner != id || had[0].Agent != u.Agent {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("store: the turn %s is another message's or agent's", u.Turn)
+	}
 	m := mergeUsage(had[0], u)
 	_, err = t.ExecContext(ctx, `UPDATE turn_usage SET ts = ?, session = ?, model = ?, reported = ?, input = ?, output = ?, cache_read = ?,
 		cache_write = ?, thought = ?, total = ?, cost = ?, currency = ?, context_used = ?, context_size = ? WHERE turn = ?`,
 		usageAt(m.At, now), m.Session, m.Model, m.Reported, m.Input, m.Output, m.CacheRead, m.CacheWrite, m.Thought, m.Total, m.Cost,
 		m.Currency, m.ContextUsed, m.ContextSize, m.Turn)
 	return err
+}
+
+// turnOwner is the message a turn's count is of.
+func turnOwner(ctx context.Context, t *sql.Tx, turn string) (string, error) {
+	var msg string
+	err := t.QueryRowContext(ctx, "SELECT msg FROM turn_usage WHERE turn = ?", turn).Scan(&msg)
+	return msg, err
 }
 
 // mergeUsage is two readings of one turn as one: the larger of each number, what either says.
@@ -466,22 +478,25 @@ func DeltaOf(turn string) (base string, ok bool) {
 	if i <= 0 || i == len(turn)-1 {
 		return turn, false
 	}
-	k, err := strconv.Atoi(turn[i+1:])
-	if err != nil || k < 2 || turn[i+1] == '0' {
+	// Digits only, no leading zero, 2 and on: the same rule as the app's usageTurn (turn.ts).
+	k := turn[i+1:]
+	for _, c := range k {
+		if c < '0' || c > '9' {
+			return turn, false
+		}
+	}
+	if k[0] == '0' || k == "1" {
 		return turn, false
 	}
 	return turn[:i], true
 }
 
-// countedTurn says whether a usage event's turn is counted here already: a turn by its row, a
-// delta by its own id (usage_deltas).
+// countedTurn says whether a usage event's turn is counted here already: by its row, or a delta
+// by its own id (usage_deltas).
 func countedTurn(ctx context.Context, t *sql.Tx, turn string) (int, error) {
-	q := "SELECT count(*) FROM turn_usage WHERE turn = ?"
-	if _, ok := DeltaOf(turn); ok {
-		q = "SELECT count(*) FROM usage_deltas WHERE turn = ?"
-	}
 	var n int
-	err := t.QueryRowContext(ctx, q, turn).Scan(&n)
+	err := t.QueryRowContext(ctx, "SELECT (SELECT count(*) FROM turn_usage WHERE turn = ?) + (SELECT count(*) FROM usage_deltas WHERE turn = ?)",
+		turn, turn).Scan(&n)
 	return n, err
 }
 
@@ -493,6 +508,18 @@ func countUsageEvent(ctx context.Context, t *sql.Tx, msg string, u Usage, now ti
 	if !ok {
 		return addUsage(ctx, t, msg, u, now)
 	}
+	// A delta folds only into its own turn: the row of the same message and the same agent. A turn
+	// id is known to whoever reads the events; one of another message or agent is left alone, and
+	// the event counts as a turn of its own (its id not taken as a delta), as before deltas.
+	var owner, agent string
+	err := t.QueryRowContext(ctx, "SELECT msg, agent FROM turn_usage WHERE turn = ?", base).Scan(&owner, &agent)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	case owner != msg || agent != u.Agent:
+		return addUsage(ctx, t, msg, u, now)
+	}
 	if _, err := t.ExecContext(ctx, "INSERT INTO usage_deltas (turn, base) VALUES (?, ?)", u.Turn, base); err != nil {
 		return err
 	}
@@ -501,8 +528,8 @@ func countUsageEvent(ctx context.Context, t *sql.Tx, msg string, u Usage, now ti
 		cost = CASE WHEN ? IS NULL THEN cost ELSE coalesce(cost, 0) + ? END,
 		currency = CASE WHEN currency = '' THEN ? ELSE currency END, model = CASE WHEN model = '' THEN ? ELSE model END,
 		context_used = CASE WHEN ? > 0 THEN ? ELSE context_used END, context_size = CASE WHEN ? > 0 THEN ? ELSE context_size END
-		WHERE turn = ?`, u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Thought, u.Total, u.Cost, u.Cost, u.Currency, u.Model,
-		u.ContextUsed, u.ContextUsed, u.ContextSize, u.ContextSize, base)
+		WHERE turn = ? AND msg = ? AND agent = ?`, u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Thought, u.Total, u.Cost, u.Cost, u.Currency, u.Model,
+		u.ContextUsed, u.ContextUsed, u.ContextSize, u.ContextSize, base, msg, u.Agent)
 	if err != nil {
 		return err
 	}

@@ -203,7 +203,10 @@ func (l *turnLocks) take(ctx context.Context, id string) error {
 		return nil
 	}
 	for {
-		if h := l.a.holderOf(id); h != "" && l.senders[h] {
+		// Refused only when the holder is a sender of this message that waits for this message's
+		// chain (send --wait, follow): it never lets go first. A sender that went on (no wait) ends
+		// its turn by itself; this one queues behind it.
+		if h := l.a.holderOf(id); h != "" && l.senders[h] && l.a.n.waitsForAny(h, l.chain()) {
 			what := "the session " + strings.TrimPrefix(id, "sid:")
 			if !strings.HasPrefix(id, "sid:") {
 				what = "the session of " + id
@@ -224,6 +227,15 @@ func (l *turnLocks) take(ctx context.Context, id string) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// chain is the turn's message and the messages it was sent from.
+func (l *turnLocks) chain() map[string]bool {
+	out := map[string]bool{l.msg: true}
+	for id := range l.senders {
+		out[id] = true
+	}
+	return out
 }
 
 func (l *turnLocks) release() {
@@ -649,7 +661,7 @@ func (s *acpSlot) freeSession(ctx context.Context, sid string) (bool, error) {
 		}
 		// The turn holding the session is this message's sender (or its sender's), waiting for the
 		// answer: it never ends first. Said at once, not after the sender's time runs out.
-		if c := other.cur.Load(); c != nil && senders[c.ID] {
+		if c := other.cur.Load(); c != nil && senders[c.ID] && s.a.n.waitsForAny(c.ID, s.chain(senders)) {
 			return false, failf("refused", "the session %s is open in the agent's process of the turn that sent this message (%s), which waits for this answer; send it with a --task whose session that turn has not opened", sid, c.ID)
 		}
 		select {
@@ -672,6 +684,18 @@ func (s *acpSlot) senders(ctx context.Context) map[string]bool {
 		return map[string]bool{}
 	}
 	return s.a.sendersOf(ctx, *m)
+}
+
+// chain is the slot's current message and its senders.
+func (s *acpSlot) chain(senders map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	for id := range senders {
+		out[id] = true
+	}
+	if m := s.cur.Load(); m != nil {
+		out[m.ID] = true
+	}
+	return out
 }
 
 // sendersOf are the messages m was sent from: its parent, the parent's, and so on (a few levels).

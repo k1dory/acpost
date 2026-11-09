@@ -1108,6 +1108,7 @@ func (a *sandboxAgent) followOnce(ctx context.Context, t *sandboxTurn) (sandboxE
 // handle runs one message as one turn of the sandbox's conversation.
 func (a *sandboxAgent) handle(m store.Message) {
 	n := a.n
+	defer sandboxHandled(m.ID) // tests: the attempt is over, all it stores stored
 	if err := n.st.Extend(n.ctx, m.ID, m.LeaseID, a.cfg.Lease.D()); err != nil {
 		return
 	}
@@ -1335,3 +1336,6 @@ func (a *sandboxAgent) saveCursor() {
 // sandboxUsageRead is called between a sandbox turn's reading of a usage line and its storing (a
 // test holds it there).
 var sandboxUsageRead = func() {}
+
+// sandboxHandled is called as a sandbox agent's attempt at a message returns (tests wait for it).
+var sandboxHandled = func(id string) {}

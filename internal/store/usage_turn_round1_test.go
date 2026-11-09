@@ -553,3 +553,49 @@ func TestUsagePastTheEventRoomAgrees(t *testing.T) {
 	}
 	agree(t, s, c.ID, sum)
 }
+
+// A delta relayed under another message's lease, naming a turn it learned from the events it can
+// read: the other message's turn stays as it was; the event counts as a turn of its own.
+func TestDeltaOfAnotherMessageLeavesItAlone(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t, Options{})
+	relay := func(turn string, input int, cost float64) string {
+		m := Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"}
+		if _, _, err := s.Insert(ctx, &m); err != nil {
+			t.Fatal(err)
+		}
+		c, ok, err := s.Claim(ctx, "agent:x", time.Minute)
+		if err != nil || !ok {
+			t.Fatal(ok, err)
+		}
+		b, _ := json.Marshal(Usage{Turn: turn, Agent: "agent:x@a", Model: "m", Reported: true, Input: input, Total: input, Cost: &cost, Currency: "USD"})
+		if _, err := s.RelayEvents(ctx, c.ID, c.LeaseID, 0, []RelayedEvent{{Kind: "usage", Data: string(b)}}); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	first := relay("v", 100, 0.25)
+	second := relay("v#2", 50, 0.5)
+	var owner string
+	var input int
+	var cost float64
+	if err := s.w.QueryRow("SELECT msg, input, cost FROM turn_usage WHERE turn = 'v'").Scan(&owner, &input, &cost); err != nil {
+		t.Fatal(err)
+	}
+	if owner != first || input != 100 || cost != 0.25 {
+		t.Fatalf("the first message's turn became %s %d %v (want %s, 100, 0.25)", owner, input, cost, first)
+	}
+	if err := s.w.QueryRow("SELECT msg, input FROM turn_usage WHERE turn = 'v#2'").Scan(&owner, &input); err != nil || owner != second || input != 50 {
+		t.Fatalf("the relayed event: %s %d %v (want a turn of its own message, 50)", owner, input, err)
+	}
+}
+
+// The rule for a delta's id, the same cases as the app's (turn.test.ts).
+func TestDeltaOfRule(t *testing.T) {
+	for id, want := range map[string]string{"t1#2": "t1", "t1#10": "t1", "t1#1": "", "t1#+2": "", "t1#02": "", "t1#": "", "#2": "", "a#b": "", "t1": ""} {
+		base, ok := DeltaOf(id)
+		if (want != "") != ok || (ok && base != want) {
+			t.Errorf("DeltaOf(%q) = %q, %v; want %q", id, base, ok, want)
+		}
+	}
+}

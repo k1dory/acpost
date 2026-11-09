@@ -26,7 +26,9 @@ func TestCancelMidStreamUsageAgrees(t *testing.T) {
 			<-release
 		}
 	}
-	t.Cleanup(func() { sandboxUsageRead = func() {} })
+	handled := make(chan string, 4)
+	sandboxHandled = func(id string) { handled <- id }
+	t.Cleanup(func() { sandboxUsageRead, sandboxHandled = func() {}, func(string) {} })
 	n, _ := sandboxNodeOn(t, f.handler, "store: \"memory:\"\n")
 	m, _, err := n.Send(ctx, me, SendRequest{To: "cloud", Body: "build it"})
 	if err != nil {
@@ -56,17 +58,18 @@ func TestCancelMidStreamUsageAgrees(t *testing.T) {
 	}
 	// The attempt ends (its stream closed by the cancel) and stores what it read: every line read
 	// is counted, in at most three events (the cancel's, the line it caught, the attempt's end).
-	var sum, events, counted int
-	var data []string
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		sum, events, data = usage()
-		counted = int(inputUsage(t, n))
-		if read := int(calls.Load()) * 100; counted == read && sum == read {
-			break
+	select {
+	case id := <-handled:
+		if id != m.ID {
+			t.Fatalf("handled %s", id)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("lines read %d (×100), counted %d, usage events %d summing to %d", calls.Load(), counted, events, sum)
-		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the attempt never ended")
+	}
+	sum, events, data := usage()
+	counted := int(inputUsage(t, n))
+	if read := int(calls.Load()) * 100; counted != read || sum != read {
+		t.Fatalf("lines read %d (×100), counted %d, usage events %d summing to %d", calls.Load(), counted, events, sum)
 	}
 	if events > 3 {
 		t.Fatalf("%d usage events for one cancelled attempt: want at most 3", events)
