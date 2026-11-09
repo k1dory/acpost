@@ -485,9 +485,17 @@ class App {
         this.moveDraft(d, "thread:" + c.thread);
       }
       // A new cloud task whose sandbox was made and whose message the node took (its answer lost):
-      // the thread of that sandbox is the task's, and the new task's screen becomes it.
+      // the thread of that sandbox is the task's, and the new task's screen becomes it — while the
+      // draft still describes that task (in the cloud, the same catalogue agent and repository).
+      // Once the person chose another place, agent or repository, the draft is a new task of its
+      // own: it stays, and lets that sandbox go. (A session's or cloud chat's draft has no such
+      // choice: where it goes is the chat itself.)
       const n = this.draftMap.get("new");
       if (n && !n.busy && n.sending && n.sandbox && n.sandbox.agent === c.agent) {
+        if (this.draft.where !== "cloud" || n.sandbox.for !== this.draft.cloudAgent + "\u0000" + this.draft.repo) {
+          n.forget();
+          continue;
+        }
         const shown = !this.chat && !this.thread;
         n.sending.moved = true;
         this.moveDraft(n, "thread:" + c.thread);

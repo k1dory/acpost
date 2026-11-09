@@ -562,6 +562,92 @@ describe("send, review round 7", () => {
   });
 });
 
+describe("send, review round 8", () => {
+  const T1 = { key: "thread:T1", kind: "thread", thread: "T1", agent: "agent:sb_1", title: "", updated: "" };
+  async function lostCloudSend() {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
+    fake.Node.CreateCloudTask.mockResolvedValueOnce({ agent: "agent:sb_1" }).mockResolvedValueOnce({ agent: "agent:sb_2" });
+    app.draftOf().text = "build it";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")); // taken into T1, the answer lost
+    await app.submit(app.draftOf());
+    return app;
+  }
+  async function refreshAndSend(app: any) {
+    fake.Node.Thread.mockResolvedValue([{ ...msg("m1", "T1", "running"), to: "agent:sb_1" }]);
+    fake.Node.Chats.mockResolvedValue({ items: [T1] });
+    await app.loadChats();
+    await flush();
+    expect(app.thread).toBe("");                       // not joined: the draft is another task now
+    expect(app.draftOf().text).toBe("build it, changed");
+    fake.Node.SendTask.mockImplementation(async (t: any) => ({ ...msg("m9", "T9"), to: t.to }));
+    expect(await app.submit(app.draftOf())).toBe(true);
+    return fake.Node.SendTask.mock.calls.at(-1)![0];
+  }
+
+  it("a new task moved to this Mac is not joined to the old sandbox's thread (R8)", async () => {
+    const app = await lostCloudSend();
+    app.draft.where = "mac"; app.draft.agent = "agent:claude"; app.draft.cwd = "/Users/me/src";
+    app.draftOf().text = "build it, changed";
+    const t = await refreshAndSend(app);
+    expect(t).toMatchObject({ to: "agent:claude", cwd: "/Users/me/src" });
+    expect(t.thread).toBeUndefined();
+  });
+
+  it("a new task given another catalogue agent gets a sandbox of its own (R8)", async () => {
+    const app = await lostCloudSend();
+    app.draft.cloudAgent = "ref2";
+    app.draftOf().text = "build it, changed";
+    const t = await refreshAndSend(app);
+    expect(t.to).toBe("agent:sb_2");
+    expect(t.thread).toBeUndefined();
+    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String));
+  });
+
+  it("a new task given another repository gets a sandbox of its own (R8)", async () => {
+    const app = await lostCloudSend();
+    app.draft.repo = "github.com/me/b";
+    app.draftOf().text = "build it, changed";
+    const t = await refreshAndSend(app);
+    expect(t.to).toBe("agent:sb_2");
+    expect(t.thread).toBeUndefined();
+    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String));
+  });
+
+  it("a new task still as it was is joined (R8, the R6.1 case)", async () => {
+    const app = await lostCloudSend();
+    fake.Node.Thread.mockResolvedValue([{ ...msg("m1", "T1", "running"), to: "agent:sb_1" }]);
+    fake.Node.Chats.mockResolvedValue({ items: [T1] });
+    await app.loadChats();
+    await flush();
+    expect(app.thread).toBe("T1");
+  });
+
+  it("a session's draft follows its thread whatever settings were chosen since: the chat is where it goes (R8)", async () => {
+    const app = await load();
+    const opts = { agent: "agent:claude", options: [{ id: "m", name: "Model", category: "model", current: "sonnet", values: [{ value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }] }] };
+    fake.Node.Options.mockResolvedValue(opts);                     // the agent's choices, as it answers them
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [S] });
+    await app.loadChats();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S);
+    app.draftOf().text = "go on";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout"));
+    await app.submit(app.draftOf());
+    app.setSetting("agent:claude", "model", "opus");             // changed since: not a target
+    fake.Node.Chats.mockResolvedValue({ items: [T] });
+    await app.loadChats();
+    fake.Node.SendTask.mockResolvedValueOnce(msg("m2", "T1"));
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T1", "running"), msg("m2", "T1")]);
+    await app.submit(app.draftOf());
+    const again = fake.Node.SendTask.mock.calls[1][0];
+    expect(again).toMatchObject({ thread: "T1", to: "agent:claude", model: "opus" });
+    expect(again.idem).not.toBe(fake.Node.SendTask.mock.calls[0][0].idem); // another message: another key
+  });
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");
