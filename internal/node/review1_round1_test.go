@@ -84,9 +84,9 @@ func TestCancelDuringForwardReachesHub(t *testing.T) {
 	received, release := heldSend(f)
 	go func() { _, _, _ = n.Send(ctx, me, SendRequest{To: "agent:far@other", Body: "work", IdemKey: "c1"}) }()
 	waitFor(t, received, "the hub takes the send")
-	m, created, err := n.Send(ctx, me, SendRequest{To: "agent:far@other", Body: "work", IdemKey: "c1"})
-	if err != nil || created {
-		t.Fatal(created, err)
+	m, err := n.st.ByIdem(ctx, me.Address(), "c1")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := n.Cancel(ctx, me, m.ID); err != nil {
 		t.Fatal(err)

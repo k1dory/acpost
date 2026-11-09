@@ -42,6 +42,10 @@ type fakeHub struct {
 	received   chan struct{} // told when a send is taken
 	getFails   int           // the next GETs of a message answer 500
 	cancels    []string
+	holdIn     chan struct{} // a send waits for it before the hub takes it
+	reply      string        // its copy's reply
+	files      int           // GETs of files
+	hangFiles  int           // the next GETs of files never answer
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
@@ -123,6 +127,14 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "refused", "message": "not now"}})
 			return
 		}
+		if holdIn := f.holdIn; holdIn != nil {
+			f.mu.Unlock()
+			select {
+			case <-holdIn:
+			case <-f.quit:
+			}
+			f.mu.Lock()
+		}
 		f.sent = append(f.sent, rq)
 		m, dup := f.msgs[f.keys[rq.From+"|"+key]], key != "" && f.keys[rq.From+"|"+key] != ""
 		if !dup {
@@ -162,6 +174,10 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "POST" && part == "cancel":
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/messages/"), "/cancel")
 		f.cancels = append(f.cancels, id)
+		if f.state.Final() {
+			conflict(w, "message is already "+string(f.state))
+			return
+		}
 		f.state = store.Cancelled
 		_ = json.NewEncoder(w).Encode(store.Message{ID: id, State: store.Cancelled})
 	case r.Method == "GET" && part == "by-idem":
@@ -180,14 +196,27 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 		}
 		f.mu.Lock()
-		_ = json.NewEncoder(w).Encode(store.Message{ID: r.PathValue("id"), State: f.state})
+		_ = json.NewEncoder(w).Encode(store.Message{ID: r.PathValue("id"), State: f.state, Reply: f.reply})
 	case r.Method == "GET" && strings.HasPrefix(part, "msg_") && f.getFails > 0:
 		f.getFails--
 		w.WriteHeader(500)
 	case r.Method == "GET" && strings.HasPrefix(part, "msg_") && f.msgs[part].ID != "":
 		m := f.msgs[part]
-		m.State = f.state
+		m.State, m.Reply = f.state, f.reply
 		_ = json.NewEncoder(w).Encode(m)
+	case r.Method == "GET" && part == "files":
+		f.files++
+		if f.hangFiles > 0 {
+			f.hangFiles--
+			f.mu.Unlock()
+			select {
+			case <-r.Context().Done():
+			case <-f.quit:
+			}
+			f.mu.Lock()
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"name": "f.bin", "size": 1, "data": "eA=="}}})
 	case r.Method == "GET" && strings.HasPrefix(part, "msg_") && f.missing:
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "no message " + part}})
@@ -222,7 +251,7 @@ func (f *fakeHub) get() fakeHub {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return fakeHub{lease: f.lease, state: f.state, replies: append([]client.ReplyRequest(nil), f.replies...),
-		sent: append([]client.SendRequest(nil), f.sent...), cancels: append([]string(nil), f.cancels...), msgs: maps.Clone(f.msgs)}
+		sent: append([]client.SendRequest(nil), f.sent...), cancels: append([]string(nil), f.cancels...), msgs: maps.Clone(f.msgs), files: f.files}
 }
 
 func (f *fakeHub) count(part string) int {
@@ -234,9 +263,9 @@ func (f *fakeHub) count(part string) int {
 // fastHub makes relays renew the hub's lease every d, and try a reply again after d/3, for this
 // test.
 func fastHub(t *testing.T, d time.Duration) {
-	oldRenew, oldRetry := hubRenew, hubRetry
-	hubRenew, hubRetry = d, d/3
-	t.Cleanup(func() { hubRenew, hubRetry = oldRenew, oldRetry })
+	oldRenew, oldRetry, oldAbsence := hubRenew, hubRetry, hubAbsence
+	hubRenew, hubRetry, hubAbsence = d, d/3, 10*d
+	t.Cleanup(func() { hubRenew, hubRetry, hubAbsence = oldRenew, oldRetry, oldAbsence })
 }
 
 // eventually waits up to 5 s for cond.

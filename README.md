@@ -345,7 +345,9 @@ text, when it adds something, is in `error` after the explanation.
 
 `--timeout` defaults to no limit for `wait` and is advisable from an agent, whose shell tool has its
 own. `--idempotency-key` makes a repeated `send` (a retry after a network error) return the first
-message instead of creating another; keys are per sender and kept as long as the message.
+message instead of creating another; keys are per sender and kept as long as the message. A send
+through the hub whose answer is not known yet makes a repeat fail with `unavailable` (try again
+shortly); one found not to have reached the hub releases its key, so the next repeat sends it.
 
 ## Configuration
 
@@ -478,6 +480,7 @@ are `{"error":{"code":"not_found","message":"…","hint":"…"}}` with codes `in
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
+| `GET /v1/messages/by-idem?from=&key=` | (a joined node, to its hub) the message one of its senders (`…@<node>`) sent with an idempotency key: what became of a send whose answer was lost |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |
 | `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…","files":[…]}` or `{"lease":"…","error":"…"}` |
 | `POST /v1/messages/{id}/lease` | extend a claim |

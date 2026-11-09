@@ -21,3 +21,10 @@ var (
 )
 
 const hubReplyTimeout = time.Minute // a reply carries its files
+
+// hubAbsence is how long after a forwarded message was stored the hub's "no such message" is
+// taken for "not sent": a send still on its way may arrive before that.
+var hubAbsence = 30 * time.Second
+
+// hubFilesTimeout bounds one download of a message's files the hub kept (a forward's recovery).
+var hubFilesTimeout = time.Minute

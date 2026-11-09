@@ -630,7 +630,8 @@ func (n *Node) takeDelivery(ctx context.Context, local *store.Message, maxQueued
 // The hub cancelled it, or ended it without this node (it gave up after the lease was lost too
 // often): the copy here ends too, if it is still this delivery's. Otherwise the lease went to
 // another delivery, or the hub's lease ran out and it delivers again: the copy is left as it is (a
-// turn running goes on) for the next delivery to adopt; it is not cancelled for good.
+// turn running goes on) for the next delivery to adopt, and watched until then; it is not
+// cancelled for good.
 func (n *Node) hubLeaseGone(id, lease string) {
 	// The hub's word is needed: without it (the hub did not answer, the store failed) it is asked
 	// again, a pause longer each time, until it answers or another delivery owns the copy.
@@ -666,10 +667,9 @@ func (n *Node) hubLeaseVerdict(id, lease string) bool {
 		if err == nil && hm.Error != "" {
 			why += ": " + hm.Error
 		}
-	case err == nil:
-		n.log.Info("hub lease lost; the message is left to the hub's next delivery", "id", id)
-		return true
 	default:
+		// Not ended there (queued for its next delivery), or no answer: watched on, until a
+		// delivery adopts the copy or the hub ends the message (a cancel comes with no delivery).
 		return false
 	}
 	ok, err := n.st.CancelIfOrigin(n.ctx, id, originHub+lease, code, why)

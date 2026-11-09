@@ -198,3 +198,97 @@ func (s *Store) OfOrigin(ctx context.Context, origin, after string, limit int) (
 	}
 	return out, rows.Err()
 }
+
+// ReplaceForward replaces, in one transaction, a message stored to be sent to a hub (id, origin
+// forwarding) with a copy of the message the hub kept for the same key (first, with its files):
+// the copy takes the sender's key, and a cancel done here meanwhile (the stored message is
+// final) stays with it, its origin forwarding until the cancel reaches the hub; otherwise its
+// origin is origin. Nothing changes on any failure. A copy already here is kept as it is (the
+// stored message is dropped). It returns the copy.
+func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin string, first Message) (Message, error) {
+	if first.ID == "" || first.To == "" {
+		return Message{}, errors.New("store: replace needs the hub's message's id and recipient")
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		var seq int64
+		var sender string
+		var state State
+		var key sql.NullString
+		err := t.QueryRowContext(ctx, "SELECT seq, sender, state, idem_key FROM messages WHERE id = ? AND origin = ?", id, forwarding).
+			Scan(&seq, &sender, &state, &key)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		for _, q := range []string{"DELETE FROM events WHERE msg = ?", "DELETE FROM contents WHERE seq = ?", "DELETE FROM files WHERE msg = ?", "DELETE FROM messages WHERE seq = ?"} {
+			if _, err := t.ExecContext(ctx, q, seq); err != nil {
+				return err
+			}
+		}
+		var n int
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM messages WHERE id = ?", first.ID).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			o, st, finished := origin, Queued, int64(0)
+			if state.Final() {
+				o, st, finished = forwarding, Cancelled, ms(now)
+			}
+			thread := first.Thread
+			if thread == "" {
+				thread = first.ID
+			}
+			var meta string
+			if len(first.Meta) > 0 {
+				b, _ := json.Marshal(first.Meta)
+				meta = string(b)
+			}
+			var idem any
+			if key.Valid {
+				idem = key.String
+			}
+			if err := s.roomFor(ctx, t, int64(len(first.Body))); err != nil {
+				return err
+			}
+			res, err := t.ExecContext(ctx, `INSERT INTO messages
+				(id, sender, recipient, task, thread, parent, depth, state, meta, body_size, created_at, updated_at, expires_at, finished_at, origin, idem_key)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				first.ID, sender, first.To, first.Task, thread, first.Parent, first.Depth, st, meta, len(first.Body),
+				ms(now), ms(now), ms(first.ExpiresAt), finished, o, idem)
+			if err != nil {
+				return err
+			}
+			nseq, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			if _, err := t.ExecContext(ctx, "INSERT INTO contents (seq, body) VALUES (?, ?)", nseq, first.Body); err != nil {
+				return err
+			}
+			if err := s.putFiles(ctx, t, nseq, false, first.Files); err != nil {
+				return err
+			}
+		}
+		return dropOrphans(ctx, t)
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	return s.Get(ctx, first.ID)
+}
+
+// ReopenForward takes back a cancel done here on a message stored to be sent to a hub, when the
+// hub had already ended it (its outcome is the message's): queued again, with origin origin, for
+// the hub's outcome to be copied onto it. It reports whether it did.
+func (s *Store) ReopenForward(ctx context.Context, id, forwarding, origin string) (bool, error) {
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, state = 'queued', error = '', error_code = '', finished_at = 0,
+		updated_at = ? WHERE id = ? AND origin = ? AND state = 'cancelled'`, origin, ms(time.Now()), id, forwarding)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}

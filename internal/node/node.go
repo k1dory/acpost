@@ -443,7 +443,11 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 
 	// A repeat (same sender, same key) returns the first message before anything is resolved again.
 	if r.IdemKey != "" && p.Kind != "node" {
-		if prev, err := n.st.ByIdem(ctx, p.Address(), r.IdemKey); err == nil {
+		if prev, err := n.st.ByIdem(ctx, p.Address(), r.IdemKey); err == nil && prev.Origin != originUnsent {
+			// (unsent: its key was released between the lookup and the read; it is sent anew)
+			if prev.Origin == originForwarding && !prev.State.Final() {
+				return store.Message{}, false, pendingErr(prev.ID) // not known to be sent: no success yet
+			}
 			return hideLease(prev), false, nil
 		}
 	}
@@ -682,6 +686,14 @@ func (n *Node) Cancel(ctx context.Context, p Principal, id string) (store.Messag
 	if !p.local() && !nodeOwn && m.From != p.Address() && !n.canServe(p, m.To) {
 		return m, errf("refused", "only the sender may cancel %s", id)
 	}
+	afterCancelRead(id)
+	if m.Origin == originForwarding {
+		cur, done, err := n.cancelForwarding(ctx, p, m)
+		if err != nil || done {
+			return cur, err
+		}
+		m = cur // the send finished meanwhile: as it is now
+	}
 	if m.Origin == originRemote {
 		// The hub owns the outcome: if it already has one, that is what the local copy gets (follow).
 		if _, err := n.hub.Cancel(ctx, id); err != nil {
@@ -698,9 +710,6 @@ func (n *Node) Cancel(ctx context.Context, p Principal, id string) (store.Messag
 	}
 	if err != nil {
 		return got, err
-	}
-	if m.Origin == originForwarding {
-		n.resolveLater(id) // the hub may have it already: the cancel goes there too
 	}
 	n.notify()
 	return hideLease(got), nil

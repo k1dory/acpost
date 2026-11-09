@@ -11,23 +11,40 @@ import (
 
 // Forwarding: a message to an agent on another node goes to the hub, and the node keeps a local
 // copy. The copy is stored before the hub is asked (origin forwarding), under the sender's key, so
-// a repeat finds it without the hub and a request that ends after the hub took the message still
-// leaves it. Then:
+// a request that ends after the hub took the message still leaves it. Then:
 //
 //	forwarding  the hub's answer is not known yet: resolveForward learns it from the hub
 //	remote      the hub has it: the copy follows the hub's (followSweep, follow)
 //	unsent      not sent for certain (refused, or the hub never got it); its key is free again
 //
-// A copy cancelled (or ended) here while still forwarding keeps that origin until the cancel has
-// reached the hub too.
+// A copy cancelled here while still forwarding keeps that origin until the hub has the cancel
+// (or, the hub having ended it already, until its outcome is the copy's).
+//
+// One goroutine at a time owns a forwarding copy (n.resolving): the send while its request is out,
+// then the resolver it hands the copy to. Nothing settles a copy while its send may still reach
+// the hub, and the hub's "I have no such message" counts only once hubAbsence has passed since
+// the copy was stored (a send may arrive late).
 
 const (
 	originForwarding = "forwarding"
 	originUnsent     = "unsent"
 )
 
-// finishForward is the store's FinishForward (a test makes one write fail).
-var finishForward = (*store.Store).FinishForward
+// Store writes of the forwarding path (a test makes one fail).
+var (
+	finishForward  = (*store.Store).FinishForward
+	forwardNotSent = (*store.Store).ForwardNotSent
+	// afterCancelRead runs in Cancel between reading the message and cancelling it (a test
+	// finishes a forward there).
+	afterCancelRead = func(id string) {}
+)
+
+// pendingErr is what a send with the key of a copy still forwarding gets: not a success (the hub
+// may not have it), but a cause to try again.
+func pendingErr(id string) error {
+	return errh("unavailable", "send again shortly with the same key: the hub's answer is being learned",
+		"%s is on its way to the hub, not confirmed yet", id)
+}
 
 // forward sends a message to the hub and keeps a local copy that follows it.
 func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store.Message, bool, error) {
@@ -39,26 +56,35 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 	lctx := context.WithoutCancel(ctx) // the local copy's writes outlive the request
 	pending := *m
 	pending.To, pending.Origin = to.String(), originForwarding
+	n.resolving.Store(m.ID, true) // this send owns the copy until it hands it on
+	owned := true
+	defer func() {
+		if owned {
+			n.resolving.Delete(m.ID)
+		}
+	}()
+	handOn := func() { owned = false; n.resolveOwned(m.ID) }
 	got, created, err := n.st.Insert(lctx, &pending)
 	if err != nil {
 		return store.Message{}, false, n.fileErr(err, m.ID)
 	}
-	if !created {
-		return hideLease(got), false, nil // a repeat of the key, sent at the same time
+	if !created { // a repeat of the key, sent at the same time
+		if got.Origin == originForwarding || got.Origin == originUnsent { // (unsent: released just now)
+			return store.Message{}, false, pendingErr(got.ID)
+		}
+		return hideLease(got), false, nil
 	}
 	sent, created, err := n.hub.Send(ctx, req, m.IdemKey)
 	if err != nil {
-		if hubRefused(err) {
-			n.notSent(lctx, m.ID, hubErr(err))
-		} else {
-			n.resolveLater(m.ID) // the hub may have it: asked (a node closing asks at its next start)
+		if !hubRefused(err) || !n.notSent(lctx, m.ID, hubErr(err)) {
+			handOn() // the hub may have it, or the write failed: learned from the hub
 		}
 		return store.Message{}, false, hubErr(err)
 	}
 	if !created && sent.ID != m.ID {
 		copied, err := n.takeHubRepeat(ctx, m.ID, sent)
 		if err != nil {
-			n.resolveLater(m.ID)
+			handOn()
 			return store.Message{}, false, err
 		}
 		return hideLease(copied), false, nil
@@ -66,7 +92,7 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 	if ok, err := finishForward(n.st, lctx, m.ID, originForwarding, originRemote, sent); err != nil || !ok {
 		// The hub has it, the copy is not marked so (a write failed, or it was cancelled
 		// meanwhile): the resolver finishes it, carrying a cancel to the hub.
-		n.resolveLater(m.ID)
+		handOn()
 	} else {
 		n.startFollow(m.ID)
 	}
@@ -84,20 +110,13 @@ func hubRefused(err error) bool {
 }
 
 // takeHubRepeat replaces the copy stored for a send (id) with a copy of the message the hub kept
-// for the same key before (sent): its first send, whose local copy is gone or was never made.
+// for the same key before (sent): its first send, whose local copy is gone or was never made. The
+// replacement is one store step, a cancel done here meanwhile carried over.
 func (n *Node) takeHubRepeat(ctx context.Context, id string, sent store.Message) (store.Message, error) {
-	lctx := context.WithoutCancel(ctx)
-	pending, err := n.st.Get(lctx, id)
-	if err != nil {
-		return store.Message{}, err
-	}
-	key, err := n.st.IdemKeyOf(lctx, id)
-	if err != nil {
-		return store.Message{}, err
-	}
-	var files []store.File
 	if listed := pick(sent.Files, false); len(listed) > 0 {
-		got, err := n.fetchFiles(ctx, sent.ID, false, listed, "the message")
+		fctx, done := context.WithTimeout(ctx, hubFilesTimeout)
+		got, err := n.fetchFiles(fctx, sent.ID, false, listed, "the message")
+		done()
 		var e *Error
 		if err != nil && !errors.As(err, &e) {
 			err = hubErr(err)
@@ -105,28 +124,26 @@ func (n *Node) takeHubRepeat(ctx context.Context, id string, sent store.Message)
 		if err != nil {
 			return store.Message{}, err
 		}
-		files = got
+		sent.Files = got
+	} else {
+		sent.Files = nil
 	}
-	if err := n.st.DropForward(lctx, id, originForwarding); err != nil {
-		return store.Message{}, err
-	}
-	local := &store.Message{ID: sent.ID, From: pending.From, To: sent.To, Task: sent.Task, Thread: sent.Thread, Parent: sent.Parent,
-		Depth: sent.Depth, Meta: sent.Meta, Body: sent.Body, ExpiresAt: sent.ExpiresAt, Origin: originRemote, Files: files, IdemKey: key}
-	got, _, err := n.st.Insert(lctx, local)
+	got, err := n.st.ReplaceForward(context.WithoutCancel(ctx), id, originForwarding, originRemote, sent)
 	if err != nil {
-		if existing, gerr := n.st.Get(lctx, sent.ID); gerr == nil {
-			return existing, nil
-		}
 		return store.Message{}, err
 	}
 	n.notify()
-	n.startFollow(sent.ID)
+	if got.Origin == originForwarding {
+		n.resolveLater(got.ID) // cancelled here: the cancel goes to the hub's message
+	} else {
+		n.startFollow(got.ID)
+	}
 	return got, nil
 }
 
-// notSent marks a forwarded message as not sent for certain.
+// notSent marks a forwarded message as not sent for certain; false: the write failed.
 func (n *Node) notSent(ctx context.Context, id string, why error) bool {
-	ok, err := n.st.ForwardNotSent(ctx, id, originForwarding, originUnsent, "not sent through the hub: "+why.Error())
+	ok, err := forwardNotSent(n.st, ctx, id, originForwarding, originUnsent, "not sent through the hub: "+why.Error())
 	if err != nil {
 		return false
 	}
@@ -136,11 +153,18 @@ func (n *Node) notSent(ctx context.Context, id string, why error) bool {
 	return true
 }
 
-// resolveLater starts resolveForward for a message, unless one runs for it already.
+// resolveLater starts resolveForward for a message, unless something owns it already (its send,
+// or a resolver).
 func (n *Node) resolveLater(id string) {
 	if _, busy := n.resolving.LoadOrStore(id, true); busy {
 		return
 	}
+	n.resolveOwned(id)
+}
+
+// resolveOwned starts resolveForward for a message the caller owns (n.resolving holds it); the
+// resolver lets it go when done.
+func (n *Node) resolveOwned(id string) {
 	if !n.goWork(func() {
 		defer n.resolving.Delete(id)
 		n.resolveForward(id)
@@ -200,36 +224,48 @@ func (n *Node) resolveOnce(id string) bool {
 		first, err := n.hub.ByIdem(ctx, n.qualify(local.From), key)
 		done()
 		switch {
-		case err == nil:
-			if local.State.Final() {
-				return n.foundOnHub(first.ID, local, first) && n.notSent(n.ctx, id, errors.New("cancelled before the hub had it"))
-			}
+		case err == nil && first.ID != id:
 			_, err := n.takeHubRepeat(n.ctx, id, first)
 			return err == nil
+		case err == nil:
+			return false // there now under this id: the next try finds it
 		case errors.As(err, &ce) && (ce.Code == "not_found" || ce.Status == 404 || ce.Status == 405):
-			// None (or a hub without the lookup): not sent.
+			// None (or a hub without the lookup).
 		default:
 			return false
 		}
 	}
+	if time.Since(local.CreatedAt) < hubAbsence {
+		return false // the send may still arrive: absence counts only later
+	}
 	return n.notSent(n.ctx, id, errors.New("the hub did not get it; send again"))
 }
 
-// foundOnHub settles a forwarding copy the hub has (hm, under hm.ID): the copy follows it, or, ended
-// here meanwhile, the hub's is cancelled first.
+// foundOnHub settles a forwarding copy the hub has (hm): the copy follows it; cancelled here
+// meanwhile, the cancel goes to the hub first, and a hub that had already ended the message gives
+// the copy its outcome.
 func (n *Node) foundOnHub(id string, local, hm store.Message) bool {
 	if local.State.Final() {
 		ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
-		_, err := n.hub.Cancel(ctx, hm.ID)
+		_, err := n.hub.Cancel(ctx, id)
 		done()
-		if err != nil && !isFinalErr(err) {
-			return false // the cancel did not reach the hub: again later
-		}
-		if hm.ID != id {
+		switch {
+		case err == nil:
+			_, err = n.st.SetOriginIf(n.ctx, id, originForwarding, originRemote)
+			return err == nil
+		case isFinalErr(err):
+			// Ended on the hub before the cancel: its outcome is the message's.
+			ok, err := n.st.ReopenForward(n.ctx, id, originForwarding, originRemote)
+			if err != nil {
+				return false
+			}
+			if ok {
+				n.notify()
+				n.startFollow(id)
+			}
 			return true
 		}
-		_, err = n.st.SetOriginIf(n.ctx, id, originForwarding, originRemote)
-		return err == nil
+		return false // the cancel did not reach the hub: again later
 	}
 	ok, err := finishForward(n.st, n.ctx, id, originForwarding, originRemote, hm)
 	if err != nil || !ok {
@@ -253,4 +289,22 @@ func (n *Node) resumeForwards() {
 		}
 		after = page[len(page)-1]
 	}
+}
+
+// cancelForwarding cancels a copy still forwarding, only while it is (a send finishing at the same
+// time makes it the hub's: then the hub is asked first, as for any remote copy). done: it is
+// cancelled; otherwise m is the copy as it is now.
+func (n *Node) cancelForwarding(ctx context.Context, p Principal, m store.Message) (store.Message, bool, error) {
+	ok, err := n.st.CancelIfOrigin(ctx, m.ID, originForwarding, "", "")
+	if err != nil {
+		return m, false, err
+	}
+	if ok {
+		n.resolveLater(m.ID) // the hub may have it already: the cancel goes there too
+		n.notify()
+		cur, err := n.Get(ctx, p, m.ID)
+		return cur, true, err
+	}
+	cur, err := n.Get(ctx, p, m.ID)
+	return cur, false, err
 }
