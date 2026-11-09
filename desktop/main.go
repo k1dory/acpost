@@ -25,8 +25,9 @@ func main() {
 	services := []application.Service{application.NewService(node)}
 	// Notifications of the system need the bundle's identifier: from acpost.app only.
 	if exe, err := os.Executable(); err == nil && strings.Contains(exe, ".app/Contents/MacOS/") {
-		node.notes = notifications.New()
-		services = append(services, application.NewService(node.notes))
+		notes := notifications.New()
+		node.notes = notes
+		services = append(services, application.NewService(notes))
 	}
 	app := application.New(application.Options{
 		Name:        "acpost",

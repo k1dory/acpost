@@ -6,6 +6,7 @@
   import "@xterm/xterm/css/xterm.css";
   import { app } from "../lib/state.svelte";
   import { Node, on, b64, unb64, errText } from "../lib/api";
+  import { attachShell } from "./terminalAttach";
 
   // Shown (its tab current, the panel open): it takes the keys, sized to its box.
   let { active = true }: { active?: boolean } = $props();
@@ -15,6 +16,10 @@
   let id = "";
   let err = $state("");
   let exited = $state<string>("");
+  let lost = $state(false); // the connection to the node is down; the shell may go on
+  // Each start (and close) is a new generation: a shell that opens after the component moved on
+  // (closed, or started again) is closed, not attached.
+  let gen = 0;
   let where = $state(""); // the agent whose directory the shell was opened in
   let stop: (() => void) | null = null;
   let ro: ResizeObserver | null = null;
@@ -37,7 +42,8 @@
 
   async function start() {
     close();
-    err = ""; exited = "";
+    const my = gen;
+    err = ""; exited = ""; lost = false;
     const fit = new FitAddon();
     term = new Terminal({
       fontFamily: '"JetBrains Mono", "JetBrainsMono Nerd Font", "Symbols Nerd Font Mono", "MesloLGS NF", ui-monospace, Menlo, monospace', fontSize: 12.5, lineHeight: 1.25, cursorBlink: true,
@@ -50,20 +56,26 @@
     try {
       where = app.focusAgent();
       const opened: any = await Node.OpenTerminal(where, term.cols, term.rows);
+      if (my !== gen || !term) { Node.CloseTerminal(opened.id).catch(() => {}); return; }
       id = opened.id;
       const dec = new TextDecoder();
+      // Subscribed before the output starts: what the shell prints first is not lost.
       stop = on("term:" + id, d => {
-        if (d.data) term?.write(dec.decode(unb64(d.data), { stream: true }));
-        if (d.exit) exited = d.error ? d.error : `exited${d.code !== undefined && d.code !== null ? ` (${d.code})` : ""}`;
+        if (d.data) { lost = false; term?.write(dec.decode(unb64(d.data), { stream: true })); }
+        if (d.lost) lost = true;
+        if (d.exit) { lost = false; exited = d.error ? errText(d.error) : d.code !== undefined && d.code !== null ? t("exited ({code})", { code: d.code }) : t("exited"); }
       });
-      term.onData(type);
+      const xt = term, tid = id;
+      await attachShell({ onData: fn => xt.onData(fn), input: type, attach: () => Node.TermAttach(tid, 0) });
+      if (my !== gen || !term) return;
       term.onResize(({ cols, rows }) => Node.TermResize(id, cols, rows).catch(() => {}));
       ro = new ResizeObserver(() => fit.fit());
       ro.observe(el);
       term.focus();
-    } catch (e) { err = errText(e); }
+    } catch (e) { if (my === gen) err = errText(e); }
   }
   function close() {
+    gen++;
     stop?.(); stop = null; ro?.disconnect(); ro = null;
     if (id) Node.CloseTerminal(id).catch(() => {});
     id = ""; queued = ""; term?.dispose(); term = null;
@@ -81,7 +93,7 @@
 <div class="tw">
   <div class="tools">
     <span class="muted">{where ? t("in {agent}'s directory", { agent: where.slice(6) }) : t("home directory")}</span>
-    {#if exited}<span class="chip">{exited}</span>{/if}
+    {#if exited}<span class="chip">{exited}</span>{:else if lost}<span class="chip">{t("Not reachable right now")}</span>{/if}
     <span class="sp"></span>
     <button class="btn sm" onclick={start}>{t("New shell")}</button>
   </div>

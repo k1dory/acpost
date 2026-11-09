@@ -3,13 +3,17 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
@@ -22,8 +26,39 @@ import (
 // configuration written first if there is none: Claude Code and Codex over ACP, the cloud of the
 // first agent-sandbox env file found).
 
-// ensureNode answers whether a node serves now, starting one in the app when none does.
+// runNode runs the app's own node (a stub in tests).
+var runNode = server.Run
+
+// nodeStartWait is how long the app's own node has to get ready; nodeStopWait how long a start
+// that did not is waited for once cancelled.
+var nodeStartWait, nodeStopWait = 20 * time.Second, 5 * time.Second
+
+// ensureNode answers whether a node serves now, starting one in the app when none does. Calls
+// are serialized (Wails runs each binding call in its own goroutine, and Status is called at
+// start, on a timer and from "Try again"): one node starts, the others find it running. The
+// outcome is kept for Status.
 func (n *Node) ensureNode() error {
+	n.startMu.Lock()
+	defer n.startMu.Unlock()
+	err := n.startNode()
+	n.mu.Lock()
+	n.startErr = ""
+	if err != nil {
+		n.startErr = err.Error()
+	}
+	n.mu.Unlock()
+	return err
+}
+
+func (n *Node) startNode() error {
+	switch n.ownNode() {
+	case nodeUp:
+		return nil
+	case nodeStopping:
+		// A start that failed or timed out is still stopping: not a node that runs, and none
+		// starts beside it. The error stays, so the next Status tries again.
+		return errors.New("the last start of the node is still stopping: try again in a moment")
+	}
 	c, err := n.client()
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -44,7 +79,7 @@ func (n *Node) ensureNode() error {
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return fmt.Errorf("%s: %w (fix it, or remove it for the app to write one)", path, err)
 	}
 	logPath := filepath.Join(config.StateDir(), "app-node.log")
 	_ = os.MkdirAll(filepath.Dir(logPath), 0o700)
@@ -53,28 +88,74 @@ func (n *Node) ensureNode() error {
 		return err
 	}
 	ready := make(chan struct{})
-	failed := make(chan error, 1)
+	var readyOnce sync.Once
+	result := make(chan error, 1) // what Run returned, sent before done closes
+	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	n.stopNode = cancel
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		cancel()
+		logf.Close()
+		return errors.New("the app is quitting")
+	}
+	n.stopNode, n.nodeDone, n.nodeOK = cancel, done, false
+	n.mu.Unlock()
 	go func() {
+		defer close(done)
 		defer logf.Close()
 		log := slog.New(slog.NewTextHandler(logf, nil))
-		if err := server.Run(ctx, cfg, log, func() { close(ready) }); err != nil {
-			failed <- err
-		}
+		result <- runNode(ctx, cfg, log, func() { readyOnce.Do(func() { close(ready) }) })
 	}()
 	select {
 	case <-ready:
 		n.mu.Lock()
 		n.c = nil // reconnect to the node now listening
+		n.nodeOK = true
 		n.mu.Unlock()
 		return nil
-	case err := <-failed:
+	case err := <-result: // one channel: the cause is not lost to a "stopped" picked first
+		cancel()
+		if err == nil {
+			return fmt.Errorf("the node stopped as it started (log %s)", logPath)
+		}
 		return fmt.Errorf("the node did not start: %w (log %s)", err, logPath)
-	case <-time.After(20 * time.Second):
-		return fmt.Errorf("the node did not start in 20 s (log %s)", logPath)
+	case <-time.After(nodeStartWait):
+		// Not left starting: the next try would start another beside it.
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(nodeStopWait):
+		}
+		return fmt.Errorf("the node did not start in %s (log %s)", nodeStartWait, logPath)
 	}
 }
+
+// ownNode is the state of the node the app started: none (never started, or stopped), up (it
+// got ready and runs), or stopping (it never got ready, and has not ended yet).
+func (n *Node) ownNode() int {
+	n.mu.Lock()
+	done, ready := n.nodeDone, n.nodeOK
+	n.mu.Unlock()
+	if done == nil {
+		return nodeNone
+	}
+	select {
+	case <-done:
+		return nodeNone
+	default:
+	}
+	if ready {
+		return nodeUp
+	}
+	return nodeStopping
+}
+
+const (
+	nodeNone = iota
+	nodeUp
+	nodeStopping
+)
 
 // writeDefaultConfig writes a node for this Mac: the ACP agents found, and a cloud when an
 // agent-sandbox env file is there.
@@ -108,7 +189,11 @@ func writeDefaultConfig(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o600)
+	// Written whole, and only where there is none: a configuration that appeared meanwhile is kept.
+	if err := writeAtomic(path, []byte(b.String()), 0o600, nil, false); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return nil
 }
 
 // Chats lists the user's chats (threads, Claude Code and Codex sessions, cloud sandboxes) and folders.
@@ -167,18 +252,29 @@ type Task struct {
 	Effort  string   `json:"effort,omitempty"`
 	Mode    string   `json:"mode,omitempty"`
 	Files   []Upload `json:"files,omitempty"`
+	// Idem is the send's idempotency key, the composer's for this one message: a retry after a
+	// lost answer gets the message already made instead of a second run.
+	Idem string `json:"idem,omitempty"`
 }
 
 // SendTask sends a message with its directory and settings.
 func (n *Node) SendTask(t Task) (store.Message, error) {
 	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (store.Message, error) {
 		r := client.SendRequest{To: t.To, Body: t.Body, Thread: t.Thread, Session: t.Session, Cwd: t.Cwd, Model: t.Model, Effort: t.Effort, Mode: t.Mode}
-		files, err := decodeUploads(t.Files)
+		var lim *client.Limits
+		if len(t.Files) > 0 {
+			st, err := c.Status(ctx)
+			if err != nil {
+				return store.Message{}, err
+			}
+			lim = st.Limits
+		}
+		files, err := decodeUploads(t.Files, lim)
 		if err != nil {
 			return store.Message{}, err
 		}
 		r.Files = files
-		m, _, err := c.Send(ctx, r, "")
+		m, _, err := c.Send(ctx, r, t.Idem)
 		return m, err
 	})
 }
@@ -224,11 +320,13 @@ func (n *Node) Home() string {
 	return h
 }
 
+// callLong calls the node with a deadline of d; its errors come whole (withHint), the
+// client's own too.
 func callLong[T any](n *Node, d time.Duration, fn func(ctx context.Context, c *client.Client) (T, error)) (T, error) {
 	var zero T
 	c, err := n.client()
 	if err != nil {
-		return zero, err
+		return zero, withHint(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
@@ -288,5 +386,5 @@ func (n *Node) StartBacklogItem(id, agent string) (string, error) {
 	m, err := call(n, func(ctx context.Context, c *client.Client) (store.Message, error) {
 		return c.StartBacklogItem(ctx, id, agent)
 	})
-	return cmpOr(m.Thread, m.ID), err
+	return cmp.Or(m.Thread, m.ID), err
 }
