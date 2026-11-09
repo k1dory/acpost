@@ -25,8 +25,6 @@ describe("i18n (F8)", () => {
     expect(all.filter(f => f.endsWith(".svelte")).length).toBeGreaterThan(30); // it does read them
     const hits: string[] = [];
     for (const f of all.filter(f => f.endsWith(".svelte"))) {
-      // Terminal.svelte is another branch's (its "exited" is noted there).
-      if (f.endsWith("Terminal.svelte") || f.endsWith("IDE.svelte")) continue;
       for (const x of templateText(raw[f])) hits.push(`${f}: ${x}`);
     }
     expect(hits).toEqual([]);
