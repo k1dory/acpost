@@ -189,10 +189,8 @@ const (
 type turnLocks struct {
 	a    *acpAgent
 	held map[string]func()
-	// msg is the turn's message, senders the messages it was sent from: a lock held by one of them
-	// is never let go before this turn answers (the sender waits for it), so it is refused at once.
-	msg     string
-	senders map[string]bool
+	// msg is the turn's message: a lock whose holder waits for it (waitsReach) is refused at once.
+	msg string
 }
 
 func (l *turnLocks) take(ctx context.Context, id string) error {
@@ -203,15 +201,15 @@ func (l *turnLocks) take(ctx context.Context, id string) error {
 		return nil
 	}
 	for {
-		// Refused only when the holder is a sender of this message that waits for this message's
-		// chain (send --wait, follow): it never lets go first. A sender that went on (no wait) ends
-		// its turn by itself; this one queues behind it.
-		if h := l.a.holderOf(id); h != "" && l.senders[h] && l.a.n.waitsForAny(h, l.chain()) {
+		// Refused only in a cycle: the holder's turn waits, through waits only (send --wait, follow),
+		// for this message, so it never lets go first. Anything else (a hop of the chain that went
+		// on without waiting) ends by itself; this one queues behind it.
+		if h := l.a.holderOf(id); h != "" && l.a.n.waitsReach(h, l.msg) {
 			what := "the session " + strings.TrimPrefix(id, "sid:")
 			if !strings.HasPrefix(id, "sid:") {
 				what = "the session of " + id
 			}
-			return failf("refused", "%s is the one the turn that sent this message (%s) runs in, and that turn waits for this answer; send the message without --session, with a --task of its own", what, h)
+			return failf("refused", "%s is held by the turn of %s, which waits (send --wait, through the messages it waits for) for this message's answer; send it without --session, with a --task of its own, or without waiting for it", what, h)
 		}
 		// Waited for in steps: the holder is looked at again (a sender's turn may take the lock
 		// while this one waits for another's).
@@ -229,15 +227,6 @@ func (l *turnLocks) take(ctx context.Context, id string) error {
 	}
 }
 
-// chain is the turn's message and the messages it was sent from.
-func (l *turnLocks) chain() map[string]bool {
-	out := map[string]bool{l.msg: true}
-	for id := range l.senders {
-		out[id] = true
-	}
-	return out
-}
-
 func (l *turnLocks) release() {
 	for id, unlock := range l.held {
 		unlock()
@@ -248,7 +237,7 @@ func (l *turnLocks) release() {
 // lockTurn takes a message's locks: its key's, then (read once the key is held, so it is the one
 // the turn before left) the session stored for it.
 func (s *acpSlot) lockTurn(ctx context.Context, key string, m store.Message) (*turnLocks, error) {
-	l := &turnLocks{a: s.a, held: map[string]func(){}, msg: m.ID, senders: s.a.sendersOf(ctx, m)}
+	l := &turnLocks{a: s.a, held: map[string]func(){}, msg: m.ID}
 	if id, ok := strings.CutPrefix(key, "session:"); ok {
 		return l, l.take(ctx, "sid:"+id)
 	}
@@ -652,7 +641,6 @@ func (s *acpSlot) freeSession(ctx context.Context, sid string) (bool, error) {
 		return false, nil
 	}
 	other := s.a.slots[o]
-	senders := s.senders(ctx)
 	s.freeing.Store(true)
 	defer s.freeing.Store(false)
 	for !other.turn.TryLock() {
@@ -661,7 +649,7 @@ func (s *acpSlot) freeSession(ctx context.Context, sid string) (bool, error) {
 		}
 		// The turn holding the session is this message's sender (or its sender's), waiting for the
 		// answer: it never ends first. Said at once, not after the sender's time runs out.
-		if c := other.cur.Load(); c != nil && senders[c.ID] && s.a.n.waitsForAny(c.ID, s.chain(senders)) {
+		if c, me := other.cur.Load(), s.cur.Load(); c != nil && me != nil && s.a.n.waitsReach(c.ID, me.ID) {
 			return false, failf("refused", "the session %s is open in the agent's process of the turn that sent this message (%s), which waits for this answer; send it with a --task whose session that turn has not opened", sid, c.ID)
 		}
 		select {
@@ -674,42 +662,6 @@ func (s *acpSlot) freeSession(ctx context.Context, sid string) (bool, error) {
 	s.a.n.log.Info("stopping a slot's process: another slot opens its session", "agent", s.a.name, "slot", o, "session", sid)
 	other.stopProc()
 	return true, nil
-}
-
-// senders are the messages the slot's current message was sent from: its parent, the parent's, and
-// so on (a few levels, read from the store).
-func (s *acpSlot) senders(ctx context.Context) map[string]bool {
-	m := s.cur.Load()
-	if m == nil {
-		return map[string]bool{}
-	}
-	return s.a.sendersOf(ctx, *m)
-}
-
-// chain is the slot's current message and its senders.
-func (s *acpSlot) chain(senders map[string]bool) map[string]bool {
-	out := map[string]bool{}
-	for id := range senders {
-		out[id] = true
-	}
-	if m := s.cur.Load(); m != nil {
-		out[m.ID] = true
-	}
-	return out
-}
-
-// sendersOf are the messages m was sent from: its parent, the parent's, and so on (a few levels).
-func (a *acpAgent) sendersOf(ctx context.Context, m store.Message) map[string]bool {
-	out := map[string]bool{}
-	for id := m.Parent; id != "" && !out[id] && len(out) < 16; {
-		out[id] = true
-		p, err := a.n.st.Get(ctx, id)
-		if err != nil {
-			break
-		}
-		id = p.Parent
-	}
-	return out
 }
 
 // holderOf is the message whose turn holds a lock (a key's, a session's), "" when none does.

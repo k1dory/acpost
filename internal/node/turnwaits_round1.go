@@ -47,14 +47,27 @@ func (n *Node) noteWait(p Principal, id string) func() {
 	}
 }
 
-// waitsForAny says whether the turn of message turn waits for one of msgs.
-func (n *Node) waitsForAny(turn string, msgs map[string]bool) bool {
+// waitsReach says whether the turn of message from waits, through waits only, for message to: from
+// waits for M1, M1's turn waits for M2, …, one of them waits for to. A message that needs a lock
+// from's turn holds is then in a cycle (from never lets go before to is answered) and is refused
+// at once; a chain with one hop that does not wait ends by itself, and the message queues.
+func (n *Node) waitsReach(from, to string) bool {
 	w := n.waits()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for id := range w.of[turn] {
-		if msgs[id] {
-			return true
+	seen := map[string]bool{from: true}
+	next := []string{from}
+	for len(next) > 0 && len(seen) < 1024 {
+		turn := next[0]
+		next = next[1:]
+		for id := range w.of[turn] {
+			if id == to {
+				return true
+			}
+			if !seen[id] {
+				seen[id] = true
+				next = append(next, id)
+			}
 		}
 	}
 	return false
