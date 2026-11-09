@@ -356,6 +356,9 @@ func (s *Store) migrate() error {
 	if err := migrateSchedules(s); err != nil {
 		return fmt.Errorf("migrate schedules: %w", err)
 	}
+	if _, err := s.w.Exec(disownSchema); err != nil { // disown_round2.go
+		return err
+	}
 	// Columns added after the first release.
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
@@ -366,6 +369,8 @@ func (s *Store) migrate() error {
 		{"hub_seq", "hub_seq INTEGER NOT NULL DEFAULT 0"},
 		// A cancel asked for on a message forwarded to a hub, not yet settled there (forward.go).
 		{"cancel_wanted", "cancel_wanted INTEGER NOT NULL DEFAULT 0"},
+		// The hub's attempt number of the delivery a joined node's copy is (hub_round2.go): an older one is refused.
+		{"hub_attempt", "hub_attempt INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var n int
 		if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = ?", c.name).Scan(&n); err != nil {
@@ -535,9 +540,15 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 				return err
 			}
 		}
+		// A message its sender disowned is not taken, however late it comes (disown_round2.go).
+		if gone, err := isDisowned(ctx, t, out.ID); err != nil {
+			return err
+		} else if gone {
+			return ErrDisowned
+		}
 		if maxQueued > 0 {
 			var q int
-			if err := t.QueryRowContext(ctx, `SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ? AND state = 'queued'`, out.To).Scan(&q); err != nil {
+			if err := t.QueryRowContext(ctx, `SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ? AND state = 'queued' AND `+queueOf(out.Origin), out.To).Scan(&q); err != nil {
 				return err
 			}
 			if q >= maxQueued {
@@ -736,9 +747,12 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 	}
 	args = append(args, ms(now))
 	err := s.tx(ctx, func(t *sql.Tx) error {
+		// The time once the writer is had: a claim that waited for it sees what expired meanwhile.
+		now = time.Now()
+		args[len(args)-1] = ms(now)
 		var id string
 		err := t.QueryRowContext(ctx, `SELECT id FROM messages INDEXED BY messages_queue
-			WHERE recipient IN (`+ph+`) AND state = 'queued' AND (expires_at = 0 OR expires_at > ?) ORDER BY id LIMIT 1`,
+			WHERE recipient IN (`+ph+`) AND state = 'queued' AND (expires_at = 0 OR expires_at > ?) AND `+localWork+` ORDER BY id LIMIT 1`,
 			args...).Scan(&id)
 		if err != nil {
 			return err
@@ -940,7 +954,7 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 	var n int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'lease lost after ' || attempts || ' attempts', error_code = 'lease_lost',
-			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND attempts >= ?`, t, t, t, maxAttempts)
+			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND attempts >= ? AND `+localWork, t, t, t, maxAttempts)
 		if err != nil {
 			return err
 		}
@@ -949,7 +963,7 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 			return err
 		}
 		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', error_code = 'lease_lost', lease_id = '', lease_until = 0, updated_at = ?
-			WHERE state = 'running' AND lease_id <> '' AND lease_until < ?`, t, t)
+			WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND `+localWork, t, t)
 		if err != nil {
 			return err
 		}
@@ -977,7 +991,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 		}
 		args = append(args, maxAttempts)
 		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'interrupted by a node restart after ' || attempts || ' attempts', error_code = 'node_restart',
-			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND attempts >= ?`, args...)
+			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND attempts >= ? AND `+localWork, args...)
 		if err != nil {
 			return err
 		}
@@ -990,7 +1004,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 			args = append(args, r)
 		}
 		res, err = t.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'interrupted: the node restarted', lease_id = '', lease_until = 0,
-			updated_at = ? WHERE state = 'running' AND recipient IN (`+ph+`)`, args...)
+			updated_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND `+localWork, args...)
 		if err != nil {
 			return err
 		}
@@ -1075,8 +1089,8 @@ func (s *Store) EditQueued(ctx context.Context, id, body string) (Message, error
 // Counts says how many messages for recipient are queued and running.
 func (s *Store) Counts(ctx context.Context, recipient string) (queued, running int, err error) {
 	err = s.r.QueryRowContext(ctx, `SELECT
-		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'queued'),
-		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'running')`, recipient).Scan(&queued, &running)
+		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'queued' AND `+localWork+`),
+		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'running' AND `+localWork+`)`, recipient).Scan(&queued, &running)
 	return
 }
 

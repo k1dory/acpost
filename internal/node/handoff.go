@@ -253,7 +253,14 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 		patch.Write(d)
 		send = send[k:]
 	}
-	untracked, _ := run(top, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := run(top, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		// Not the new files' list: a patch without them is not the work (a cut list is too much).
+		if CodeOf(err) == "invalid" {
+			return rs, err
+		}
+		return rs, errf("unavailable", "git ls-files failed in %s", top)
+	}
 	for _, f := range strings.Split(string(untracked), "\x00") {
 		if f == "" {
 			continue
@@ -264,9 +271,12 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 		}
 		// A new file as a patch (git diff --no-index exits 1 when there is a difference).
 		o, err := run(top, "diff", "--no-index", "--binary", "--no-ext-diff", "--no-textconv", "--", "/dev/null", f)
-		if err != nil && CodeOf(err) == "invalid" {
-			rs.left = append(rs.left, f) // too big to send
+		switch newFilePatch(o, err) {
+		case patchLeft:
+			rs.left = append(rs.left, f) // too big to send, or gone or unreadable since it was listed
 			continue
+		case patchFailed:
+			return rs, errf("unavailable", "git diff of the new file %s failed in %s", f, top)
 		}
 		if patch.Len()+len(o) > handoffPatch {
 			rs.left = append(rs.left, f)

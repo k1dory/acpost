@@ -182,6 +182,9 @@ func (n *Node) fetchFiles(ctx context.Context, id string, reply bool, listed []s
 	if err := n.checkFiles(files, nil, side); err != nil {
 		return nil, err
 	}
+	if err := asListed(listed, files, side); err != nil {
+		return nil, err
+	}
 	for i := range files {
 		files[i].Reply = reply
 	}
@@ -521,7 +524,7 @@ func (n *Node) deliver(m store.Message) {
 	}
 	local := &store.Message{ID: m.ID, From: m.From, To: "agent:" + to.Name, Task: m.Task, Thread: m.Thread, Parent: m.Parent,
 		Depth: m.Depth, Meta: m.Meta, Body: m.Body, ExpiresAt: m.ExpiresAt, Origin: originHub + m.LeaseID, Files: files}
-	if why, ok := n.takeDelivery(ctx, local, lim.MaxQueuedPerAgent); !ok {
+	if why, ok := n.takeDelivery(ctx, local, m.Attempts, lim.MaxQueuedPerAgent); !ok {
 		if why != "" {
 			refuse(why)
 		}
@@ -598,13 +601,23 @@ func (n *Node) relay(id, lease string) {
 // takeDelivery makes a delivery the local copy of its message. An earlier delivery of the same
 // message is adopted first, in one step with its new lease (a full queue does not refuse what is
 // already here); only a new one is admitted under the queue's limit. Not ok: why is the refusal
-// for the hub, or "" when the delivery is left to the hub's lease (a passing failure of the store).
-func (n *Node) takeDelivery(ctx context.Context, local *store.Message, maxQueued int) (why string, ok bool) {
-	for range 2 {
-		_, err := n.st.AdoptDelivery(ctx, local.ID, local.From, local.To, originHub, local.Origin)
+// for the hub, or "" when the delivery is left to the hub's lease (a passing failure of the store,
+// or a newer delivery of the message owns the copy).
+//
+// attempt is the hub's attempt number of this delivery. Every delivery ends with the adopt that
+// records it, a new copy too, so of two deliveries taken at once in any order the newer owns the
+// copy at the end: an older one's adopt after it is refused.
+func (n *Node) takeDelivery(ctx context.Context, local *store.Message, attempt, maxQueued int) (why string, ok bool) {
+	for range 3 {
+		_, err := n.st.AdoptDelivery(ctx, local.ID, local.From, local.To, originHub, local.Origin, attempt)
 		switch {
 		case err == nil:
 			return "", true
+		case errors.Is(err, store.ErrStaleDelivery):
+			// The hub handed the message again since (this lease is no longer its): that
+			// delivery's relay hands the outcome.
+			n.log.Info("an older delivery came after a newer one; left to the newer", "id", local.ID, "attempt", attempt)
+			return "", false
 		case errors.Is(err, store.ErrIDInUse):
 			// Only an earlier delivery of this same message is adopted, never a local message with the id.
 			return "node " + n.Name() + ": message id " + local.ID + " is already in use here", false
@@ -615,7 +628,7 @@ func (n *Node) takeDelivery(ctx context.Context, local *store.Message, maxQueued
 		_, _, err = n.st.InsertLimited(ctx, local, maxQueued)
 		switch {
 		case err == nil:
-			return "", true
+			continue // stored: the adopt records its attempt
 		case errors.Is(err, store.ErrQueueFull):
 			return fmt.Sprintf("node %s: %s has a full queue (limits.max_queued_per_agent)", n.Name(), local.To), false
 		case errors.Is(err, store.ErrStoreFull):
