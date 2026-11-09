@@ -10,7 +10,6 @@ export {
     Artifact,
     CloudCatalog,
     Connection,
-    ConversationPage,
     Task,
     Upload
 } from "./models.js";
