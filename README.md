@@ -325,7 +325,7 @@ text, when it adds something, is in `error` after the explanation.
 | `turn_timeout` | the turn ran past `turn_timeout` |
 | `agent_stopped` | the agent ended the turn itself (refusal, token limit) |
 | `unsupported` | the agent does not offer what was asked (e.g. `session/list`) |
-| `lease_lost` | an inbox consumer or a node lost its claim too often |
+| `lease_lost` | an inbox consumer or a node let its claim run out: the message goes back to the queue with this code, and fails with it after `max_attempts` |
 | `node_restart` | the node restarted during the last allowed attempt |
 | `files_refused` | a node on the way (the hub, the sender's node) refused the reply's files by its limits; the reply's text is kept |
 | `agent_error` | anything else the agent reported |
@@ -354,6 +354,8 @@ such a message returns it unfinished: it ends with the hub's outcome once the hu
 ## Configuration
 
 YAML or JSON (by extension). Every field is optional; this is the full set with defaults.
+An absent `~/.config/acpost/config.yaml` is the defaults; a file named by `--config` or
+`ACPOST_CONFIG` must exist, the default one too. Limits are positive (0 is the default).
 
 ```yaml
 node:

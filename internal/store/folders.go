@@ -12,6 +12,9 @@ import (
 // Folders the node's user sorts chats into, in the app: a chat (an acpost thread, an agent's ACP
 // session, a cloud sandbox) is in one folder or none. A folder is the app's, not a directory.
 
+// The REFERENCES below is not enforced: the store runs with foreign_keys off (store.go), and
+// MoveChat checks the folder and DeleteFolder removes its chats in the same transaction itself.
+// The clause stays because a store made before cannot drop it without rebuilding the table.
 const foldersSchema = `
 CREATE TABLE IF NOT EXISTS folders (
 	id   TEXT    PRIMARY KEY,

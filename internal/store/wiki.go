@@ -55,36 +55,42 @@ type WikiPage struct {
 var ErrNoWiki = errors.New("no wiki for this repository")
 
 func (s *Store) Wikis(ctx context.Context) ([]Wiki, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT w.repo, w.agent, w.lang, w.status, w.msg, w.error, w.updated,
-		(SELECT count(*) FROM wiki_pages p WHERE p.repo = w.repo) FROM wikis w ORDER BY w.repo`)
+	rows, err := s.r.QueryContext(ctx, wikiSelect+` ORDER BY w.repo`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Wiki{}
 	for rows.Next() {
-		var w Wiki
-		var upd int64
-		if err := rows.Scan(&w.Repo, &w.Agent, &w.Lang, &w.Status, &w.Msg, &w.Error, &upd, &w.Pages); err != nil {
+		w, err := scanWiki(rows)
+		if err != nil {
 			return nil, err
 		}
-		w.Updated = fromMS(upd)
 		out = append(out, w)
 	}
 	return out, rows.Err()
 }
 
+// Wiki is one repository's wiki (one row, not the table).
 func (s *Store) Wiki(ctx context.Context, repo string) (Wiki, error) {
-	all, err := s.Wikis(ctx)
-	if err != nil {
+	w, err := scanWiki(s.r.QueryRowContext(ctx, wikiSelect+` WHERE w.repo = ?`, repo))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Wiki{}, ErrNoWiki
+	}
+	return w, err
+}
+
+const wikiSelect = `SELECT w.repo, w.agent, w.lang, w.status, w.msg, w.error, w.updated,
+	(SELECT count(*) FROM wiki_pages p WHERE p.repo = w.repo) FROM wikis w`
+
+func scanWiki(row interface{ Scan(...any) error }) (Wiki, error) {
+	var w Wiki
+	var upd int64
+	if err := row.Scan(&w.Repo, &w.Agent, &w.Lang, &w.Status, &w.Msg, &w.Error, &upd, &w.Pages); err != nil {
 		return Wiki{}, err
 	}
-	for _, w := range all {
-		if w.Repo == repo {
-			return w, nil
-		}
-	}
-	return Wiki{}, ErrNoWiki
+	w.Updated = fromMS(upd)
+	return w, nil
 }
 
 // StartWiki notes a wiki being written by msg (its pages, if any, kept until the new ones come).

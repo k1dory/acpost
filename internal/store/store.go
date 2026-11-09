@@ -143,6 +143,8 @@ func Open(dsn string, opt Options) (*Store, error) {
 		opt.MaxEventData = 16 << 10
 	}
 	s := &Store{opt: opt}
+	// Foreign keys stay off: every delete removes its dependent rows itself, in the same
+	// transaction, and checks on each write would cost the queue for no case it misses.
 	pragmas := []string{"busy_timeout(10000)", "foreign_keys(0)", fmt.Sprintf("journal_size_limit(%d)", opt.JournalSizeLimit)}
 	switch {
 	case dsn == "memory:":
@@ -160,6 +162,8 @@ func Open(dsn string, opt Options) (*Store, error) {
 			return nil, fmt.Errorf("store %q: no path", dsn)
 		}
 		if err := s.openFile(path, pragmas); err != nil {
+			// What openFile took (the lock, the connections) goes, or the next Open says ErrLocked.
+			s.Close()
 			return nil, err
 		}
 	default:
@@ -356,7 +360,11 @@ func (s *Store) migrate() error {
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
 		{"relayed", "relayed INTEGER NOT NULL DEFAULT 0"}, // events taken from the node running the agent
-		// a cancel asked for on a message forwarded to a hub, not yet settled there
+		// What Complete ended the message with (completion.go): the holder's repeat is no conflict.
+		{"completion", "completion TEXT NOT NULL DEFAULT ''"},
+		// The last hub event a forwarded message's copy took (hubcursor.go); 0: none taken by number.
+		{"hub_seq", "hub_seq INTEGER NOT NULL DEFAULT 0"},
+		// A cancel asked for on a message forwarded to a hub, not yet settled there (forward.go).
 		{"cancel_wanted", "cancel_wanted INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var n int
@@ -437,7 +445,11 @@ func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 // afterWrite keeps the WAL bounded. SQLite's own checkpoints after a commit are passive: while
 // readers keep reading they cannot reset the WAL, and it grows. So once about a quarter of
 // journal_size_limit has been written, the WAL's size is checked, and above the limit a
-// TRUNCATE checkpoint waits (busy_timeout) for the readers of old snapshots and resets it.
+// TRUNCATE checkpoint waits for the readers of old snapshots and resets it.
+//
+// It runs on the caller's goroutine and holds the one writer connection, so it waits at most
+// checkpointWait, not busy_timeout (10 s): a reader that keeps its snapshot longer leaves the WAL
+// as it is until the next check, and no send waits out that reader.
 func (s *Store) afterWrite(ctx context.Context, n int64) {
 	if s.path == "" || s.written.Add(n) < s.opt.JournalSizeLimit/4 {
 		return
@@ -447,8 +459,15 @@ func (s *Store) afterWrite(ctx context.Context, n int64) {
 	if err != nil || st.Size() <= s.opt.JournalSizeLimit {
 		return
 	}
-	var busy, logPages, done int
-	_ = s.w.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done)
+	c, err := s.w.Conn(ctx)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	shortWait(ctx, c, checkpointWait, func() {
+		var busy, logPages, done int
+		_ = c.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done)
+	})
 }
 
 // liveBytes is how much of the file holds data (pages in use).
@@ -700,6 +719,10 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 	if len(recipients) == 0 {
 		return Message{}, false, nil
 	}
+	// A lease of nothing has run out already: the next reap would requeue the message at once.
+	if lease <= 0 {
+		return Message{}, false, fmt.Errorf("store: claim needs a positive lease, not %v", lease)
+	}
 	now := time.Now()
 	var m Message
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(recipients)), ",")
@@ -717,9 +740,17 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 			return err
 		}
 		lid := newLease()
-		if _, err := t.ExecContext(ctx, `UPDATE messages SET state = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ?, updated_at = ?
-			WHERE id = ?`, lid, ms(now.Add(lease)), ms(now), id); err != nil {
+		// Still queued: the one writer and BEGIN IMMEDIATE make it so today; the condition keeps
+		// a second claim of the same message impossible should either change.
+		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ?, updated_at = ?
+			WHERE id = ? AND state = 'queued'`, lid, ms(now.Add(lease)), ms(now), id)
+		if err != nil {
 			return err
+		}
+		if k, err := res.RowsAffected(); err != nil {
+			return err
+		} else if k == 0 {
+			return sql.ErrNoRows
 		}
 		// What an earlier attempt attached to its reply is not this attempt's.
 		if _, err := t.ExecContext(ctx, "DELETE FROM files WHERE reply = 1 AND msg = (SELECT seq FROM messages WHERE id = ?)", id); err != nil {
@@ -810,14 +841,23 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 		return fmt.Errorf("store: complete with state %s", state)
 	}
 	now := ms(time.Now())
+	key := completionKey(lease, state, reply, errCode, errText, files)
 	err := s.tx(ctx, func(t *sql.Tx) error {
 		res, err := t.ExecContext(ctx, `UPDATE messages SET state = ?, error = ?, error_code = ?, reply_size = ?, lease_id = '', lease_until = 0,
-			updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''`,
-			state, errText, errCode, len(reply), now, now, id, lease)
+			completion = ?, updated_at = ?, finished_at = ? WHERE id = ? AND state = 'running' AND lease_id = ? AND lease_id <> ''`,
+			state, errText, errCode, len(reply), key, now, now, id, lease)
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
+			// A holder repeating its own answer (its response was lost) is told it is recorded.
+			same, err := completed(ctx, t, id, lease, key)
+			if err != nil {
+				return err
+			}
+			if same {
+				return errRepeat
+			}
 			return ErrLeaseLost
 		}
 		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
@@ -830,6 +870,9 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 		}
 		return s.putFiles(ctx, t, seq, true, files)
 	})
+	if errors.Is(err, errRepeat) {
+		return nil // nothing was written: the first call recorded it
+	}
 	if err == nil {
 		s.afterWrite(ctx, int64(len(reply))+filesSize(files))
 	}
@@ -889,7 +932,7 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 			return err
 		}
 		a, _ := res.RowsAffected()
-		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', lease_id = '', lease_until = 0, updated_at = ?
+		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', error_code = 'lease_lost', lease_id = '', lease_until = 0, updated_at = ?
 			WHERE state = 'running' AND lease_id <> '' AND lease_until < ?`, t, t)
 		if err != nil {
 			return err
@@ -1046,13 +1089,18 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 	if len(data) > s.opt.MaxEventData {
 		data = data[:s.opt.MaxEventData] + truncMark
 	}
-	switch {
-	case kind == "usage":
-		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
-		u, ok := readUsage(data)
-		if !ok {
-			return n, nil
+	var u Usage
+	usage := false
+	if kind == "usage" {
+		// Not readable (or cut to MaxEventData): counted nowhere, and kept as usage it would make
+		// every relay of the message's events refused; what the agent did is said by a notice.
+		if u, usage = readUsage(data); !usage {
+			kind, data = "notice", unreadableUsage
 		}
+	}
+	switch {
+	case usage:
+		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
 		var have, counted int
 		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'usage'", seq).Scan(&have); err != nil {
 			return n, err
@@ -1067,9 +1115,16 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 			return n, err
 		}
 	case n >= s.opt.MaxEventsPerMessage:
-		return n, nil
+		// Usage took the last place (it is kept past the limit): the first event dropped gives its
+		// place to the marker. One event for one, so a copy's count never runs ahead of the events
+		// it took (relayevents.go resumes from it).
+		var marked int
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'truncated'", seq).Scan(&marked); err != nil || marked > 0 {
+			return n, err
+		}
+		kind, data = "truncated", truncatedEvents
 	case n == s.opt.MaxEventsPerMessage-1:
-		kind, data = "truncated", "later events were not kept (limits.max_events_per_message)"
+		kind, data = "truncated", truncatedEvents
 	}
 	if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(now), kind, data); err != nil {
 		return n, err
@@ -1280,4 +1335,24 @@ func (p *Party) where(prefix string) (string, []any) {
 		}
 	}
 	return "(" + cond + ")", args
+}
+
+const (
+	truncatedEvents = "later events were not kept (limits.max_events_per_message)"
+	unreadableUsage = `{"severity":"warning","text":"the agent's usage of this turn could not be read: not counted"}`
+)
+
+// checkpointWait bounds how long afterWrite's checkpoint waits for readers (see there).
+const checkpointWait = 250 * time.Millisecond
+
+// shortWait runs fn on c with busy_timeout at d, and puts the connection's own wait back after,
+// whatever ctx has become. The restore is deferred before the change: SQLite applies the PRAGMA
+// while preparing it, so a ctx cancelled after that still errors, and the connection would go
+// back to the pool giving up on readers after d (a later Maintain would leave the WAL as it is).
+func shortWait(ctx context.Context, c *sql.Conn, d time.Duration, fn func()) {
+	defer func() { _, _ = c.ExecContext(context.WithoutCancel(ctx), "PRAGMA busy_timeout = 10000") }()
+	if _, err := c.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", d.Milliseconds())); err != nil {
+		return
+	}
+	fn()
 }

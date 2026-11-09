@@ -133,7 +133,9 @@ func TestTokenFromEnv(t *testing.T) {
 }
 
 func TestLoadMissingFileIsDefaults(t *testing.T) {
-	c, err := Load(filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("ACPOST_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	c, err := Load(DefaultPath())
 	if err != nil || c.Limits.MaxBody == 0 {
 		t.Fatal(err)
 	}
