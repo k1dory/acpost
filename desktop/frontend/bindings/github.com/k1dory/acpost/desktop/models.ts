@@ -8,9 +8,6 @@ import { Create as $Create } from "@wailsio/runtime";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as client$0 from "../internal/client/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as store$0 from "../internal/store/models.js";
 
 /**
  * Artifact is a file to show: its name, type, size and content (base64).
@@ -124,35 +121,6 @@ export class Connection {
 }
 
 /**
- * ConversationPage is a page of conversations.
- */
-export class ConversationPage {
-    "items": store$0.Conversation[];
-    "next"?: string;
-
-    /** Creates a new ConversationPage instance. */
-    constructor($$source: Partial<ConversationPage> = {}) {
-        if (!("items" in $$source)) {
-            this["items"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new ConversationPage instance from a string or object.
-     */
-    static createFrom($$source: any = {}): ConversationPage {
-        const $$createField0_0 = $$createType4;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("items" in $$parsedSource) {
-            $$parsedSource["items"] = $$createField0_0($$parsedSource["items"]);
-        }
-        return new ConversationPage($$parsedSource as Partial<ConversationPage>);
-    }
-}
-
-/**
  * Task is a message as the composer sends it.
  */
 export class Task {
@@ -170,6 +138,12 @@ export class Task {
     "mode"?: string;
     "files"?: Upload[];
 
+    /**
+     * Idem is the send's idempotency key, the composer's for this one message: a retry after a
+     * lost answer gets the message already made instead of a second run.
+     */
+    "idem"?: string;
+
     /** Creates a new Task instance. */
     constructor($$source: Partial<Task> = {}) {
         if (!("to" in $$source)) {
@@ -186,7 +160,7 @@ export class Task {
      * Creates a new Task instance from a string or object.
      */
     static createFrom($$source: any = {}): Task {
-        const $$createField8_0 = $$createType6;
+        const $$createField8_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("files" in $$parsedSource) {
             $$parsedSource["files"] = $$createField8_0($$parsedSource["files"]);
@@ -235,7 +209,5 @@ export class Upload {
 const $$createType0 = client$0.CloudAgent.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = client$0.Status.createFrom;
-const $$createType3 = store$0.Conversation.createFrom;
+const $$createType3 = Upload.createFrom;
 const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = Upload.createFrom;
-const $$createType6 = $Create.Array($$createType5);

@@ -4,9 +4,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"os"
@@ -18,6 +21,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/store"
 )
 
 // Artifacts: what agents hand back — files attached to a reply, or files on this Mac a reply
@@ -39,18 +43,27 @@ const oNoFollowAny = 0x20000000
 
 var errArtifact = errors.New("not a file the app shows: a file of this Mac, outside hidden folders, up to 20 MiB")
 
-// MessageFile is a file of a message (a reply's attachment).
+// MessageFile is a file of a message: the reply's when the reply and the message both have one
+// of that name (an agent sends back a file it was given, changed).
 func (n *Node) MessageFile(id, name string) (Artifact, error) {
-	files, err := call(n, func(ctx context.Context, c *client.Client) ([]storeFile, error) { return filesOf(ctx, c, id) })
+	files, err := call(n, func(ctx context.Context, c *client.Client) ([]store.File, error) { return c.Files(ctx, id) })
 	if err != nil {
 		return Artifact{}, err
 	}
-	for _, f := range files {
-		if f.Name == name && len(f.Data) > 0 {
-			return Artifact{Name: f.Name, Type: typeOf(f.Name, f.Type, f.Data), Size: len(f.Data), Data: base64.StdEncoding.EncodeToString(f.Data)}, nil
+	var found *store.File
+	for i, f := range files {
+		// A link has no content here; an empty file is a file.
+		if f.Name != name || f.Link() || len(f.Data) == 0 && f.Size > 0 {
+			continue
+		}
+		if found == nil || f.Reply && !found.Reply {
+			found = &files[i]
 		}
 	}
-	return Artifact{}, errors.New("no such file in the message")
+	if found == nil {
+		return Artifact{}, errors.New("no such file in the message")
+	}
+	return Artifact{Name: found.Name, Type: typeOf(found.Name, found.Type, found.Data), Size: len(found.Data), Data: base64.StdEncoding.EncodeToString(found.Data)}, nil
 }
 
 // LocalFile is a file of this Mac a chat links to: path absolute, or relative to base (the
@@ -100,7 +113,23 @@ func (n *Node) SaveArtifact(name, data string) (string, error) {
 	if err != nil || dest == "" {
 		return "", err
 	}
-	return dest, os.WriteFile(dest, b, 0o644)
+	return dest, saveFile(dest, b)
+}
+
+// saveFile replaces dest whole, keeping its mode when it exists.
+func saveFile(dest string, b []byte) error {
+	// A link is written through, as os.WriteFile does: the file at the end of its chain is
+	// replaced, in its own directory, and every link stays.
+	dest, err := writeTarget(dest)
+	if err != nil {
+		return err
+	}
+	var keep *os.FileMode
+	if st, err := os.Stat(dest); err == nil {
+		m := st.Mode().Perm() // 0000 too: a mode, not "none"
+		keep = &m
+	}
+	return writeAtomic(dest, b, 0o644, keep, true)
 }
 
 // OpenArtifact opens an attachment in its own app (a copy in a temporary folder).
@@ -150,9 +179,7 @@ func artifactTemp() (string, error) {
 
 func artifactPath(path, base string) (string, error) {
 	path = strings.TrimSpace(strings.TrimPrefix(path, "file://"))
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, "~/") {
-		path = filepath.Join(home, path[2:])
-	}
+	path = expandHome(path)
 	if !filepath.IsAbs(path) {
 		if base == "" || !filepath.IsAbs(base) {
 			return "", errArtifact
@@ -189,22 +216,128 @@ func typeOf(name, said string, b []byte) string {
 	return http.DetectContentType(b)
 }
 
-// storeFile is a message's file as the node gives it.
-type storeFile struct {
-	Name  string
-	Type  string
-	Reply bool
-	Data  []byte
+// writeAtomic writes path whole or not at all: a temporary file beside it, synced, then renamed
+// over it (replace) or linked in only where there is no file yet (else fs.ErrExist). A
+// failure or a crash midway leaves what was there. A new file gets perm under the umask, as
+// os.WriteFile gives it; keep (when not nil) is an existing file's mode, kept as it was.
+func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool) error {
+	dir := filepath.Dir(path)
+	mode := perm
+	if keep != nil {
+		mode = *keep
+	}
+	var f *os.File
+	var err error
+	for range 100 {
+		var r [8]byte
+		rand.Read(r[:])
+		// A short name of its own (a destination's name may be as long as a name can be), made
+		// as private as the file it replaces from the start: its content is never readable by
+		// more than the file's was.
+		f, err = os.OpenFile(filepath.Join(dir, ".acpost-tmp-"+hex.EncodeToString(r[:])), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if !errors.Is(err, fs.ErrExist) {
+			break
+		}
+	}
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // gone once renamed; after a link, the extra name
+	_, err = f.Write(b)
+	if afterWrite != nil {
+		afterWrite(tmp)
+	}
+	if err == nil && keep != nil {
+		err = f.Chmod(*keep)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if replace {
+		err = os.Rename(tmp, path)
+	} else {
+		err = os.Link(tmp, path)
+	}
+	if err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil { // the new name itself survives a crash
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
-func filesOf(ctx context.Context, c *client.Client, id string) ([]storeFile, error) {
-	fs, err := c.Files(ctx, id)
-	if err != nil {
-		return nil, err
+// afterWrite, in tests, looks at the temporary file once the content is in it.
+var afterWrite func(tmp string)
+
+// writeTarget is the file a write to p reaches, read as the system reads a path: component by
+// component, each link met replaced by its target (read from the directory reached so far), a
+// ".." going up from the directory actually reached, never from the text of the path. Only the
+// last component may be missing (a link to a file not there yet makes it). A cycle, or a chain
+// too long, is an error.
+func writeTarget(p string) (string, error) {
+	if !filepath.IsAbs(p) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		p = wd + string(filepath.Separator) + p
 	}
-	out := make([]storeFile, 0, len(fs))
-	for _, f := range fs {
-		out = append(out, storeFile{Name: f.Name, Type: f.Type, Reply: f.Reply, Data: f.Data})
+	rest := strings.Split(p, string(filepath.Separator))
+	cur, hops := string(filepath.Separator), 0
+	for len(rest) > 0 {
+		c := rest[0]
+		rest = rest[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur) // cur has no links in it: its parent is the real one
+			continue
+		}
+		next := filepath.Join(cur, c)
+		st, err := os.Lstat(next)
+		// A trailing "/" or "/." says "a directory": only a name with nothing at all after it
+		// may be a file, missing or not.
+		if errors.Is(err, fs.ErrNotExist) && len(rest) == 0 {
+			return next, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if st.Mode()&os.ModeSymlink != 0 {
+			if hops++; hops > 40 {
+				return "", errors.New(p + ": too many links (a cycle?)")
+			}
+			to, err := os.Readlink(next)
+			if err != nil {
+				return "", err
+			}
+			if filepath.IsAbs(to) {
+				cur = string(filepath.Separator)
+			}
+			rest = append(strings.Split(to, string(filepath.Separator)), rest...)
+			continue
+		}
+		if !st.IsDir() && len(rest) > 0 {
+			return "", &fs.PathError{Op: "save", Path: next, Err: syscall.ENOTDIR}
+		}
+		cur = next
 	}
-	return out, nil
+	// The walk ended on a directory (a link to ".", "..", a folder): the system would not
+	// write it as a file.
+	if st, err := os.Lstat(cur); err != nil {
+		return "", err
+	} else if st.IsDir() {
+		return "", &fs.PathError{Op: "save", Path: cur, Err: syscall.EISDIR}
+	}
+	return cur, nil
 }
