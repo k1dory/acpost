@@ -36,6 +36,7 @@ const (
 var (
 	finishForward  = (*store.Store).FinishForward
 	forwardNotSent = (*store.Store).ForwardNotSent
+	replaceForward = (*store.Store).ReplaceForward
 	// afterCancelRead runs in Cancel between reading the message and cancelling it (a test
 	// finishes a forward there).
 	afterCancelRead = func(id string) {}
@@ -116,9 +117,12 @@ func hubRefused(err error) bool {
 // replacement is one store step, a cancel done here meanwhile carried over.
 //
 // Files this node refuses for good (over its limits) are left out: the copy still takes the key and
-// the cancel, and follows the hub's outcome. While a download fails for a passing cause, a cancel
-// asked for goes to the hub's message at once; the copy is made at a later try.
+// the cancel, and follows the hub's outcome.
 func (n *Node) takeHubRepeat(ctx context.Context, id string, sent store.Message) (store.Message, error) {
+	// The hub's message is known: a cancel asked for goes to it first, so nothing below (a
+	// download, the store's room, a write) holds it back. The copy is replaced at this try or a
+	// later one.
+	n.cancelThrough(id, sent.ID)
 	if listed := pick(sent.Files, false); len(listed) > 0 {
 		fctx, done := context.WithTimeout(ctx, hubFilesTimeout)
 		got, err := n.fetchFiles(fctx, sent.ID, false, listed, "the message")
@@ -132,13 +136,12 @@ func (n *Node) takeHubRepeat(ctx context.Context, id string, sent store.Message)
 				"id", sent.ID, "err", err)
 			sent.Files = nil
 		default:
-			n.cancelThrough(id, sent.ID)
 			return store.Message{}, hubErr(err)
 		}
 	} else {
 		sent.Files = nil
 	}
-	got, err := n.st.ReplaceForward(context.WithoutCancel(ctx), id, originForwarding, originRemote, sent)
+	got, err := replaceForward(n.st, context.WithoutCancel(ctx), id, originForwarding, originRemote, sent)
 	if err != nil {
 		return store.Message{}, err
 	}
@@ -343,7 +346,8 @@ func (n *Node) cancelForwarding(ctx context.Context, p Principal, m store.Messag
 }
 
 // cancelThrough sends the hub a cancel asked for on a forwarding copy (id) to the message the hub
-// kept for it (hubID), before the copy is replaced; the resolver confirms it once it is.
+// kept for it (hubID), before the copy is replaced (every try: a cancel the hub has already is a
+// conflict there, nothing more); the resolver confirms it once the copy is replaced.
 func (n *Node) cancelThrough(id, hubID string) {
 	local, err := n.st.Get(n.ctx, id)
 	if err != nil || local.Origin != originForwarding {

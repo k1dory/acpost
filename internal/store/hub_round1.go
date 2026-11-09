@@ -229,6 +229,10 @@ func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin strin
 				return err
 			}
 		}
+		// The dropped copy's files free their room before the copy that replaces it asks for room.
+		if err := dropOrphans(ctx, t); err != nil {
+			return err
+		}
 		var n int
 		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM messages WHERE id = ?", first.ID).Scan(&n); err != nil {
 			return err
