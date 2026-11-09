@@ -509,17 +509,19 @@ func (n *Node) TermResize(id string, cols, rows int) error {
 	return err
 }
 
-// CloseTerminal ends a terminal.
+// CloseTerminal ends a terminal. Its output stops at once; its entry stays the app's until the
+// node says the shell is closed (or that there is no such terminal): a close that did not reach
+// the node is tried again, and shutdown still closes it. Its shell would go on, no one's.
 func (n *Node) CloseTerminal(id string) error {
 	n.mu.Lock()
 	if t := n.terms[id]; t != nil {
 		t.stop()
-		delete(n.terms, id)
 	}
 	n.mu.Unlock()
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
-		return struct{}{}, c.CloseTerminal(ctx, id)
-	})
+	err := n.closeTerm(id)
+	if err != nil {
+		go n.retryClose(id)
+	}
 	return err
 }
 
@@ -706,3 +708,46 @@ func (n *Node) emitTerm(id string, me *term, ev map[string]any) {
 
 // termOpenTimeout bounds an open of a terminal; shutdown waits for opens in flight that long.
 const termOpenTimeout = 30 * time.Second
+
+// closeTerm asks the node to end a terminal; once it is known ended (closed, or the node has no
+// such terminal), the terminal is no longer the app's.
+func (n *Node) closeTerm(id string) error {
+	c, err := n.client()
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = c.CloseTerminal(ctx, id)
+		cancel()
+	}
+	if err != nil && termOutcome(err) != termGone {
+		return withHint(err)
+	}
+	n.mu.Lock()
+	if t := n.terms[id]; t != nil {
+		t.stop()
+		delete(n.terms, id)
+	}
+	n.mu.Unlock()
+	return nil
+}
+
+// closeRetry is the first wait before a failed close of a terminal is tried again (doubling,
+// closeTries times); what is still not closed then is closed with the app.
+var closeRetry, closeTries = time.Second, 8
+
+func (n *Node) retryClose(id string) {
+	wait := closeRetry
+	for range closeTries {
+		time.Sleep(wait)
+		wait = min(2*wait, 30*time.Second)
+		n.mu.Lock()
+		_, mine := n.terms[id]
+		quitting := n.closed
+		n.mu.Unlock()
+		if !mine || quitting { // closed meanwhile, or shutdown closes it
+			return
+		}
+		if n.closeTerm(id) == nil {
+			return
+		}
+	}
+}
