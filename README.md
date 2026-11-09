@@ -353,9 +353,9 @@ through the hub whose answer is not known yet makes a repeat fail with `unavaila
 shortly); one the hub refused releases its key, so the next repeat sends it. One the hub still has no
 trace of after 30 s may yet arrive late: the node has the hub disown it, and the hub either has it
 (the copy follows it) or refuses it if it comes within the next seven days (far past any retry),
-and the key is released. A
-hub of a version before disown cannot refuse a late send: there, as before, the copy ends as not sent
-after 30 s and a send held longer on its way can still run. A `cancel` of
+and the key is released. A hub of a version before disown cannot refuse a late send: there, as
+before, the copy ends as not sent after 30 s and a send held longer on its way can still run. A
+`cancel` of
 such a message returns it unfinished: it ends with the hub's outcome once the hub has answered
 (cancelled, or the result it had already), and cancelled if the hub never got it.
 
