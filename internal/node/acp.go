@@ -39,6 +39,8 @@ type acpAgent struct {
 	keyMu  sync.Mutex
 	keys   map[string]*keyLock
 	owners map[string]int // ACP session id → the slot whose process last ran it (concurrency > 1)
+	// holders: a lock's id (task:, sid:, …) → the message whose turn holds it.
+	holders map[string]string
 
 	optMu    sync.Mutex
 	optAsk   sync.Mutex             // one asking the agent what it offers at a time
@@ -187,6 +189,10 @@ const (
 type turnLocks struct {
 	a    *acpAgent
 	held map[string]func()
+	// msg is the turn's message, senders the messages it was sent from: a lock held by one of them
+	// is never let go before this turn answers (the sender waits for it), so it is refused at once.
+	msg     string
+	senders map[string]bool
 }
 
 func (l *turnLocks) take(ctx context.Context, id string) error {
@@ -196,12 +202,28 @@ func (l *turnLocks) take(ctx context.Context, id string) error {
 	if _, ok := l.held[id]; ok || id == "" {
 		return nil
 	}
-	unlock, err := l.a.lockKeyCtx(ctx, id)
-	if err != nil {
-		return err
+	for {
+		if h := l.a.holderOf(id); h != "" && l.senders[h] {
+			what := "the session " + strings.TrimPrefix(id, "sid:")
+			if !strings.HasPrefix(id, "sid:") {
+				what = "the session of " + id
+			}
+			return failf("refused", "%s is the one the turn that sent this message (%s) runs in, and that turn waits for this answer; send the message without --session, with a --task of its own", what, h)
+		}
+		// Waited for in steps: the holder is looked at again (a sender's turn may take the lock
+		// while this one waits for another's).
+		wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		unlock, err := l.a.lockKeyCtx(wctx, id)
+		cancel()
+		if err == nil {
+			l.a.setHolder(id, l.msg)
+			l.held[id] = func() { l.a.setHolder(id, ""); unlock() }
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
-	l.held[id] = unlock
-	return nil
 }
 
 func (l *turnLocks) release() {
@@ -213,8 +235,8 @@ func (l *turnLocks) release() {
 
 // lockTurn takes a message's locks: its key's, then (read once the key is held, so it is the one
 // the turn before left) the session stored for it.
-func (s *acpSlot) lockTurn(ctx context.Context, key string) (*turnLocks, error) {
-	l := &turnLocks{a: s.a, held: map[string]func(){}}
+func (s *acpSlot) lockTurn(ctx context.Context, key string, m store.Message) (*turnLocks, error) {
+	l := &turnLocks{a: s.a, held: map[string]func(){}, msg: m.ID, senders: s.a.sendersOf(ctx, m)}
 	if id, ok := strings.CutPrefix(key, "session:"); ok {
 		return l, l.take(ctx, "sid:"+id)
 	}
@@ -620,20 +642,45 @@ func (s *acpSlot) freeSession(ctx context.Context, sid string) (bool, error) {
 // senders are the messages the slot's current message was sent from: its parent, the parent's, and
 // so on (a few levels, read from the store).
 func (s *acpSlot) senders(ctx context.Context) map[string]bool {
-	out := map[string]bool{}
 	m := s.cur.Load()
 	if m == nil {
-		return out
+		return map[string]bool{}
 	}
+	return s.a.sendersOf(ctx, *m)
+}
+
+// sendersOf are the messages m was sent from: its parent, the parent's, and so on (a few levels).
+func (a *acpAgent) sendersOf(ctx context.Context, m store.Message) map[string]bool {
+	out := map[string]bool{}
 	for id := m.Parent; id != "" && !out[id] && len(out) < 16; {
 		out[id] = true
-		p, err := s.a.n.st.Get(ctx, id)
+		p, err := a.n.st.Get(ctx, id)
 		if err != nil {
 			break
 		}
 		id = p.Parent
 	}
 	return out
+}
+
+// holderOf is the message whose turn holds a lock (a key's, a session's), "" when none does.
+func (a *acpAgent) holderOf(id string) string {
+	a.keyMu.Lock()
+	defer a.keyMu.Unlock()
+	return a.holders[id]
+}
+
+func (a *acpAgent) setHolder(id, msg string) {
+	a.keyMu.Lock()
+	defer a.keyMu.Unlock()
+	if msg == "" {
+		delete(a.holders, id)
+		return
+	}
+	if a.holders == nil {
+		a.holders = map[string]string{}
+	}
+	a.holders[id] = msg
 }
 
 // explainStart says why an agent process did not start.
@@ -732,8 +779,17 @@ func (s *acpSlot) handle(m store.Message) {
 	defer tl.stop()
 	ctx, cancelled, lost := tl.ctx, &tl.cancelled, &tl.lost
 	key := sessionKey(a.cfg.Session, m)
-	locks, err := s.lockTurn(ctx, key)
+	locks, err := s.lockTurn(ctx, key, m)
 	defer locks.release()
+	var f Failure
+	if errors.As(err, &f) {
+		// The lock is held by the turn this message was sent from: it would wait for itself.
+		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, store.Failed, "", f.Code, f.Message); err != nil && !errors.Is(err, store.ErrLeaseLost) {
+			n.log.Warn("complete", "id", m.ID, "err", err)
+		}
+		n.notify()
+		return
+	}
 	if err != nil {
 		return // cancelled, the lease lost or the node stopping: nothing of the turn ran
 	}

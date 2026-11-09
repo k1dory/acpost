@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,8 +11,8 @@ import (
 
 // PutUsage records a turn's usage for message id. Its row in turn_usage is taken, or replaced by a
 // fuller reading of the same turn (more tokens: an attempt that read the whole turn after one that
-// broke off in it), never by a lesser one. With event, a "usage" event goes among the message's
-// too: how the usage reaches the app and the sender's node. With a lease, all of it happens only
+// broke off in it), never by a lesser one. With event, the message's counted turns get their
+// "usage" events too (PublishUsage), how the usage reaches the app and the sender's node. With a lease, all of it happens only
 // while that attempt holds the message running (ErrLeaseLost otherwise), in one transaction with
 // the check: what an attempt read of its turn is there before the attempt's outcome is.
 func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool) error {
@@ -21,56 +22,124 @@ func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool
 	}
 	now := time.Now()
 	return s.tx(ctx, func(t *sql.Tx) error {
-		var seq int64
-		var n int
-		var state State
-		var cur string
-		err := t.QueryRowContext(ctx, "SELECT seq, events, state, lease_id FROM messages WHERE id = ?", id).Scan(&seq, &n, &state, &cur)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
+		seq, n, err := leasedMessage(ctx, t, id, lease)
 		if err != nil {
 			return err
 		}
-		if lease != "" && (state != Running || cur != lease) {
-			return ErrLeaseLost
-		}
-		var had int
-		err = t.QueryRowContext(ctx, "SELECT total FROM turn_usage WHERE turn = ?", u.Turn).Scan(&had)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			if event {
-				_, err := s.insertEvent(ctx, t, id, seq, n, "usage", data) // counted there
-				return err
-			}
-			return addUsage(ctx, t, id, u, now)
-		case err != nil:
+		if err := putUsageTx(ctx, t, id, u, now); err != nil {
 			return err
-		}
-		if u.Total > had {
-			if _, err := t.ExecContext(ctx, `UPDATE turn_usage SET ts = ?, model = ?, reported = ?, input = ?, output = ?, cache_read = ?,
-				cache_write = ?, thought = ?, total = ?, cost = ?, currency = ?, context_used = ?, context_size = ? WHERE turn = ?`,
-				usageAt(u.At, now), u.Model, u.Reported, u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Thought, u.Total, u.Cost,
-				u.Currency, u.ContextUsed, u.ContextSize, u.Turn); err != nil {
-				return err
-			}
 		}
 		if !event {
 			return nil
 		}
-		// The turn is counted (an earlier reading of it): its event goes among the message's all the
-		// same, as insertEvent keeps usage events (past the events' limit, up to maxUsageEvents).
-		var have int
-		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'usage'", seq).Scan(&have); err != nil {
-			return err
-		}
-		if have >= maxUsageEvents {
-			return nil
-		}
-		if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n+1, ms(now), "usage", data); err != nil {
-			return err
-		}
-		_, err = t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq)
-		return err
+		return publishUsageTx(ctx, t, id, seq, n, now)
 	})
+}
+
+// PublishUsage puts among message id's events the usage of each of its turns that is counted and
+// has no event yet (read by an attempt that was retried), from the counted row: before the message
+// is final, so the app and the sender's node get it. With a lease, only while that attempt holds
+// the message running (ErrLeaseLost otherwise).
+func (s *Store) PublishUsage(ctx context.Context, id, lease string) error {
+	now := time.Now()
+	return s.tx(ctx, func(t *sql.Tx) error {
+		seq, n, err := leasedMessage(ctx, t, id, lease)
+		if err != nil {
+			return err
+		}
+		return publishUsageTx(ctx, t, id, seq, n, now)
+	})
+}
+
+// leasedMessage is a message's seq and event count, checked to be running under lease (when given).
+func leasedMessage(ctx context.Context, t *sql.Tx, id, lease string) (int64, int, error) {
+	var seq int64
+	var n int
+	var state State
+	var cur string
+	err := t.QueryRowContext(ctx, "SELECT seq, events, state, lease_id FROM messages WHERE id = ?", id).Scan(&seq, &n, &state, &cur)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	if lease != "" && (state != Running || cur != lease) {
+		return 0, 0, ErrLeaseLost
+	}
+	return seq, n, nil
+}
+
+// putUsageTx counts a turn's usage, or replaces its count by a fuller reading of the same turn
+// (more tokens), never by a lesser one.
+func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Time) error {
+	var had int
+	err := t.QueryRowContext(ctx, "SELECT total FROM turn_usage WHERE turn = ?", u.Turn).Scan(&had)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return addUsage(ctx, t, id, u, now)
+	case err != nil:
+		return err
+	case u.Total <= had:
+		return nil
+	}
+	_, err = t.ExecContext(ctx, `UPDATE turn_usage SET ts = ?, model = ?, reported = ?, input = ?, output = ?, cache_read = ?,
+		cache_write = ?, thought = ?, total = ?, cost = ?, currency = ?, context_used = ?, context_size = ? WHERE turn = ?`,
+		usageAt(u.At, now), u.Model, u.Reported, u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Thought, u.Total, u.Cost,
+		u.Currency, u.ContextUsed, u.ContextSize, u.Turn)
+	return err
+}
+
+// publishUsageTx adds a "usage" event for each counted turn of message id that has none: its data
+// is the counted row (the fullest reading of the turn), not whatever an attempt read last. Usage
+// events are kept past the events' limit, up to maxUsageEvents, as insertEvent keeps them.
+func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int, now time.Time) error {
+	rows, err := t.QueryContext(ctx, `SELECT turn, ts, agent, session, model, reported, input, output, cache_read, cache_write,
+		thought, total, cost, currency, context_used, context_size FROM turn_usage WHERE msg = ? ORDER BY ts, turn`, id)
+	if err != nil {
+		return err
+	}
+	var all []Usage
+	for rows.Next() {
+		var u Usage
+		var ts int64
+		var cost sql.NullFloat64
+		if err := rows.Scan(&u.Turn, &ts, &u.Agent, &u.Session, &u.Model, &u.Reported, &u.Input, &u.Output, &u.CacheRead,
+			&u.CacheWrite, &u.Thought, &u.Total, &cost, &u.Currency, &u.ContextUsed, &u.ContextSize); err != nil {
+			rows.Close()
+			return err
+		}
+		u.At = time.UnixMilli(ts).UTC()
+		if cost.Valid {
+			c := cost.Float64
+			u.Cost = &c
+		}
+		all = append(all, u)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, u := range all {
+		var have, same int
+		if err := t.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(json_extract(data, '$.turn') = ?), 0) FROM events WHERE msg = ? AND kind = 'usage'",
+			u.Turn, seq).Scan(&have, &same); err != nil {
+			return err
+		}
+		if same > 0 || have >= maxUsageEvents {
+			continue
+		}
+		b, err := json.Marshal(u)
+		if err != nil {
+			return err
+		}
+		n++
+		if _, err := t.ExecContext(ctx, "INSERT INTO events (msg, seq, ts, kind, data) VALUES (?, ?, ?, ?, ?)", seq, n, ms(now), "usage", string(b)); err != nil {
+			return err
+		}
+		if _, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq); err != nil {
+			return err
+		}
+	}
+	return nil
 }

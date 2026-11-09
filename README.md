@@ -43,7 +43,7 @@ the node runs, `client:<token>` for a program authenticated by a token.
 |---|---|
 | `id` | `msg_` + a ULID: sortable by creation time, unique across nodes |
 | `from`, `to` | addresses |
-| `task` | free-form label (`TASK-42`, a ticket URL). Messages with the same task to the same agent share its ACP session |
+| `task` | free-form label (`TASK-42`, a ticket URL). Messages with the same task to the same agent share its ACP session; a sender from elsewhere (a client token, another node) gets sessions of its own, never those of the node's user and agents |
 | `thread` | conversation id; a new message starts its own (`thread = id`) |
 | `parent`, `depth` | the message during whose handling this one was sent, and how deep the chain is |
 | `body` | text, up to `limits.max_body` (1 MiB); Markdown goes as it is |
