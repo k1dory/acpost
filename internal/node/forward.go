@@ -226,11 +226,12 @@ func (n *Node) resolveOnce(id string) bool {
 		first, found, err := n.hub.ByIdem(ctx, n.qualify(local.From), key)
 		done()
 		switch {
-		case err != nil:
+		case err != nil && time.Since(local.CreatedAt) < hubAbsence:
 			// No answer, or a hub without the lookup (an older version answers 404 for any
-			// path): it may hold the send under an earlier id, so the copy and its key stay
-			// until it can say.
+			// path): it may hold the send under an earlier id. Past the wait, the disown below
+			// asks by the key too (or, a hub without either, the copy ends as before).
 			return false
+		case err != nil:
 		case found && first.ID != id:
 			_, err := n.takeHubRepeat(n.ctx, id, first)
 			return err == nil
@@ -239,9 +240,9 @@ func (n *Node) resolveOnce(id string) bool {
 		}
 	}
 	if time.Since(local.CreatedAt) < hubAbsence {
-		return false // the send may still arrive: the fence waits a while, so it is seldom needed
+		return false // the send may still arrive: absence is asked about only later
 	}
-	return n.fenceForward(id, local, key)
+	return n.disownForward(id, local, key)
 }
 
 // foundOnHub settles a forwarding copy the hub has (hm): the copy follows it; cancelled here

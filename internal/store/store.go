@@ -356,6 +356,9 @@ func (s *Store) migrate() error {
 	if err := migrateSchedules(s); err != nil {
 		return fmt.Errorf("migrate schedules: %w", err)
 	}
+	if _, err := s.w.Exec(disownSchema); err != nil { // disown_round2.go
+		return err
+	}
 	// Columns added after the first release.
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
@@ -532,6 +535,12 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 			if !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
+		}
+		// A message its sender disowned is not taken, however late it comes (disown_round2.go).
+		if gone, err := isDisowned(ctx, t, out.ID); err != nil {
+			return err
+		} else if gone {
+			return ErrDisowned
 		}
 		if maxQueued > 0 {
 			var q int

@@ -1501,8 +1501,8 @@ func streamErr(data string) error {
 // Any error, a 404 included (a hub without the lookup), leaves that unknown.
 func (c *Client) ByIdem(ctx context.Context, from, key string) (store.Message, bool, error) {
 	var out struct {
-		Found   *bool         `json:"found"`
-		Message store.Message `json:"message"`
+		Found   *bool       `json:"found"`
+		Message wireMessage `json:"message"`
 	}
 	if _, err := c.do(ctx, "GET", "/v1/messages/by-idem", url.Values{"from": {from}, "key": {key}}, nil, &out, nil); err != nil {
 		return store.Message{}, false, err
@@ -1510,7 +1510,7 @@ func (c *Client) ByIdem(ctx context.Context, from, key string) (store.Message, b
 	if out.Found == nil {
 		return store.Message{}, false, fmt.Errorf("%w: a lookup by key without its answer", ErrBadResponse)
 	}
-	return out.Message, *out.Found, nil
+	return store.Message(out.Message), *out.Found, nil
 }
 
 // What a node or hub answers is decoded within this version's bounds but not held to its fields:
@@ -1530,9 +1530,68 @@ type responseMessage struct {
 }
 
 // responseOf is what a response is decoded into for out: a message's files are read tolerantly.
+// (Every other response with messages in it holds them as wireMessage: Page, ByIdem, Disown.)
 func responseOf(out any) any {
 	if m, ok := out.(*store.Message); ok {
-		return &responseMessage{Message: m, Files: (*responseFiles)(&m.Files)}
+		return (*wireMessage)(m)
 	}
 	return out
+}
+
+// wireMessage is a message inside a response: its files are responseFiles.
+type wireMessage store.Message
+
+func (w *wireMessage) UnmarshalJSON(b []byte) error {
+	m := (*store.Message)(w)
+	return json.Unmarshal(b, &responseMessage{Message: m, Files: (*responseFiles)(&m.Files)})
+}
+
+// UnmarshalJSON reads a page of messages as a response carries it (wireMessage).
+func (p *Page) UnmarshalJSON(b []byte) error {
+	var w struct {
+		Items []wireMessage `json:"items"`
+		Next  string        `json:"next,omitempty"`
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	p.Next, p.Items = w.Next, nil
+	if w.Items != nil {
+		p.Items = make([]store.Message, len(w.Items))
+		for i := range w.Items {
+			p.Items[i] = store.Message(w.Items[i])
+		}
+	}
+	return nil
+}
+
+// DisownRequest is the body of POST /v1/messages/{id}/disown: who sent the message, and its key.
+type DisownRequest struct {
+	From string `json:"from"`
+	Key  string `json:"key,omitempty"`
+}
+
+// ErrNoDisown: the hub has no disown (a version before it): it cannot refuse a send that comes late.
+var ErrNoDisown = errors.New("the hub cannot disown a send (an older version)")
+
+// Disown asks the hub to give up a message this node sent as from (its key, or "") and never had
+// the answer for: found, the hub has it (m, under id or the key's earlier id); not found, the hub
+// refuses it from now on, however late it comes.
+func (c *Client) Disown(ctx context.Context, id, from, key string) (store.Message, bool, error) {
+	var out struct {
+		Found   *bool       `json:"found"`
+		Message wireMessage `json:"message"`
+	}
+	code, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(id)+"/disown", nil, DisownRequest{From: from, Key: key}, &out, nil)
+	var ce *Error
+	if err != nil && (code == http.StatusNotFound || code == http.StatusMethodNotAllowed) && errors.As(err, &ce) && ce.Code != "not_found" {
+		return store.Message{}, false, ErrNoDisown // no such route: an older hub
+	}
+	if err != nil {
+		return store.Message{}, false, err
+	}
+	if out.Found == nil {
+		return store.Message{}, false, fmt.Errorf("%w: a disown without its answer", ErrBadResponse)
+	}
+	return store.Message(out.Message), *out.Found, nil
 }

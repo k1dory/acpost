@@ -60,6 +60,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/messages/{id}/files", s.auth(s.files))
 	mux.HandleFunc("POST /v1/attach", s.auth(s.attach))
 	mux.HandleFunc("POST /v1/messages/{id}/cancel", s.auth(s.cancel))
+	mux.HandleFunc("POST /v1/messages/{id}/disown", s.auth(s.disown)) // a joined node gives up a send it has no answer for
 	mux.HandleFunc("PATCH /v1/messages/{id}", s.auth(s.editQueued))
 	mux.HandleFunc("POST /v1/messages/{id}/reply", s.auth(s.reply))
 	mux.HandleFunc("POST /v1/messages/{id}/lease", s.auth(s.extend))
@@ -1485,4 +1486,24 @@ func (s *server) byIdem(w http.ResponseWriter, r *http.Request, p node.Principal
 		return
 	}
 	reply(w, http.StatusOK, map[string]any{"found": true, "message": m}, err)
+}
+
+// disown: a joined node gives up a message it sent and never had the answer for. The hub has it
+// (found, with the message: the node follows it) or refuses it from now on (found false).
+func (s *server) disown(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req client.DisownRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	m, found, err := s.n.Disown(r.Context(), p, r.PathValue("id"), req.From, req.Key)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusOK, map[string]any{"found": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"found": true, "message": m})
 }

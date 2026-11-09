@@ -116,32 +116,24 @@ func (rp *resolverPool) try(n *Node, id string) {
 	rp.signal()
 }
 
-// fenceForward settles a forwarding copy the hub has no trace of, past hubAbsence. Absence is no
-// proof the send never arrives (a proxy may hold it): the message is sent once more, under the
-// same id and key but expiring at once, without its files. Whichever of the two reaches the hub
-// first is the message there; the other is a repeat of the key, answered with it, not run. So a
-// late send finds a message no one can take (it expires as it is stored) instead of running
-// after its sender was told it was not sent; or the fence finds the send arrived, and the copy
-// follows it. It uses what every hub answers: an older one fences the same way.
-func (n *Node) fenceForward(id string, local store.Message, key string) bool {
-	body := local.Body
-	if body == "" {
-		body = "(files only; not sent)" // a body is required, the files are not sent again
-	}
-	req := client.SendRequest{To: local.To, Body: body, Task: local.Task, Thread: local.Thread, Meta: local.Meta,
-		ID: id, From: n.qualify(local.From), Parent: local.Parent, Depth: local.Depth, TTL: "1ns"}
+// disownForward settles a forwarding copy the hub has no trace of, past hubAbsence. Absence is no
+// proof the send never arrives (a proxy may hold it): the hub is asked to disown it, which it does
+// in one step with any send of it. It has it (under the id, or the key's earlier send): the copy
+// follows that. It had not: it refuses the id from now on, and the copy is not sent for certain
+// (its key free for a send again). A hub before disown cannot refuse a late send: the copy ends
+// as not sent, as it did before (README).
+func (n *Node) disownForward(id string, local store.Message, key string) bool {
 	ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
-	sent, _, err := n.hub.Send(ctx, req, key)
+	m, found, err := n.hub.Disown(ctx, id, n.qualify(local.From), key)
 	done()
 	switch {
-	case err != nil && hubRefused(err):
-		// The hub refuses the message itself: the late send meets the same refusal.
+	case errors.Is(err, client.ErrNoDisown), err == nil && !found:
 		return n.notSent(n.ctx, id, errors.New("the hub did not get it; send again"))
 	case err != nil:
 		return false // no answer: again later
-	case sent.ID != id:
-		_, err := n.takeHubRepeat(n.ctx, id, sent) // the key's earlier send, kept by the hub
+	case m.ID != id:
+		_, err := n.takeHubRepeat(n.ctx, id, m) // the key's earlier send, kept by the hub
 		return err == nil
 	}
-	return n.foundOnHub(id, local, sent)
+	return n.foundOnHub(id, local, m)
 }

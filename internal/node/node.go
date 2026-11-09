@@ -542,6 +542,9 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 		return store.Message{}, false, errh("not_found", "`acpost agents` lists the agents this node knows", "no agent %s here", to)
 	}
 	got, created, err := n.st.InsertLimited(ctx, m, lim.MaxQueuedPerAgent)
+	if e := disownedErr(err, m.ID); e != nil {
+		return got, false, e
+	}
 	if errors.Is(err, store.ErrQueueFull) {
 		return got, false, errf("refused", "%s has %d messages queued (limits.max_queued_per_agent)", m.To, lim.MaxQueuedPerAgent)
 	}

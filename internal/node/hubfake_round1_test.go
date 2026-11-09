@@ -44,13 +44,15 @@ type fakeHub struct {
 	received   chan struct{} // told when a send is taken
 	getFails   int           // the next GETs of a message answer 500
 	cancels    []string
-	holdIn     chan struct{} // a send waits for it before the hub takes it
-	reply      string        // its copy's reply
-	files      int           // GETs of files
-	hangFiles  int           // the next GETs of files never answer
-	events     []store.Event // the message's events, numbered from 1
-	eventsFrom []int64       // the after of each GET of events
-	oldRoutes  bool          // routes of a hub before the lookup by key
+	holdIn     chan struct{}   // a send waits for it before the hub takes it
+	reply      string          // its copy's reply
+	files      int             // GETs of files
+	hangFiles  int             // the next GETs of files never answer
+	events     []store.Event   // the message's events, numbered from 1
+	eventsFrom []int64         // the after of each GET of events
+	oldRoutes  bool            // routes of a hub before the lookup by key
+	disowned   map[string]bool // ids a node disowned: a send of one is refused (oldRoutes: no disown)
+	disownHas  *store.Message  // a disown finds this message (the send arrived meanwhile)
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
@@ -132,10 +134,34 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 		var rq client.RelayRequest
 		_ = json.NewDecoder(r.Body).Decode(&rq)
 		_ = json.NewEncoder(w).Encode(map[string]int64{"relayed": rq.After + int64(len(rq.Events))})
+	case r.Method == "POST" && part == "disown" && f.oldRoutes:
+		http.NotFound(w, r) // a hub before disown: no such route
+	case r.Method == "POST" && part == "disown":
+		var rq client.DisownRequest
+		_ = json.NewDecoder(r.Body).Decode(&rq)
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/messages/"), "/disown")
+		if f.disownHas != nil {
+			_ = json.NewEncoder(w).Encode(map[string]any{"found": true, "message": *f.disownHas})
+			return
+		}
+		if m, ok := f.msgs[id]; ok {
+			_ = json.NewEncoder(w).Encode(map[string]any{"found": true, "message": m})
+			return
+		}
+		if f.disowned == nil {
+			f.disowned = map[string]bool{}
+		}
+		f.disowned[id] = true
+		_ = json.NewEncoder(w).Encode(map[string]any{"found": false})
 	case r.Method == "POST" && part == "messages":
 		var rq client.SendRequest
 		_ = json.NewDecoder(r.Body).Decode(&rq)
 		key := r.Header.Get("Idempotency-Key")
+		if f.disowned[rq.ID] {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "refused", "message": "given up by its sender"}})
+			return
+		}
 		if f.refuse > 0 {
 			f.refuse--
 			w.WriteHeader(http.StatusForbidden)
