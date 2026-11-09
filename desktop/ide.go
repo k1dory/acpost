@@ -48,7 +48,10 @@ var (
 	ideProbeEvery = time.Second     // the readiness probe's pace
 )
 
-var errIDEQuitting = errors.New("the app is quitting")
+var (
+	errIDEQuitting = errors.New("the app is quitting")
+	errIDEOtherApp = errors.New("VS Code's folder is another acpost's, running beside this one (an installed app and a build, two launches): its IDE is there; quit it to have the IDE here")
+)
 
 // ideStart is one start of the server: its result, ready once it is known.
 type ideStart struct {
@@ -252,11 +255,7 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	pidFile := filepath.Join(data, idePidFile)
 	// The record of the server, published whole (a new file renamed over the old one) or not at
 	// all: a server it does not name could not be found again after a crash, so it is not kept.
-	var rec []byte
-	var recErr error
-	if s.owner != nil { // another app's server is not this one's to name
-		rec, recErr = ideWriteRecord(data, cmd.Process.Pid)
-	}
+	rec, recErr := ideWriteRecord(data, cmd.Process.Pid)
 	s.mu.Unlock()
 	go run.wait(tokFile, pidFile, string(rec))
 
@@ -585,26 +584,39 @@ func (s *ideServer) stop() {
 
 // own takes the IDE folder's lock for this app's life, when no other running app of this kind
 // holds it: the one that holds it owns the server the pid file names. The lock ends with the
-// process, so a crashed app's server is no one's: the next app takes the lock and ends it.
+// process, so a crashed app's server is no one's: the next app takes the lock and ends it. An
+// app that is quitting lets it go in a moment: it is waited for that long (ideOwnWait).
 func (s *ideServer) own(data string) bool {
+	for end := time.Now().Add(ideOwnWait); ; time.Sleep(50 * time.Millisecond) {
+		if owned, done := s.tryOwn(data); done || !time.Now().Before(end) {
+			return owned
+		}
+	}
+}
+
+// ideOwnWait is how long a start waits for another app to let the IDE folder go.
+var ideOwnWait = 3 * time.Second
+
+// tryOwn is one try at the lock: whether it is held, and whether trying again is of no use.
+func (s *ideServer) tryOwn(data string) (owned, done bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.owner != nil {
-		return true
+		return true, true
 	}
 	if s.stopped { // quitting: nothing to own
-		return false
+		return false, true
 	}
 	f, err := os.OpenFile(filepath.Join(data, ideLockFile), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return false
+		return false, true
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return false
+		return false, false
 	}
 	s.owner = f
-	return true
+	return true, true
 }
 
 // disown lets the lock go (the app quitting; its server has ended).
@@ -631,10 +643,11 @@ func (s *ideServer) choosePort(data string) (int, error) {
 	if want == 0 {
 		want = idePort
 	}
+	// Only the lock's holder starts a server: the folder's server, settings, extensions and record
+	// are its. Another app running beside it (an installed app and a build of it, two launches)
+	// starts none: a server of its would share all that, and no record would name it.
 	// A server no running app owns (its app crashed) is ended first, whatever port it is on (it
-	// may have started on another one; its folder is this one): its group waited for. Only the
-	// lock's holder does so: another instance's server (an installed app and a build of it, two
-	// launches) is live and stays.
+	// may have started on another one; its folder is this one): its group waited for.
 	// The lock is held throughout (stop lets it go only after): the pid file read is the one this
 	// app's lock covers, never one another app wrote after taking the lock.
 	s.claim.Lock()
@@ -642,11 +655,18 @@ func (s *ideServer) choosePort(data string) (int, error) {
 	if s.owned != nil {
 		s.owned()
 	}
+	if !owner {
+		s.claim.Unlock()
+		if s.life.Err() != nil {
+			return 0, errIDEQuitting
+		}
+		return 0, errIDEOtherApp
+	}
 	if s.stuck != 0 && groupGone(s.stuck, 0) {
 		s.stuck = 0
 	}
 	if s.stuck == 0 {
-		if pid := ideOrphan(data); owner && pid > 0 && !endGroup(pid) {
+		if pid := ideOrphan(data); pid > 0 && !endGroup(pid) {
 			s.stuck = pid
 		}
 	}
@@ -661,11 +681,7 @@ func (s *ideServer) choosePort(data string) (int, error) {
 	}
 	// Taken: the server picks a free port itself as it listens (one picked here could be taken
 	// before it starts); its address says which.
-	who := "something else"
-	if !owner {
-		who = "another acpost"
-	}
-	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by %s; VS Code starts on another, without its settings and state\n", want, who)
+	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by something else; VS Code starts on another, without its settings and state\n", want)
 	return 0, nil
 }
 

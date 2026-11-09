@@ -363,8 +363,12 @@ func TestIDEOrphanEndedSamePort(t *testing.T) {
 }
 
 // Review 1 (P1): a second app running beside the first (an installed app and a build, two
-// launches) leaves the first's live server alone and starts its own on another port.
+// launches) leaves the first's live server alone. Round 2, 2: and starts none of its own (it
+// would share the first's folders, with no record of it): it says whose the IDE is.
 func TestIDELiveOwnerKept(t *testing.T) {
+	old := ideOwnWait
+	ideOwnWait = 300 * time.Millisecond
+	defer func() { ideOwnWait = old }()
 	f := newFakeIDE(t, "serve")
 	if _, err := f.open(""); err != nil {
 		t.Fatal(err)
@@ -372,17 +376,16 @@ func TestIDELiveOwnerKept(t *testing.T) {
 	first := f.current()
 	g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
 	t.Cleanup(g.stop)
-	base, err := g.open("")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := g.open(""); !errors.Is(err, errIDEOtherApp) {
+		t.Fatalf("a second app's start: %v", err)
 	}
 	if closed(first.done) || waitClosed(first.done, 500*time.Millisecond) {
 		t.Fatal("the other app's live server was ended")
 	}
-	if portOf(t, base) == f.port {
-		t.Fatal("the second app took the first's port")
+	if n := f.starts(); n != 1 {
+		t.Fatalf("the CLI ran %d times: the second app started a server", n)
 	}
-	// The pid file still names the owner's server, not the second's.
+	// The pid file still names the owner's server.
 	if rec := readRecord(t, f.data); rec.Pid != first.cmd.Process.Pid {
 		t.Fatalf("pid file %+v, owner's server %d", rec, first.cmd.Process.Pid)
 	}
@@ -657,30 +660,33 @@ func TestIDEGroupEndsInOrder(t *testing.T) {
 }
 
 // Review 3.2: an app quitting while its start looks for an orphan keeps its lock until that is
-// done: the next app (which takes the lock only then) is never taken for its orphan.
+// done: the next app (which takes the lock only then: it waits for it, round 2) is never taken
+// for its orphan.
 func TestIDEStopWaitsForOrphanCheck(t *testing.T) {
 	g := newFakeIDE(t, "serve")
 	h := &ideServer{findCLI: g.findCLI, dataDir: g.dataDir, install: g.install, port: g.port, budget: g.budget}
 	t.Cleanup(h.stop)
 	var hrun *ideRun
+	hdone := make(chan struct{})
 	g.owned = func() {
 		g.owned = nil
-		done := make(chan struct{})
 		go g.stop() // the app quitting now
 		go func() {
-			defer close(done)
+			defer close(hdone)
 			if _, err := h.open(""); err == nil { // the next app, at once
 				h.mu.Lock()
 				hrun = h.run
 				h.mu.Unlock()
+			} else {
+				t.Errorf("the next app: %v", err)
 			}
 		}()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-		}
+		time.Sleep(100 * time.Millisecond) // the next app is trying the lock meanwhile
 	}
 	g.open("")
+	if !waitClosed(hdone, 15*time.Second) {
+		t.Fatal("the next app's start did not end")
+	}
 	if hrun == nil {
 		t.Fatal("the next app did not start")
 	}
