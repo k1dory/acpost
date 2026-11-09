@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -202,6 +203,11 @@ func DefaultPath() string {
 	if p := os.Getenv("ACPOST_CONFIG"); p != "" {
 		return p
 	}
+	return implicitPath()
+}
+
+// implicitPath is the file read when no path is named at all: the only one that may be absent.
+func implicitPath() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "acpost", "config.yaml")
 	}
@@ -209,10 +215,20 @@ func DefaultPath() string {
 	return filepath.Join(home, ".config", "acpost", "config.yaml")
 }
 
-// Load reads a configuration file; a file that does not exist is the defaults.
+// Load reads a configuration file. The implicit default file (ACPOST_CONFIG unset) that does not
+// exist is the defaults; any other file that does not exist is an error, or a typo in its path
+// would start a node with no agents and no tokens. A path given by --config goes to LoadNamed,
+// since only the caller knows it was named, even when it names the default file.
 func Load(path string) (*Config, error) {
+	return load(path, os.Getenv("ACPOST_CONFIG") == "" && samePath(path, implicitPath()))
+}
+
+// LoadNamed reads a configuration file someone named: it must exist.
+func LoadNamed(path string) (*Config, error) { return load(path, false) }
+
+func load(path string, mayBeAbsent bool) (*Config, error) {
 	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) && mayBeAbsent {
 		return Parse(nil, ".yaml")
 	}
 	if err != nil {
@@ -349,8 +365,21 @@ func (c *Config) fill() error {
 	defInt(&l.MaxQueuedPerAgent, 1000)
 	defInt(&l.MaxEventsPerMessage, 1000)
 	defInt(&l.MaxAttempts, 3)
+	// 0 is the default above; a negative limit would refuse every send (max_depth), fail every
+	// retry (max_attempts), drop every event or lift the queue limit, so it is an error.
+	for _, v := range []struct {
+		key string
+		n   int
+	}{{"max_depth", l.MaxDepth}, {"max_queued_per_agent", l.MaxQueuedPerAgent}, {"max_events_per_message", l.MaxEventsPerMessage}, {"max_attempts", l.MaxAttempts}} {
+		if v.n <= 0 {
+			return fmt.Errorf("limits.%s %d: a positive number", v.key, v.n)
+		}
+	}
 
 	for i, t := range c.Tokens {
+		if t == nil {
+			return fmt.Errorf("tokens[%d]: empty", i)
+		}
 		if !ValidName(t.Name) {
 			return fmt.Errorf("tokens[%d].name %q", i, t.Name)
 		}
@@ -535,6 +564,19 @@ func (s *Size) parse(in string) error {
 	if err != nil || v < 0 {
 		return fmt.Errorf("size %q: like 1024, 64KiB, 1MiB", in)
 	}
+	if v > math.MaxInt64/mult {
+		return fmt.Errorf("size %q: too large", in)
+	}
 	*s = Size(v * mult)
 	return nil
+}
+
+func samePath(a, b string) bool {
+	if x, err := filepath.Abs(a); err == nil {
+		a = x
+	}
+	if x, err := filepath.Abs(b); err == nil {
+		b = x
+	}
+	return a == b
 }

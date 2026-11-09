@@ -61,14 +61,10 @@ func (n *Node) checkFiles(files, have []store.File, side string) error {
 		}
 		now[f.Name] = true
 		f.Reply = false
-		if f.Link() {
-			// A link is kept as a link: its type from what was given or its name, its size as said.
-			f.Type = linkType(f.Name, f.Type)
-			continue
+		storedForm(f) // node.go: what asStored compares a repeated reply by
+		if !f.Link() {
+			size += int64(len(f.Data))
 		}
-		size += int64(len(f.Data))
-		f.Type = fileType(f.Name, f.Type, f.Data)
-		f.Size = len(f.Data)
 	}
 	if size > int64(lim.MaxFilesSize) {
 		return errf("refused", "the files of %s are %d bytes together, over limits.max_files_size (%d)", side, size, lim.MaxFilesSize)
@@ -106,9 +102,7 @@ func validLink(f *store.File) error {
 	default:
 		return bad("scheme " + u.Scheme)
 	}
-	if f.Size < 0 || f.Size > maxLinkSize {
-		f.Size = 0
-	}
+	f.Size = linkSize(f.Size)
 	return nil
 }
 

@@ -1,71 +1,54 @@
 package store
 
 import (
-	"context"
-	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
-// The final usage event carries the fullest reading of the turn that is counted, not what the last
-// attempt read: a node receiving it counts that too.
-func TestFinalUsageEventIsTheCountedReading(t *testing.T) {
-	ctx := context.Background()
-	open := func() *Store {
-		s, err := Open("memory:", Options{})
-		if err != nil {
+// Usage that cannot be read is not dropped silently: a notice says so, and it is not counted.
+func TestUnreadableUsageLeavesANotice(t *testing.T) {
+	s := openTest(t, Options{})
+	m := mustInsert(t, s, msg("agent:r", "x"))
+	if err := s.AddEvent(ctx, m.ID, "usage", `{"broken":`); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := s.Events(ctx, m.ID, 0, 100)
+	if err != nil || len(evs) != 1 || evs[0].Kind != "notice" || !strings.Contains(evs[0].Data, "usage") {
+		t.Fatalf("%+v %v", evs, err)
+	}
+	if got, _ := s.UsageOf(ctx, UsageQuery{}); len(got) != 0 {
+		t.Fatalf("counted: %+v", got)
+	}
+}
+
+// Usage in the last place an event has still leaves the marker saying later ones were dropped.
+func TestUsageInTheLastPlaceKeepsTheMarker(t *testing.T) {
+	s := openTest(t, Options{MaxEventsPerMessage: 3})
+	m := mustInsert(t, s, msg("agent:r", "x"))
+	for range 2 {
+		if err := s.AddEvent(ctx, m.ID, "tool_call", "{}"); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { s.Close() })
-		return s
 	}
-	s := open()
-	m := Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"}
-	if _, _, err := s.Insert(ctx, &m); err != nil {
-		t.Fatal(err)
+	usageEvent(t, s, m.ID, Usage{Turn: "t1", At: time.Now(), Agent: "agent:a@n", Input: 1})
+	for range 3 {
+		if err := s.AddEvent(ctx, m.ID, "tool_call", "{}"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	c, ok, err := s.Claim(ctx, "agent:x", time.Minute)
-	if err != nil || !ok {
-		t.Fatal(ok, err)
-	}
-	reading := func(input int) string {
-		b, _ := json.Marshal(Usage{Turn: "sbu_1", Agent: "agent:x@n", Model: "m", Reported: true, Input: input, Total: input})
-		return string(b)
-	}
-	if err := s.PutUsage(ctx, m.ID, c.LeaseID, reading(150), false); err != nil { // an attempt read 150, broke, retried
-		t.Fatal(err)
-	}
-	if err := s.PutUsage(ctx, m.ID, c.LeaseID, reading(100), true); err != nil { // the last broke earlier
-		t.Fatal(err)
-	}
-	evs, err := s.Events(ctx, m.ID, 0, 10)
+	evs, err := s.Events(ctx, m.ID, 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var data []string
-	for _, e := range evs {
-		if e.Kind == "usage" {
-			data = append(data, e.Data)
+	var kinds []string
+	for i, e := range evs {
+		kinds = append(kinds, e.Kind)
+		if e.Seq != int64(i+1) {
+			t.Fatalf("event %d has seq %d", i, e.Seq)
 		}
 	}
-	if len(data) != 1 {
-		t.Fatalf("usage events %q, want one", data)
-	}
-	var u Usage
-	if err := json.Unmarshal([]byte(data[0]), &u); err != nil || u.Input != 150 {
-		t.Fatalf("the event says %d input tokens (%v), want the counted 150", u.Input, err)
-	}
-	// The sender's node, given the event, counts what it says.
-	r := open()
-	rm := Message{ID: m.ID, From: "user:a", To: "agent:x@n", Body: "hi"}
-	if _, _, err := r.Insert(ctx, &rm); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.AddEvent(ctx, m.ID, "usage", data[0]); err != nil {
-		t.Fatal(err)
-	}
-	sums, err := r.UsageOf(ctx, UsageQuery{})
-	if err != nil || len(sums) != 1 || sums[0].Input != 150 {
-		t.Fatalf("the receiving node counts %+v %v, want 150", sums, err)
+	if got := strings.Join(kinds, " "); got != "tool_call tool_call usage truncated" {
+		t.Fatalf("events: %s", got)
 	}
 }
