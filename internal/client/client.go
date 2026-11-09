@@ -666,7 +666,10 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, body)
+	// The request has its own cancel: it is what cuts a drain that does not end (see below).
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, method, u, body)
 	if err != nil {
 		return 0, err
 	}
@@ -692,8 +695,10 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 	}
 	if out == nil {
 		// Read what is left of a small answer, so the connection goes back to the pool; not
-		// for long: a body that does not come is cut, and the call has its answer already.
-		cut := time.AfterFunc(drainTimeout, func() { resp.Body.Close() })
+		// for long: a body that does not come is cut, and the call has its answer already. Cut by
+		// cancelling the request, not by closing the body: a gzip answer whose header does not
+		// come holds the body's lock while it reads, and Close would wait for it.
+		cut := time.AfterFunc(drainTimeout, cancel)
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		cut.Stop()
 	}

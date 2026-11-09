@@ -89,6 +89,9 @@ func (n *Node) FileAt(ctx context.Context, p Principal, repo, tree, file string)
 	if cut {
 		return "", errf("invalid", "the file is over %d KiB to show", fileAtMax>>10)
 	}
+	if err != nil && ctx.Err() != nil {
+		return "", ctx.Err() // the request ended (the node stops), not "no file"
+	}
 	if err != nil {
 		return "", errf("not_found", "%s is not in that version (or the snapshot is gone)", file)
 	}

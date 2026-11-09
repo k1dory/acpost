@@ -75,6 +75,9 @@ func (n *Node) forgeOf(ctx context.Context, p Principal, q ForgeQuery) (ForgeInf
 		return ForgeInfo{}, errf("invalid", "an agent or a directory")
 	}
 	out, _, err := git(ctx, dir, nil, 4096, "remote", "get-url", "origin")
+	if err != nil && ctx.Err() != nil {
+		return ForgeInfo{}, ctx.Err() // the request ended (the node stops), not "no origin"
+	}
 	if err != nil {
 		return ForgeInfo{}, errh("not_found", "the repository needs a remote named origin", "%s: no origin remote (%v)", dir, err)
 	}
