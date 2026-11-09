@@ -17,8 +17,10 @@ import (
 //	remote      the hub has it: the copy follows the hub's (followSweep, follow)
 //	unsent      not sent for certain (refused, or the hub never got it); its key is free again
 //
-// A copy cancelled here while still forwarding keeps that origin until the hub has the cancel
-// (or, the hub having ended it already, until its outcome is the copy's).
+// A cancel asked for here while a copy is still forwarding is recorded (cancel_wanted), not done:
+// the copy stays unfinished until the hub's verdict, so no one waiting sees an outcome that the
+// hub then contradicts. The hub cancels it, or had ended it before: either way the copy takes the
+// hub's outcome. The hub never got it: the copy ends cancelled.
 //
 // One goroutine at a time owns a forwarding copy (n.resolving): the send while its request is out,
 // then the resolver it hands the copy to. Nothing settles a copy while its send may still reach
@@ -245,7 +247,29 @@ func (n *Node) resolveOnce(id string) bool {
 // meanwhile, the cancel goes to the hub first, and a hub that had already ended the message gives
 // the copy its outcome.
 func (n *Node) foundOnHub(id string, local, hm store.Message) bool {
-	if local.State.Final() {
+	wanted, err := n.st.CancelWanted(n.ctx, id)
+	if err != nil {
+		return false
+	}
+	if wanted && !local.State.Final() {
+		ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+		_, err := n.hub.Cancel(ctx, id)
+		done()
+		if err != nil && !isFinalErr(err) {
+			return false // the cancel did not reach the hub: again later
+		}
+		// Cancelled there, or ended before the cancel: the hub's outcome is the message's.
+		ok, err := n.st.CancelSettled(n.ctx, id, originForwarding, originRemote)
+		if err != nil {
+			return false
+		}
+		if ok {
+			n.notify()
+			n.startFollow(id)
+		}
+		return true
+	}
+	if local.State.Final() { // cancelled by an earlier version while forwarding
 		ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
 		_, err := n.hub.Cancel(ctx, id)
 		done()
@@ -291,17 +315,17 @@ func (n *Node) resumeForwards() {
 	}
 }
 
-// cancelForwarding cancels a copy still forwarding, only while it is (a send finishing at the same
-// time makes it the hub's: then the hub is asked first, as for any remote copy). done: it is
-// cancelled; otherwise m is the copy as it is now.
+// cancelForwarding asks for a copy still forwarding to be cancelled, only while it is (a send
+// finishing at the same time makes it the hub's: then the hub is asked first, as for any remote
+// copy). done: the cancel is recorded, and the copy, still unfinished, ends when the hub's verdict
+// is known; otherwise m is the copy as it is now.
 func (n *Node) cancelForwarding(ctx context.Context, p Principal, m store.Message) (store.Message, bool, error) {
-	ok, err := n.st.CancelIfOrigin(ctx, m.ID, originForwarding, "", "")
+	ok, err := n.st.WantCancel(ctx, m.ID, originForwarding)
 	if err != nil {
 		return m, false, err
 	}
 	if ok {
-		n.resolveLater(m.ID) // the hub may have it already: the cancel goes there too
-		n.notify()
+		n.resolveLater(m.ID) // the cancel goes to the hub (or the hub is found not to have it)
 		cur, err := n.Get(ctx, p, m.ID)
 		return cur, true, err
 	}

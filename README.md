@@ -347,7 +347,9 @@ text, when it adds something, is in `error` after the explanation.
 own. `--idempotency-key` makes a repeated `send` (a retry after a network error) return the first
 message instead of creating another; keys are per sender and kept as long as the message. A send
 through the hub whose answer is not known yet makes a repeat fail with `unavailable` (try again
-shortly); one found not to have reached the hub releases its key, so the next repeat sends it.
+shortly); one found not to have reached the hub releases its key, so the next repeat sends it. A `cancel` of
+such a message returns it unfinished: it ends with the hub's outcome once the hub has answered
+(cancelled, or the result it had already), and cancelled if the hub never got it.
 
 ## Configuration
 

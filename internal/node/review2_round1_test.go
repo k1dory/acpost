@@ -157,9 +157,10 @@ func TestDedupKeepsLocalCancel(t *testing.T) {
 		c := f.get().cancels
 		return len(c) == 1 && c[0] == first.ID
 	})
-	if got, _ := n.st.Get(ctx, first.ID); got.State != store.Cancelled {
-		t.Fatalf("the copy of the first message is %s", got.State)
-	}
+	eventually(t, "the copy of the first message takes the hub's cancel", func() bool {
+		got, _ := n.st.Get(ctx, first.ID)
+		return got.State == store.Cancelled
+	})
 }
 
 // A lease lost while the hub holds the message for its next delivery, and the sender cancels it

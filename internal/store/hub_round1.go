@@ -120,7 +120,7 @@ func (s *Store) FinishForward(ctx context.Context, id, forwarding, origin string
 		meta = string(b)
 	}
 	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, recipient = ?, task = ?, thread = ?, parent = ?, depth = ?, meta = ?,
-		expires_at = ?, updated_at = ? WHERE id = ? AND origin = ? AND state IN ('queued', 'running')`,
+		expires_at = ?, updated_at = ? WHERE id = ? AND origin = ? AND state IN ('queued', 'running') AND cancel_wanted = 0`,
 		origin, sent.To, sent.Task, sent.Thread, sent.Parent, sent.Depth, meta, ms(sent.ExpiresAt), ms(time.Now()), id, forwarding)
 	if err != nil {
 		return false, err
@@ -156,11 +156,12 @@ func (s *Store) DropForward(ctx context.Context, id, forwarding string) error {
 // rather than answered with this failure. It reports whether it did.
 func (s *Store) ForwardNotSent(ctx context.Context, id, forwarding, unsent, why string) (bool, error) {
 	now := ms(time.Now())
+	// A cancel asked for meanwhile is what it ends as: nothing was sent to undo.
 	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, idem_key = NULL,
-		error = CASE WHEN state IN ('queued', 'running') THEN ? ELSE error END,
+		error = CASE WHEN state IN ('queued', 'running') AND cancel_wanted = 0 THEN ? ELSE error END,
 		finished_at = CASE WHEN state IN ('queued', 'running') THEN ? ELSE finished_at END,
-		state = CASE WHEN state IN ('queued', 'running') THEN 'failed' ELSE state END,
-		lease_id = '', lease_until = 0, updated_at = ? WHERE id = ? AND origin = ?`, unsent, why, now, now, id, forwarding)
+		state = CASE WHEN state NOT IN ('queued', 'running') THEN state WHEN cancel_wanted = 1 THEN 'cancelled' ELSE 'failed' END,
+		cancel_wanted = 0, lease_id = '', lease_until = 0, updated_at = ? WHERE id = ? AND origin = ?`, unsent, why, now, now, id, forwarding)
 	if err != nil {
 		return false, err
 	}
@@ -201,10 +202,9 @@ func (s *Store) OfOrigin(ctx context.Context, origin, after string, limit int) (
 
 // ReplaceForward replaces, in one transaction, a message stored to be sent to a hub (id, origin
 // forwarding) with a copy of the message the hub kept for the same key (first, with its files):
-// the copy takes the sender's key, and a cancel done here meanwhile (the stored message is
-// final) stays with it, its origin forwarding until the cancel reaches the hub; otherwise its
-// origin is origin. Nothing changes on any failure. A copy already here is kept as it is (the
-// stored message is dropped). It returns the copy.
+// the copy takes the sender's key, and a cancel asked for meanwhile stays with it, its origin
+// forwarding until the cancel reaches the hub; otherwise its origin is origin. A copy already here
+// takes the key and the cancel the same way. Nothing changes on any failure. It returns the copy.
 func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin string, first Message) (Message, error) {
 	if first.ID == "" || first.To == "" {
 		return Message{}, errors.New("store: replace needs the hub's message's id and recipient")
@@ -215,8 +215,9 @@ func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin strin
 		var sender string
 		var state State
 		var key sql.NullString
-		err := t.QueryRowContext(ctx, "SELECT seq, sender, state, idem_key FROM messages WHERE id = ? AND origin = ?", id, forwarding).
-			Scan(&seq, &sender, &state, &key)
+		var wanted bool
+		err := t.QueryRowContext(ctx, "SELECT seq, sender, state, idem_key, cancel_wanted FROM messages WHERE id = ? AND origin = ?", id, forwarding).
+			Scan(&seq, &sender, &state, &key, &wanted)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -232,10 +233,27 @@ func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin strin
 		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM messages WHERE id = ?", first.ID).Scan(&n); err != nil {
 			return err
 		}
+		wanted = wanted || state.Final() // (a cancel stored by an earlier version: the copy was final)
+		if n > 0 {
+			// The hub's message is here already (an earlier send made it, without the key): it
+			// takes the key, and the cancel asked for goes to the hub through it.
+			if key.Valid {
+				if _, err := t.ExecContext(ctx, "UPDATE messages SET idem_key = ? WHERE id = ? AND sender = ? AND idem_key IS NULL",
+					key.String, first.ID, sender); err != nil {
+					return err
+				}
+			}
+			if wanted {
+				if _, err := t.ExecContext(ctx, `UPDATE messages SET origin = ?, cancel_wanted = 1, updated_at = ?
+					WHERE id = ? AND origin IN (?, ?) AND state IN ('queued', 'running')`, forwarding, ms(now), first.ID, origin, forwarding); err != nil {
+					return err
+				}
+			}
+		}
 		if n == 0 {
-			o, st, finished := origin, Queued, int64(0)
-			if state.Final() {
-				o, st, finished = forwarding, Cancelled, ms(now)
+			o, st, finished, cw := origin, Queued, int64(0), 0
+			if wanted {
+				o, cw = forwarding, 1
 			}
 			thread := first.Thread
 			if thread == "" {
@@ -254,10 +272,10 @@ func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin strin
 				return err
 			}
 			res, err := t.ExecContext(ctx, `INSERT INTO messages
-				(id, sender, recipient, task, thread, parent, depth, state, meta, body_size, created_at, updated_at, expires_at, finished_at, origin, idem_key)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				(id, sender, recipient, task, thread, parent, depth, state, meta, body_size, created_at, updated_at, expires_at, finished_at, origin, idem_key, cancel_wanted)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				first.ID, sender, first.To, first.Task, thread, first.Parent, first.Depth, st, meta, len(first.Body),
-				ms(now), ms(now), ms(first.ExpiresAt), finished, o, idem)
+				ms(now), ms(now), ms(first.ExpiresAt), finished, o, idem, cw)
 			if err != nil {
 				return err
 			}
@@ -286,6 +304,42 @@ func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin strin
 func (s *Store) ReopenForward(ctx context.Context, id, forwarding, origin string) (bool, error) {
 	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, state = 'queued', error = '', error_code = '', finished_at = 0,
 		updated_at = ? WHERE id = ? AND origin = ? AND state = 'cancelled'`, origin, ms(time.Now()), id, forwarding)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// WantCancel records a cancel asked for on a message stored to be sent to a hub (origin
+// forwarding), not yet ended: it stays unfinished until the hub's verdict. It reports whether it
+// did (false: no longer forwarding, or ended).
+func (s *Store) WantCancel(ctx context.Context, id, forwarding string) (bool, error) {
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET cancel_wanted = 1, updated_at = ?
+		WHERE id = ? AND origin = ? AND state IN ('queued', 'running')`, ms(time.Now()), id, forwarding)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// CancelWanted says whether a cancel was asked for on a message and not yet settled.
+func (s *Store) CancelWanted(ctx context.Context, id string) (bool, error) {
+	var wanted bool
+	err := s.r.QueryRowContext(ctx, "SELECT cancel_wanted FROM messages WHERE id = ?", id).Scan(&wanted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return wanted, err
+}
+
+// CancelSettled marks a message stored to be sent to a hub as the hub's (origin), its cancel
+// request settled there (the hub cancelled it, or had ended it before): the hub's outcome is
+// copied onto it next. It reports whether it did.
+func (s *Store) CancelSettled(ctx context.Context, id, forwarding, origin string) (bool, error) {
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, cancel_wanted = 0, updated_at = ? WHERE id = ? AND origin = ?`,
+		origin, ms(time.Now()), id, forwarding)
 	if err != nil {
 		return false, err
 	}

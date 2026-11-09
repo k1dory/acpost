@@ -356,6 +356,8 @@ func (s *Store) migrate() error {
 	for _, c := range []struct{ name, ddl string }{
 		{"error_code", "error_code TEXT NOT NULL DEFAULT ''"},
 		{"relayed", "relayed INTEGER NOT NULL DEFAULT 0"}, // events taken from the node running the agent
+		// a cancel asked for on a message forwarded to a hub, not yet settled there
+		{"cancel_wanted", "cancel_wanted INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var n int
 		if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = ?", c.name).Scan(&n); err != nil {
