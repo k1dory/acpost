@@ -650,7 +650,7 @@ func (s *acpSlot) freeSession(ctx context.Context, sid string) (bool, error) {
 		// The turn holding the session is this message's sender (or its sender's), waiting for the
 		// answer: it never ends first. Said at once, not after the sender's time runs out.
 		if c, me := other.cur.Load(), s.cur.Load(); c != nil && me != nil && s.a.n.waitsReach(c.ID, me.ID) {
-			return false, failf("refused", "the session %s is open in the agent's process of the turn that sent this message (%s), which waits for this answer; send it with a --task whose session that turn has not opened", sid, c.ID)
+			return false, failf("refused", "the session %s is open in the agent's process of the turn of %s, which waits (send --wait, through the messages it waits for) for this message's answer; send it with a --task whose session that turn has not opened, or without waiting for it", sid, c.ID)
 		}
 		select {
 		case <-ctx.Done():
