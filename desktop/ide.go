@@ -78,6 +78,7 @@ type ideServer struct {
 	inst       chan struct{} // one install at a time, the first's and any again
 	owner      *os.File      // the IDE folder's lock, held while this app owns its server
 	claim      sync.Mutex    // held from taking the lock to the end of the orphan's removal; stop waits for it
+	stuck      int           // an orphan's process group that did not end (under claim): no start till it is gone
 
 	pane  sync.Mutex // the pane's calls, one at a time
 	shown string     // the address the pane has open (under pane)
@@ -633,9 +634,18 @@ func (s *ideServer) choosePort(data string) (int, error) {
 	if s.owned != nil {
 		s.owned()
 	}
-	if pid := ideOrphan(data); owner && pid > 0 && !endGroup(pid) {
+	if s.stuck != 0 && groupGone(s.stuck, 0) {
+		s.stuck = 0
+	}
+	if s.stuck == 0 {
+		if pid := ideOrphan(data); owner && pid > 0 && !endGroup(pid) {
+			s.stuck = pid
+		}
+	}
+	if s.stuck != 0 {
+		pg := s.stuck
 		s.claim.Unlock()
-		return 0, fmt.Errorf("VS Code's server left from before (process group %d) does not end: not starting another beside it", pid)
+		return 0, fmt.Errorf("VS Code's server left from before (process group %d) does not end: not starting another beside it", pg)
 	}
 	s.claim.Unlock()
 	if portFree(want) {
@@ -671,7 +681,14 @@ func ideOrphan(data string) int {
 	if err != nil || pid <= 1 {
 		return 0
 	}
-	if g, err := syscall.Getpgid(pid); err != nil || g != pid {
+	if g, err := syscall.Getpgid(pid); err != nil {
+		// Its leader gone, its group still there: that group is the server's (a group's id is not
+		// taken again while it has a process), what is left of it.
+		if !groupGone(pid, 0) {
+			return pid
+		}
+		return 0
+	} else if g != pid {
 		return 0
 	}
 	cmdline, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()

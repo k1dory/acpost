@@ -771,6 +771,22 @@ func TestIDEStuckGroupRefusesStart(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "does not end") || f.starts() != 1 {
 			t.Fatalf("a start beside a stuck orphan: %v, %d starts", err, f.starts())
 		}
+		// Review 5: asked again (its leader gone by now, the group still there): still refused.
+		_, err = g.open("")
+		if err == nil || !strings.Contains(err.Error(), "does not end") || f.starts() != 1 {
+			t.Fatalf("a second start beside a stuck orphan: %v, %d starts", err, f.starts())
+		}
+		// A new app (no memory of it) refuses too: the leaderless group is the server's.
+		h := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+		t.Cleanup(h.stop)
+		g.stop()
+		_, err = h.open("")
+		if err == nil || !strings.Contains(err.Error(), "does not end") || f.starts() != 1 {
+			t.Fatalf("another app beside a stuck orphan: %v, %d starts", err, f.starts())
+		}
 		ideStuckGroup.Store(0)
+		if _, err := h.open(""); err != nil || f.starts() != 2 {
+			t.Fatalf("once it is gone: %v, %d starts", err, f.starts())
+		}
 	})
 }
