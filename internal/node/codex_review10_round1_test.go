@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,10 +19,9 @@ func TestCancelMidStreamUsageAgrees(t *testing.T) {
 		f.frames = append(f.frames, frame(7+i, "r1", "log", `{"type":"usage","model":"claude-x","input_tokens":100}`, nil))
 	}
 	reached, release := make(chan struct{}), make(chan struct{})
-	calls := 0
+	var calls atomic.Int32 // usage lines read (the hook is called for each, stored or kept)
 	sandboxUsageRead = func() {
-		calls++
-		if calls == 2 {
+		if calls.Add(1) == 2 {
 			close(reached)
 			<-release
 		}
@@ -54,12 +54,22 @@ func TestCancelMidStreamUsageAgrees(t *testing.T) {
 		}
 		return
 	}
-	// The attempt ends (its stream closed by the cancel) and stores what it read.
-	time.Sleep(time.Second)
-	sum, events, data := usage()
-	counted := int(inputUsage(t, n))
-	if sum != counted || events > 16 || counted < 200 {
-		t.Fatalf("counted %d, usage events %d summing to %d: want them equal, at most 16 events, at least the 200 read before the cancel's end", counted, events, sum)
+	// The attempt ends (its stream closed by the cancel) and stores what it read: every line read
+	// is counted, in at most three events (the cancel's, the line it caught, the attempt's end).
+	var sum, events, counted int
+	var data []string
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		sum, events, data = usage()
+		counted = int(inputUsage(t, n))
+		if read := int(calls.Load()) * 100; counted == read && sum == read {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("lines read %d (×100), counted %d, usage events %d summing to %d", calls.Load(), counted, events, sum)
+		}
+	}
+	if events > 3 {
+		t.Fatalf("%d usage events for one cancelled attempt: want at most 3", events)
 	}
 	r, err := store.Open("memory:", store.Options{})
 	if err != nil {

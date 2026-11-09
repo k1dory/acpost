@@ -1130,17 +1130,18 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 	switch {
 	case usage:
 		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
-		var have, counted int
+		var have int
 		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'usage'", seq).Scan(&have); err != nil {
 			return n, err
 		}
-		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM turn_usage WHERE turn = ?", u.Turn).Scan(&counted); err != nil {
+		counted, err := countedTurn(ctx, t, u.Turn) // usage_round1.go: a delta by its own id
+		if err != nil {
 			return n, err
 		}
 		if counted > 0 || have >= maxUsageEvents {
 			return n, nil // a turn counted already (its event come again) takes no place
 		}
-		if err := addUsage(ctx, t, id, u, now); err != nil {
+		if err := countUsageEvent(ctx, t, id, u, now); err != nil { // usage_round1.go: a delta folds into its turn
 			return n, err
 		}
 	case n >= s.opt.MaxEventsPerMessage:

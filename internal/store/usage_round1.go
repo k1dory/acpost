@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -409,6 +411,11 @@ CREATE TABLE IF NOT EXISTS usage_unpublished (
 	turn TEXT NOT NULL,
 	PRIMARY KEY (msg, turn)
 ) WITHOUT ROWID;
+-- The delta events (turn#2, …) a node counted into their turn's row: each taken once.
+CREATE TABLE IF NOT EXISTS usage_deltas (
+	turn TEXT PRIMARY KEY,
+	base TEXT NOT NULL
+) WITHOUT ROWID;
 -- What of a turn's count its message's usage events carry (their sum, and how many): a turn that
 -- grows after it was published goes out again as what it grew by (publishUsageTx).
 CREATE TABLE IF NOT EXISTS usage_published (
@@ -449,4 +456,60 @@ func (s *Store) migrateUsage() error {
 		_, err := t.Exec("DROP TRIGGER usage_published_when_final")
 		return err
 	})
+}
+
+// DeltaOf says whether a usage event's turn id is a delta of a turn published before (turn#2,
+// turn#3, …: what its count grew by), and of which turn. Every reader of usage events folds a
+// turn's events into one record by it.
+func DeltaOf(turn string) (base string, ok bool) {
+	i := strings.LastIndexByte(turn, '#')
+	if i <= 0 || i == len(turn)-1 {
+		return turn, false
+	}
+	k, err := strconv.Atoi(turn[i+1:])
+	if err != nil || k < 2 || turn[i+1] == '0' {
+		return turn, false
+	}
+	return turn[:i], true
+}
+
+// countedTurn says whether a usage event's turn is counted here already: a turn by its row, a
+// delta by its own id (usage_deltas).
+func countedTurn(ctx context.Context, t *sql.Tx, turn string) (int, error) {
+	q := "SELECT count(*) FROM turn_usage WHERE turn = ?"
+	if _, ok := DeltaOf(turn); ok {
+		q = "SELECT count(*) FROM usage_deltas WHERE turn = ?"
+	}
+	var n int
+	err := t.QueryRowContext(ctx, q, turn).Scan(&n)
+	return n, err
+}
+
+// countUsageEvent counts a usage event that came here (a relay, a sender's node): a turn as its
+// row; a delta added into its turn's row (tokens and cost summed, the context as it says), so a
+// turn is one turn wherever it is counted, and costed if any of its events had a cost.
+func countUsageEvent(ctx context.Context, t *sql.Tx, msg string, u Usage, now time.Time) error {
+	base, ok := DeltaOf(u.Turn)
+	if !ok {
+		return addUsage(ctx, t, msg, u, now)
+	}
+	if _, err := t.ExecContext(ctx, "INSERT INTO usage_deltas (turn, base) VALUES (?, ?)", u.Turn, base); err != nil {
+		return err
+	}
+	res, err := t.ExecContext(ctx, `UPDATE turn_usage SET input = input + ?, output = output + ?, cache_read = cache_read + ?,
+		cache_write = cache_write + ?, thought = thought + ?, total = total + ?,
+		cost = CASE WHEN ? IS NULL THEN cost ELSE coalesce(cost, 0) + ? END,
+		currency = CASE WHEN currency = '' THEN ? ELSE currency END, model = CASE WHEN model = '' THEN ? ELSE model END,
+		context_used = CASE WHEN ? > 0 THEN ? ELSE context_used END, context_size = CASE WHEN ? > 0 THEN ? ELSE context_size END
+		WHERE turn = ?`, u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Thought, u.Total, u.Cost, u.Cost, u.Currency, u.Model,
+		u.ContextUsed, u.ContextUsed, u.ContextSize, u.ContextSize, base)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// The turn's own event did not come here (left out past the limit): the delta stands for it.
+		u.Turn = base
+		return addUsage(ctx, t, msg, u, now)
+	}
+	return nil
 }
