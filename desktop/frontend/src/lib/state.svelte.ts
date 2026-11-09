@@ -482,6 +482,15 @@ class App {
         if (d.sending) d.sending.moved = true;
         this.moveDraft(d, "thread:" + c.thread);
       }
+      // A new cloud task whose sandbox was made and whose message the node took (its answer lost):
+      // the thread of that sandbox is the task's, and the new task's screen becomes it.
+      const n = this.draftMap.get("new");
+      if (n && !n.busy && n.sending && n.sandbox && n.sandbox.agent === c.agent) {
+        const shown = !this.chat && !this.thread;
+        n.sending.moved = true;
+        this.moveDraft(n, "thread:" + c.thread);
+        if (shown) { this.target = c.agent ?? ""; this.openThread(c.thread); }
+      }
     }
   }
 
@@ -567,7 +576,13 @@ class App {
         d.files = d.files.filter(f => !sent.files.includes(f));
       }
       this.moveDraft(d, "thread:" + m.thread);
-      if (here) { this.thread = m.thread; this.target = to; }
+      if (here) {
+        this.thread = m.thread;
+        this.target = to;
+        // A thread that was there before this message (the draft had moved to it): its earlier
+        // turns are shown and followed too, not just this one.
+        if (into) await this.openThread(m.thread);
+      }
       // Shown wherever its thread is open, now (if it is opened later, the node's list has it).
       if (this.thread === m.thread) {
         // Sent again after its answer was lost, the node gives the message it has: one, not two.

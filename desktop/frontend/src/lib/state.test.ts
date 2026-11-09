@@ -474,6 +474,56 @@ describe("send, review round 5", () => {
   });
 });
 
+describe("send, review round 6", () => {
+  it("a new cloud task whose answer was lost: the sandbox's thread is its, and an edit goes there (R6.1)", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1";
+    fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
+    const d = app.draftOf();
+    d.text = "build it";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")); // taken into T1, the answer lost
+    expect(await app.submit(d)).toBe(false);
+    const sb = { ...msg("m1", "T1", "running"), to: "agent:sb_1" };
+    fake.Node.Thread.mockResolvedValue([sb]);
+    fake.Node.Chats.mockResolvedValue({ items: [{ key: "thread:T1", kind: "thread", thread: "T1", agent: "agent:sb_1", title: "", updated: "" }] });
+    await app.loadChats();
+    await flush();
+    expect(app.thread).toBe("T1");                     // the new task's screen is its thread now
+    expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0);
+    expect(app.draftOf().text).toBe("build it");
+    app.draftOf().text = "build it, in Go";            // edited: a new message of the same thread
+    fake.Node.SendTask.mockResolvedValueOnce({ ...msg("m2", "T1"), to: "agent:sb_1" });
+    expect(await app.submit(app.draftOf())).toBe(true);
+    const again = fake.Node.SendTask.mock.calls[1][0];
+    expect(again.thread).toBe("T1");
+    expect(fake.Node.CreateCloudTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a session's edited draft sent into its thread shows and follows the thread's first turn too (R6.2)", async () => {
+    const app = await load();
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [S] });
+    await app.loadChats();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S);
+    app.draftOf().text = "go on";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")); // m1 taken into T1, answer lost
+    await app.submit(app.draftOf());
+    fake.Node.Chats.mockResolvedValue({ items: [T] });
+    await app.loadChats();
+    app.draftOf().text = "go on, and also this";
+    fake.Node.SendTask.mockResolvedValueOnce(msg("m2", "T1"));
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T1", "running"), msg("m2", "T1")]);
+    expect(await app.submit(app.draftOf())).toBe(true);
+    expect(app.thread).toBe("T1");
+    expect(app.msgs.map(m => m.id)).toEqual(["m1", "m2"]);
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0);
+    expect(app.runningHere().map(m => m.id)).toEqual(["m1"]); // stopHere() reaches it
+  });
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");
