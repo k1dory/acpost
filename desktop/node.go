@@ -520,7 +520,7 @@ func (n *Node) CloseTerminal(id string) error {
 	n.mu.Unlock()
 	err := n.closeTerm(id)
 	if err != nil {
-		go n.retryClose(id)
+		go n.retryClose(id, closeRetry, closeTries)
 	}
 	return err
 }
@@ -734,9 +734,8 @@ func (n *Node) closeTerm(id string) error {
 // closeTries times); what is still not closed then is closed with the app.
 var closeRetry, closeTries = time.Second, 8
 
-func (n *Node) retryClose(id string) {
-	wait := closeRetry
-	for range closeTries {
+func (n *Node) retryClose(id string, wait time.Duration, tries int) {
+	for range tries {
 		time.Sleep(wait)
 		wait = min(2*wait, 30*time.Second)
 		n.mu.Lock()
