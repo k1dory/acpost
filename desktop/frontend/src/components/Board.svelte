@@ -26,7 +26,7 @@
   async function saveItem() {
     if (!draft.title.trim() || busy) return;
     busy = true;
-    try { await Node.PutBacklogItem(draft as any); adding = false; await loadBacklog(); } catch (e) { app.error = errText(e); }
+    try { await Node.PutBacklogItem({ ...draft } as any); /* the form as it was at the click */ adding = false; await loadBacklog(); } catch (e) { app.error = errText(e); }
     busy = false;
   }
   async function pickDir() {

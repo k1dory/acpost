@@ -608,7 +608,7 @@ class App {
       }
       if (!to) { this.error = t("Choose an agent"); return false; }
       // The settings chosen when it was sent (a model picked while its file was read is the next one's).
-      Object.assign(task, { to }, to === at.agent ? at.settings : this.settingsFor(to));
+      Object.assign(task, { to }, at.settings[to] ?? {}); // none taken: a sandbox (no settings of this Mac's)
       // The same message is all of it the same (files' bytes and types, settings): only then the same key.
       let what = JSON.stringify(task);
       const { to: _to, thread: _th, session: _se, cwd: _cwd, ...rest } = task;
@@ -663,13 +663,12 @@ class App {
 
   /** What a message is for, taken when it is sent: the chat, thread and draft of then. */
   private sendAt(d: ComposerDraft) {
-    // The agent it goes to, when this Mac's (a cloud task's sandbox is known later, and has no
-    // settings of this Mac's), and the settings chosen for it then.
-    const agent = !this.chat && !this.thread ? (this.draft.where === "cloud" ? "" : this.draft.agent) : this.target;
+    // The settings chosen then, for each agent it can go to: the new task's agent of this Mac, or
+    // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
     return {
       chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target,
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
-      agent, settings: this.settingsFor(agent),
+      settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,
     };
   }
 
