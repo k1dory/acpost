@@ -685,14 +685,18 @@ class App {
   }
 
   /** A local chat sent on to the cloud: the cloud chat it goes on in. Each chat's unfinished
-   * handoff is kept, its request frozen with its key, until an answer comes: asked again after a
-   * lost answer (other chats handed off meanwhile or not), the same request goes, and the node
-   * gives the sandbox and message of the first. Another cloud agent or note is another handoff. */
+   * handoff is kept here (not in the form, which is made anew), its request frozen with its key at
+   * the first try, until an answer comes. Asked again with the form as it was (restored from it,
+   * pendingHandoff), the frozen request goes whole, and the node gives the sandbox and message of
+   * the first. Only another cloud agent or note, chosen by the person, is another handoff. */
   private handoffs = new Map<string, HandoffReq & { idem: string }>();
+  pendingHandoff(c: Chat | null): HandoffReq | undefined {
+    return c ? this.handoffs.get(handoffFrom(c.kind === "thread" ? c.thread ?? "" : "", c.agent ?? "", c.session ?? "")) : undefined;
+  }
   async handoff(req: HandoffReq): Promise<Chat> {
-    const from = req.thread ? "thread:" + req.thread : `session:${req.agent}/${req.session}`;
+    const from = handoffFrom(req.thread, req.agent, req.session);
     let r = this.handoffs.get(from);
-    if (!r || JSON.stringify({ ...r, idem: undefined }) !== JSON.stringify({ ...req, idem: undefined })) {
+    if (!r || r.cloud_agent !== req.cloud_agent || r.note !== req.note) {
       r = { ...req, idem: newId() };
       this.handoffs.set(from, r);
     }
@@ -861,6 +865,11 @@ class App {
     const m = this.msgs[0];
     return m?.meta?.acp_cwd || m?.meta?.acp_session_cwd || this.chat?.cwd || "";
   }
+}
+
+/** Which chat a handoff is of: its thread, or its session. */
+function handoffFrom(thread: string, agent: string, session: string) {
+  return thread ? "thread:" + thread : `session:${agent}/${session}`;
 }
 
 export type HandoffReq = { thread: string; agent: string; session: string; cwd: string; cloud_agent: string; note: string };

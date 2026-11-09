@@ -15,11 +15,13 @@ export type FileLike = { name: string; type: string; size: number; arrayBuffer()
 /** Reads asked so far (any draft): a send takes the files of the reads asked before it. */
 let asked = 0;
 
-/** The files a send made now takes, once the reads asked before it are done (`adding`): those
- * attached then, and those those reads bring. What is attached after it is the next message's. */
+/** The files a send made now takes, once the reads asked before it are done (`adding`): the list
+ * as it was then, and what those reads brought. Nothing done to the draft after it (a file
+ * removed, another attached) changes the message sent. */
 export function filesAsOf(d: ComposerDraft): () => Attachment[] {
-  const had = new Set(d.files), upto = asked;
-  return () => d.files.filter(f => had.has(f) || (f.asked ?? Infinity) <= upto);
+  const had = [...d.files], upto = asked;
+  const seen = new Set(had);
+  return () => [...had, ...d.files.filter(f => !seen.has(f) && (f.asked ?? Infinity) <= upto)];
 }
 
 /** A cloud sandbox asked for (for: the destination, App.destNow()). */

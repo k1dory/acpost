@@ -231,6 +231,22 @@ describe("a send waits for the files being read (finding 4)", () => {
     expect(d.files).toEqual([]); // sent: not left for the next message
   });
 
+  it("a file removed after the send, while another is read, still goes: the send's list is the click's", async () => {
+    const app = await load();
+    app.thread = "T"; app.target = "agent:claude";
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "T"));
+    const d = app.draftOf();
+    d.text = "both";
+    d.files = [{ name: "a.txt", type: "text/plain", size: 1, data: "YQ==" }];
+    const read = deferred<ArrayBuffer>();
+    d.add([file("b.txt", read.promise)], null, () => {});
+    const going = app.submit(d);
+    d.files = d.files.filter(f => f.name !== "a.txt"); // removed after Send
+    read.resolve(new ArrayBuffer(1));
+    await going;
+    expect(fake.Node.SendTask.mock.calls[0][0].files.map((f: any) => f.name)).toEqual(["a.txt", "b.txt"]);
+  });
+
   it("a file that cannot be read is said, and the next one is still read", async () => {
     const { ComposerDraft } = await import("./composer.svelte");
     const d = new ComposerDraft("new");

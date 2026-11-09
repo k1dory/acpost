@@ -155,3 +155,32 @@ describe("the preview's native view (finding 10)", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("a handoff's form is the unfinished handoff's (review round 3)", () => {
+  it("lost answer, the chat's screen made anew, Hand off again without editing: the same request, key and all", async () => {
+    const app = await setup();
+    app.cloudAgents = [{ ref: "ref1", name: "Cloud", revision: 1 }];
+    app.chat = { key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", cwd: "/w", title: "T", updated: "" };
+    app.thread = "T";
+    fake.Node.Handoff.mockRejectedValueOnce(new Error("lost")).mockResolvedValue({ chat: { key: "cloud:sb_1" } });
+    fake.Node.Thread.mockResolvedValue([]);
+    const Conversation = (await import("./Conversation.svelte")).default;
+    const handOff = async (note?: string) => {
+      (document.querySelector('button[aria-label="Continue in the cloud"]') as HTMLButtonElement).click(); flushSync();
+      if (note !== undefined) type(document.querySelector(".hand textarea") as HTMLTextAreaElement, note);
+      button("Hand off").click();
+      await settle();
+    };
+    let c = mount(Conversation, { target: document.body });
+    await settle();
+    await handOff("Finish the tests");
+    unmount(c);                          // Settings opened, then back to the chat
+    c = mount(Conversation, { target: document.body });
+    mounted.push(c);
+    await settle();
+    await handOff();                     // not edited
+    const [first, retry] = fake.Node.Handoff.mock.calls.map(x => x[0]);
+    expect(first.note).toBe("Finish the tests");
+    expect(retry).toEqual(first);
+  });
+});

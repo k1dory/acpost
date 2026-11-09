@@ -39,7 +39,13 @@
   let note = $state("");
   let handErr = $state("");
   let sending = $state(false);
-  function openHand() { handing = !handing; handErr = ""; toCloud = toCloud || app.cloudAgents[0]?.ref || ""; }
+  // A handoff of this chat still unanswered: the form is as it was (a retry is that handoff).
+  function openHand() {
+    handing = !handing; handErr = "";
+    const was = app.pendingHandoff(app.chat);
+    if (was) { toCloud = was.cloud_agent; note = was.note; }
+    toCloud = toCloud || app.cloudAgents[0]?.ref || "";
+  }
   async function hand() {
     const c = app.chat;
     if (!c || sending) return;
