@@ -2,22 +2,24 @@
   import { t } from "../lib/i18n.svelte";
   import { Node, errText } from "../lib/api";
   import { tokens, money } from "../lib/format";
+  import { latest } from "../lib/latest";
+  import { usageTotal, costText } from "../lib/usage";
 
   let days = $state(7);
   let by = $state<"agent" | "model" | "day" | "session">("agent");
   let rows = $state<any[]>([]);
   let err = $state("");
   let loading = $state(true);
+  // A period clicked while the last one loads: the numbers shown are those of the last clicked.
+  const usage = latest();
   async function load() {
+    const d = days, b = by;
     loading = true; err = "";
-    try { rows = ((await Node.Usage(days, by)) ?? []) as any[]; } catch (e) { err = errText(e); }
-    loading = false;
+    if (await usage(() => Node.Usage(d, b), r => (rows = (r ?? []) as any[]), e => (err = errText(e)))) loading = false;
   }
   $effect(() => { days; by; load(); });
-  const total = $derived(rows.reduce((a, r) => ({
-    turns: a.turns + r.turns, input: a.input + r.input, output: a.output + r.output, cr: a.cr + r.cache_read, cw: a.cw + r.cache_write,
-    cost: a.cost + (r.cost || 0) + (r.estimated || 0), cur: r.currency || r.estimated_currency || a.cur,
-  }), { turns: 0, input: 0, output: 0, cr: 0, cw: 0, cost: 0, cur: "USD" }));
+  const total = $derived(usageTotal(rows));
+  const groups: Record<string, string> = { agent: "Agent", model: "Model", day: "Day", session: "Session" };
   const cache = $derived(total.input + total.cr + total.cw ? total.cr / (total.input + total.cr + total.cw) : 0);
   const maxTok = $derived(Math.max(1, ...rows.map(r => r.input + r.output + r.cache_read + r.cache_write)));
   const sorted = $derived(by === "day" ? [...rows].sort((a, b) => a.key.localeCompare(b.key)) : [...rows].sort((a, b) => (b.cost + (b.estimated || 0)) - (a.cost + (a.estimated || 0)) || b.total - a.total));
@@ -28,11 +30,11 @@
     <h1>{t("Usage")}</h1>
     <span class="sp"></span>
     <div class="seg nodrag">{#each [[1, "Today"], [7, "7 days"], [30, "30 days"], [0, "All"]] as [d, l]}<button class:on={days === d} onclick={() => (days = d as number)}>{t(l as string)}</button>{/each}</div>
-    <div class="seg nodrag">{#each ["agent", "model", "day", "session"] as b}<button class:on={by === b} onclick={() => (by = b as any)}>{b[0].toUpperCase() + b.slice(1)}</button>{/each}</div>
+    <div class="seg nodrag">{#each Object.keys(groups) as b}<button class:on={by === b} onclick={() => (by = b as any)}>{t(groups[b])}</button>{/each}</div>
   </header>
 
   <div class="tiles">
-    {#each [["Cost", money(total.cost, total.cur), rows.some(r => r.estimated) ? t("~ includes estimates from prices") : ""], ["Turns", String(total.turns), ""], ["Tokens in / out", `${tokens(total.input + total.cr + total.cw)} / ${tokens(total.output)}`, ""], ["Cache hit", `${(cache * 100).toFixed(0)}%`, t("{n} read from cache", { n: tokens(total.cr) })]] as [k, v, s]}
+    {#each [["Cost", costText(total.costs), rows.some(r => r.estimated) ? t("~ includes estimates from prices") : ""], ["Turns", String(total.turns), ""], ["Tokens in / out", `${tokens(total.input + total.cr + total.cw)} / ${tokens(total.output)}`, ""], ["Cache hit", `${(cache * 100).toFixed(0)}%`, t("{n} read from cache", { n: tokens(total.cr) })]] as [k, v, s]}
       <div class="card tile"><div class="k muted">{t(k)}</div><div class="v num">{loading ? "…" : v}</div>{#if s}<div class="s muted">{s}</div>{/if}</div>
     {/each}
   </div>
@@ -41,7 +43,7 @@
   {:else}
     <div class="card panel"><div class="inner">
       <table>
-        <thead><tr><th>{by}</th><th class="r">{t("turns")}</th><th>{t("tokens")}</th><th class="r">{t("cache")}</th><th class="r">{t("cost")}</th></tr></thead>
+        <thead><tr><th>{t(groups[by])}</th><th class="r">{t("turns")}</th><th>{t("tokens")}</th><th class="r">{t("cache")}</th><th class="r">{t("cost")}</th></tr></thead>
         <tbody>
           {#each sorted as r (r.key)}
             {@const tok = r.input + r.output + r.cache_read + r.cache_write}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tilde } from "../lib/names";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { tick } from "svelte";
@@ -27,7 +28,7 @@
   });
   const source = $derived(app.chat?.kind === "cloud" ? t("Cloud") : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
   const cwd = $derived(app.chatCwd());
-  const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
+  const short = (d: string) => tilde(d, app.home);
 
   function onScroll() { if (box) stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80; }
   // Handoff: this chat (on the Mac) goes on in the cloud.
@@ -71,7 +72,7 @@
       {/if}
     </div>
     <span class="sp"></span>
-    {#if waiting.length}<span class="chip ask nodrag">{waiting.length} needs approval</span>{/if}
+    {#if waiting.length}<span class="chip ask nodrag">{t("{n} to approve", { n: waiting.length })}</span>{/if}
     {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
     {#if canHand}
       <div class="hand nodrag">

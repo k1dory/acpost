@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusOnMount } from "../lib/actions";
   import { t } from "../lib/i18n.svelte";
   import { app, type Chat } from "../lib/state.svelte";
   import { ago, screenScale } from "../lib/format";
@@ -38,7 +39,7 @@
     return c.running ? "running" : c.queued ? "queued" : c.failed ? "failed" : ""; // idle: no colour
   }
   // The name field takes the keys as soon as it shows.
-  function focusOnMount(el: HTMLInputElement) { requestAnimationFrame(() => { el.focus(); el.select(); }); }
+  const focusSelect = (el: HTMLInputElement) => focusOnMount(el, true);
   function source(c: Chat) {
     if (c.kind === "cloud") return "cloud";
     const a = c.agent ?? "";
@@ -128,7 +129,7 @@
 
 {#snippet row(c: Chat)}
   {#if renaming === c.key}
-    <input class="input fname" bind:value={renameText} use:focusOnMount onblur={commitRename}
+    <input class="input fname" bind:value={renameText} use:focusSelect onblur={commitRename}
       onkeydown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") renaming = null; }} />
   {:else}
   <button class="row" class:sel={isOpen(c) && app.view === "chat"} class:lifted={dragging?.chat.key === c.key}
@@ -170,13 +171,13 @@
       <button class="ic-btn" title={t("New folder")} onclick={startNew}><Icon name="plus" size={12} /></button>
     </div>
     {#if naming === "new"}
-      <input class="input fname" placeholder={t("Folder name")} bind:value={nameText} onkeydown={keyName} onblur={commitName} use:focusOnMount />
+      <input class="input fname" placeholder={t("Folder name")} bind:value={nameText} onkeydown={keyName} onblur={commitName} use:focusSelect />
     {/if}
     {#each app.folders as f (f.id)}
       {@const items = inFolder(f.id)}
       <div class="folder" class:drop={dropOn === f.id} data-drop={f.id} role="group">
         {#if naming === f.id}
-          <input class="input fname" bind:value={nameText} onkeydown={keyName} onblur={commitName} use:focusOnMount />
+          <input class="input fname" bind:value={nameText} onkeydown={keyName} onblur={commitName} use:focusSelect />
         {:else}
           <button class="fh" onclick={() => toggle(f.id)} ondblclick={() => { naming = f.id; nameText = f.name; }} oncontextmenu={e => onMenu(e, undefined, f.id)}>
             <span class="chev" class:rot={!collapsed[f.id]}><Icon name="chev" size={10} /></span>

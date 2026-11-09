@@ -21,7 +21,7 @@
   <div class="row">
     <span class="ic"><Icon name="alert" /></span>
     <div class="t">
-      <div class="title">{req.title || "The agent asks"}</div>
+      <div class="title">{req.title || t("The agent asks")}</div>
       {#if req.message || req.text}<div class="desc muted selectable">{req.message || req.text}</div>{/if}
     </div>
     {#if req.decision}
@@ -36,12 +36,12 @@
   {/if}
   {#if !req.decision}
     <div class="acts">
-      {#if reject}<button class="btn" disabled={busy} onclick={() => pick(reject.option_id)}>{reject.name || "Reject"}</button>
+      {#if reject}<button class="btn" disabled={busy} onclick={() => pick(reject.option_id)}>{reject.name || t("Reject")}</button>
       {:else}<button class="btn" disabled={busy} onclick={() => pick("")}>{t("Reject")}</button>{/if}
       {#each (req.options ?? []).filter(o => o !== allow && o !== reject) as o}
         <button class="btn" disabled={busy} onclick={() => pick(o.option_id)}>{o.name}</button>
       {/each}
-      {#if allow}<button class="btn primary" disabled={busy} onclick={() => pick(allow.option_id)}>{allow.name || "Allow"}</button>{/if}
+      {#if allow}<button class="btn primary" disabled={busy} onclick={() => pick(allow.option_id)}>{allow.name || t("Allow")}</button>{/if}
     </div>
   {/if}
 </div>
