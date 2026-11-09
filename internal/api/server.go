@@ -136,7 +136,7 @@ func (s *server) auth(h handler) http.HandlerFunc {
 		if p.Kind == "node" {
 			r = r.WithContext(context.WithValue(r.Context(), lenientKey{}, true))
 		}
-		h(w, r, p)
+		h(&cutWriter{ResponseWriter: w, ctx: r.Context()}, r, p)
 	}
 }
 
@@ -146,6 +146,9 @@ var statusOf = map[string]int{
 }
 
 func writeErr(w http.ResponseWriter, err error) {
+	if requestCut(w) {
+		err = context.Canceled
+	}
 	code, e := errorOf(err)
 	writeStatus(w, code, e)
 }
@@ -1314,8 +1317,9 @@ func (st *sseStream) send(format string, args ...any) error {
 // fail reports err to the client, unless the client is gone (or the node stops: its clients
 // reconnect to the next one).
 func (st *sseStream) fail(err error) {
-	if st.ctx.Err() != nil {
-		return
+	cut := st.ctx.Err() != nil
+	if cut {
+		err = context.Canceled // what the layers below made of it is not the answer
 	}
 	code, e := errorOf(err)
 	st.mu.Lock()
@@ -1328,6 +1332,9 @@ func (st *sseStream) fail(err error) {
 		st.closed = true // the answer is this JSON: no heartbeat after it
 		writeStatus(st.w, code, e)
 		return
+	}
+	if cut {
+		return // the stream began: its client reconnects
 	}
 	b, _ := json.Marshal(map[string]any{"status": code, "error": e})
 	if _, err := fmt.Fprintf(st.w, "event: "+sseErrorEvent+"\ndata: %s\n\n", b); err == nil {
@@ -1442,4 +1449,26 @@ func knownFileFields(raw json.RawMessage) ([]byte, error) {
 		out = append(out, f)
 	}
 	return json.Marshal(out)
+}
+
+// cutWriter is a handler's ResponseWriter with its request's context. An error answered after the
+// request ended (the node stops, or its client went away) is the API's unavailable, whatever the
+// layers below made of the cancellation (a rolled-back transaction, an ACP request cancelled, a
+// git killed): nothing a cut request reports is final. A success is still written as it is.
+type cutWriter struct {
+	http.ResponseWriter
+	ctx context.Context
+}
+
+func (w *cutWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *cutWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func requestCut(w http.ResponseWriter) bool {
+	cw, ok := w.(*cutWriter)
+	return ok && cw.ctx.Err() != nil
 }

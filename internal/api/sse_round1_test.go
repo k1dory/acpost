@@ -45,14 +45,28 @@ func TestSSEStreamErrors(t *testing.T) {
 		t.Fatalf("error event %q: %+v %v", data, eb, err)
 	}
 
-	// The client went away: nothing is written for it.
+	// The request ended before the stream began (the node stops, or the client went away, which
+	// cannot be told apart): the answer is unavailable, whatever the error, so a client that is
+	// still there asks again.
 	ctx, cancel := context.WithCancel(context.Background())
 	w = httptest.NewRecorder()
 	st, _ = newSSE(w, r.WithContext(ctx))
 	cancel()
+	st.fail(errors.New("agent_error: cancelled"))
+	st.done()
+	if w.Code != 503 || errCode(w.Body.String()) != "unavailable" {
+		t.Fatalf("cut before the start: %d %q", w.Code, w.Body.String())
+	}
+
+	// After the start, a cut stream writes nothing more: its client reconnects.
+	ctx, cancel = context.WithCancel(context.Background())
+	w = httptest.NewRecorder()
+	st, _ = newSSE(w, r.WithContext(ctx))
+	_ = st.send("event: data\ndata: x\n\n")
+	cancel()
 	st.fail(errors.New("context canceled"))
 	st.done()
-	if w.Body.Len() != 0 {
-		t.Fatalf("written for a client that is gone: %q", w.Body.String())
+	if strings.Contains(w.Body.String(), "acpost-error") {
+		t.Fatalf("an error event on a cut stream: %q", w.Body.String())
 	}
 }
