@@ -2,7 +2,7 @@ import { t, tr } from "./i18n.svelte";
 import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
-import { ComposerDraft, filesAsOf, type Attachment } from "./composer.svelte";
+import { ComposerDraft, sendFiles, type Attachment } from "./composer.svelte";
 import { afterSent } from "./draft";
 import { Turn, type Ev } from "./turn";
 
@@ -557,9 +557,9 @@ class App {
     d.busy = true;
     // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
     // are part of it: waited for, not left for the next message.
-    const at = this.sendAt(d), files = filesAsOf(d);
-    await d.adding;
-    const sentFiles = files();
+    const at = this.sendAt(d), owned = sendFiles(d);
+    await owned.wait;
+    const sentFiles = owned.files();
     const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles }, at);
     d.busy = false;
     // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
@@ -635,7 +635,8 @@ class App {
       // A draft edited into another task keeps all it holds: it is that task, sent text and all.
       if (sent && same) {
         d.text = afterSent(d.text, sent.text);
-        d.files = d.files.filter(f => !sent.files.includes(f));
+        // (the send's copies: a file of the click's, or one a read of then brought)
+        d.files = d.files.filter(f => !sent.files.some(s => s.rid !== undefined ? s.rid === f.rid : s.name === f.name && s.data === f.data));
       }
       if (same) this.moveDraft(d, "thread:" + m.thread);
       else d.forget();

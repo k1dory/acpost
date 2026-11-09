@@ -6,22 +6,37 @@ import { b64bytes } from "./base64";
 import type { Limits } from "./state.svelte";
 import { newId } from "./ids";
 
-/** A file attached; asked: the read that brought it (a send takes the reads asked before it).
- * Kept in the attachment: the $state array gives back proxies, not the objects put in. */
-export type Attachment = { name: string; type: string; size: number; data: string; asked?: number };
+/** A file attached. rid: the read that brought it (its own, of all reads), source: the name of the
+ * file read (before it was named against those attached). */
+export type Attachment = { name: string; type: string; size: number; data: string; rid?: number; source?: string };
 /** A file to attach (a File, or what a test gives). */
 export type FileLike = { name: string; type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
+type Namer = (f: { name: string; type: string }, taken: string[]) => string;
 
-/** Reads asked so far (any draft): a send takes the files of the reads asked before it. */
-let asked = 0;
+/** One add(): the files it read, in order, as they were read (whatever the form does with them
+ * after), and how they are named. done: settled once all are read (or refused). */
+type ReadJob = { results: Attachment[]; name: Namer; done: Promise<void> };
 
-/** The files a send made now takes, once the reads asked before it are done (`adding`): the list
- * as it was then, and what those reads brought. Nothing done to the draft after it (a file
- * removed, another attached) changes the message sent. */
-export function filesAsOf(d: ComposerDraft): () => Attachment[] {
-  const had = [...d.files], upto = asked;
-  const seen = new Set(had);
-  return () => [...had, ...d.files.filter(f => !seen.has(f) && (f.asked ?? Infinity) <= upto)];
+let rids = 0;
+
+/** The files a send takes, owned by it from the click: the files attached then, and what the
+ * reads already going then bring (each read delivers to the send too, not only to the form),
+ * named against the send's own list. The form after the click is not asked: a file removed
+ * from it, or attached to it, is the next message's business. wait() is when those reads end. */
+export function sendFiles(d: ComposerDraft): { wait: Promise<void>; files: () => Attachment[] } {
+  const had = [...d.files], jobs = [...d.reading];
+  return {
+    wait: Promise.all(jobs.map(j => j.done)).then(() => {}),
+    files: () => {
+      const out = had.map(f => ({ ...f }));
+      const have = new Set<number | undefined>(had.map(f => f.rid).filter(r => r !== undefined));
+      for (const j of jobs) for (const r of j.results) {
+        if (have.has(r.rid)) continue; // read before the click: in the click's list already
+        out.push({ ...r, name: j.name({ name: r.source ?? r.name, type: r.type }, out.map(x => x.name)) });
+      }
+      return out;
+    },
+  };
 }
 
 /** A cloud sandbox asked for (for: the destination, App.destNow()). */
@@ -68,6 +83,8 @@ export class ComposerDraft {
    * into it goes there. */
   movedTo: ComposerDraft | null = null;
   adding: Promise<void> = Promise.resolve();
+  /** The reads still going into this draft (a send at the click takes them). */
+  reading = new Set<ReadJob>();
 
   /** The draft that holds this one's text now. */
   live(): ComposerDraft {
@@ -81,6 +98,8 @@ export class ComposerDraft {
     this.movedTo = to;
     const mine = this.adding, theirs = to.adding;
     to.adding = Promise.all([mine, theirs]).then(() => {});
+    for (const j of this.reading) to.reading.add(j);
+    this.reading.clear();
   }
 
   constructor(public key: string) {}
@@ -96,10 +115,11 @@ export class ComposerDraft {
    * that cannot be read is said too, and the next is read. `name` gives the name it is attached
    * under, from the names attached right then. A send waits for what is being read (adding). */
   add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size" | "read", file: string) => void,
-    name: (f: FileLike, taken: string[]) => string = f => f.name): Promise<void> {
+    name: Namer = f => f.name): Promise<void> {
     const files = [...list];
-    const ticket = ++asked;
     const at = this.live();
+    const job: ReadJob = { results: [], name, done: Promise.resolve() };
+    at.reading.add(job);
     at.adding = at.adding.then(async () => {
       for (const f of files) {
         if (overLimits(this.live().files, f, limits)) { fail(overLimits(this.live().files, f, limits) as "count" | "size", f.name); return; }
@@ -111,9 +131,13 @@ export class ComposerDraft {
         const over = overLimits(d.files, f, limits);
         if (over) { fail(over, f.name); return; }
         // Its name, chosen here: against all attached by now, those added just before it included.
-        d.files = [...d.files, { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data, asked: ticket }];
+        const a: Attachment = { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data, rid: ++rids, source: f.name };
+        job.results.push({ ...a });
+        d.files = [...d.files, a];
       }
-    }).catch(() => {}); // what failed was said: the queue goes on
+    }).catch(() => {}) // what failed was said: the queue goes on
+      .finally(() => { for (let x: ComposerDraft | null = this; x; x = x.movedTo) x.reading.delete(job); });
+    job.done = at.adding;
     return at.adding;
   }
 }

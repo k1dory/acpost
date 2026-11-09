@@ -339,3 +339,78 @@ describe("an operation started is a frozen request (review round 2)", () => {
     });
   }
 });
+
+describe("a send owns its attachments from the click (review round 4)", () => {
+  const slow = (name: string, data: string) => {
+    const d = deferred<ArrayBuffer>();
+    return { d, f: { name, type: "text/plain", size: 1, arrayBuffer: () => d.promise }, done: () => d.resolve(new TextEncoder().encode(data).buffer as ArrayBuffer) };
+  };
+  async function setupSend() {
+    const app = await load();
+    const { freeName } = await import("./paste");
+    app.thread = "T"; app.target = "agent:claude";
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "T"));
+    const d = app.draftOf();
+    d.text = "these";
+    const add = (fs: any[]) => d.add(fs, null, () => {}, (f, taken) => freeName(f.name, taken));
+    return { app, d, add, sent: () => fake.Node.SendTask.mock.calls[0][0].files.map((f: any) => f.name) };
+  }
+
+  it("two files of one name, the ready one removed after Send while the other is read: both go, named apart", async () => {
+    const { app, d, add, sent } = await setupSend();
+    d.files = [{ name: "a.txt", type: "text/plain", size: 1, data: "MQ==" }];
+    const b = slow("a.txt", "2");
+    add([b.f]);
+    const going = app.submit(d);
+    d.files = [];                // the first a.txt removed: the form names the read one a.txt again
+    b.done();
+    await going;
+    expect(sent()).toEqual(["a.txt", "a (2).txt"]);
+  });
+
+  it("a file read after Send and removed from the form while the other is read still goes", async () => {
+    const { app, d, add, sent } = await setupSend();
+    const x = slow("x.txt", "x"), y = slow("y.txt", "y");
+    add([x.f, y.f]);
+    const going = app.submit(d);
+    x.done(); await flush();
+    expect(d.files.map(f => f.name)).toEqual(["x.txt"]);
+    d.files = [];                // removed while y is read
+    y.done();
+    await going;
+    expect(sent()).toEqual(["x.txt", "y.txt"]);
+  });
+
+  it("any adds, removals and reads after the click: what goes is the click's files and what the reads of then brought", async () => {
+    let seed = 7;
+    const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed % n; };
+    for (let run = 0; run < 60; run++) {
+      vi.resetModules();
+      fake = fakeNode();
+      fake.Node.Chats.mockResolvedValue({ items: [] });
+      fake.Node.Agents.mockResolvedValue([]);
+      const { app, d, add } = await setupSend();
+      const want: string[] = [];
+      const pending: ReturnType<typeof slow>[] = [];
+      let n = 0;
+      for (let i = rnd(3); i > 0; i--) { const v = "r" + n++; d.files = [...d.files, { name: rnd(2) ? "same.txt" : v, type: "text/plain", size: 1, data: btoa(v) }]; want.push(v); }
+      for (let i = 1 + rnd(3); i > 0; i--) { const v = "p" + n++; const s = slow(rnd(2) ? "same.txt" : v, v); pending.push(s); add([s.f]); want.push(v); }
+      const going = app.submit(d);
+      // After the click: none of this is the message's.
+      const later: ReturnType<typeof slow>[] = [];
+      for (let step = 0; step < 8; step++) {
+        const k = rnd(3);
+        if (k === 0 && d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
+        else if (k === 1) { const v = "late" + n++; const s = slow("same.txt", v); later.push(s); add([s.f]); }
+        else { const all = [...pending, ...later]; all[rnd(all.length)].done(); } // a read ends (resolving twice is a no-op)
+        await flush();
+      }
+      for (const s of [...pending, ...later]) s.done();
+      await going;
+      const files = fake.Node.SendTask.mock.calls[0][0].files;
+      const datas = files.map((f: any) => atob(f.data)).sort();
+      expect(datas).toEqual([...want].sort());
+      expect(new Set(files.map((f: any) => f.name)).size).toBe(files.length); // never two of one name
+    }
+  });
+});
