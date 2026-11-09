@@ -306,8 +306,15 @@ func TestIDELegacyRecord(t *testing.T) {
 func TestIDEPortRetryWaitsForGroup(t *testing.T) {
 	old := ideTermWait
 	ideTermWait = 100 * time.Millisecond
-	defer func() { ideTermWait = old; ideStuckGroup.Store(0) }()
 	f := newFakeIDE(t, "serve")
+	defer func() {
+		// The stuck group let go, and its wait (which reads ideTermWait) over, before the reset.
+		ideStuckGroup.Store(0)
+		if r := f.current(); r != nil && !waitClosed(r.done, 10*time.Second) {
+			t.Error("the first attempt's group did not end")
+		}
+		ideTermWait = old
+	}()
 	var thief net.Listener
 	f.ideServer.starts = func(port int) {
 		if port == f.port && thief == nil {
