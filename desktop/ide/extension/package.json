@@ -31,7 +31,32 @@
         "label": "acpost",
         "path": "./icons/acpost-product-icons.json"
       }
-    ]
+    ],
+    "configurationDefaults": {
+      "window.autoDetectColorScheme": true,
+      "workbench.preferredDarkColorTheme": "acpost Dark",
+      "workbench.preferredLightColorTheme": "acpost Light",
+      "workbench.productIconTheme": "acpost",
+      "workbench.iconTheme": "vs-minimal",
+      "workbench.activityBar.location": "default",
+      "window.commandCenter": false,
+      "workbench.layoutControl.enabled": false,
+      "workbench.startupEditor": "none",
+      "workbench.tips.enabled": false,
+      "workbench.secondarySideBar.defaultVisibility": "hidden",
+      "workbench.tree.indent": 14,
+      "workbench.tree.renderIndentGuides": "none",
+      "chat.disableAIFeatures": true,
+      "chat.commandCenter.enabled": false,
+      "extensions.ignoreRecommendations": true,
+      "editor.fontFamily": "'JetBrains Mono', 'SF Mono', Menlo, monospace",
+      "editor.fontSize": 13,
+      "editor.lineHeight": 1.6,
+      "editor.minimap.enabled": false,
+      "editor.renderLineHighlight": "line",
+      "terminal.integrated.fontFamily": "'JetBrains Mono', 'SF Mono', Menlo, monospace",
+      "terminal.integrated.fontSize": 12
+    }
   },
   "main": "./extension.js",
   "activationEvents": [

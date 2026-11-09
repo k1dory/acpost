@@ -4,7 +4,7 @@ const vscode = require("vscode");
 
 exports.activate = async (ctx) => {
   if (ctx.workspaceState.get("acpost.tidied")) return;
-  try { await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar"); } catch {}
+  try { await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar"); } catch { return; } // tried again next time
   await ctx.workspaceState.update("acpost.tidied", true);
 };
 exports.deactivate = () => {};
