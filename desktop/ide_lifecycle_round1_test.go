@@ -403,7 +403,7 @@ func TestIDEForeignPortLeftAlone(t *testing.T) {
 	defer l.Close()
 	// A pid file naming a process that is not a server of this app's (this test; a record of
 	// another boot: never this app's server).
-	writeRecord(t, f.data, ideRecord{Pid: os.Getpid(), Boot: "another", Start: "Mon Jan  1 00:00:00 2024"})
+	writeRecord(t, f.data, ideRecord{Pid: os.Getpid(), Boot: "another", Start: 1704067200})
 	base, err := f.open("")
 	if err != nil {
 		t.Fatal(err)

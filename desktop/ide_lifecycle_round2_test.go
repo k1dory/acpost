@@ -43,7 +43,7 @@ func TestIDERecordWrittenOrStartFails(t *testing.T) {
 		rec := readRecord(t, f.data)
 		run := f.current()
 		if _, start, ok := ideProc(run.cmd.Process.Pid); rec.Pid != run.cmd.Process.Pid || rec.Boot != ideBoot() || !ok || rec.Start != start {
-			t.Fatalf("record %+v, server %d started %q", rec, run.cmd.Process.Pid, start)
+			t.Fatalf("record %+v, server %d started %d", rec, run.cmd.Process.Pid, start)
 		}
 		if m, _ := filepath.Glob(filepath.Join(f.data, ".serve-web.pid-*")); len(m) != 0 {
 			t.Fatalf("temporary files left: %v", m)
@@ -95,7 +95,7 @@ func TestIDEOrphanOwnershipProven(t *testing.T) {
 		if groupGone(pg, 0) {
 			t.Fatal("the group under test is gone")
 		}
-		writeRecord(t, f.data, ideRecord{Pid: pg, Boot: ideBoot(), Start: "Mon Jan  1 00:00:00 2024"})
+		writeRecord(t, f.data, ideRecord{Pid: pg, Boot: ideBoot(), Start: 1704067200})
 		if _, err := f.open(""); err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +107,7 @@ func TestIDEOrphanOwnershipProven(t *testing.T) {
 		name string
 		edit func(*ideRecord)
 	}{
-		{"another start time", func(r *ideRecord) { r.Start = "Mon Jan  1 00:00:00 2024" }},
+		{"another start time", func(r *ideRecord) { r.Start = 1704067200 }},
 		{"another boot", func(r *ideRecord) { r.Boot = "00000000-0000-0000-0000-000000000000" }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -343,5 +343,35 @@ func TestIDEPortRetryWaitsForGroup(t *testing.T) {
 	first := f.current()
 	if rec := readRecord(t, f.data); rec.Pid != first.cmd.Process.Pid {
 		t.Fatalf("record %+v, first attempt %d", rec, first.cmd.Process.Pid)
+	}
+}
+
+// Round 2 review 2: the record's start time is the same in every time zone: a server recorded
+// under one is proven the app's under another (the Mac's zone changed, or the app's TZ), ended as
+// its orphan, and the start keeps its port. A zone with summer time and one without, both ways.
+func TestIDERecordAcrossTimeZones(t *testing.T) {
+	for _, z := range [][2]string{{"UTC", "Europe/Moscow"}, {"America/New_York", "Australia/Lord_Howe"}, {"Europe/Moscow", "UTC"}} {
+		t.Run(z[0]+" to "+z[1], func(t *testing.T) {
+			t.Setenv("TZ", z[0])
+			f := newFakeIDE(t, "serve")
+			if _, err := f.open(""); err != nil {
+				t.Fatal(err)
+			}
+			orphan := f.current()
+			f.disown() // the app crashed
+			t.Setenv("TZ", z[1])
+			g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+			t.Cleanup(g.stop)
+			base, err := g.open("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !waitClosed(orphan.done, 3*time.Second) {
+				t.Fatal("the server recorded in another time zone still runs")
+			}
+			if portOf(t, base) != f.port {
+				t.Fatalf("port %d, want %d", portOf(t, base), f.port)
+			}
+		})
 	}
 }

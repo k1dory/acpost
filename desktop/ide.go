@@ -793,7 +793,7 @@ func ideOrphan(data string) (int, error) {
 		return 0, fmt.Errorf("%s names process group %d, which runs and is not provably VS Code's server of this folder: not starting another beside it (remove the file if that group is not VS Code's)", name, old)
 	}
 	var rec ideRecord
-	if json.Unmarshal(b, &rec) != nil || rec.Pid <= 1 || rec.Start == "" || rec.Boot == "" || rec.Boot != ideBoot() {
+	if json.Unmarshal(b, &rec) != nil || rec.Pid <= 1 || rec.Start <= 0 || rec.Boot == "" || rec.Boot != ideBoot() {
 		return 0, nil
 	}
 	pid := rec.Pid
@@ -947,7 +947,7 @@ func ideDataDir() (string, error) {
 type ideRecord struct {
 	Pid   int    `json:"pid"`
 	Boot  string `json:"boot"`
-	Start string `json:"start"`
+	Start int64  `json:"start"` // Unix seconds: the same in every time zone and locale
 }
 
 // ideBoot names this boot of the Mac.
@@ -956,26 +956,31 @@ func ideBoot() string {
 	return b
 }
 
-// idePS runs ps in the C locale (its dates read the same in every app that reads them).
+// idePS runs ps in the C locale and UTC: its dates read the same whatever the app's or the Mac's
+// time zone is now (it may have changed since the record was written: travel, another TZ).
 func idePS(args ...string) ([]byte, error) {
 	c := exec.Command("ps", args...)
-	c.Env = append(os.Environ(), "LC_ALL=C")
+	c.Env = append(os.Environ(), "LC_ALL=C", "TZ=UTC")
 	return c.Output()
 }
 
-// ideProc is what ps says of pid: its process group and the time it started; ok is false when
-// there is no such process.
-func ideProc(pid int) (pgid int, start string, ok bool) {
+// ideProc is what ps says of pid: its process group and the time it started (Unix seconds); ok
+// is false when there is no such process.
+func ideProc(pid int) (pgid int, start int64, ok bool) {
 	out, err := idePS("-o", "pgid=,lstart=", "-p", strconv.Itoa(pid))
 	f := strings.Fields(string(out))
 	if err != nil || len(f) < 2 {
-		return 0, "", false
+		return 0, 0, false
 	}
 	pgid, err = strconv.Atoi(f[0])
 	if err != nil {
-		return 0, "", false
+		return 0, 0, false
 	}
-	return pgid, strings.Join(f[1:], " "), true
+	t, err := time.Parse("Mon Jan 2 15:04:05 2006", strings.Join(f[1:], " "))
+	if err != nil {
+		return 0, 0, false
+	}
+	return pgid, t.Unix(), true
 }
 
 // ideWriteRecord names the server pid in the pid file in data: written to a new file and renamed
