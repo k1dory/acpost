@@ -58,6 +58,7 @@ type globals struct {
 	explicitNode        bool
 	cancel              context.CancelFunc // of a quick command's budget
 	status              *client.Status     // what connect's probe was told (nil: not asked)
+	flagErr             bool               // the flags did not parse: g.json is as far as cobra got
 }
 
 // How long the CLI waits for a node that took the connection but does not answer: a probe of the
@@ -87,8 +88,10 @@ func (g *globals) configPath() string {
 func main() {
 	g := &globals{}
 	root := rootCmd(g) // registering the flags sets their defaults
-	// Known before flags are parsed: an error in parsing them is reported in JSON too.
-	g.json = jsonWanted(os.Args[1:], os.Getenv("ACPOST_JSON"))
+	// Known before flags are parsed: an error in parsing them is reported in JSON too. Kept apart
+	// from g.json, which cobra sets as it goes and leaves where a bad flag stopped it.
+	parseJSON := jsonWanted(os.Args[1:], os.Getenv("ACPOST_JSON"))
+	g.json = parseJSON
 	// Ctrl-C ends a command through its context: term restores the terminal and closes its own,
 	// a save is not cut midway; a second Ctrl-C ends it at once.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -102,6 +105,9 @@ func main() {
 	}
 	code := exitCode(err)
 	hint := hintOf(err)
+	if g.flagErr {
+		g.json = parseJSON // the last --json given decides, wherever the bad flag was
+	}
 	if g.json {
 		e := map[string]any{"code": codeName(err), "message": err.Error()}
 		if hint != "" {
@@ -261,7 +267,7 @@ func rootCmd(g *globals) *cobra.Command {
 			return nil
 		},
 	}
-	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErr(err) })
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { g.flagErr = true; return usageErr(err) })
 	pf := root.PersistentFlags()
 	pf.StringVar(&g.node, "node", "", "node to talk to: unix:///path, http(s)://host:port (ACPOST_NODE; default: the local node)")
 	pf.StringVar(&g.token, "token", "", "bearer token (ACPOST_TOKEN: given here it shows in ps, the variable does not)")
