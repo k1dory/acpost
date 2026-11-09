@@ -95,7 +95,7 @@ func TestSandboxUsageCountedOnce(t *testing.T) {
 	for attempt := 1; attempt <= 2; attempt++ {
 		tr := &sandboxTurn{a: a, msgID: msg.ID, run: sandboxRun{ID: "r7", Session: "s-1"}}
 		tr.used, tr.usage = true, store.Usage{Input: 100, Output: 20}
-		a.recordUsage(msg.ID, "", tr, true)
+		a.recordUsage(msg.ID, "", tr)
 	}
 	sums, err := n.st.UsageOf(ctx, store.UsageQuery{})
 	if err != nil {

@@ -1111,39 +1111,21 @@ func (a *sandboxAgent) handle(m store.Message) {
 	tl := n.watchTurn(m, a.cfg.Lease.D())
 	defer tl.stop()
 	ctx := tl.ctx
-	// keepUsage records what the attempt read of its turn's usage (set once the turn is read), under
-	// its lease and before its outcome: final, with the usage's event; not final (the message is
-	// tried again), only counted, to be replaced by a fuller reading of the same turn.
-	// publishUsage puts the message's counted usage among its events, as the message turns final:
-	// what earlier attempts read too, also when this one ends before it reads the turn.
-	publishUsage := func(lease string) {
-		if n.ctx.Err() != nil || tl.lost.Load() {
-			return
-		}
-		if err := n.st.PublishUsage(n.ctx, m.ID, lease); err != nil {
-			if n.ctx.Err() == nil {
-				n.log.Debug("usage", "err", err)
-			}
-			return
-		}
-		n.eventsAdded()
-	}
-	keepUsage := func(final bool, lease string) {
-		if final {
-			publishUsage(lease)
-		}
-	}
+	// keepUsage stores what the attempt read of its turn's usage (set once the turn is read), under
+	// its lease and before its outcome. It is only counted here: the transaction that makes the
+	// message final (Complete, the last Release, a cancel, a requeue after a restart) publishes its
+	// event from the count, so a node stopping between the two leaves nothing published that a
+	// retry's fuller reading could not replace.
+	keepUsage := func(lease string) {}
 	complete := func(state store.State, reply string, f Failure) {
-		keepUsage(true, m.LeaseID)
+		keepUsage(m.LeaseID)
 		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, state, capReply(reply, int(n.cfg.Limits.MaxReply)), f.Code, f.Message); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("complete", "id", m.ID, "err", err)
 		}
 		n.notify()
 	}
 	release := func(f Failure) {
-		// The release fails the message when its attempts are spent: then what was read of the turn
-		// is all there is, recorded as final.
-		keepUsage(m.Attempts >= n.cfg.Limits.MaxAttempts, m.LeaseID)
+		keepUsage(m.LeaseID) // published by the release itself when it fails the message (attempts spent)
 		if _, err := n.st.Release(n.ctx, m.ID, m.LeaseID, f.Code, f.Message, n.cfg.Limits.MaxAttempts); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("release", "id", m.ID, "err", err)
 		}
@@ -1184,7 +1166,7 @@ func (a *sandboxAgent) handle(m store.Message) {
 	t := &sandboxTurn{a: a, msgID: m.ID, run: run, limit: int(n.cfg.Limits.MaxReply), after: live, mark: m.ID}
 	t.onUsage = func() {
 		if n.ctx.Err() == nil && !tl.lost.Load() {
-			a.recordUsage(m.ID, m.LeaseID, t, false)
+			a.recordUsage(m.ID, m.LeaseID, t)
 		}
 	}
 	t.stream = &textStream{record: func(kind string, data any) {
@@ -1234,16 +1216,12 @@ func (a *sandboxAgent) handle(m store.Message) {
 	}
 	t.mu.Unlock()
 	t.stream.close()
-	// The usage goes with the attempt's outcome, ahead of it: a retried attempt (its replay broke
-	// off after part of the turn's usage) keeps what it read, which the next one's fuller reading of
-	// the same turn replaces; the final one adds the usage's event. An attempt that lost its lease
-	// (or a node stopping) records nothing.
-	keepUsage = func(final bool, lease string) {
+	// What the attempt read is counted ahead of its outcome (a retried attempt's reading is replaced
+	// by the next one's fuller reading of the same turn). An attempt that lost its lease (or a node
+	// stopping) records nothing.
+	keepUsage = func(lease string) {
 		if n.ctx.Err() == nil && !tl.lost.Load() {
-			a.recordUsage(m.ID, lease, t, final)
-		}
-		if final {
-			publishUsage(lease) // the turns counted without an event (this one, if it used nothing)
+			a.recordUsage(m.ID, lease, t)
 		}
 	}
 	reply := t.reply(a.cfg.Reply)
@@ -1256,9 +1234,8 @@ func (a *sandboxAgent) handle(m store.Message) {
 			done()
 		}
 		switch {
-		case n.ctx.Err() != nil || tl.lost.Load():
-		case tl.cancelled.Load():
-			keepUsage(true, "") // the canceller ended the message (no lease): what the turn used is counted
+		case n.ctx.Err() != nil || tl.lost.Load() || tl.cancelled.Load():
+			// A cancel made the message final: it published what was counted (as read) then.
 		case timedOut:
 			complete(store.Failed, reply, failf("turn_timeout", "the turn ran past %s (turn_timeout); the sandbox's run was cancelled", a.cfg.TurnTimeout.D()))
 		default:
@@ -1273,8 +1250,9 @@ func (a *sandboxAgent) handle(m store.Message) {
 	complete(store.Failed, reply, failf("agent_stopped", "the sandbox's agent stopped: %s", end.reason))
 }
 
-// recordUsage records a turn's usage under an attempt's lease ("": none), final with its event.
-func (a *sandboxAgent) recordUsage(msgID, lease string, t *sandboxTurn, final bool) {
+// recordUsage counts a turn's usage under an attempt's lease ("": none); its event is published by
+// the transaction that makes the message final (store.publishFinalized).
+func (a *sandboxAgent) recordUsage(msgID, lease string, t *sandboxTurn) {
 	t.mu.Lock()
 	u, used := t.usage, t.used
 	t.mu.Unlock()
@@ -1293,14 +1271,10 @@ func (a *sandboxAgent) recordUsage(msgID, lease string, t *sandboxTurn, final bo
 		u.Model = a.cfg.Model
 	}
 	u.Total = u.Input + u.Output + u.CacheRead + u.CacheWrite
-	if err := n.st.PutUsage(n.ctx, msgID, lease, eventJSON(u), final); err != nil {
+	if err := n.st.PutUsage(n.ctx, msgID, lease, eventJSON(u), false); err != nil {
 		if n.ctx.Err() == nil {
 			n.log.Debug("usage", "err", err)
 		}
-		return
-	}
-	if final {
-		n.eventsAdded()
 	}
 }
 

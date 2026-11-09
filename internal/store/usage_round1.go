@@ -232,5 +232,29 @@ CREATE TABLE IF NOT EXISTS usage_unpublished (
 	turn TEXT NOT NULL,
 	PRIMARY KEY (msg, turn)
 ) WITHOUT ROWID;
-DROP TRIGGER IF EXISTS usage_published_when_final;
 `
+
+// migrateUsage applies usagePublishSchema and, in a store an earlier version of this branch wrote
+// with its usage trigger, takes the usage that trigger was to publish over to usage_unpublished
+// (the counted turns of messages not final yet that have no usage event) in the transaction that
+// drops the trigger: a message cancelled after the upgrade publishes it all the same.
+func (s *Store) migrateUsage() error {
+	if _, err := s.w.Exec(usagePublishSchema); err != nil {
+		return err
+	}
+	var n int
+	if err := s.w.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'usage_published_when_final'").Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	return s.tx(context.Background(), func(t *sql.Tx) error {
+		if _, err := t.Exec(`INSERT INTO usage_unpublished (msg, turn)
+			SELECT u.msg, u.turn FROM messages m JOIN turn_usage u ON u.msg = m.id
+			WHERE m.state NOT IN ('done', 'failed', 'cancelled', 'expired')
+				AND NOT EXISTS (SELECT 1 FROM events e WHERE e.msg = m.seq AND e.kind = 'usage' AND json_extract(e.data, '$.turn') = u.turn)
+			ON CONFLICT (msg, turn) DO NOTHING`); err != nil {
+			return err
+		}
+		_, err := t.Exec("DROP TRIGGER usage_published_when_final")
+		return err
+	})
+}

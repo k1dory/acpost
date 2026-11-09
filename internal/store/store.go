@@ -378,7 +378,7 @@ func (s *Store) migrate() error {
 		}
 	}
 	// A message turning final publishes its turns' counted usage (usage_round1.go): schema.
-	if _, err := s.w.Exec(usagePublishSchema); err != nil {
+	if err := s.migrateUsage(); err != nil {
 		return err
 	}
 	return nil

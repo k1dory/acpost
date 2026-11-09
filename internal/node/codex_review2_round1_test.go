@@ -162,9 +162,9 @@ func inputUsage(t *testing.T, n *Node) int64 {
 }
 
 // The last attempt's release fails the message: whoever sees it failed (a follower, the hub's
-// relay, flushing the events and leaving) already finds the turn's usage, event and count. A
-// trigger in the node's database notes, in the very write that makes the message failed, what of
-// the usage is there.
+// relay, flushing the events and leaving) already finds the turn's usage, event and count. A reader
+// of the node's database watches, one consistent read at a time, for the message failed without
+// its usage event.
 func TestSandboxFinalStateCarriesItsUsage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o700); err != nil {
@@ -177,27 +177,17 @@ func TestSandboxFinalStateCarriesItsUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE seen_final (msg TEXT, counted INTEGER, events INTEGER);
-		CREATE TRIGGER seen_final AFTER UPDATE OF state ON messages WHEN NEW.state = 'failed' BEGIN
-			INSERT INTO seen_final VALUES (NEW.id, (SELECT count(*) FROM turn_usage WHERE msg = NEW.id),
-				(SELECT count(*) FROM events WHERE msg = NEW.seq AND kind = 'usage'));
-		END;`); err != nil {
-		t.Fatal(err)
-	}
 	m, _, err := n.Send(ctx, me, SendRequest{To: "cloud", Body: "count me"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	seen := watchFinalUsage(t, db, m.ID)
 	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
 	if err != nil || w.State != store.Failed {
 		t.Fatalf("%s %s %q %v (want failed)", w.State, w.ErrorCode, w.Error, err)
 	}
-	var counted, events int
-	if err := db.QueryRow("SELECT counted, events FROM seen_final WHERE msg = ?", m.ID).Scan(&counted, &events); err != nil {
-		t.Fatal(err)
-	}
-	if counted != 1 || events != 1 {
-		t.Fatalf("as the message turned failed: usage counted %d, usage events %d (want 1, 1: there before the outcome)", counted, events)
+	if counted, events, early := seen(); counted != 1 || events != 1 || early {
+		t.Fatalf("final: usage counted %d, usage events %d (want 1, 1); seen final before its usage event: %v", counted, events, early)
 	}
 	if used := inputUsage(t, n); used != 100 {
 		t.Fatalf("%d input tokens counted, want 100", used)
@@ -219,4 +209,34 @@ func TestSandboxPartialUsageOutlivesFailedAttempts(t *testing.T) {
 	if used := inputUsage(t, n); used != 100 {
 		t.Fatalf("%d input tokens counted: the 100 the first attempt read are lost", used)
 	}
+}
+
+// watchFinalUsage reads, in one statement at a time (one snapshot), the state of message id and its
+// usage events until it is final; the returned func waits for that and says the usage counted,
+// the usage events and whether a read ever saw the message final without a usage event.
+func watchFinalUsage(t *testing.T, db *sql.DB, id string) func() (counted, events int, early bool) {
+	t.Helper()
+	done := make(chan struct{})
+	var counted, events int
+	var early bool
+	go func() {
+		defer close(done)
+		for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
+			var state string
+			var c, e int
+			err := db.QueryRow(`SELECT m.state, (SELECT count(*) FROM turn_usage WHERE msg = m.id),
+				(SELECT count(*) FROM events WHERE msg = m.seq AND kind = 'usage') FROM messages m WHERE m.id = ?`, id).Scan(&state, &c, &e)
+			if err != nil {
+				continue
+			}
+			if store.State(state).Final() {
+				if e == 0 {
+					early = true
+				}
+				counted, events = c, e
+				return
+			}
+		}
+	}()
+	return func() (int, int, bool) { <-done; return counted, events, early }
 }

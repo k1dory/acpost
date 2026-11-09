@@ -323,3 +323,40 @@ func TestOldUsageTriggerDroppedOnOpen(t *testing.T) {
 		t.Fatalf("the old trigger is still there (%d, %v)", n, err)
 	}
 }
+
+// A store an earlier version wrote with its usage trigger, holding a message between attempts whose
+// usage is counted without an event (and no usage_unpublished table): opened by this version and
+// the message cancelled, the usage is published all the same.
+func TestTriggerEraUsageIsPublishedAfterTheUpgrade(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "s", "store.db")
+	s, err := Open("sqlite://"+path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := claimedWithUsage(t, s, map[string]int{"t1": 100})
+	if st, err := s.Release(ctx, c.ID, c.LeaseID, "agent_unavailable", "broke", 5); err != nil || st != Queued {
+		t.Fatal(st, err)
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE usage_unpublished;
+		CREATE TRIGGER usage_published_when_final AFTER UPDATE OF state ON messages BEGIN SELECT 1; END;`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err = Open("sqlite://"+path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Cancel(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := usageEvents(t, s, c.ID); len(got) != 1 || got[0].Input != 100 {
+		t.Fatalf("usage events after the upgrade and a cancel: %+v (want one of 100)", got)
+	}
+}

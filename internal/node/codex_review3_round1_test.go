@@ -58,26 +58,16 @@ func TestSandboxCountedUsageIsPublishedAtFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE seen_final (msg TEXT, counted INTEGER, events INTEGER);
-		CREATE TRIGGER seen_final AFTER UPDATE OF state ON messages WHEN NEW.state = 'failed' BEGIN
-			INSERT INTO seen_final VALUES (NEW.id, (SELECT count(*) FROM turn_usage WHERE msg = NEW.id),
-				(SELECT count(*) FROM events WHERE msg = NEW.seq AND kind = 'usage'));
-		END;`); err != nil {
-		t.Fatal(err)
-	}
 	m, _, err := n.Send(ctx, me, SendRequest{To: "cloud", Body: "count me"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	seen := watchFinalUsage(t, db, m.ID)
 	w, err := n.Wait(ctx, me, m.ID, 20*time.Second)
 	if err != nil || w.State != store.Failed || w.Attempts != 2 {
 		t.Fatalf("%s %s %q attempts=%d %v (want failed after 2)", w.State, w.ErrorCode, w.Error, w.Attempts, err)
 	}
-	var counted, events int
-	if err := db.QueryRow("SELECT counted, events FROM seen_final WHERE msg = ?", m.ID).Scan(&counted, &events); err != nil {
-		t.Fatal(err)
-	}
-	if counted != 1 || events != 1 {
-		t.Fatalf("as the message turned failed: usage counted %d, usage events %d (want 1, 1)", counted, events)
+	if counted, events, early := seen(); counted != 1 || events != 1 || early {
+		t.Fatalf("final: usage counted %d, usage events %d (want 1, 1); seen final before its usage event: %v", counted, events, early)
 	}
 }
