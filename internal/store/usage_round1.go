@@ -31,10 +31,13 @@ func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool
 		if err := putUsageTx(ctx, t, id, u, now, !final); err != nil {
 			return err
 		}
-		if !event {
+		if event {
+			return publishUsageTx(ctx, t, id, seq, n, now)
+		}
+		if final {
 			return nil
 		}
-		return publishUsageTx(ctx, t, id, seq, n, now)
+		return pendUsageTx(ctx, t, id, u.Turn)
 	})
 }
 
@@ -97,30 +100,8 @@ func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Tim
 // is the counted row (the fullest reading of the turn), not whatever an attempt read last. Usage
 // events are kept past the events' limit, up to maxUsageEvents, as insertEvent keeps them.
 func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int, now time.Time) error {
-	rows, err := t.QueryContext(ctx, `SELECT turn, ts, agent, session, model, reported, input, output, cache_read, cache_write,
-		thought, total, cost, currency, context_used, context_size FROM turn_usage WHERE msg = ? ORDER BY ts, turn`, id)
+	all, err := countedUsage(ctx, t, "msg = ?", id)
 	if err != nil {
-		return err
-	}
-	var all []Usage
-	for rows.Next() {
-		var u Usage
-		var ts int64
-		var cost sql.NullFloat64
-		if err := rows.Scan(&u.Turn, &ts, &u.Agent, &u.Session, &u.Model, &u.Reported, &u.Input, &u.Output, &u.CacheRead,
-			&u.CacheWrite, &u.Thought, &u.Total, &cost, &u.Currency, &u.ContextUsed, &u.ContextSize); err != nil {
-			rows.Close()
-			return err
-		}
-		u.At = time.UnixMilli(ts).UTC()
-		if cost.Valid {
-			c := cost.Float64
-			u.Cost = &c
-		}
-		all = append(all, u)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		return err
 	}
 	for _, u := range all {
@@ -144,36 +125,112 @@ func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int,
 			return err
 		}
 	}
+	// Published here: none of them waits for the trigger any more.
+	_, err = t.ExecContext(ctx, "DELETE FROM usage_unpublished WHERE msg = ?", id)
+	return err
+}
+
+// countedUsage reads turns' counted usage (turn_usage rows matching where), oldest first.
+func countedUsage(ctx context.Context, t *sql.Tx, where string, args ...any) ([]Usage, error) {
+	rows, err := t.QueryContext(ctx, `SELECT turn, ts, agent, session, model, reported, input, output, cache_read, cache_write,
+		thought, total, cost, currency, context_used, context_size FROM turn_usage WHERE `+where+` ORDER BY ts, turn`, args...)
+	if err != nil {
+		return nil, err
+	}
+	var all []Usage
+	for rows.Next() {
+		var u Usage
+		var ts int64
+		var cost sql.NullFloat64
+		if err := rows.Scan(&u.Turn, &ts, &u.Agent, &u.Session, &u.Model, &u.Reported, &u.Input, &u.Output, &u.CacheRead,
+			&u.CacheWrite, &u.Thought, &u.Total, &cost, &u.Currency, &u.ContextUsed, &u.ContextSize); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		u.At = time.UnixMilli(ts).UTC()
+		if cost.Valid {
+			c := cost.Float64
+			u.Cost = &c
+		}
+		all = append(all, u)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// pendUsageTx marks a turn's counted usage as waiting for message id to turn final
+// (publishFinalized publishes it then, from the counted row).
+func pendUsageTx(ctx context.Context, t *sql.Tx, id, turn string) error {
+	_, err := t.ExecContext(ctx, "INSERT INTO usage_unpublished (msg, turn) VALUES (?, ?) ON CONFLICT (msg, turn) DO NOTHING", id, turn)
+	return err
+}
+
+// publishFinalized publishes the waiting usage (usage_unpublished) of every message that is final
+// now: each finalizer (Complete, the last Release, Cancel, Expire, ReapLeases, RequeueRunning,
+// Settle) calls it in the transaction that makes messages final, so a message's counted usage is
+// among its events the moment it is final, whatever ended it (a cancel between attempts, say). The
+// table holds only the turns of messages under way that a retried attempt counted: nearly always
+// empty: one read of it.
+func (s *Store) publishFinalized(ctx context.Context, t *sql.Tx) error {
+	// The waiting turns first (nearly always none), then their messages by id: a join let SQLite
+	// walk every final message for the few waiting rows, milliseconds at each finalizer.
+	rows, err := t.QueryContext(ctx, "SELECT DISTINCT msg FROM usage_unpublished")
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(ids) == 0 {
+		return err
+	}
+	now := time.Now()
+	for _, id := range ids {
+		var seq int64
+		var n int
+		var state State
+		err := t.QueryRowContext(ctx, "SELECT seq, events, state FROM messages WHERE id = ?", id).Scan(&seq, &n, &state)
+		if errors.Is(err, sql.ErrNoRows) {
+			// The message is gone (deleted): nothing waits for it any more.
+			if _, err := t.ExecContext(ctx, "DELETE FROM usage_unpublished WHERE msg = ?", id); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !state.Final() {
+			continue
+		}
+		if err := publishUsageTx(ctx, t, id, seq, n, now); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// usagePublishSchema makes every move of a message to a final state (complete, the last release,
-// cancel, expire, a reaped or requeued last attempt, a hub's outcome settled) publish, in the same
-// write, the usage of its turns that is counted and has no event yet: an attempt that was retried
-// counts what it read without an event, and whatever ends the message after it (a cancel between
-// attempts, say) must not leave that usage to this node alone. The event is built from the counted
-// row as PublishUsage builds it (Usage's JSON), up to maxUsageEvents usage events a message: the
-// selection is cut to the room left. The trigger is dropped and made again each time the store
-// opens, so a store keeps the current body, not one an earlier version installed.
+// usagePublishSchema keeps the usage that waits to be published as its message turns final
+// (publishFinalized), and turn_usage's index by message. An earlier version did this with a
+// trigger on messages: SQLite compiles a trigger's body into every UPDATE of a message's state, and
+// that made Complete, Release and Cancel dear enough to nearly double the store's tests under
+// -race; the trigger is dropped where it was installed.
 const usagePublishSchema = `
 CREATE INDEX IF NOT EXISTS turn_usage_msg ON turn_usage (msg);
+CREATE TABLE IF NOT EXISTS usage_unpublished (
+	msg  TEXT NOT NULL,
+	turn TEXT NOT NULL,
+	PRIMARY KEY (msg, turn)
+) WITHOUT ROWID;
 DROP TRIGGER IF EXISTS usage_published_when_final;
-CREATE TRIGGER usage_published_when_final AFTER UPDATE OF state ON messages
-WHEN NEW.state IN ('done', 'failed', 'cancelled', 'expired') AND OLD.state NOT IN ('done', 'failed', 'cancelled', 'expired')
-BEGIN
-	INSERT INTO events (msg, seq, ts, kind, data)
-	SELECT NEW.seq, NEW.events + row_number() OVER (ORDER BY u.ts, u.turn),
-		CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), 'usage',
-		json_object('turn', u.turn, 'at', strftime('%Y-%m-%dT%H:%M:%fZ', u.ts / 1000.0, 'unixepoch'), 'agent', u.agent,
-			'session', u.session, 'model', u.model, 'reported', json(CASE WHEN u.reported THEN 'true' ELSE 'false' END),
-			'input', u.input, 'output', u.output, 'cache_read', u.cache_read, 'cache_write', u.cache_write, 'thought', u.thought,
-			'total', u.total, 'cost', u.cost, 'currency', u.currency, 'context_used', u.context_used, 'context_size', u.context_size)
-	FROM turn_usage u
-	WHERE u.msg = NEW.id
-		AND NOT EXISTS (SELECT 1 FROM events e WHERE e.msg = NEW.seq AND e.kind = 'usage' AND json_extract(e.data, '$.turn') = u.turn)
-	ORDER BY u.ts, u.turn
-	LIMIT max(0, 16 - (SELECT count(*) FROM events e WHERE e.msg = NEW.seq AND e.kind = 'usage'));
-	UPDATE messages SET events = (SELECT coalesce(max(e.seq), 0) FROM events e WHERE e.msg = NEW.seq)
-	WHERE seq = NEW.seq AND events < (SELECT coalesce(max(e.seq), 0) FROM events e WHERE e.msg = NEW.seq);
-END;
 `

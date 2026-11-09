@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -283,8 +282,10 @@ func TestFinalCountIsThePublishedOne(t *testing.T) {
 	}
 }
 
-// A store opened over one whose trigger an earlier version installed gets the current trigger.
-func TestUsageTriggerReplacedOnOpen(t *testing.T) {
+// A store opened over one where an earlier version of this branch installed a usage trigger on
+// messages drops it: the finalizers publish (publishFinalized), and the trigger made every UPDATE of
+// a message's state dearer.
+func TestOldUsageTriggerDroppedOnOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s", "store.db")
 	s, err := Open("sqlite://"+path, Options{})
 	if err != nil {
@@ -295,8 +296,7 @@ func TestUsageTriggerReplacedOnOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DROP TRIGGER usage_published_when_final;
-		CREATE TRIGGER usage_published_when_final AFTER UPDATE OF state ON messages BEGIN SELECT 1; END;`); err != nil {
+	if _, err := db.Exec(`CREATE TRIGGER usage_published_when_final AFTER UPDATE OF state ON messages BEGIN SELECT 1; END;`); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -310,11 +310,8 @@ func TestUsageTriggerReplacedOnOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var body string
-	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'usage_published_when_final'").Scan(&body); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(body, "INSERT INTO events") {
-		t.Fatalf("the trigger is still the old one: %s", body)
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'usage_published_when_final'").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the old trigger is still there (%d, %v)", n, err)
 	}
 }

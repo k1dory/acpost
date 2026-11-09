@@ -405,10 +405,22 @@ func implName(init acp.InitializeResponse) string {
 	return ""
 }
 
+// exitText says how an ended agent process ended: its exit error, or a clean exit (status 0).
+func exitText(p *acpProc) string {
+	if p.exitErr == nil {
+		return "the agent exited with status 0"
+	}
+	return fmt.Sprintf("the agent exited (%v)", p.exitErr)
+}
+
 // procErr explains an ACP error by the process's exit when it died.
 func procErr(p *acpProc, err error) error {
 	select {
 	case <-p.done:
+		if p.exitErr == nil {
+			// It ended cleanly (status 0) without answering: the call's own error says what was cut.
+			return fmt.Errorf("the agent exited with status 0 before it answered (%w)", err)
+		}
 		return fmt.Errorf("the agent exited (%w)", p.exitErr)
 	case <-time.After(500 * time.Millisecond):
 		return err
@@ -909,7 +921,7 @@ func (s *acpSlot) handle(m store.Message) {
 		select {
 		case <-p.done:
 			s.dropProc(p)
-			release(failf("agent_crashed", "the agent exited (%v)", p.exitErr))
+			release(failf("agent_crashed", "%s", exitText(p)))
 		default:
 			if f, final := openFailure(err, key); final {
 				complete(store.Failed, "", f)
