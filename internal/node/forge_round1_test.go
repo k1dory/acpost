@@ -13,6 +13,7 @@ import (
 // A pull request opened without a base goes into the repository's default branch, asked of the
 // forge (master, develop…), not an assumed main.
 func TestOpenPullIntoTheDefaultBranch(t *testing.T) {
+	noKeychain(t)
 	var gotBase string
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
