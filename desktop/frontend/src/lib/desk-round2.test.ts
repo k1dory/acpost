@@ -53,6 +53,45 @@ describe("what the app creates is created once (finding 1)", () => {
     expect(new Set([a, b, c]).size).toBe(3);
   });
 
+  it("a sandbox asked, a new task started meanwhile, the answer lost: the draft put back keeps the key", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
+    const made = deferred();
+    fake.Node.CreateCloudTask.mockReturnValueOnce(made.promise).mockResolvedValueOnce({ agent: "agent:sb_1" });
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "t1", "queued", "agent:sb_1"));
+    const d = app.draftOf();
+    d.text = "do it";
+    const going = app.submit(d);
+    await flush();
+    app.newTask();                        // while the sandbox is being made
+    made.reject(new Error("lost"));       // it may have been made
+    expect(await going).toBe(false);
+    const back = app.draftOf();
+    expect(back.text).toBe("do it");      // put back into the new task
+    expect(await app.submit(back)).toBe(true);
+    const [a, b] = fake.Node.CreateCloudTask.mock.calls.map(c => c[3]);
+    expect(b).toBe(a);
+  });
+
+  it("put back where it no longer goes (another repository chosen), the draft asks a new sandbox", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
+    const made = deferred();
+    fake.Node.CreateCloudTask.mockReturnValueOnce(made.promise).mockResolvedValueOnce({ agent: "agent:sb_2" });
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "t1", "queued", "agent:sb_2"));
+    const d = app.draftOf();
+    d.text = "do it";
+    const going = app.submit(d);
+    await flush();
+    app.newTask();
+    app.draft.repo = "github.com/me/b";
+    made.reject(new Error("lost"));
+    await going;
+    await app.submit(app.draftOf());
+    const [a, b] = fake.Node.CreateCloudTask.mock.calls.map(c => c[3]);
+    expect(b).not.toBe(a);
+  });
+
   it("a handoff asked again after a lost answer carries the first one's key; another handoff a new one", async () => {
     const app = await load();
     const req = { thread: "T", agent: "", session: "", cwd: "/w", cloud_agent: "ref1", note: "" };

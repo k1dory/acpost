@@ -478,8 +478,7 @@ class App {
     if (there && there !== d) {
       there.text = [there.text, d.text].filter(Boolean).join("\n");
       there.files = [...there.files, ...d.files];
-      if (!there.sending && d.sending) there.sending = d.sending;
-      if (!there.sandbox && d.sandbox) there.sandbox = d.sandbox;
+      if (!there.op.pending() && d.op.pending()) there.op = d.op; // whole: its key with its sandbox
       d.forward(there);
     } else {
       d.key = to;
@@ -568,7 +567,8 @@ class App {
     if (!ok && ![...this.draftMap.values()].includes(d)) {
       // The text comes back into the new task's draft: its key and sandbox go with it only if that
       // task goes where this one went.
-      if (d.sending?.dest && d.sending.dest !== this.destNow()) d.forget();
+      const dest = d.op.dest();
+      if (dest && dest !== this.destNow()) d.forget();
       this.moveDraft(d, "new");
     }
     return ok;

@@ -22,20 +22,40 @@ export function filesAsOf(d: ComposerDraft): () => Attachment[] {
   return () => d.files.filter(f => had.has(f) || (f.asked ?? Infinity) <= upto);
 }
 
-export class ComposerDraft {
-  text = $state("");
-  files = $state<Attachment[]>([]);
-  busy = $state(false);
-  /** The cloud sandbox made for this draft when its send failed after it: the next try goes there
+/** What a send of a draft made so far. */
+export class SendOp {
+  /** The cloud sandbox made for the draft when its send failed after it: the next try goes there
    * (for: the destination it was made for, App.destNow()). */
   sandbox: { for: string; agent: string } | null = null;
-  /** The key of the sandbox being made for this draft, from before its first request: a retry
-   * after a lost answer gets the sandbox made the first time. */
-  sandboxOp = new OpKey();
+  /** The key of the sandbox being made, from before its first request: a retry after a lost
+   * answer gets the sandbox made the first time. */
+  sandboxKey = new OpKey();
   /** The message being sent (all of it but its key) and its idempotency key: the same message
    * tried again has the same key, so the node runs it once even when its first answer was lost.
    * content is the message without where it goes; task, the request as it was made. */
   sending: { what: string; key: string; content: string; task: any; dest: string; moved?: boolean } | null = null;
+
+  /** Something was made or asked that a retry must reuse. */
+  pending(): boolean { return !!(this.sending || this.sandbox || this.sandboxKey.held() !== undefined); }
+  /** Where what it made goes (a new task's destination), if it says. */
+  dest(): string | undefined {
+    const k = this.sandboxKey.held();
+    return this.sending?.dest || this.sandbox?.for || (typeof k === "string" ? k : undefined);
+  }
+}
+
+export class ComposerDraft {
+  text = $state("");
+  files = $state<Attachment[]>([]);
+  busy = $state(false);
+  /** What a send of this draft made so far, all of it in one: a draft that moves (into a thread,
+   * back into a new task) takes it whole, so no part of it is left behind. */
+  op = new SendOp();
+  get sandbox() { return this.op.sandbox; }
+  set sandbox(v) { this.op.sandbox = v; }
+  get sending() { return this.op.sending; }
+  set sending(v) { this.op.sending = v; }
+  get sandboxOp() { return this.op.sandboxKey; }
   /** Where this draft went (a new task's, a thread's it merged into): what is still being read
    * into it goes there. */
   movedTo: ComposerDraft | null = null;
@@ -61,7 +81,7 @@ export class ComposerDraft {
   epoch = 0;
 
   /** What a send made is let go: the next message is a new one (a new task, a sent message). */
-  forget() { this.sandbox = null; this.sandboxOp.done(); this.sending = null; this.epoch++; }
+  forget() { this.op = new SendOp(); this.epoch++; }
 
   /** Attaches files within the node's limits, one at a time: two drops at once cannot both pass a
    * check made before either was read. A file over the limits is said (fail) and not read; one
