@@ -1,6 +1,9 @@
 package node
 
 import (
+	"bytes"
+	"strings"
+
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -31,4 +34,32 @@ func asListed(listed, got []store.File, side string) error {
 		}
 	}
 	return nil
+}
+
+// What newFilePatch makes of git diff --no-index /dev/null on a new file.
+const (
+	patchTaken  = iota // the file's whole patch
+	patchLeft          // the file is not sent, and named so: too big, or gone or unreadable since listed
+	patchFailed        // git did not finish (killed past its time): the handoff fails, not the file
+)
+
+// newFilePatch tells a new file's patch from git's failing to read it. The diff exits 1 for a
+// difference, and also for a file it cannot find (with nothing on stdout); 128 for one it cannot
+// read: a patch is taken only when its output is one (a new file's starts with its header).
+func newFilePatch(out []byte, err error) int {
+	if CodeOf(err) == "invalid" {
+		return patchLeft // over the size a handoff sends
+	}
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	exit1 := err == nil || strings.HasSuffix(msg, "exit status 1")
+	switch {
+	case exit1 && bytes.HasPrefix(out, []byte("diff --git ")) && !strings.Contains(msg, "error:") && !strings.Contains(msg, "fatal:"):
+		return patchTaken
+	case exit1, strings.HasSuffix(msg, "exit status 128"):
+		return patchLeft
+	}
+	return patchFailed
 }
