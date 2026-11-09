@@ -4,7 +4,7 @@
   import Icon from "./Icon.svelte";
   import TaskSetup from "./TaskSetup.svelte";
   import { bytes } from "../lib/names";
-  import { pasteFiles, pasteNames } from "../lib/paste";
+  import { pasteFiles, pasteName, freeName } from "../lib/paste";
 
   // The text and files are the chat's draft, kept by the app (they outlive this composer: a new
   // task becoming a chat, the node going down and coming back).
@@ -98,24 +98,25 @@
     if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); send(); }
   }
   // A file over the node's limits is said at once, not read (and not found out at sending).
-  function add(list: FileList | File[] | null) {
+  // Its name is chosen as it is attached (a name already attached gets " (2)"): the node refuses
+  // two files of one name in a message.
+  function add(list: FileList | File[] | null, name: (f: { name: string; type: string }, taken: string[]) => string = (f, taken) => freeName(f.name, taken)) {
     d.add(list ?? [], app.limits, over => {
       app.error = over === "count"
         ? t("A message takes at most {n} files", { n: app.limits!.max_files })
         : t("The files are over the node's limit of {n} together", { n: bytes(app.limits!.max_files_size) });
-    });
+    }, name);
   }
   // A paste with files (a screenshot, a copied image, files copied in Finder) attaches them as a
   // drop does; text pastes as usual (lib/paste.ts says which, for each mix). The textarea's paste
-  // comes here too: it bubbles to the card. A pasted image's name has a counter of the session's
-  // pastes in it (two pastes never give one name, even while the first is still being read); a
-  // real file's name is kept unless one attached has it.
+  // comes here too: it bubbles to the card. Names are chosen in the draft's queue as each file is
+  // attached (lib/paste.ts pasteName), so pastes and drops still being read never share one.
   function paste(e: ClipboardEvent) {
     if (!e.clipboardData) return;
     const files = pasteFiles(e.clipboardData);
     if (!files.length) return;
     e.preventDefault();
-    add(pasteNames(files, d.live().files.map(f => f.name)));
+    add(files, pasteName);
   }
   $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } d.text; });
   $effect(() => { slash.length; slashSel = 0; });

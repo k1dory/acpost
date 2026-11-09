@@ -75,6 +75,47 @@ describe("pasting into the composer", () => {
     expect(app.draftOf().files).toEqual([]);
   });
 
+  it("a named file pasted twice while the first is still read: two names (R1.1)", async () => {
+    const app = await setup();
+    const slow = (text: string) => {
+      const f = new File([text], "report.txt", { type: "text/plain" });
+      const r = Promise.withResolvers<ArrayBuffer>();
+      Object.defineProperty(f, "arrayBuffer", { value: () => r.promise });
+      return { f, r };
+    };
+    const a = slow("one"), b = slow("two");
+    paste([a.f]);
+    paste([b.f]);
+    a.r.resolve(new TextEncoder().encode("one").buffer);
+    b.r.resolve(new TextEncoder().encode("two").buffer);
+    await settle(app);
+    expect(app.draftOf().files.map(f => f.name)).toEqual(["report.txt", "report (2).txt"]);
+  });
+
+  it("a paste and a drop of one name: two names (R1.1)", async () => {
+    const app = await setup();
+    paste([new File(["one"], "report.txt", { type: "text/plain" })]);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["two"], "report.txt", { type: "text/plain" })] } });
+    document.querySelector(".comp")!.dispatchEvent(drop);
+    await settle(app);
+    expect(app.draftOf().files.map(f => f.name)).toEqual(["report.txt", "report (2).txt"]);
+  });
+
+  it("an address ending in the image's name pastes as text (R1.3)", async () => {
+    const app = await setup();
+    expect(paste([img()], "https://example.com/image.png")).toBe(false);
+    await settle(app);
+    expect(app.draftOf().files).toEqual([]);
+  });
+
+  it("a dotfile keeps its name (R1.4)", async () => {
+    const app = await setup();
+    paste([new File(["A=1"], ".env", { type: "text/plain" })]);
+    await settle(app);
+    expect(app.draftOf().files.map(f => f.name)).toEqual([".env"]);
+  });
+
   it("over max_files: the same error as a drop", async () => {
     const app = await setup();
     app.limits = { max_body: 1 << 20, max_files: 1, max_files_size: 1 << 20 };

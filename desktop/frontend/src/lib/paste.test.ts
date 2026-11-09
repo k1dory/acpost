@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from "vitest";
-import { pasteFiles, pasteNames, type Clip } from "./paste";
+import { pasteFiles, pasteName, freeName, type Clip } from "./paste";
 
 const img = (name = "image.png", type = "image/png") => new File([new Uint8Array([1, 2, 3])], name, { type });
 const clip = (files: File[], text = "", asItems = false): Clip => ({
@@ -10,11 +10,17 @@ const clip = (files: File[], text = "", asItems = false): Clip => ({
 });
 
 describe("what a paste attaches", () => {
-  it("a screenshot alone: attached (from files or from items, once)", () => {
+  it("a screenshot alone: attached (from files, or from items when files is empty; once)", () => {
     const f = img();
     expect(pasteFiles(clip([f]))).toEqual([f]);
     expect(pasteFiles(clip([f], "", true))).toEqual([f]);
     expect(pasteFiles({ files: [f], items: [{ kind: "file", type: f.type, getAsFile: () => f }], getData: () => "" })).toEqual([f]);
+  });
+  it("two files that say the same of themselves are both kept (R1.2)", () => {
+    const at = 1_700_000_000_000;
+    const one = new File(["one"], "report.txt", { type: "text/plain", lastModified: at });
+    const two = new File(["two"], "report.txt", { type: "text/plain", lastModified: at });
+    expect(pasteFiles(clip([one, two]))).toEqual([one, two]);
   });
   it("text alone: nothing, the text pastes as usual", () => {
     expect(pasteFiles(clip([], "hello"))).toEqual([]);
@@ -27,26 +33,34 @@ describe("what a paste attaches", () => {
   it("a part of a page with its picture: the text only, never both", () => {
     expect(pasteFiles(clip([img()], "A paragraph of the page"))).toEqual([]);
   });
+  it("text that only ends in the file's name is text: an address, a path in a sentence (R1.3)", () => {
+    expect(pasteFiles(clip([img()], "https://example.com/image.png"))).toEqual([]);
+    expect(pasteFiles(clip([img()], "See assets/image.png"))).toEqual([]);
+    expect(pasteFiles(clip([img()], "file:not a url/image.png x"))).toEqual([]);
+  });
 });
 
 describe("names of pasted files", () => {
   const at = new Date(2026, 10, 9, 14, 5, 9);
-  it("a pasted image gets a name of its own, by its type", () => {
-    const [f] = pasteNames([img("image.png")], [], at);
-    expect(f.name).toMatch(/^pasted-140509-\d+\.png$/);
-    expect(pasteNames([img("", "image/jpeg")], [], at)[0].name).toMatch(/\.jpg$/);
+  it("a pasted picture with WebKit's name, or a file with none, gets a name of its own by its type", () => {
+    expect(pasteName({ name: "image.png", type: "image/png" }, [], at)).toMatch(/^pasted-140509-\d+\.png$/);
+    expect(pasteName({ name: "", type: "image/jpeg" }, [], at)).toMatch(/\.jpg$/);
+    expect(pasteName({ name: "", type: "text/plain" }, [], at)).toMatch(/^pasted-.*\.txt$/);
   });
   it("two pastes, two names", () => {
-    const [a] = pasteNames([img()], [], at);
-    const [b] = pasteNames([img()], [a.name], at);
-    expect(a.name).not.toBe(b.name);
-    const two = pasteNames([img(), img()], [], at);
-    expect(two[0].name).not.toBe(two[1].name);
+    const a = pasteName({ name: "image.png", type: "image/png" }, [], at);
+    const b = pasteName({ name: "image.png", type: "image/png" }, [a], at);
+    expect(a).not.toBe(b);
   });
   it("a real name stays, unless one attached has it", () => {
-    const f = img("diagram.png");
-    expect(pasteNames([f], ["other.png"], at)[0]).toBe(f);
-    expect(pasteNames([f], ["diagram.png"], at)[0].name).toBe("diagram (2).png");
-    expect(pasteNames([f], ["diagram.png", "diagram (2).png"], at)[0].name).toBe("diagram (3).png");
+    expect(pasteName({ name: "diagram.png", type: "image/png" }, ["other.png"], at)).toBe("diagram.png");
+    expect(pasteName({ name: "diagram.png", type: "image/png" }, ["diagram.png"], at)).toBe("diagram (2).png");
+    expect(freeName("diagram.png", ["diagram.png", "diagram (2).png"])).toBe("diagram (3).png");
+  });
+  it("dotfiles and a file named like a picture that is not one keep their names (R1.4)", () => {
+    expect(pasteName({ name: ".env", type: "text/plain" }, [], at)).toBe(".env");
+    expect(pasteName({ name: ".gitignore", type: "" }, [], at)).toBe(".gitignore");
+    expect(pasteName({ name: "image.txt", type: "text/plain" }, [], at)).toBe("image.txt");
+    expect(freeName(".env", [".env"])).toBe(".env (2)");
   });
 });

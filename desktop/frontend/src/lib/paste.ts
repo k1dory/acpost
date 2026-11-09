@@ -20,18 +20,30 @@ export type Clip = {
   getData(type: string): string;
 };
 
-/** The files of a clipboard: its files and its items of kind "file" (WebKit puts a pasted image
- * in one or the other, or both: the same file once). */
+/** The files of a clipboard: its file list whole (two files of one name, size and date may still
+ * differ: nothing is dropped by what they say of themselves); its items of kind "file" only when
+ * the list is empty (WebKit puts a pasted image in one or the other, or both). */
 export function clipFiles(c: Clip): File[] {
+  const list = Array.from(c.files ?? []).filter((f): f is File => !!f);
+  if (list.length) return list;
   const out: File[] = [];
-  const seen = (f: File) => out.some(x => x === f || (x.name === f.name && x.size === f.size && x.type === f.type && x.lastModified === f.lastModified));
-  for (const f of Array.from(c.files ?? [])) if (f && !seen(f)) out.push(f);
   for (const it of Array.from(c.items ?? [])) {
     if (it.kind !== "file") continue;
     const f = it.getAsFile();
-    if (f && !seen(f)) out.push(f);
+    if (f) out.push(f);
   }
   return out;
+}
+
+/** Whether a line of the clipboard's text is one of the files: its exact name, or a file: URL of it. */
+function namesFile(line: string, names: Set<string>): boolean {
+  if (names.has(line)) return true;
+  if (!/^file:/i.test(line)) return false;
+  try {
+    const u = new URL(line);
+    if (u.protocol !== "file:") return false;
+    return names.has(decodeURIComponent(u.pathname.split("/").pop() ?? ""));
+  } catch { return false; }
 }
 
 /** The files a paste attaches ([]: let the text paste as usual). */
@@ -40,41 +52,40 @@ export function pasteFiles(c: Clip): File[] {
   if (!files.length) return [];
   const text = (c.getData("text/plain") || "").trim();
   if (!text) return files;
-  // Finder: the text is the files' names (or their file:// addresses), one per line.
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  // Finder: the text is the files' names (or their file: URLs), one per line, and nothing else.
   const names = new Set(files.map(f => f.name));
-  const isName = (l: string) => names.has(l) || names.has(decodeURIComponent(l.replace(/^file:\/\//, "")).split("/").pop() ?? "");
-  return lines.every(isName) ? files : [];
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  return lines.every(l => namesFile(l, names)) ? files : [];
 }
 
 const exts: Record<string, string> = {
   "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/heic": "heic",
   "image/tiff": "tiff", "image/bmp": "bmp", "image/svg+xml": "svg", "application/pdf": "pdf", "text/plain": "txt",
 };
-/** Names a pasted image gets from WebKit, which say nothing: replaced. */
-const generic = /^(image|blob|untitled)?(\.[a-z0-9]+)?$/i;
+/** Names WebKit gives a pasted picture, which say nothing of it (only for images: a file named
+ * image.png that is not one keeps its name; a dotfile like .env is a real name). */
+const generic = /^(image|blob|untitled)\.[a-z0-9]+$/i;
 let pasted = 0;
 
-/** Pasted files with names of their own: a pasted image (no name, or "image.png") becomes
- * pasted-HHMMSS-n.ext (by its type); a real name stays, unless one already attached has it (the
- * node refuses two files of one name in a message): then "name (2).ext". `taken`: the names
- * attached already. */
-export function pasteNames(files: File[], taken: Iterable<string>, now = new Date()): File[] {
+/** A name not among `taken`: the name itself, or "name (2).ext", "name (3).ext"… (the node refuses
+ * two files of one name in a message). */
+export function freeName(name: string, taken: Iterable<string>): string {
   const used = new Set(taken);
+  if (!used.has(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  let i = 2;
+  while (used.has(`${base} (${i})${ext}`)) i++;
+  return `${base} (${i})${ext}`;
+}
+
+/** The name a pasted file is attached under, `taken` being the names attached when it is (asked
+ * in the draft's queue, so earlier pastes and drops still being read are among them): a file with
+ * no name, or a picture with WebKit's generic one, becomes pasted-HHMMSS-n.ext (by its type, n
+ * counting the session's pastes); a real name stays, unless taken. */
+export function pasteName(f: { name: string; type: string }, taken: Iterable<string>, now = new Date()): string {
+  if (f.name && !(f.type.startsWith("image/") && generic.test(f.name))) return freeName(f.name, taken);
   const hms = [now.getHours(), now.getMinutes(), now.getSeconds()].map(n => String(n).padStart(2, "0")).join("");
-  return files.map(f => {
-    let name = f.name;
-    if (generic.test(name)) {
-      const ext = exts[f.type] ?? (name.includes(".") ? name.split(".").pop()! : "bin");
-      do name = `pasted-${hms}-${++pasted}.${ext}`; while (used.has(name));
-    } else if (used.has(name)) {
-      const dot = name.lastIndexOf(".");
-      const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
-      let i = 2;
-      while (used.has(`${base} (${i})${ext}`)) i++;
-      name = `${base} (${i})${ext}`;
-    }
-    used.add(name);
-    return name === f.name ? f : new File([f], name, { type: f.type, lastModified: f.lastModified });
-  });
+  const ext = exts[f.type] ?? (f.name.includes(".") ? f.name.split(".").pop()! : "bin");
+  return freeName(`pasted-${hms}-${++pasted}.${ext}`, taken);
 }

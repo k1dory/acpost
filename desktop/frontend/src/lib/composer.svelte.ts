@@ -48,8 +48,10 @@ export class ComposerDraft {
   forget() { this.sandbox = null; this.sending = null; this.epoch++; }
 
   /** Attaches files within the node's limits, one at a time: two drops at once cannot both pass a
-   * check made before either was read. A file over the limits is said (fail) and not read. */
-  add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size") => void): Promise<void> {
+   * check made before either was read. A file over the limits is said (fail) and not read. `name`
+   * gives the name it is attached under, from the names attached right then. */
+  add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size") => void,
+    name: (f: FileLike, taken: string[]) => string = f => f.name): Promise<void> {
     const files = [...list];
     const at = this.live();
     at.adding = at.adding.then(async () => {
@@ -61,7 +63,8 @@ export class ComposerDraft {
         const d = this.live();
         const over = overLimits(d.files, f, limits);
         if (over) { fail(over); return; }
-        d.files = [...d.files, { name: f.name, type: f.type || "application/octet-stream", size: f.size, data }];
+        // Its name, chosen here: against all attached by now, those added just before it included.
+        d.files = [...d.files, { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data }];
       }
     }).catch(() => {});
     return at.adding;
