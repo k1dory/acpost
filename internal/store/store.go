@@ -734,6 +734,9 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 	}
 	args = append(args, ms(now))
 	err := s.tx(ctx, func(t *sql.Tx) error {
+		// The time once the writer is had: a claim that waited for it sees what expired meanwhile.
+		now = time.Now()
+		args[len(args)-1] = ms(now)
 		var id string
 		err := t.QueryRowContext(ctx, `SELECT id FROM messages INDEXED BY messages_queue
 			WHERE recipient IN (`+ph+`) AND state = 'queued' AND (expires_at = 0 OR expires_at > ?) AND `+localWork+` ORDER BY id LIMIT 1`,
