@@ -253,7 +253,7 @@ describe("send, review round 2", () => {
     sent.resolve(msg("m1", "A", "queued"));
     expect(await going).toBe(true);
     expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(String));
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     expect(app.draftOf().text).toBe("");
   });
 
@@ -492,7 +492,7 @@ describe("send, review round 6", () => {
     await flush();
     expect(app.thread).toBe("T1");                     // the new task's screen is its thread now
     expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(String));
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     expect(app.draftOf().text).toBe("build it");
     app.draftOf().text = "build it, in Go";            // edited: a new message of the same thread
     fake.Node.SendTask.mockResolvedValueOnce({ ...msg("m2", "T1"), to: "agent:sb_1" });
@@ -521,7 +521,7 @@ describe("send, review round 6", () => {
     expect(await app.submit(app.draftOf())).toBe(true);
     expect(app.thread).toBe("T1");
     expect(app.msgs.map(m => m.id)).toEqual(["m1", "m2"]);
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(String));
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     expect(app.runningHere().map(m => m.id)).toEqual(["m1"]); // stopHere() reaches it
   });
 });
@@ -873,12 +873,12 @@ describe("following a running message", () => {
     const app = await load();
     fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
     await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(String));
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     fake.emit("events:m1", { events: evs(1, 3) });
     fake.emit("events:m1", { error: "stream reset" });
     expect(fake.listeners("events:m1")).toBe(0);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(fake.Node.Follow).toHaveBeenLastCalledWith("m1", 3, expect.any(String));
+    expect(fake.Node.Follow).toHaveBeenLastCalledWith("m1", 3, expect.any(Number));
     expect(fake.listeners("events:m1")).toBe(1);
     // The same events again (the node sends from after=3 but may repeat): applied once.
     fake.emit("events:m1", { events: evs(3, 2) });

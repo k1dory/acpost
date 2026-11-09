@@ -55,14 +55,14 @@ func TestReplacedFollowEmitsNothingStale(t *testing.T) {
 		log = append(log, name)
 		mu.Unlock()
 	}
-	if err := n.Follow("m1", 0, ""); err != nil {
+	if err := n.Follow("m1", 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	<-in
 	refollowed := make(chan struct{})
 	go func() {
-		n.Unfollow("m1", "")
-		n.Follow("m1", 0, "")
+		n.Unfollow("m1", 0)
+		n.Follow("m1", 0, 0)
 		mu.Lock()
 		log = append(log, "followed again")
 		mu.Unlock()

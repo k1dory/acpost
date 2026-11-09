@@ -127,9 +127,35 @@ describe("one owner per subscription (finding 2)", () => {
     const follows = fake.Node.Follow.mock.calls.map(c => c[2]);
     const unfollows = fake.Node.Unfollow.mock.calls.filter(c => c[0] === "m1").map(c => c[1]);
     expect(follows.length).toBe(2);
-    expect(follows[0]).toMatch(/^[0-9a-f]{32}$/);
-    expect(follows[1]).not.toBe(follows[0]);
+    expect(follows[1]).toBeGreaterThan(follows[0]); // the newer generation, which the app keeps
     expect(unfollows).toEqual([follows[0]]); // only the first: the node keeps the second, whenever it runs
+  });
+
+  it("A, B, A with the first Follow answering last: only the first generation is let go, the second never", async () => {
+    const app = await load();
+    fake.Node.Thread.mockImplementation(async (th: string) => th === "A" ? [msg("m1", "A", "running")] : []);
+    const first = deferred();
+    fake.Node.Follow.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+    const A = { key: "thread:A", kind: "thread" as const, thread: "A", title: "A", updated: "" };
+    await app.open(A);
+    await app.open({ key: "thread:B", kind: "thread", thread: "B", title: "B", updated: "" });
+    await app.open(A);
+    await flush();
+    first.resolve(undefined); // the first Follow's answer, late
+    await flush();
+    const [g1, g2] = fake.Node.Follow.mock.calls.map(c => c[2]);
+    expect(g2).toBeGreaterThan(g1);
+    const gone = fake.Node.Unfollow.mock.calls.filter(c => c[0] === "m1").map(c => c[1]);
+    expect(gone.length).toBeGreaterThan(0);
+    expect(gone.every(g => g === g1)).toBe(true);
+    expect(fake.listeners("events:m1")).toBe(1);
+  });
+
+  it("generations rise across a reload of the window (they start from the clock)", async () => {
+    const app = await load();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
+    expect(fake.Node.Follow.mock.calls[0][2]).toBeGreaterThanOrEqual(Date.now() * 1000 - 60e9);
   });
 
   it("a batch of another subscription of the same message is not this one's", async () => {
@@ -137,9 +163,9 @@ describe("one owner per subscription (finding 2)", () => {
     fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
     await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
     const sub = fake.Node.Follow.mock.calls[0][2];
-    fake.emit("events:m1", { id: "m1", sub: "someone-else", events: evs(1, 2) });
+    fake.emit("events:m1", { id: "m1", gen: sub + 1, events: evs(1, 2) });
     expect(app.turns.m1.last).toBe(0);
-    fake.emit("events:m1", { id: "m1", sub, events: evs(1, 2) });
+    fake.emit("events:m1", { id: "m1", gen: sub, events: evs(1, 2) });
     expect(app.turns.m1.last).toBe(2);
   });
 });
@@ -150,7 +176,7 @@ describe("nothing is dropped at the end (finding 3)", () => {
     fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
     await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
     const sub = fake.Node.Follow.mock.calls[0][2];
-    fake.emit("events:m1", { id: "m1", sub, events: evs(1, 1) });
+    fake.emit("events:m1", { id: "m1", gen: sub, events: evs(1, 1) });
     return app;
   }
 
@@ -177,7 +203,7 @@ describe("nothing is dropped at the end (finding 3)", () => {
   it("the stream's own final came after its last batch: nothing more is read", async () => {
     const app = await running();
     const sub = fake.Node.Follow.mock.calls[0][2];
-    fake.emit("events:m1", { id: "m1", sub, final: msg("m1", "T", "done") });
+    fake.emit("events:m1", { id: "m1", gen: sub, final: msg("m1", "T", "done") });
     await flush();
     expect(fake.Node.Events).not.toHaveBeenCalled();
   });

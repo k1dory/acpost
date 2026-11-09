@@ -100,7 +100,9 @@ export function Checks(agent: string, ref: string): $CancellablePromise<forge$0.
 }
 
 /**
- * CloseTerminal ends a terminal.
+ * CloseTerminal ends a terminal. Its output stops at once; its entry stays the app's until the
+ * node says the shell is closed (or that there is no such terminal): a close that did not reach
+ * the node is tried again, and shutdown still closes it. Its shell would go on, no one's.
  */
 export function CloseTerminal(id: string): $CancellablePromise<void> {
     return $Call.ByID(3705491908, id);
@@ -194,11 +196,12 @@ export function FileAt(repo: string, tree: string, path: string): $CancellablePr
 
 /**
  * Follow streams a message's events after seq `after` as "events:<id>" until it is final (or
- * Unfollow). Following it again restarts the stream. sub names this subscription (the window
- * makes it): an Unfollow of another one, late, leaves it alone.
+ * Unfollow). Following it again restarts the stream. gen is this subscription's generation (the
+ * window's, rising): only the newest generation of a message changes its stream (followGen), so
+ * Follows and Unfollows that Wails runs out of order end as the window asked last.
  */
-export function Follow(id: string, after: number, sub: string): $CancellablePromise<void> {
-    return $Call.ByID(1045125245, id, after, sub);
+export function Follow(id: string, after: number, gen: number): $CancellablePromise<void> {
+    return $Call.ByID(1045125245, id, after, gen);
 }
 
 /**
@@ -574,12 +577,12 @@ export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
 }
 
 /**
- * Unfollow stops a message's stream, when it is still the subscription sub ("": whichever). Wails
+ * Unfollow lets a message's subscription gen go, and every older one (0: whichever there is). Wails
  * runs each call in its own goroutine: an Unfollow sent before a Follow may run after it, and
- * must not stop the stream that Follow started.
+ * must not stop the stream that Follow started; a Follow of gen that comes after it starts none.
  */
-export function Unfollow(id: string, sub: string): $CancellablePromise<void> {
-    return $Call.ByID(553991142, id, sub);
+export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
+    return $Call.ByID(553991142, id, gen);
 }
 
 /**

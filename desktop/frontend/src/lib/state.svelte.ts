@@ -116,9 +116,10 @@ class App {
   cloudAgents = $state<CloudAgent[]>([]);
   home = $state("");
   error = $state("");
-  /** The messages followed: the listener's off, and the subscription's name (Follow/Unfollow
-   * carry it: a late Unfollow of one stops only that one, not the stream that followed it). */
-  private unsub = new Map<string, { off: () => void; sub: string }>();
+  /** The messages followed: the listener's off, and the subscription's generation (Follow and
+   * Unfollow carry it; the app lets only a message's newest generation change its stream, so calls
+   * that Wails runs out of order end as asked last). */
+  private unsub = new Map<string, { off: () => void; sub: number }>();
   /** Bumped each time the screen changes chat: an answer to a call made before is not this chat's. */
   private gen = 0;
 
@@ -370,9 +371,9 @@ class App {
   private follow(id: string, turn: Turn, tries: number) {
     if (this.unsub.has(id)) return;
     const gen = this.gen;
-    const sub = newId();
+    const sub = nextGen();
     const off = on("events:" + id, (b: any) => {
-      if (b.sub && b.sub !== sub) return; // another subscription's
+      if (b.gen && b.gen !== sub) return; // another subscription's
       if (b.events?.length) {
         tries = 0;
         turn.add(b.events as Ev[]);
@@ -858,6 +859,13 @@ const stage: Record<string, number> = { queued: 0, running: 1, done: 2, failed: 
 /** A thread's messages as loaded, with those the screen already has: one per id, the later of the
  * two (by updated_at, then by state: a finished one is past a running one), in the loaded order
  * and then those the load did not have yet. */
+/** A subscription's generation: rising, also across reloads of the window (from the clock). */
+let lastGen = 0;
+function nextGen(): number {
+  lastGen = Math.max(lastGen + 1, Date.now() * 1000);
+  return lastGen;
+}
+
 export function mergeMsgs(loaded: Msg[], shown: Msg[]): Msg[] {
   const byId = new Map(shown.map(m => [m.id, m]));
   const later = (a: Msg, b: Msg) => {
