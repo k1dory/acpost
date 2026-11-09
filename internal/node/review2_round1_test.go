@@ -121,9 +121,11 @@ func TestLateSendNotTakenForUnsent(t *testing.T) {
 	f.set(func(f *fakeHub) { f.holdIn = nil })
 	close(holdIn) // the send arrives
 	eventually(t, "the cancel reaches the hub", func() bool { c := f.get().cancels; return len(c) == 1 && c[0] == m.ID })
-	if got, _ := n.st.Get(ctx, m.ID); got.Origin != originRemote {
-		t.Fatalf("origin %q", got.Origin)
-	}
+	// The hub has the cancel; the copy learns it from the hub's answer, a moment later.
+	eventually(t, "the copy is the hub's, cancelled", func() bool {
+		got, _ := n.st.Get(ctx, m.ID)
+		return got.Origin == originRemote && got.State == store.Cancelled
+	})
 }
 
 // A send cancelled here while the hub answers with its first send of the key (another id): the

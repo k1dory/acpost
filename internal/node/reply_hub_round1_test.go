@@ -50,9 +50,11 @@ func TestRelayHandsReplyWhenHubIsBack(t *testing.T) {
 	if f.count("lease") == 0 {
 		t.Fatal("the lease was not renewed while the hub was away")
 	}
-	if got, _ := n.st.Get(ctx, m.ID); got.Origin != originAcked+"L1" {
-		t.Fatalf("outcome not marked as taken: %q", got.Origin)
-	}
+	// Marked once the hub's answer is back, a moment after the hub has the reply.
+	eventually(t, "the outcome is marked as taken", func() bool {
+		got, _ := n.st.Get(ctx, m.ID)
+		return got.Origin == originAcked+"L1"
+	})
 }
 
 // A node started with an outcome its hub did not confirm hands it; one confirmed is not handed again.
@@ -69,7 +71,9 @@ func TestStartHandsUnconfirmedReply(t *testing.T) {
 	if got := f.replyCalls("L0"); got != 0 {
 		t.Fatalf("a confirmed outcome was handed again (%d)", got)
 	}
-	if got, _ := n.st.Get(ctx, m.ID); got.Origin != originAcked+"L1" {
-		t.Fatalf("outcome not marked as taken: %q", got.Origin)
-	}
+	// Marked once the hub's answer is back, a moment after the hub has the reply.
+	eventually(t, "the outcome is marked as taken", func() bool {
+		got, _ := n.st.Get(ctx, m.ID)
+		return got.Origin == originAcked+"L1"
+	})
 }
