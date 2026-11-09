@@ -150,7 +150,7 @@ func (e *env) serve(extra ...string) {
 	})
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if r := e.run("", "status"); r.code == 0 {
+		if e.answers() {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
