@@ -13,7 +13,7 @@ import (
 // copy. The copy is stored before the hub is asked (origin forwarding), under the sender's key, so
 // a request that ends after the hub took the message still leaves it. Then:
 //
-//	forwarding  the hub's answer is not known yet: resolveForward learns it from the hub
+//	forwarding  the hub's answer is not known yet: the resolvers learn it from the hub (resolveOnce)
 //	remote      the hub has it: the copy follows the hub's (followSweep, follow)
 //	unsent      not sent for certain (refused, or the hub never got it); its key is free again
 //
@@ -67,7 +67,13 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 		}
 	}()
 	handOn := func() { owned = false; n.resolveOwned(m.ID) }
-	got, created, err := n.st.Insert(lctx, &pending)
+	// Copies the hub has not answered for count against the limit of the address they go to.
+	lim := n.cfg.Limits.MaxQueuedPerAgent
+	got, created, err := n.st.InsertLimited(lctx, &pending, lim)
+	if errors.Is(err, store.ErrQueueFull) {
+		return store.Message{}, false, errh("unavailable", "send again once the hub answers",
+			"%s has %d messages waiting for the hub's answer (limits.max_queued_per_agent)", pending.To, lim)
+	}
 	if err != nil {
 		return store.Message{}, false, n.fileErr(err, m.ID)
 	}
@@ -84,6 +90,7 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 		}
 		return store.Message{}, false, hubErr(err)
 	}
+	sent.To = n.hubAddress(ctx, sent.To)
 	if !created && sent.ID != m.ID {
 		copied, err := n.takeHubRepeat(ctx, m.ID, sent)
 		if err != nil {
@@ -123,6 +130,7 @@ func (n *Node) takeHubRepeat(ctx context.Context, id string, sent store.Message)
 	// download, the store's room, a write) holds it back. The copy is replaced at this try or a
 	// later one.
 	n.cancelThrough(id, sent.ID)
+	sent.To = n.hubAddress(ctx, sent.To) // the hub's own agent, by the hub's name: never the repeat's address
 	if listed := pick(sent.Files, false); len(listed) > 0 {
 		fctx, done := context.WithTimeout(ctx, hubFilesTimeout)
 		got, err := n.fetchFiles(fctx, sent.ID, false, listed, "the message")
@@ -166,7 +174,7 @@ func (n *Node) notSent(ctx context.Context, id string, why error) bool {
 	return true
 }
 
-// resolveLater starts resolveForward for a message, unless something owns it already (its send,
+// resolveLater hands a message to the resolvers, unless something owns it already (its send,
 // or a resolver).
 func (n *Node) resolveLater(id string) {
 	if _, busy := n.resolving.LoadOrStore(id, true); busy {
@@ -175,35 +183,18 @@ func (n *Node) resolveLater(id string) {
 	n.resolveOwned(id)
 }
 
-// resolveOwned starts resolveForward for a message the caller owns (n.resolving holds it); the
-// resolver lets it go when done.
+// resolveOwned hands a message the caller owns (n.resolving holds it) to the resolvers, which let
+// it go when it is settled. They learn from the hub what became of a message stored to be sent
+// through it (the hub did not answer, the request ended, the node stopped, the copy was cancelled
+// meanwhile), trying again with a growing pause until they know, a bounded number at once
+// (resolverPool). They do not send the message again: its sender was told the send failed.
 func (n *Node) resolveOwned(id string) {
-	if !n.goWork(func() {
-		defer n.resolving.Delete(id)
-		n.resolveForward(id)
-	}) {
+	if !n.resolvers.add(n, id) {
 		n.resolving.Delete(id)
 	}
 }
 
-// resolveForward learns from the hub what became of a message stored to be sent through it (the
-// hub did not answer, the request ended, the node stopped, the copy was cancelled meanwhile),
-// trying again with a growing pause until it knows. It does not send the message again: its
-// sender was told the send failed.
-func (n *Node) resolveForward(id string) {
-	for pause := hubRetry; n.ctx.Err() == nil; pause = min(2*pause, time.Minute) {
-		select {
-		case <-n.ctx.Done():
-			return
-		case <-time.After(pause):
-		}
-		if n.resolveOnce(id) {
-			return
-		}
-	}
-}
-
-// resolveOnce is one try of resolveForward; it reports whether the message is settled.
+// resolveOnce is one try of the resolvers; it reports whether the message is settled.
 func (n *Node) resolveOnce(id string) bool {
 	local, err := n.st.Get(n.ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -237,11 +228,12 @@ func (n *Node) resolveOnce(id string) bool {
 		first, found, err := n.hub.ByIdem(ctx, n.qualify(local.From), key)
 		done()
 		switch {
-		case err != nil:
+		case err != nil && time.Since(local.CreatedAt) < hubAbsence:
 			// No answer, or a hub without the lookup (an older version answers 404 for any
-			// path): it may hold the send under an earlier id, so the copy and its key stay
-			// until it can say.
+			// path): it may hold the send under an earlier id. Past the wait, the disown below
+			// asks by the key too (or, a hub without either, the copy ends as before).
 			return false
+		case err != nil:
 		case found && first.ID != id:
 			_, err := n.takeHubRepeat(n.ctx, id, first)
 			return err == nil
@@ -250,9 +242,9 @@ func (n *Node) resolveOnce(id string) bool {
 		}
 	}
 	if time.Since(local.CreatedAt) < hubAbsence {
-		return false // the send may still arrive: absence counts only later
+		return false // the send may still arrive: absence is asked about only later
 	}
-	return n.notSent(n.ctx, id, errors.New("the hub did not get it; send again"))
+	return n.disownForward(id, local, key)
 }
 
 // foundOnHub settles a forwarding copy the hub has (hm): the copy follows it; cancelled here
@@ -303,6 +295,7 @@ func (n *Node) foundOnHub(id string, local, hm store.Message) bool {
 		}
 		return false // the cancel did not reach the hub: again later
 	}
+	hm.To = n.hubAddress(n.ctx, hm.To)
 	ok, err := finishForward(n.st, n.ctx, id, originForwarding, originRemote, hm)
 	if err != nil || !ok {
 		return false // a write failed, or the copy changed (cancelled): again, from what it is then

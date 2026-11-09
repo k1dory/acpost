@@ -120,6 +120,10 @@ type Node struct {
 	held      heldLeases // the leases of turns running in this process (lease.go)
 	cloudOps  sync.Map   // idempotency key → *sync.Mutex: one cloud task made at a time per key (cloud.go)
 	resolving sync.Map   // ids of forwarded messages resolveForward runs for (forward.go)
+
+	resolvers resolverPool // the tries of resolveForward, bounded (resolve_round2.go)
+	hubName   atomic.Value // string: the hub's node name, once known (hubAddress, resolve_round2.go)
+	turnWaits turnWaits    // what agents' turns wait for (turnwaits_round1.go): the node's own, gone with it
 }
 
 type agentToken struct {
@@ -540,6 +544,9 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 		return store.Message{}, false, errh("not_found", "`acpost agents` lists the agents this node knows", "no agent %s here", to)
 	}
 	got, created, err := n.st.InsertLimited(ctx, m, lim.MaxQueuedPerAgent)
+	if e := disownedErr(err, m.ID); e != nil {
+		return got, false, e
+	}
 	if errors.Is(err, store.ErrQueueFull) {
 		return got, false, errf("refused", "%s has %d messages queued (limits.max_queued_per_agent)", m.To, lim.MaxQueuedPerAgent)
 	}

@@ -10,9 +10,10 @@ import (
 	"github.com/k1dory/acpost/internal/store"
 )
 
-// A hub of the version before the lookup by key holds the first send of a key; a repeat's answer
-// is lost and the repeat is cancelled. The hub's 404 for the lookup proves nothing: the copy is
-// not taken for unsent, and its key stays.
+// A hub of the version before the lookup by key (and before disown) holds the first send of a
+// key; a repeat's answer is lost and the repeat is cancelled. Such a hub can say nothing of the
+// repeat: past the wait the copy ends as not sent, as main did (a known limit, README), its key
+// free, and the hub is not asked about it again. A send again with the key gets the hub's first.
 func TestOldHubLookupIsNoProofOfAbsence(t *testing.T) {
 	fastHub(t, 30*time.Millisecond) // absence would count after 300 ms
 	n := newNode(t, hubCfg)
@@ -33,13 +34,21 @@ func TestOldHubLookupIsNoProofOfAbsence(t *testing.T) {
 	if _, err := n.Cancel(ctx, me, m.ID); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second)
-	got, err := n.st.ByIdem(ctx, me.Address(), "o1")
-	if err != nil || got.ID != m.ID {
-		t.Fatalf("the key was released: %v", err)
+	eventually(t, "the copy ends as not sent past the wait", func() bool {
+		got, _ := n.st.Get(ctx, m.ID)
+		return got.State.Final() && got.Origin == originUnsent
+	})
+	if _, err := n.st.ByIdem(ctx, me.Address(), "o1"); err == nil {
+		t.Fatal("the key stayed taken")
 	}
-	if got.State.Final() || got.Origin != originForwarding {
-		t.Fatalf("taken for unsent on an old hub's 404: %s %s", got.State, got.Origin)
+	asked := f.count("disown") + f.count(m.ID) + f.count("by-idem")
+	time.Sleep(500 * time.Millisecond)
+	if again := f.count("disown") + f.count(m.ID) + f.count("by-idem"); again != asked {
+		t.Fatalf("the hub is still asked about the copy (%d calls, then %d)", asked, again)
+	}
+	again, _, err := n.Send(ctx, me, SendRequest{To: "agent:far@other", Body: "work", IdemKey: "o1"})
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("a send again with the key: %s %v, the hub's first is %s", again.ID, err, first.ID)
 	}
 }
 

@@ -22,16 +22,20 @@ const CodeHubGaveUp = "lease_lost"
 
 // AdoptDelivery takes a new delivery of message id onto the copy this node has: its origin
 // becomes origin. Only a copy of the same message is taken (its origin starts with prefix, same
-// sender and recipient): ErrIDInUse otherwise, ErrNotFound when there is no copy. A copy cancelled
+// sender and recipient): ErrIDInUse otherwise, ErrNotFound when there is no copy. attempt is the
+// hub's attempt number of this delivery: one older than the delivery the copy is already is
+// refused (ErrStaleDelivery), so a delivery late in arriving never takes the copy from a newer
+// one (0, from a hub that sends none, is taken over 0). A copy cancelled
 // because the hub gave it up is queued again, its attempts kept; any other copy keeps its state (a
 // copy running goes on; a final one is reported under the new lease).
-func (s *Store) AdoptDelivery(ctx context.Context, id, from, to, prefix, origin string) (Message, error) {
+func (s *Store) AdoptDelivery(ctx context.Context, id, from, to, prefix, origin string, attempt int) (Message, error) {
 	var m Message
 	err := s.tx(ctx, func(t *sql.Tx) error {
 		var sender, recipient, cur, code string
 		var state State
-		err := t.QueryRowContext(ctx, "SELECT sender, recipient, origin, state, error_code FROM messages WHERE id = ?", id).
-			Scan(&sender, &recipient, &cur, &state, &code)
+		var had int
+		err := t.QueryRowContext(ctx, "SELECT sender, recipient, origin, state, error_code, hub_attempt FROM messages WHERE id = ?", id).
+			Scan(&sender, &recipient, &cur, &state, &code, &had)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -41,16 +45,19 @@ func (s *Store) AdoptDelivery(ctx context.Context, id, from, to, prefix, origin 
 		if len(cur) < len(prefix) || cur[:len(prefix)] != prefix || sender != from || recipient != to {
 			return ErrIDInUse
 		}
+		if attempt < had {
+			return ErrStaleDelivery
+		}
 		now := ms(time.Now())
 		if state == Cancelled && code == CodeHubGaveUp {
-			if _, err := t.ExecContext(ctx, `UPDATE messages SET origin = ?, state = 'queued', error = '', error_code = '', reply_size = 0,
-				lease_id = '', lease_until = 0, updated_at = ?, finished_at = 0 WHERE id = ?`, origin, now, id); err != nil {
+			if _, err := t.ExecContext(ctx, `UPDATE messages SET origin = ?, hub_attempt = ?, state = 'queued', error = '', error_code = '', reply_size = 0,
+				lease_id = '', lease_until = 0, updated_at = ?, finished_at = 0 WHERE id = ?`, origin, attempt, now, id); err != nil {
 				return err
 			}
 			if _, err := t.ExecContext(ctx, "UPDATE contents SET reply = '' WHERE seq = (SELECT seq FROM messages WHERE id = ?)", id); err != nil {
 				return err
 			}
-		} else if _, err := t.ExecContext(ctx, "UPDATE messages SET origin = ? WHERE id = ?", origin, id); err != nil {
+		} else if _, err := t.ExecContext(ctx, "UPDATE messages SET origin = ?, hub_attempt = ? WHERE id = ?", origin, attempt, id); err != nil {
 			return err
 		}
 		m, err = s.get(ctx, t, id)
@@ -123,9 +130,12 @@ func (s *Store) FinishForward(ctx context.Context, id, forwarding, origin string
 		b, _ := json.Marshal(sent.Meta)
 		meta = string(b)
 	}
-	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, recipient = ?, task = ?, thread = ?, parent = ?, depth = ?, meta = ?,
+	// The node qualifies the hub's own agents with the hub's name (agent:bot@hub); one it could not
+	// (the name not known yet) keeps the address this same message was sent to, not an unqualified one.
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, recipient = CASE WHEN instr(?, '@') > 0 THEN ? ELSE recipient END,
+		task = ?, thread = ?, parent = ?, depth = ?, meta = ?,
 		expires_at = ?, updated_at = ? WHERE id = ? AND origin = ? AND state IN ('queued', 'running') AND cancel_wanted = 0`,
-		origin, sent.To, sent.Task, sent.Thread, sent.Parent, sent.Depth, meta, ms(sent.ExpiresAt), ms(time.Now()), id, forwarding)
+		origin, sent.To, sent.To, sent.Task, sent.Thread, sent.Parent, sent.Depth, meta, ms(sent.ExpiresAt), ms(time.Now()), id, forwarding)
 	if err != nil {
 		return false, err
 	}

@@ -67,8 +67,10 @@ func TestSideFilesCapVersusBrokenConnection(t *testing.T) {
 	if _, err := c.SideFiles(context.Background(), "cut", true, 1<<20); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrBadResponse) {
 		t.Fatalf("cut connection: %v", err)
 	}
-	if _, err := c.SideFiles(context.Background(), "odd", true, 1<<20); !errors.Is(err, ErrBadResponse) {
-		t.Fatalf("a list that does not decode: %v", err)
+	// A field this version does not read is a newer node's: taken, without it (the node checks
+	// what came against the listing: asListed).
+	if fs, err := c.SideFiles(context.Background(), "odd", true, 1<<20); err != nil || len(fs) != 1 || fs[0].Data != nil {
+		t.Fatalf("a list with a field unknown here: %+v %v", fs, err)
 	}
 	if fs, err := c.SideFiles(context.Background(), "msg_x", true, 1<<20); err != nil || len(fs) != 1 {
 		t.Fatalf("within the cap: %v", err)

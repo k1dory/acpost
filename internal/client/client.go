@@ -706,7 +706,7 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
 		cr := &capReader{r: resp.Body, left: c.MaxResponse}
-		if err := json.NewDecoder(cr).Decode(out); err != nil {
+		if err := json.NewDecoder(cr).Decode(responseOf(out)); err != nil {
 			// Only what is wrong with the content is final; anything the connection did may pass.
 			var se *json.SyntaxError
 			var te *json.UnmarshalTypeError
@@ -868,10 +868,10 @@ var ErrBadResponse = errors.New("bad response")
 // Files returns a message's files with their data.
 func (c *Client) Files(ctx context.Context, id string) ([]store.File, error) {
 	var out struct {
-		Items store.Files `json:"items"`
+		Items responseFiles `json:"items"`
 	}
 	_, err := c.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id)+"/files", nil, nil, &out, nil)
-	return out.Items, err
+	return []store.File(out.Items), err
 }
 
 // SideFiles returns the files of one side of a message (the reply's, or the message's own), with
@@ -884,10 +884,10 @@ func (c *Client) SideFiles(ctx context.Context, id string, reply bool, max int64
 		side = "reply"
 	}
 	var out struct {
-		Items store.Files `json:"items"`
+		Items responseFiles `json:"items"`
 	}
 	_, err := cc.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id)+"/files", url.Values{"side": {side}}, nil, &out, nil)
-	return out.Items, err
+	return []store.File(out.Items), err
 }
 
 // Attach adds files to the reply the calling agent process works on; it returns that message's id.
@@ -1041,7 +1041,7 @@ func (c *Client) followOnce(ctx context.Context, id string, after *int64, fn fun
 			}
 			if kind == "end" {
 				var m store.Message
-				if err := json.Unmarshal([]byte(data.String()), &m); err != nil {
+				if err := json.Unmarshal([]byte(data.String()), responseOf(&m)); err != nil {
 					return m, false, fmt.Errorf("%w: the end of the event stream: %w", ErrBadResponse, err)
 				}
 				return m, true, nil
@@ -1501,8 +1501,8 @@ func streamErr(data string) error {
 // Any error, a 404 included (a hub without the lookup), leaves that unknown.
 func (c *Client) ByIdem(ctx context.Context, from, key string) (store.Message, bool, error) {
 	var out struct {
-		Found   *bool         `json:"found"`
-		Message store.Message `json:"message"`
+		Found   *bool       `json:"found"`
+		Message wireMessage `json:"message"`
 	}
 	if _, err := c.do(ctx, "GET", "/v1/messages/by-idem", url.Values{"from": {from}, "key": {key}}, nil, &out, nil); err != nil {
 		return store.Message{}, false, err
@@ -1510,5 +1510,89 @@ func (c *Client) ByIdem(ctx context.Context, from, key string) (store.Message, b
 	if out.Found == nil {
 		return store.Message{}, false, fmt.Errorf("%w: a lookup by key without its answer", ErrBadResponse)
 	}
-	return out.Message, *out.Found, nil
+	return store.Message(out.Message), *out.Found, nil
+}
+
+// What a node or hub answers is decoded within this version's bounds but not held to its fields:
+// a newer one may add a field to a file, and a list of files refused for it would lose a message
+// the hub has leased to this node (a claim), or its outcome. A user's request to this node is
+// decoded strictly (store.Files.UnmarshalJSON).
+
+// responseFiles is a list of files in a response.
+type responseFiles store.Files
+
+func (fs *responseFiles) UnmarshalJSON(b []byte) error { return (*store.Files)(fs).DecodeTolerant(b) }
+
+// responseMessage is a message in a response: its files are responseFiles.
+type responseMessage struct {
+	*store.Message
+	Files *responseFiles `json:"files,omitempty"`
+}
+
+// responseOf is what a response is decoded into for out: a message's files are read tolerantly.
+// (Every other response with messages in it holds them as wireMessage: Page, ByIdem, Disown.)
+func responseOf(out any) any {
+	if m, ok := out.(*store.Message); ok {
+		return (*wireMessage)(m)
+	}
+	return out
+}
+
+// wireMessage is a message inside a response: its files are responseFiles.
+type wireMessage store.Message
+
+func (w *wireMessage) UnmarshalJSON(b []byte) error {
+	m := (*store.Message)(w)
+	return json.Unmarshal(b, &responseMessage{Message: m, Files: (*responseFiles)(&m.Files)})
+}
+
+// UnmarshalJSON reads a page of messages as a response carries it (wireMessage).
+func (p *Page) UnmarshalJSON(b []byte) error {
+	var w struct {
+		Items []wireMessage `json:"items"`
+		Next  string        `json:"next,omitempty"`
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	p.Next, p.Items = w.Next, nil
+	if w.Items != nil {
+		p.Items = make([]store.Message, len(w.Items))
+		for i := range w.Items {
+			p.Items[i] = store.Message(w.Items[i])
+		}
+	}
+	return nil
+}
+
+// DisownRequest is the body of POST /v1/messages/{id}/disown: who sent the message, and its key.
+type DisownRequest struct {
+	From string `json:"from"`
+	Key  string `json:"key,omitempty"`
+}
+
+// ErrNoDisown: the hub has no disown (a version before it): it cannot refuse a send that comes late.
+var ErrNoDisown = errors.New("the hub cannot disown a send (an older version)")
+
+// Disown asks the hub to give up a message this node sent as from (its key, or "") and never had
+// the answer for: found, the hub has it (m, under id or the key's earlier id); not found, the hub
+// refuses it from now on, however late it comes.
+func (c *Client) Disown(ctx context.Context, id, from, key string) (store.Message, bool, error) {
+	var out struct {
+		Found   *bool       `json:"found"`
+		Message wireMessage `json:"message"`
+	}
+	code, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(id)+"/disown", nil, DisownRequest{From: from, Key: key}, &out, nil)
+	if err != nil && (code == http.StatusNotFound || code == http.StatusMethodNotAllowed) {
+		// No such route: an older hub (its catch-all answers not_found, JSON or not). The route
+		// never answers 404 itself: a message it does not have is found false.
+		return store.Message{}, false, ErrNoDisown
+	}
+	if err != nil {
+		return store.Message{}, false, err
+	}
+	if out.Found == nil {
+		return store.Message{}, false, fmt.Errorf("%w: a disown without its answer", ErrBadResponse)
+	}
+	return store.Message(out.Message), *out.Found, nil
 }

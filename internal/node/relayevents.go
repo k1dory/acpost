@@ -152,8 +152,11 @@ func (n *Node) followHub(id string) (store.Message, error) {
 					n.settleFrom(id, m, nil)
 				}
 			}
+			if err := n.copyEvent(id, e); err != nil {
+				return err // not copied: nothing after it is (the caller copies from the cursor)
+			}
 			after = e.Seq
-			return n.copyEvent(id, e)
+			return nil
 		})
 		stale := sctx.Err() != nil && n.ctx.Err() == nil
 		done()
@@ -181,8 +184,10 @@ func (n *Node) copyHubEvents(id string) bool {
 			return errors.As(err, &ce) && ce.Code == "not_found" // gone there: the outcome says so
 		}
 		for _, e := range page {
-			if n.copyEvent(id, e) != nil {
-				return true
+			if err := n.copyEvent(id, e); err != nil {
+				// The copy gone: nothing to settle. A write that failed: the outcome waits for the
+				// next try, which copies from this event (the cursor did not pass it).
+				return errors.Is(err, store.ErrNotFound)
 			}
 			after = e.Seq
 		}
@@ -195,14 +200,12 @@ func (n *Node) copyHubEvents(id string) bool {
 
 // copyEvent takes the hub's event e onto the local copy, recording the hub's number with it: a
 // copy resuming (a restart, a stream opened again) starts after it, though this node may keep
-// fewer events than the hub has.
+// fewer events than the hub has. Any error is the caller's (store.ErrNotFound: the copy is gone):
+// an event not stored must stop the copying, or the next one stored moves the cursor past it.
 func (n *Node) copyEvent(id string, e store.Event) error {
 	err := n.st.CopyHubEvent(n.ctx, id, e.Seq, e.Kind, e.Data)
 	if err == nil {
 		n.eventsAdded()
 	}
-	if errors.Is(err, store.ErrNotFound) {
-		return err // the local copy is gone
-	}
-	return nil
+	return err
 }

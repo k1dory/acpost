@@ -143,7 +143,9 @@ func (n *Node) WriteWiki(ctx context.Context, p Principal, repo, agent, lang str
 		return store.Message{}, errh("unsupported", "choose an agent with a plan or read-only mode (Claude Code, Codex)",
 			"%s has no read-only mode: it would ask to run commands while it reads", to)
 	}
-	// The wiki is taken first (one writer at a time), then the task is sent.
+	// The wiki is taken first (one writer at a time), then the task is sent, under a key made from
+	// the wiki's mark: a node that stops (or a store write that fails) between the send and the
+	// link leaves a task the wiki finds by it (takeWiki), not one it calls never sent.
 	pending := "pending-" + store.NewID()
 	ok, err := n.st.StartWiki(ctx, dir, to.String(), lang, pending)
 	if err != nil {
@@ -153,15 +155,18 @@ func (n *Node) WriteWiki(ctx context.Context, p Principal, repo, agent, lang str
 		return store.Message{}, errf("conflict", "the wiki of %s is being written already", dir)
 	}
 	m, _, err := n.Send(ctx, p, SendRequest{To: to.String(), Body: wikiPrompt(lang), Cwd: dir, Mode: mode, ModeStrict: true,
-		Meta: map[string]string{"wiki": "1"}}) // a mark (meta is small): the wiki keeps the task, not the task the wiki
+		IdemKey: wikiKey(pending),
+		Meta:    map[string]string{"wiki": "1"}}) // a mark (meta is small): the wiki keeps the task, not the task the wiki
 	if err != nil {
 		_ = n.st.FinishWiki(context.WithoutCancel(ctx), dir, pending, nil, "the task could not be sent: "+err.Error())
 		return m, err
 	}
-	if err := n.st.SetWikiMsg(context.WithoutCancel(ctx), dir, pending, m.ID); err != nil {
-		return m, errf("unavailable", "%v", err)
-	}
 	w := store.Wiki{Repo: dir, Msg: m.ID, Status: "writing"}
+	if err := n.st.SetWikiMsg(context.WithoutCancel(ctx), dir, pending, m.ID); err != nil {
+		// The task is sent: the wiki links it by its key when next looked at.
+		n.log.Warn("link a wiki to its task; linked later by its key", "repo", dir, "msg", m.ID, "err", err)
+		w.Msg = pending
+	}
 	n.goWork(func() { n.followWiki(w) })
 	return m, nil
 }
@@ -195,12 +200,23 @@ func (n *Node) followWiki(w store.Wiki) {
 // takeWiki takes in the pages of a wiki's task once it ended: true when it did (or failed).
 func (n *Node) takeWiki(ctx context.Context, w store.Wiki) bool {
 	if strings.HasPrefix(w.Msg, "pending-") {
-		// Taken, and the node stopped before its task was sent (or noted): after a minute, over.
-		if time.Since(w.Updated) > time.Minute {
+		// Taken, and its task not linked: sent under the wiki's key, it is linked now; none sent
+		// (the node stopped before), after a minute the wiki is over.
+		m, err := n.st.ByIdemKey(ctx, wikiKey(w.Msg))
+		switch {
+		case err == nil:
+			if err := n.st.SetWikiMsg(ctx, w.Repo, w.Msg, m.ID); err != nil {
+				return false
+			}
+			w.Msg = m.ID // and on, as for a wiki linked from the start
+		case !errors.Is(err, store.ErrNotFound):
+			return false
+		case time.Since(w.Updated) > time.Minute:
 			_ = n.st.FinishWiki(ctx, w.Repo, w.Msg, nil, "the task writing it was never sent")
 			return true
+		default:
+			return false
 		}
-		return false
 	}
 	m, err := n.st.Get(ctx, w.Msg)
 	switch {
@@ -221,3 +237,6 @@ func (n *Node) takeWiki(ctx context.Context, w store.Wiki) bool {
 	_ = n.st.FinishWiki(ctx, w.Repo, w.Msg, pages, "")
 	return true
 }
+
+// wikiKey is the idempotency key of the task writing a wiki marked pending.
+func wikiKey(pending string) string { return "wiki:" + pending }
