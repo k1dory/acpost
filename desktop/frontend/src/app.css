@@ -86,6 +86,8 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 .btn.ghost { border-color: transparent; background: transparent; box-shadow: none; }
 .btn.ghost:hover { background: var(--hover); }
 .btn.sm { height: 24px; padding: 0 8px; font-size: 12px; border-radius: 8px; }
+/* A button that is only an icon, on a header: square, the icon in the middle (lib/ui.ts headerIcon). */
+.btn.icon { width: 28px; height: 28px; padding: 0; justify-content: center; flex: none; }
 @keyframes glare { to { transform: translateX(120%); } }
 
 .seg { display: inline-flex; border-radius: 11px; padding: 2px; border: 1px solid var(--line); box-shadow: inset 0 1px 0 var(--edge); background: var(--card); }
