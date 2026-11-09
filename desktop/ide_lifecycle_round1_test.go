@@ -383,9 +383,8 @@ func TestIDELiveOwnerKept(t *testing.T) {
 		t.Fatal("the second app took the first's port")
 	}
 	// The pid file still names the owner's server, not the second's.
-	b, _ := os.ReadFile(filepath.Join(f.data, idePidFile))
-	if string(b) != strconv.Itoa(first.cmd.Process.Pid) {
-		t.Fatalf("pid file %q, owner's server %d", b, first.cmd.Process.Pid)
+	if rec := readRecord(t, f.data); rec.Pid != first.cmd.Process.Pid {
+		t.Fatalf("pid file %+v, owner's server %d", rec, first.cmd.Process.Pid)
 	}
 }
 

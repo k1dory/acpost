@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -249,16 +250,22 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	run := &ideRun{cmd: cmd, out: out, exited: make(chan struct{}), done: make(chan struct{})}
 	s.run = run
 	pidFile := filepath.Join(data, idePidFile)
-	pid := strconv.Itoa(cmd.Process.Pid)
+	// The record of the server, published whole (a new file renamed over the old one) or not at
+	// all: a server it does not name could not be found again after a crash, so it is not kept.
+	var rec []byte
+	var recErr error
 	if s.owner != nil { // another app's server is not this one's to name
-		_ = os.WriteFile(pidFile, []byte(pid), 0o600)
+		rec, recErr = ideWriteRecord(data, cmd.Process.Pid)
 	}
 	s.mu.Unlock()
-	go run.wait(tokFile, pidFile, pid)
+	go run.wait(tokFile, pidFile, string(rec))
 
 	fail := func(err error) (string, *ideRun, error) {
 		run.kill()
 		return "", nil, err
+	}
+	if recErr != nil {
+		return fail(fmt.Errorf("VS Code's server is not recorded (%w): not kept running", recErr))
 	}
 	select {
 	case u := <-out.found:
@@ -375,7 +382,8 @@ func ideBase(u, token string) (string, error) {
 }
 
 // wait is the one place a process's end is seen: what is left of its group is ended, its token
-// and pid files removed (the pid file only while it is still this process's), then done closed.
+// and pid files removed (the pid file only while it is still this process's record, pid), then
+// done closed.
 func (r *ideRun) wait(tokFile, pidFile, pid string) {
 	_ = r.cmd.Wait()
 	close(r.exited)
@@ -393,7 +401,7 @@ func (r *ideRun) wait(tokFile, pidFile, pid string) {
 		}
 	}
 	os.Remove(tokFile)
-	if b, err := os.ReadFile(pidFile); err == nil && string(b) == pid {
+	if b, err := os.ReadFile(pidFile); err == nil && pid != "" && string(b) == pid {
 		os.Remove(pidFile)
 	}
 	close(r.done)
@@ -677,8 +685,12 @@ func ideOrphan(data string) int {
 	if err != nil {
 		return 0
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 1 {
+	var rec ideRecord
+	if json.Unmarshal(b, &rec) != nil {
+		return 0
+	}
+	pid := rec.Pid
+	if pid <= 1 {
 		return 0
 	}
 	if g, err := syscall.Getpgid(pid); err != nil {
@@ -778,4 +790,72 @@ func ideDataDir() (string, error) {
 	}
 	d := filepath.Join(base, "acpost", "vscode")
 	return d, os.MkdirAll(d, 0o700)
+}
+
+// ideRecord is what the pid file says of the server: its process, the boot it ran in and when its
+// process started. A process of that number in another boot, or started at another time, is not
+// it (numbers are taken again).
+type ideRecord struct {
+	Pid   int    `json:"pid"`
+	Boot  string `json:"boot"`
+	Start string `json:"start"`
+}
+
+// ideBoot names this boot of the Mac.
+func ideBoot() string {
+	b, _ := syscall.Sysctl("kern.bootsessionuuid")
+	return b
+}
+
+// idePS runs ps in the C locale (its dates read the same in every app that reads them).
+func idePS(args ...string) ([]byte, error) {
+	c := exec.Command("ps", args...)
+	c.Env = append(os.Environ(), "LC_ALL=C")
+	return c.Output()
+}
+
+// ideProc is what ps says of pid: its process group and the time it started; ok is false when
+// there is no such process.
+func ideProc(pid int) (pgid int, start string, ok bool) {
+	out, err := idePS("-o", "pgid=,lstart=", "-p", strconv.Itoa(pid))
+	f := strings.Fields(string(out))
+	if err != nil || len(f) < 2 {
+		return 0, "", false
+	}
+	pgid, err = strconv.Atoi(f[0])
+	if err != nil {
+		return 0, "", false
+	}
+	return pgid, strings.Join(f[1:], " "), true
+}
+
+// ideWriteRecord names the server pid in the pid file in data: written to a new file and renamed
+// over the old one (a reader sees the old record or the new, never part of one). It gives what it
+// wrote.
+func ideWriteRecord(data string, pid int) ([]byte, error) {
+	_, start, ok := ideProc(pid)
+	boot := ideBoot()
+	if !ok || boot == "" {
+		return nil, errors.New("its process is not known to ps")
+	}
+	b, err := json.Marshal(ideRecord{Pid: pid, Boot: boot, Start: start})
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(data, ".serve-web.pid-*")
+	if err != nil {
+		return nil, err
+	}
+	_, werr := f.Write(b)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(f.Name(), filepath.Join(data, idePidFile))
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+		return nil, werr
+	}
+	return b, nil
 }
