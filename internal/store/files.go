@@ -336,13 +336,13 @@ func (s *Store) roomFor(ctx context.Context, t *sql.Tx, n int64) error {
 func notAttached(ctx context.Context, t *sql.Tx, seq int64, files []File) ([]File, error) {
 	out := files[:0:0]
 	for _, f := range files {
-		hash := ""
+		hash, size := "", f.Size // a link's size is as given
 		if !f.Link() {
-			hash = Hash(f.Data)
+			hash, size = Hash(f.Data), len(f.Data)
 		}
 		var n int
-		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM files WHERE msg = ? AND reply = 1 AND name = ? AND type = ? AND hash = ? AND uri = ?",
-			seq, f.Name, f.Type, hash, f.URI).Scan(&n); err != nil {
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM files WHERE msg = ? AND reply = 1 AND name = ? AND type = ? AND size = ? AND hash = ? AND uri = ?",
+			seq, f.Name, f.Type, size, hash, f.URI).Scan(&n); err != nil {
 			return nil, err
 		}
 		if n == 0 {

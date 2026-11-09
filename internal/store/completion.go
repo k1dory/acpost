@@ -15,8 +15,10 @@ import (
 var errRepeat = errors.New("store: completion already recorded")
 
 // completionKey stands for a completion: the lease it ended under and everything it said (state,
-// reply, error code and text, the files by name and content: a type is filled in from those). A repeat is the same key;
-// any difference (a file added, another error text) is another answer, and a conflict.
+// reply, error code and text, the files by name, type and content, or a link's URI and size). The
+// files are taken as stored: the caller fills in their types first (node.asStored), so a repeat
+// without a type matches the type filled in the first time. A repeat is the same key; any
+// difference (a file added, another type, another error text) is another answer, and a conflict.
 func completionKey(lease string, state State, reply, errCode, errText string, files []File) string {
 	h := sha256.New()
 	field := func(v string) { fmt.Fprintf(h, "%d:%s;", len(v), v) }
@@ -27,8 +29,10 @@ func completionKey(lease string, state State, reply, errCode, errText string, fi
 	slices.SortFunc(fs, func(a, b File) int { return strings.Compare(a.Name, b.Name) })
 	for _, f := range fs {
 		field(f.Name)
+		field(f.Type)
 		if f.Link() {
 			field("uri " + f.URI)
+			field(fmt.Sprint(f.Size)) // a link's size is the sender's word, shown as given
 		} else {
 			field("sha256 " + Hash(f.Data))
 		}

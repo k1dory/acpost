@@ -806,7 +806,7 @@ func (n *Node) ReplyCoded(ctx context.Context, p Principal, id, lease, body, err
 	body = capReply(body, int(n.cfg.Limits.MaxReply))
 	// The holder repeating a reply already recorded (its response was lost) is told it is: its
 	// files are attached already, and checked against them they would be refused.
-	if same, err := n.st.RepeatsCompletion(ctx, id, lease, state, body, errCode, errText, files); err != nil || same {
+	if same, err := n.st.RepeatsCompletion(ctx, id, lease, state, body, errCode, errText, asStored(files)); err != nil || same {
 		return err
 	}
 	if m.State != store.Running || m.LeaseID == "" || m.LeaseID != lease {
@@ -951,4 +951,20 @@ func clientParty(p Principal) *store.Party {
 		party.Recipients = append(party.Recipients, "agent:"+a)
 	}
 	return party
+}
+
+// asStored is files as checkFiles leaves them for the store (type and size filled in), without
+// weighing them: a repeated reply is compared by what was recorded, and a changed type or link
+// size is another answer.
+func asStored(files []store.File) []store.File {
+	out := slices.Clone(files)
+	for i := range out {
+		f := &out[i]
+		if f.Link() {
+			f.Type = fileType(f.Name, f.Type, nil)
+			continue
+		}
+		f.Type, f.Size = fileType(f.Name, f.Type, f.Data), len(f.Data)
+	}
+	return out
 }
