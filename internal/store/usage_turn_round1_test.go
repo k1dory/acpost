@@ -396,7 +396,9 @@ func TestReopenedMessageUsageAgrees(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := openTest(t, Options{})
-			m := Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi", Origin: tc.origin}
+			// Claimed first, then given its origin: a forwarding copy is never claimed here
+			// (hub_round2.go), so a turn of it is the state an earlier version left.
+			m := Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"}
 			if _, _, err := s.Insert(ctx, &m); err != nil {
 				t.Fatal(err)
 			}
@@ -408,6 +410,9 @@ func TestReopenedMessageUsageAgrees(t *testing.T) {
 				return c
 			}
 			c := claim()
+			if err := s.SetOrigin(ctx, c.ID, tc.origin); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.PutUsage(ctx, c.ID, c.LeaseID, usageOf("r1", 100), false); err != nil {
 				t.Fatal(err)
 			}
