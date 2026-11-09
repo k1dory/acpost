@@ -11,7 +11,7 @@
   import ContextMeter from "./ContextMeter.svelte";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
-  import { Node, errText } from "../lib/api";
+  import { errText } from "../lib/api";
 
   let box = $state<HTMLDivElement>();
   let stick = true;
@@ -45,11 +45,10 @@
     if (!c || sending) return;
     sending = true; handErr = "";
     try {
-      const res: any = await Node.Handoff({ thread: c.kind === "thread" ? c.thread : "", agent: c.kind === "session" ? c.agent : "",
-        session: c.kind === "session" ? c.session : "", cwd, cloud_agent: toCloud, note } as any);
+      const to = await app.handoff({ thread: c.kind === "thread" ? c.thread ?? "" : "", agent: c.kind === "session" ? c.agent ?? "" : "",
+        session: c.kind === "session" ? c.session ?? "" : "", cwd, cloud_agent: toCloud, note });
       handing = false; note = "";
-      await app.loadChats();
-      app.open(app.chats.find(x => x.key === res.chat.key) ?? res.chat);
+      app.open(to);
     } catch (e) { handErr = errText(e); }
     sending = false;
   }

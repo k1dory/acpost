@@ -122,10 +122,12 @@ export function CloudHistory(id: string): $CancellablePromise<store$0.Event[]> {
 }
 
 /**
- * CreateCloudTask makes the sandbox of a new cloud task.
+ * CreateCloudTask makes the sandbox of a new cloud task. idem is the composer's key for this
+ * sandbox, made before its first request: a retry after a lost answer gets the sandbox made the
+ * first time, not a second one.
  */
-export function CreateCloudTask(agent: string, repo: string, name: string): $CancellablePromise<client$0.Chat> {
-    return $Call.ByID(1313616452, agent, repo, name).then(($result: any) => {
+export function CreateCloudTask(agent: string, repo: string, name: string, idem: string): $CancellablePromise<client$0.Chat> {
+    return $Call.ByID(1313616452, agent, repo, name, idem).then(($result: any) => {
         return $$createType14($result);
     });
 }
@@ -271,6 +273,8 @@ export function IDEReload(): $CancellablePromise<void> {
 
 /**
  * IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.
+ * The pane's calls are taken one at a time (pane): each is queued for the main thread in the
+ * order taken, with what is open checked and set in the same step.
  */
 export function IDEShow(url: string, x: number, y: number, w: number, h: number): $CancellablePromise<void> {
     return $Call.ByID(1674563009, url, x, y, w, h);

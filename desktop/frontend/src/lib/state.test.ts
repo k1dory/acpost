@@ -601,7 +601,7 @@ describe("send, review round 8", () => {
     const t = await refreshAndSend(app);
     expect(t.to).toBe("agent:sb_2");
     expect(t.thread).toBeUndefined();
-    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String));
+    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String), expect.any(String));
   });
 
   it("a new task given another repository gets a sandbox of its own (R8)", async () => {
@@ -611,7 +611,7 @@ describe("send, review round 8", () => {
     const t = await refreshAndSend(app);
     expect(t.to).toBe("agent:sb_2");
     expect(t.thread).toBeUndefined();
-    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String));
+    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String), expect.any(String));
   });
 
   it("a new task still as it was is joined (R8, the R6.1 case)", async () => {
@@ -652,11 +652,11 @@ describe("send, review round 9: a draft edited into another task is not the sent
   type Change = { name: string; apply: (app: any) => void; expect: (t: any) => void };
   const changes: Change[] = [
     { name: "repository", apply: app => { app.draft.repo = "github.com/me/b"; },
-      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String)); } },
+      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String), expect.any(String)); } },
     { name: "place", apply: app => { app.draft.where = "mac"; app.draft.agent = "agent:claude"; app.draft.cwd = "/Users/me/b"; },
       expect: t => { expect(t).toMatchObject({ to: "agent:claude", cwd: "/Users/me/b" }); } },
     { name: "catalogue agent", apply: app => { app.draft.cloudAgent = "ref2"; },
-      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String)); } },
+      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String), expect.any(String)); } },
   ];
   const T1 = { key: "thread:T1", kind: "thread", thread: "T1", agent: "agent:sb_1", title: "", updated: "" };
 

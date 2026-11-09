@@ -5,6 +5,7 @@ import { newId } from "./ids";
 import { ComposerDraft, type Attachment } from "./composer.svelte";
 import { afterSent } from "./draft";
 import { Turn, type Ev } from "./turn";
+import { OpKey } from "./opkey";
 
 export type Msg = {
   id: string; from: string; to: string; thread: string; parent?: string; depth: number; state: string;
@@ -642,9 +643,24 @@ class App {
   private async sandboxFor(d: ComposerDraft, draft: Draft, body: string, what: string): Promise<string> {
     if (d.sandbox?.for === what) return d.sandbox.agent;
     const epoch = d.epoch;
-    const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40));
+    // Its key is made before the first request and kept with where it goes: the answer lost, the
+    // retry gets the sandbox made then (a second would be a second machine).
+    const idem = d.sandboxOp.for(what);
+    const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40), idem);
     if (d.epoch === epoch) d.sandbox = { for: what, agent: sb.agent };
     return sb.agent;
+  }
+
+  /** A local chat sent on to the cloud: the cloud chat it goes on in. The key is kept with what
+   * is asked until an answer comes: asked again after a lost answer, the node gives the sandbox
+   * and message of the first instead of making a second. */
+  private handoffOp = new OpKey();
+  async handoff(req: { thread: string; agent: string; session: string; cwd: string; cloud_agent: string; note: string }): Promise<Chat> {
+    const idem = this.handoffOp.for(req);
+    const res: any = await Node.Handoff({ ...req, idem } as any);
+    this.handoffOp.done(idem);
+    await this.loadChats();
+    return this.chats.find(x => x.key === res.chat.key) ?? res.chat;
   }
 
   async answer(msg: string, req: string, option: string) {

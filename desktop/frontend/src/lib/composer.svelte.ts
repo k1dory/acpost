@@ -4,6 +4,7 @@
 import { overLimits } from "./draft";
 import { b64bytes } from "./base64";
 import type { Limits } from "./state.svelte";
+import { OpKey } from "./opkey";
 
 export type Attachment = { name: string; type: string; size: number; data: string };
 /** A file to attach (a File, or what a test gives). */
@@ -16,6 +17,9 @@ export class ComposerDraft {
   /** The cloud sandbox made for this draft when its send failed after it: the next try goes there
    * (for: the destination it was made for, App.destNow()). */
   sandbox: { for: string; agent: string } | null = null;
+  /** The key of the sandbox being made for this draft, from before its first request: a retry
+   * after a lost answer gets the sandbox made the first time. */
+  sandboxOp = new OpKey();
   /** The message being sent (all of it but its key) and its idempotency key: the same message
    * tried again has the same key, so the node runs it once even when its first answer was lost.
    * content is the message without where it goes; task, the request as it was made. */
@@ -45,7 +49,7 @@ export class ComposerDraft {
   epoch = 0;
 
   /** What a send made is let go: the next message is a new one (a new task, a sent message). */
-  forget() { this.sandbox = null; this.sending = null; this.epoch++; }
+  forget() { this.sandbox = null; this.sandboxOp.done(); this.sending = null; this.epoch++; }
 
   /** Attaches files within the node's limits, one at a time: two drops at once cannot both pass a
    * check made before either was read. A file over the limits is said (fail) and not read. `name`

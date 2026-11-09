@@ -234,10 +234,12 @@ func (n *Node) CloudHistory(id string) ([]store.Event, error) {
 	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) ([]store.Event, error) { return c.CloudHistory(ctx, id) })
 }
 
-// CreateCloudTask makes the sandbox of a new cloud task.
-func (n *Node) CreateCloudTask(agent, repo, name string) (client.Chat, error) {
+// CreateCloudTask makes the sandbox of a new cloud task. idem is the composer's key for this
+// sandbox, made before its first request: a retry after a lost answer gets the sandbox made the
+// first time, not a second one.
+func (n *Node) CreateCloudTask(agent, repo, name, idem string) (client.Chat, error) {
 	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.Chat, error) {
-		return c.CreateCloudTask(ctx, client.CloudTask{Agent: agent, Repo: repo, Name: name})
+		return c.CreateCloudTask(ctx, client.CloudTask{Agent: agent, Repo: repo, Name: name, Idem: idem})
 	})
 }
 
