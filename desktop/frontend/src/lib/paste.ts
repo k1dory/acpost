@@ -50,12 +50,15 @@ function namesFile(line: string, names: Set<string>): boolean {
 export function pasteFiles(c: Clip): File[] {
   const files = clipFiles(c);
   if (!files.length) return [];
-  const text = (c.getData("text/plain") || "").trim();
-  if (!text) return files;
-  // Finder: the text is the files' names (or their file: URLs), one per line, and nothing else.
+  const text = c.getData("text/plain") || "";
+  if (text === "") return files;
+  // Finder: the text is exactly the files' names (or their file: URLs), one per line, and nothing
+  // else. Compared as it is: no trimming, no empty line (a name may begin with a space; text with
+  // more than the names is text). One line ending at the very end (\n or \r\n) is allowed: Finder
+  // may end the list with one.
   const names = new Set(files.map(f => f.name));
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  return lines.every(l => namesFile(l, names)) ? files : [];
+  const lines = text.replace(/\r?\n$/, "").split(/\r\n|\n/);
+  return lines.every(l => l !== "" && namesFile(l, names)) ? files : [];
 }
 
 const exts: Record<string, string> = {

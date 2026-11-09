@@ -33,6 +33,17 @@ describe("what a paste attaches", () => {
   it("a part of a page with its picture: the text only, never both", () => {
     expect(pasteFiles(clip([img()], "A paragraph of the page"))).toEqual([]);
   });
+  it("names compared exactly: spaces and empty lines make it text, one ending line break is Finder's (R2)", () => {
+    expect(pasteFiles(clip([img()], "  image.png\n\n"))).toEqual([]);
+    expect(pasteFiles(clip([img()], "image.png\n\n"))).toEqual([]);
+    expect(pasteFiles(clip([img()], " "))).toEqual([]);
+    const spaced = new File(["x"], " report.txt", { type: "text/plain" });
+    expect(pasteFiles(clip([spaced], " report.txt"))).toEqual([spaced]);
+    const a = img("a.png"), b = img("b.png");
+    expect(pasteFiles(clip([a], "a.png\n"))).toEqual([a]);
+    expect(pasteFiles(clip([a, b], "a.png\r\nb.png\r\n"))).toEqual([a, b]);
+  });
+
   it("text that only ends in the file's name is text: an address, a path in a sentence (R1.3)", () => {
     expect(pasteFiles(clip([img()], "https://example.com/image.png"))).toEqual([]);
     expect(pasteFiles(clip([img()], "See assets/image.png"))).toEqual([]);

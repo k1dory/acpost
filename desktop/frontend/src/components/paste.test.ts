@@ -109,6 +109,21 @@ describe("pasting into the composer", () => {
     expect(app.draftOf().files).toEqual([]);
   });
 
+  it("text that is the name with spaces and blank lines pastes as text (R2)", async () => {
+    const app = await setup();
+    expect(paste([img()], "  image.png\n\n")).toBe(false);
+    await settle(app);
+    expect(app.draftOf().files).toEqual([]);
+  });
+
+  it("a file whose name begins with a space, with exactly that name as text, is attached (R2)", async () => {
+    const app = await setup();
+    const f = new File(["x"], " report.txt", { type: "text/plain" });
+    expect(paste([f], " report.txt")).toBe(true);
+    await settle(app);
+    expect(app.draftOf().files.map(x => x.name)).toEqual([" report.txt"]);
+  });
+
   it("a dotfile keeps its name (R1.4)", async () => {
     const app = await setup();
     paste([new File(["A=1"], ".env", { type: "text/plain" })]);
