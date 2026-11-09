@@ -1,6 +1,7 @@
 <script lang="ts">
   import { agentLabel, tilde as tildeOf } from "../lib/names";
   import { mcpRequest, type MCP, type MCPEdit } from "../lib/mcp";
+  import { newScheduleDraft } from "../lib/records";
   import { t, i18n, type Lang } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText, errInfo } from "../lib/api";
@@ -30,7 +31,7 @@
     if (d) note.scope = d;
   }
   const tilde = (d?: string) => tildeOf(d, app.home);
-  type Sched = { id?: string; name: string; cron: string; agent: string; body: string; cwd?: string; model?: string; effort?: string; enabled: boolean; next_run?: string; last_run?: string; last_msg?: string; last_err?: string };
+  type Sched = { id?: string; isNew?: boolean; name: string; cron: string; agent: string; body: string; cwd?: string; model?: string; effort?: string; enabled: boolean; next_run?: string; last_run?: string; last_msg?: string; last_err?: string };
   let scheds = $state<Sched[] | null>(null);
   let sc = $state<Sched | null>(null);
   const presets = [["Every hour", "@hourly"], ["Every day at 9", "0 9 * * *"], ["Weekdays at 9", "0 9 * * 1-5"], ["Every Monday", "0 9 * * 1"]];
@@ -39,7 +40,8 @@
   }
   async function saveSched(s: Sched) {
     err = ""; busy = true;
-    try { await Node.PutSchedule(s as any); sc = null; await loadScheds(); } catch (e) { err = errText(e); }
+    const { isNew: _, ...put } = s;
+    try { await Node.PutSchedule(put as any); sc = null; await loadScheds(); } catch (e) { err = errText(e); }
     busy = false;
   }
   async function runSched(id: string) {
@@ -313,7 +315,7 @@
               </div>
             {:else}<div class="row muted">{scheds === null ? t("Loading…") : t("No schedules yet")}</div>{/each}
           </div></div>
-          <div class="acts left"><button class="btn primary" onclick={() => (sc = { name: "", cron: "0 9 * * 1-5", agent: app.localAgents()[0]?.address ?? "", body: "", cwd: app.home, enabled: true })}><Icon name="plus" size={13} /> {t("New schedule")}</button></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (sc = newScheduleDraft(app.localAgents()[0]?.address ?? "", app.home))}><Icon name="plus" size={13} /> {t("New schedule")}</button></div>
         {:else}
           <div class="form card">
             <input class="input" placeholder={t("Name: morning review")} bind:value={sc.name} />
@@ -335,7 +337,7 @@
             {/if}
             <textarea class="input" rows="8" placeholder={t("What the agent should do")} bind:value={sc.body}></textarea>
             <div class="acts">
-              {#if sc.id}<button class="btn ghost danger" onclick={() => deleteSched(sc!.id!)}>{t("Delete")}</button>{/if}
+              {#if sc.id && !sc.isNew}<button class="btn ghost danger" onclick={() => deleteSched(sc!.id!)}>{t("Delete")}</button>{/if}
               <span class="sp"></span>
               <button class="btn" onclick={() => (sc = null)}>{t("Cancel")}</button>
               <button class="btn primary" disabled={busy || !sc.name.trim() || !sc.cron.trim() || !sc.agent || !sc.body.trim()} onclick={() => saveSched(sc!)}>{t("Save")}</button>
