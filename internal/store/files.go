@@ -52,13 +52,13 @@ type Files []File
 var ErrBadFiles = errors.New("bad list of files")
 
 func (fs *Files) UnmarshalJSON(b []byte) error {
-	if err := fs.decode(b); err != nil {
+	if err := fs.decode(b, true); err != nil {
 		return fmt.Errorf("%w: %v", ErrBadFiles, err)
 	}
 	return nil
 }
 
-func (fs *Files) decode(b []byte) error {
+func (fs *Files) decode(b []byte, strict bool) error {
 	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) {
 		*fs = nil
 		return nil
@@ -74,7 +74,9 @@ func (fs *Files) decode(b []byte) error {
 		}
 		var f File
 		// Strict like the API's own decoding: a misspelt field (data_base64) is an error, not an empty file.
-		dec.DisallowUnknownFields()
+		if strict {
+			dec.DisallowUnknownFields()
+		}
 		if err := dec.Decode(&f); err != nil {
 			return err
 		}
@@ -350,4 +352,14 @@ func notAttached(ctx context.Context, t *sql.Tx, seq int64, files []File) ([]Fil
 		}
 	}
 	return out, nil
+}
+
+// DecodeTolerant decodes a list of files as a response from another node carries it: a field this
+// version does not know (sent by a newer one) is ignored, not refused, as decoding a user's
+// request refuses it (UnmarshalJSON). The bound on the files holds the same.
+func (fs *Files) DecodeTolerant(b []byte) error {
+	if err := fs.decode(b, false); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadFiles, err)
+	}
+	return nil
 }
