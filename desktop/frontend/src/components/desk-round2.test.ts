@@ -87,3 +87,44 @@ describe("a form's new record has its id from the draft (finding 5)", () => {
     expect("isNew" in calls[0]).toBe(false);
   });
 });
+
+const m = (id: string, depth: number, state = "done") =>
+  ({ id, from: "user:me", to: "agent:claude", thread: "T", depth, state, created_at: "", updated_at: "" });
+const repo = (r: string, path: string) =>
+  ({ turns: [{ msg: "x", agent: "agent:claude", start: "", at: "", repo: r, before: "a", after: "b", files: [{ path, status: "M", added: 1, removed: 0 }], diff: `diff --git a/${path} b/${path}\n@@ -1 +1 @@\n+hi` }],
+     repos: [{ repo: r, before: "a", after: "b", files: [{ path, status: "M", added: 1, removed: 0 }], diff: `diff --git a/${path} b/${path}\n@@ -1 +1 @@\n+hi` }] });
+const listed = () => [...document.querySelectorAll("button.f")].map(b => b.getAttribute("title"));
+
+describe("Changes is the open chat's, all of it (findings 6, 7)", () => {
+  it("asks every message of the person in the chat, not only the first, and shows them together", async () => {
+    const app = await setup();
+    fake.Node.Changes.mockImplementation(async (id: string) => id === "m1" ? repo("/r1", "a.txt") : repo("/r2", "b.txt"));
+    app.thread = "T";
+    app.msgs = [m("m1", 0), m("c1", 1), m("m2", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(fake.Node.Changes.mock.calls.map(c => c[0]).sort()).toEqual(["m1", "m2"]);
+    expect(listed().sort()).toEqual(["/r1/a.txt", "/r2/b.txt"]);
+  });
+
+  it("a new task shows none of the last chat's changes, and an answer still coming for it is dropped", async () => {
+    const app = await setup();
+    const late = deferred();
+    fake.Node.Changes.mockResolvedValueOnce(repo("/r1", "a.txt")).mockReturnValueOnce(late.promise);
+    app.thread = "T";
+    app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(listed()).toEqual(["a.txt"]);
+    app.msgs = [m("m1", 0, "running")];   // a state changes: asked again, the answer slow
+    await settle();
+    app.newTask();
+    await settle();
+    expect(listed()).toEqual([]);
+    late.resolve(repo("/r1", "z.txt"));
+    await settle();
+    expect(listed()).toEqual([]);
+  });
+});
