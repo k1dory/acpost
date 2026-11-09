@@ -818,6 +818,40 @@ describe("send, review round 10: a draft edited into another task keeps all it h
   });
 });
 
+describe("send, review round 11: a task replaced by a new one keeps its continuation", () => {
+  const changes: [string, (app: any) => void][] = [
+    ["repository", app => { app.draft.repo = "github.com/me/b"; }],
+    ["place", app => { app.draft.where = "mac"; app.draft.agent = "agent:claude"; app.draft.cwd = "/Users/me/b"; }],
+    ["catalogue agent", app => { app.draft.cloudAgent = "ref2"; }],
+  ];
+  for (const [name, apply] of changes) {
+    it(`A's answer after a new task with another ${name}: A's thread has the rest and the new file, B is untouched`, async () => {
+      const app = await load();
+      app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
+      fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
+      const a = app.draftOf();
+      a.text = "Task A";
+      const sent = deferred();
+      fake.Node.SendTask.mockReturnValueOnce(sent.promise);
+      const going = app.submit(a);
+      a.text = "Task A\nand then this";                       // typed on while A went
+      a.files = [{ name: "more.md", type: "text/markdown", size: 1, data: "YQ==" }];
+      app.newTask();
+      apply(app);
+      const b = app.draftOf();
+      b.text = "Task B";
+      sent.resolve({ ...msg("m1", "T1"), to: "agent:sb_1" });
+      expect(await going).toBe(true);
+      expect(app.thread).toBe("");                             // the screen stays on B
+      expect(app.draftOf("thread:T1").text).toBe("and then this");
+      expect(app.draftOf("thread:T1").files.map(f => f.name)).toEqual(["more.md"]);
+      expect(app.draftOf("new")).toBe(b);
+      expect(b.text).toBe("Task B");
+      expect(b.files).toEqual([]);
+    });
+  }
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");

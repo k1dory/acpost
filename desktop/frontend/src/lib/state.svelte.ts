@@ -482,7 +482,11 @@ class App {
    * are as they were when it was sent. Every outcome of a send and every automatic link of a draft
    * asks this before it moves the draft, keeps its sandbox or key, or changes the screen. */
   stillFor(d: ComposerDraft, dest: string | undefined): boolean {
-    return d.key !== "new" || !dest || dest === this.destNow();
+    if (d.key !== "new" || !dest) return true;
+    // A draft a new task replaced is no one's editor now: it is still the task it sent (the new
+    // task has a draft and settings of its own). Only the draft being edited follows the settings.
+    if (this.draftMap.get("new") !== d) return true;
+    return dest === this.destNow();
   }
 
   /** A thread the node made of a session or a cloud sandbox continued here, that conversation's
@@ -540,7 +544,9 @@ class App {
     // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
     // put back into the new task's, not lost with the draft no screen shows.
     if (!ok && ![...this.draftMap.values()].includes(d)) {
-      if (!this.stillFor(d, d.sending?.dest)) d.forget(); // the text comes back; its key and sandbox were another task's
+      // The text comes back into the new task's draft: its key and sandbox go with it only if that
+      // task goes where this one went.
+      if (d.sending?.dest && d.sending.dest !== this.destNow()) d.forget();
       this.moveDraft(d, "new");
     }
     return ok;
