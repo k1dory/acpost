@@ -70,7 +70,9 @@ func TestForwardRepeatNeedsNoHub(t *testing.T) {
 	}
 }
 
-// A send the hub did not answer is stored, and ends as not sent once the hub says it never got it.
+// A send the hub did not answer is stored; once the hub says it never got it, the copy is fenced
+// there (sent again expiring at once, the same id and key: a late send is a repeat of it) and
+// follows the hub's message, which ends expired (fence_core_round2_test.go, on a real hub).
 func TestForwardUnansweredEndsWhenHubHasNone(t *testing.T) {
 	fastHub(t, 30*time.Millisecond)
 	n := newNode(t, hubCfg)
@@ -85,8 +87,12 @@ func TestForwardUnansweredEndsWhenHubHasNone(t *testing.T) {
 		t.Fatalf("not stored before sending: %+v %v", m, err)
 	}
 	f.set(func(f *fakeHub) { f.down, f.missing = false, true })
-	eventually(t, "the copy ends as not sent", func() bool {
+	eventually(t, "the copy follows the fence", func() bool {
 		got, _ := n.st.Get(ctx, m.ID)
-		return got.State == store.Failed
+		return got.Origin == originRemote
 	})
+	sent := f.get().sent
+	if fence := sent[len(sent)-1]; fence.ID != m.ID || fence.TTL != "1ns" || len(fence.Files) != 0 {
+		t.Fatalf("the fence: %+v", fence)
+	}
 }

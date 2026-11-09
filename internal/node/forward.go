@@ -239,9 +239,9 @@ func (n *Node) resolveOnce(id string) bool {
 		}
 	}
 	if time.Since(local.CreatedAt) < hubAbsence {
-		return false // the send may still arrive: absence counts only later
+		return false // the send may still arrive: the fence waits a while, so it is seldom needed
 	}
-	return n.notSent(n.ctx, id, errors.New("the hub did not get it; send again"))
+	return n.fenceForward(id, local, key)
 }
 
 // foundOnHub settles a forwarding copy the hub has (hm): the copy follows it; cancelled here

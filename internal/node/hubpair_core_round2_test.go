@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -42,6 +43,12 @@ func startPairNode(t *testing.T, yaml string) (*node.Node, *store.Store) {
 // named bot.
 func hubPair(t *testing.T) (hub, edge *node.Node, edgeStore *store.Store) {
 	t.Helper()
+	return hubPairWith(t, nil)
+}
+
+// hubPairWith is hubPair with the hub's API behind wrap (nil: as it is).
+func hubPairWith(t *testing.T, wrap func(http.Handler) http.Handler) (hub, edge *node.Node, edgeStore *store.Store) {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home+"/.config")
@@ -54,7 +61,11 @@ agents:
 tokens:
   - {name: edge, sha256: %s, node: true}
 `, hex.EncodeToString(sum[:])))
-	srv := httptest.NewServer(api.Handler(hub, false, 64<<20))
+	h := api.Handler(hub, false, 64<<20)
+	if wrap != nil {
+		h = wrap(h)
+	}
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	t.Setenv("ACPOST_TEST_EDGE_TOKEN", secret)
 	edge, edgeStore = startPairNode(t, fmt.Sprintf(`node: {name: edge, join: {url: %s, token_env: ACPOST_TEST_EDGE_TOKEN}}
