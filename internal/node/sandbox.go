@@ -1165,7 +1165,10 @@ func (a *sandboxAgent) handle(m store.Message) {
 	had, _ := n.st.EventCount(n.ctx, m.ID)
 	t := &sandboxTurn{a: a, msgID: m.ID, run: run, limit: int(n.cfg.Limits.MaxReply), after: live, mark: m.ID}
 	t.onUsage = func() {
-		if n.ctx.Err() == nil && !tl.lost.Load() {
+		sandboxUsageRead() // tests: between reading a usage line and storing it
+		// Under this attempt's lease, also once it ended (a cancel, the lease lost): the store takes
+		// the reading unless another attempt runs the message now.
+		if n.ctx.Err() == nil {
 			a.recordUsage(m.ID, m.LeaseID, t)
 		}
 	}
@@ -1216,11 +1219,11 @@ func (a *sandboxAgent) handle(m store.Message) {
 	}
 	t.mu.Unlock()
 	t.stream.close()
-	// What the attempt read is counted ahead of its outcome (a retried attempt's reading is replaced
-	// by the next one's fuller reading of the same turn). An attempt that lost its lease (or a node
-	// stopping) records nothing.
+	// What the attempt read is counted ahead of its outcome (merged with any other reading of the
+	// same turn). A node stopping records nothing; an attempt whose lease ended is refused by the
+	// store only when another attempt runs the message.
 	keepUsage = func(lease string) {
-		if n.ctx.Err() == nil && !tl.lost.Load() {
+		if n.ctx.Err() == nil {
 			a.recordUsage(m.ID, lease, t)
 		}
 	}
@@ -1234,8 +1237,10 @@ func (a *sandboxAgent) handle(m store.Message) {
 			done()
 		}
 		switch {
-		case n.ctx.Err() != nil || tl.lost.Load() || tl.cancelled.Load():
-			// A cancel made the message final: it published what was counted (as read) then.
+		case tl.cancelled.Load():
+			// The cancel published what was counted then; what was read since goes out as its growth.
+			keepUsage(m.LeaseID)
+		case n.ctx.Err() != nil || tl.lost.Load():
 		case timedOut:
 			complete(store.Failed, reply, failf("turn_timeout", "the turn ran past %s (turn_timeout); the sandbox's run was cancelled", a.cfg.TurnTimeout.D()))
 		default:
@@ -1317,3 +1322,7 @@ func (a *sandboxAgent) saveCursor() {
 		a.n.log.Debug("sandbox cursor", "agent", a.name, "err", err)
 	}
 }
+
+// sandboxUsageRead is called between a sandbox turn's reading of a usage line and its storing (a
+// test holds it there).
+var sandboxUsageRead = func() {}

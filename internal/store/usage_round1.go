@@ -15,7 +15,10 @@ import (
 // published when the message turns final. With event, or when the message is final already, what
 // the count has grown by since it was last published goes out now (publishUsageTx). With a lease,
 // all of it happens only while that attempt holds the message running (ErrLeaseLost otherwise),
-// in one transaction with the check.
+// in one transaction with the check. A reading of an attempt whose lease has ended (cancelled,
+// released, its node stopping) is still taken, unless another attempt runs the message now: the
+// merge cannot make a turn's count more than what was read of it, and a final message publishes
+// the growth at once.
 func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool) error {
 	u, ok := readUsage(data)
 	if !ok {
@@ -23,7 +26,7 @@ func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool
 	}
 	now := time.Now()
 	return s.tx(ctx, func(t *sql.Tx) error {
-		seq, n, final, err := leasedMessage(ctx, t, id, lease)
+		seq, n, final, err := usageMessage(ctx, t, id, lease)
 		if err != nil {
 			return err
 		}
@@ -53,6 +56,26 @@ func (s *Store) PublishUsage(ctx context.Context, id, lease string) error {
 		}
 		return publishUsageTx(ctx, t, id, seq, n, now)
 	})
+}
+
+// usageMessage is leasedMessage for a reading of usage: refused (ErrLeaseLost) only while another
+// attempt than lease's runs the message.
+func usageMessage(ctx context.Context, t *sql.Tx, id, lease string) (int64, int, bool, error) {
+	var seq int64
+	var n int
+	var state State
+	var cur string
+	err := t.QueryRowContext(ctx, "SELECT seq, events, state, lease_id FROM messages WHERE id = ?", id).Scan(&seq, &n, &state, &cur)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, false, ErrNotFound
+	}
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if lease != "" && state == Running && cur != lease {
+		return 0, 0, false, ErrLeaseLost
+	}
+	return seq, n, state.Final(), nil
 }
 
 // leasedMessage is a message's seq, event count and whether it is final, checked to be running

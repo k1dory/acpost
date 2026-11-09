@@ -534,8 +534,21 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 	var st acpx.SessionState
 	if key != "" {
 		if prev, _ := n.st.Session(ctx, a.addr, key); prev != "" {
-			got, err := s.openFreed(ctx, p, acp.SessionId(prev), cwd)
+			caps := p.init.AgentCapabilities
+			if !caps.LoadSession && caps.SessionCapabilities.Resume == nil {
+				// The agent cannot open a session again (neither session/load nor session/resume): its
+				// task goes on in a new one, as before this process stopped, without the earlier
+				// context (the turn says so: handle).
+				n.log.Info("the agent cannot reopen sessions: a new one", "agent", a.name, "key", key, "session", prev)
+				prev = ""
+			}
+			var got acpx.SessionState
+			var err error
+			if prev != "" {
+				got, err = s.openFreed(ctx, p, acp.SessionId(prev), cwd)
+			}
 			switch {
+			case prev == "":
 			case err == nil:
 				sid, st = acp.SessionId(prev), got
 			case explainACP(err, "", true).Code == "session_not_found":
@@ -913,7 +926,19 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		m.Meta[metaSessionCwd] = cwd
 	}
+	stored := ""
+	if key != "" && !strings.HasPrefix(key, "session:") {
+		stored, _ = n.st.Session(turnCtx, a.addr, key)
+	}
 	sid, err := s.sessionFor(turnCtx, p, key, cwd, locks)
+	if err == nil && stored != "" && string(sid) != stored {
+		// The task's session could not be opened again (the agent no longer has it, or cannot open
+		// one again): this turn starts a new one, without what was said before.
+		if eventErr := n.addLeasedEvent(n.ctx, m.ID, m.LeaseID, "notice", eventJSON(map[string]string{"severity": "warning",
+			"text": "the agent could not open the session " + stored + " again: this turn goes on in a new session, without its earlier context"})); eventErr != nil {
+			n.log.Debug("event", "err", eventErr)
+		}
+	}
 	if err != nil {
 		if setupFailed("opening the session", true) {
 			return

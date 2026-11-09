@@ -502,3 +502,28 @@ func TestTriggerEraUsageIsPublishedAfterTheUpgrade(t *testing.T) {
 		t.Fatalf("usage events after the upgrade and a cancel: %+v (want one of 100)", got)
 	}
 }
+
+// Retention takes what was published of a turn with the turn's count.
+func TestPublishedUsageGoesWithRetention(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t, Options{})
+	c := claimedWithUsage(t, s, map[string]int{"old": 100})
+	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "ok", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	count := func() (n int) {
+		if err := s.w.QueryRow("SELECT count(*) FROM usage_published").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if count() != 1 {
+		t.Fatal("nothing published")
+	}
+	if err := s.tx(ctx, func(tx *sql.Tx) error { return gcUsage(ctx, tx, time.Now().Add(UsageRetention+24*time.Hour)) }); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("%d published rows outlive their turns", n)
+	}
+}

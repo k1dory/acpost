@@ -247,6 +247,10 @@ func gcUsage(ctx context.Context, t *sql.Tx, now time.Time) error {
 	if _, err := t.ExecContext(ctx, "DELETE FROM turn_usage WHERE ts < ?", before); err != nil {
 		return err
 	}
+	// What was published of the turns gone goes with them (usage_round1.go).
+	if _, err := t.ExecContext(ctx, "DELETE FROM usage_published WHERE turn NOT IN (SELECT turn FROM turn_usage)"); err != nil {
+		return err
+	}
 	_, err := t.ExecContext(ctx, "DELETE FROM session_costs WHERE ts < ?", before)
 	return err
 }

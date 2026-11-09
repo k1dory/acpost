@@ -106,8 +106,9 @@ func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (ac
 	}
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}, Fork: &acp.SessionForkCapabilities{}},
-			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: os.Getenv("FAKE_PLAIN") == "", Image: os.Getenv("FAKE_PLAIN") == ""}},
+		AgentCapabilities: acp.AgentCapabilities{LoadSession: os.Getenv("FAKE_NO_LOAD") == "", // FAKE_NO_LOAD: an adapter that cannot reopen a session
+			SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}, Fork: &acp.SessionForkCapabilities{}},
+			PromptCapabilities:  acp.PromptCapabilities{EmbeddedContext: os.Getenv("FAKE_PLAIN") == "", Image: os.Getenv("FAKE_PLAIN") == ""}},
 		AgentInfo: &acp.Implementation{Name: "fake-agent", Version: "1"},
 	}, nil
 }
