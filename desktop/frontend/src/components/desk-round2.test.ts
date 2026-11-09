@@ -128,3 +128,28 @@ describe("Changes is the open chat's, all of it (findings 6, 7)", () => {
     expect(listed()).toEqual([]);
   });
 });
+
+describe("the preview's native view (finding 10)", () => {
+  it("destroyed while its Show is out: the Hide goes after the Show, and the view ends hidden", async () => {
+    await setup();
+    vi.stubGlobal("requestAnimationFrame", (f: any) => setTimeout(f, 0));
+    const box = { left: 10, top: 10, width: 300, height: 200, right: 310, bottom: 210, x: 10, y: 10 };
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box as any);
+    const order: string[] = [];
+    const show = deferred<void>();
+    fake.Node.PreviewShow.mockImplementation(() => { order.push("show:sent"); return show.promise.then(() => { order.push("show:applied"); }); });
+    fake.Node.PreviewHide.mockImplementation(async () => { order.push("hide"); });
+    const Preview = (await import("./Preview.svelte")).default;
+    const c = mount(Preview, { target: document.body });
+    await settle(); await new Promise(r => setTimeout(r, 5)); await settle();
+    expect(order).toEqual(["show:sent"]);
+    unmount(c);
+    await settle();
+    expect(order).toEqual(["show:sent"]); // not sent beside the Show: it could reach the view first
+    show.resolve();
+    await settle();
+    expect(order).toEqual(["show:sent", "show:applied", "hide"]);
+    rect.mockRestore();
+    vi.unstubAllGlobals();
+  });
+});
