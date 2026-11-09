@@ -377,6 +377,10 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
+	// A message turning final publishes its turns' counted usage (usage_round1.go): schema.
+	if err := s.migrateUsage(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -785,6 +789,9 @@ func (s *Store) Settle(ctx context.Context, id string, state State, reply, errCo
 		if n, _ := res.RowsAffected(); n == 0 {
 			return nil
 		}
+		if err := s.publishFinalized(ctx, t); err != nil { // usage_round1.go
+			return err
+		}
 		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
 		if err != nil || len(files) == 0 {
 			return err
@@ -860,6 +867,9 @@ func (s *Store) Complete(ctx context.Context, id, lease string, state State, rep
 			}
 			return ErrLeaseLost
 		}
+		if err := s.publishFinalized(ctx, t); err != nil { // usage_round1.go
+			return err
+		}
 		_, err = t.ExecContext(ctx, "UPDATE contents SET reply = ? WHERE seq = (SELECT seq FROM messages WHERE id = ?)", reply, id)
 		if err != nil || len(files) == 0 {
 			return err
@@ -897,7 +907,10 @@ func (s *Store) Release(ctx context.Context, id, lease, code, reason string, max
 			state = Failed
 			_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = ?, error_code = ?, lease_id = '', lease_until = 0, updated_at = ?, finished_at = ?
 				WHERE id = ?`, fmt.Sprintf("%s (after %d attempts)", reason, attempts), code, now, now, id)
-			return err
+			if err != nil {
+				return err
+			}
+			return s.publishFinalized(ctx, t) // usage_round1.go
 		}
 		state = Queued
 		_, err = t.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = ?, error_code = ?, lease_id = '', lease_until = 0, updated_at = ? WHERE id = ?`,
@@ -932,6 +945,9 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 			return err
 		}
 		a, _ := res.RowsAffected()
+		if err := s.publishFinalized(ctx, tx); err != nil { // usage_round1.go
+			return err
+		}
 		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', error_code = 'lease_lost', lease_id = '', lease_until = 0, updated_at = ?
 			WHERE state = 'running' AND lease_id <> '' AND lease_until < ?`, t, t)
 		if err != nil {
@@ -966,6 +982,9 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 			return err
 		}
 		a, _ := res.RowsAffected()
+		if err := s.publishFinalized(ctx, t); err != nil { // usage_round1.go
+			return err
+		}
 		args = []any{now}
 		for _, r := range recipients {
 			args = append(args, r)
@@ -985,12 +1004,19 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 // Expire ends queued messages whose time ran out before now.
 func (s *Store) Expire(ctx context.Context, now time.Time) (int, error) {
 	t := ms(now)
-	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', error_code = 'expired', updated_at = ?, finished_at = ?
+	var n int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', error_code = 'expired', updated_at = ?, finished_at = ?
 		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ? AND origin NOT IN ('remote', 'forwarding')`, t, t, t)
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return s.publishFinalized(ctx, tx) // usage_round1.go
+	})
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
 	return int(n), nil
 }
 
@@ -1005,6 +1031,9 @@ func (s *Store) Cancel(ctx context.Context, id string) (Message, error) {
 			return err
 		}
 		n, _ := res.RowsAffected()
+		if err := s.publishFinalized(ctx, t); err != nil { // usage_round1.go
+			return err
+		}
 		m, err = s.get(ctx, t, id)
 		if err != nil {
 			return err
@@ -1101,17 +1130,18 @@ func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64
 	switch {
 	case usage:
 		// Counted, and kept past the limit (at most maxUsageEvents), so it reaches the other nodes.
-		var have, counted int
+		var have int
 		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'usage'", seq).Scan(&have); err != nil {
 			return n, err
 		}
-		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM turn_usage WHERE turn = ?", u.Turn).Scan(&counted); err != nil {
+		counted, err := countedTurn(ctx, t, u.Turn) // usage_round1.go: a delta by its own id
+		if err != nil {
 			return n, err
 		}
 		if counted > 0 || have >= maxUsageEvents {
 			return n, nil // a turn counted already (its event come again) takes no place
 		}
-		if err := addUsage(ctx, t, id, u, now); err != nil {
+		if err := countUsageEvent(ctx, t, id, u, now); err != nil { // usage_round1.go: a delta folds into its turn
 			return n, err
 		}
 	case n >= s.opt.MaxEventsPerMessage:

@@ -155,6 +155,7 @@ func (n *Node) eventChanges() <-chan struct{} {
 // returns early when ctx ends or fn fails. A message sent to another node has its events there:
 // here it is followed to its end.
 func (n *Node) Follow(ctx context.Context, p Principal, id string, after int64, fn func(store.Event) error) (store.Message, error) {
+	defer n.noteWait(p, id)() // turnwaits_round1.go
 	for {
 		evs, changed := n.eventChanges(), n.changes()
 		m, err := n.Get(ctx, p, id)

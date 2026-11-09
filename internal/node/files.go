@@ -118,6 +118,22 @@ func validFileName(name string) error {
 // fileType is the media type of a file: the one given if it parses, else the extension's, else
 // what its first bytes look like.
 func fileType(name, given string, data []byte) string {
+	if t := knownType(name, given); t != "" {
+		return t
+	}
+	return http.DetectContentType(data)
+}
+
+// linkType is a link's type: given, or by its name; else nothing says what it is.
+func linkType(name, given string) string {
+	if t := knownType(name, given); t != "" {
+		return t
+	}
+	return "application/octet-stream"
+}
+
+// knownType is a file's type as given or as its extension says ("" for neither).
+func knownType(name, given string) string {
 	// A given type is taken when it is a short, plain media type (it goes into the agent's prompt).
 	if given != "" && len(given) <= 127 {
 		if _, _, err := mime.ParseMediaType(given); err == nil {
@@ -128,10 +144,7 @@ func fileType(name, given string, data []byte) string {
 	if t := textTypes[ext]; t != "" {
 		return t
 	}
-	if t := mime.TypeByExtension(ext); t != "" {
-		return t
-	}
-	return http.DetectContentType(data)
+	return mime.TypeByExtension(ext)
 }
 
 // textTypes are text formats agents trade that the system's table may not know.

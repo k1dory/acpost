@@ -40,6 +40,12 @@ func (n *Node) resolveSession(ctx context.Context, p Principal, to Address, r *S
 	cfg := n.agentCfg(to.Name)
 	local := cfg != nil && cfg.Driver == "acp" && (to.Node == "" || to.Node == n.Name())
 	if !local {
+		// The node it goes to takes the session as checked here: only who may use sessions here
+		// names one there.
+		if !p.local() {
+			return errh("refused", "sessions are the agent's conversations: only the node's own user and agents may continue them",
+				"%s may not name a session (--session)", p.Address())
+		}
 		if r.Session == "latest" {
 			return errh("invalid", "name the session id (`acpost sessions --agent <name>` on its node)", "--session latest needs an acp agent of this node, not %s", to)
 		}

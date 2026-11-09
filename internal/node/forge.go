@@ -205,7 +205,8 @@ func (n *Node) approve(ctx context.Context, p Principal, title, text string, inp
 	if p.Kind != "agent" {
 		return nil
 	}
-	msgID := n.currentOf(p)
+	turn := n.turnOf(p) // the message and its attempt's lease: a reaped attempt's asking lands nowhere
+	msgID := turn.id
 	if msgID == "" {
 		return errh("refused", "an agent does this within a turn, where a person can approve it", "agent:%s has no turn running: nobody to approve %s", p.Name, title)
 	}
@@ -226,7 +227,7 @@ func (n *Node) approve(ctx context.Context, p Principal, title, text string, inp
 		delete(n.asks.by, req.ID)
 		n.asks.mu.Unlock()
 	}()
-	if err := n.addEvent(ctx, msgID, "permission_request", eventJSON(fitRequest(req)), true); err != nil {
+	if err := n.addLeasedEvent(ctx, msgID, turn.lease, "permission_request", eventJSON(fitRequest(req))); err != nil {
 		done, cancel := context.WithCancel(context.Background())
 		cancel()
 		pending.Wait(done, req.ID, 0) // what Open holds goes with it
@@ -244,7 +245,7 @@ func (n *Node) approve(ctx context.Context, p Principal, title, text string, inp
 			decision = "allowed"
 		}
 	}
-	_ = n.addEvent(n.ctx, msgID, "permission", eventJSON(map[string]any{"request_id": req.ID, "tool": req.Title, "decision": decision, "by": by}), true)
+	_ = n.addLeasedEvent(n.ctx, msgID, turn.lease, "permission", eventJSON(map[string]any{"request_id": req.ID, "tool": req.Title, "decision": decision, "by": by}))
 	if decision != "allowed" {
 		return errh("refused", "a person approves it in the app or with `acpost approve`", "%s: %s", title, decision)
 	}

@@ -22,6 +22,12 @@
 //	                 handed back as a resource_link
 //	blocks           answers one line per non-text block it got (FAKE_PLAIN=1: it declares no
 //	                 embedded context or images)
+//
+// Knobs in its environment: FAKE_HANG_NEW (session/new never answers), FAKE_EXCLUSIVE (with
+// FAKE_STATE: a session open in another live process is busy, as codex-acp's), FAKE_ONE_PROMPT=DIR
+// (a prompt into a session another prompt is in, in any process, fails), FAKE_FAIL_NEW_ONCE=FILE
+// (the first session/new across processes fails; FILE marks it done), FAKE_CANCELS=FILE (each
+// session/cancel it gets, a line of FILE).
 package acptest
 
 import (
@@ -34,6 +40,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -89,10 +96,19 @@ func Run() {
 }
 
 func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
+	if mark := os.Getenv("FAKE_HANG_INIT"); mark != "" {
+		// The first process to start hangs in initialize (until its connection ends); the others do not.
+		if f, err := os.OpenFile(mark, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+			f.Close()
+			<-ctx.Done()
+			return acp.InitializeResponse{}, ctx.Err()
+		}
+	}
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
-		AgentCapabilities: acp.AgentCapabilities{LoadSession: true, SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}, Fork: &acp.SessionForkCapabilities{}},
-			PromptCapabilities: acp.PromptCapabilities{EmbeddedContext: os.Getenv("FAKE_PLAIN") == "", Image: os.Getenv("FAKE_PLAIN") == ""}},
+		AgentCapabilities: acp.AgentCapabilities{LoadSession: os.Getenv("FAKE_NO_LOAD") == "", // FAKE_NO_LOAD: an adapter that cannot reopen a session
+			SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}, Fork: &acp.SessionForkCapabilities{}},
+			PromptCapabilities:  acp.PromptCapabilities{EmbeddedContext: os.Getenv("FAKE_PLAIN") == "", Image: os.Getenv("FAKE_PLAIN") == ""}},
 		AgentInfo: &acp.Implementation{Name: "fake-agent", Version: "1"},
 	}, nil
 }
@@ -106,6 +122,16 @@ func (a *fakeAgent) Logout(ctx context.Context, p acp.LogoutRequest) (acp.Logout
 }
 
 func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+	if os.Getenv("FAKE_HANG_NEW") != "" {
+		<-ctx.Done()
+		return acp.NewSessionResponse{}, ctx.Err()
+	}
+	if mark := os.Getenv("FAKE_FAIL_NEW_ONCE"); mark != "" {
+		if f, err := os.OpenFile(mark, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+			f.Close()
+			return acp.NewSessionResponse{}, acp.NewInternalError(map[string]any{"why": "an MCP server did not start"})
+		}
+	}
 	n := a.sessions.Add(1)
 	sid := acp.SessionId(fmt.Sprintf("s%d-%d", os.Getpid(), n))
 	a.mu.Lock()
@@ -125,6 +151,17 @@ func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (ac
 	}
 	a.mcp[sid] = strings.Join(mcp, ";")
 	a.mu.Unlock()
+	if log := os.Getenv("FAKE_NEW_LOG"); log != "" {
+		// The new session is known at once (listed, loadable by id, its id in the log), as an agent
+		// that lists its sessions from disk has it before the client has configured it.
+		if dir := os.Getenv("FAKE_STATE"); dir != "" {
+			_ = os.WriteFile(dir+"/"+string(sid), []byte("0"), 0o600)
+		}
+		if f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			fmt.Fprintln(f, sid)
+			f.Close()
+		}
+	}
 	if os.Getenv("FAKE_COMMANDS") != "" {
 		go func() { // what claude-agent-acp does after session/new
 			time.Sleep(10 * time.Millisecond)
@@ -176,6 +213,17 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 	}
 	// A loaded session keeps its prompt count across processes through an env-named file.
 	if dir := os.Getenv("FAKE_STATE"); dir != "" {
+		if os.Getenv("FAKE_EXCLUSIVE") != "" {
+			// codex-like: a session open in another live process is busy.
+			lock := dir + "/" + string(p.SessionId) + ".lock"
+			if b, err := os.ReadFile(lock); err == nil {
+				pid, _ := strconv.Atoi(string(b))
+				if pid != os.Getpid() && pid > 0 && syscall.Kill(pid, 0) == nil {
+					return acp.LoadSessionResponse{}, &acp.RequestError{Code: -32600, Message: "Invalid request: This Codex session is in use by another Codex client", Data: map[string]any{"reason": "thread_active_writer"}}
+				}
+			}
+			_ = os.WriteFile(lock, []byte(strconv.Itoa(os.Getpid())), 0o600)
+		}
 		if b, err := os.ReadFile(dir + "/" + string(p.SessionId)); err == nil {
 			n, _ := strconv.Atoi(string(b))
 			a.mu.Lock()
@@ -188,6 +236,12 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 }
 
 func (a *fakeAgent) Cancel(ctx context.Context, p acp.CancelNotification) error {
+	if file := os.Getenv("FAKE_CANCELS"); file != "" { // each session/cancel, a line
+		if f, err := os.OpenFile(file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			fmt.Fprintln(f, p.SessionId)
+			f.Close()
+		}
+	}
 	a.mu.Lock()
 	if c := a.cancels[p.SessionId]; c != nil {
 		c()
@@ -215,6 +269,16 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 	lines := strings.Split(strings.TrimSpace(full), "\n")
 	cmd, arg, _ := strings.Cut(strings.TrimSpace(lines[len(lines)-1]), " ")
 
+	if dir := os.Getenv("FAKE_ONE_PROMPT"); dir != "" {
+		// One prompt at a time in a session, across processes: a second one is an error.
+		active := dir + "/" + string(p.SessionId) + ".active"
+		f, err := os.OpenFile(active, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return acp.PromptResponse{}, acp.NewInternalError(map[string]any{"why": "two prompts at once in session " + string(p.SessionId)})
+		}
+		f.Close()
+		defer os.Remove(active)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
 	a.prompts[p.SessionId]++
@@ -224,6 +288,9 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 	defer cancel()
 	if dir := os.Getenv("FAKE_STATE"); dir != "" {
 		_ = os.WriteFile(dir+"/"+string(p.SessionId), []byte(strconv.Itoa(count)), 0o600)
+		if os.Getenv("FAKE_EXCLUSIVE") != "" {
+			_ = os.WriteFile(dir+"/"+string(p.SessionId)+".lock", []byte(strconv.Itoa(os.Getpid())), 0o600)
+		}
 	}
 	sid := p.SessionId
 	if strings.Contains(full, "Write a wiki for the repository") { // a wiki: pages in its format
@@ -481,6 +548,20 @@ func (a *fakeAgent) SetSessionConfigOption(ctx context.Context, p acp.SetSession
 	v := p.ValueId
 	if v == nil {
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("a value")
+	}
+	if ms, _ := strconv.Atoi(os.Getenv("FAKE_SLOW_SET")); ms > 0 { // a slow session setup
+		// FAKE_SLOW_ONCE: only the first setting of all the processes is slow (it marks the file).
+		slow := true
+		if mark := os.Getenv("FAKE_SLOW_ONCE"); mark != "" {
+			f, err := os.OpenFile(mark, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			slow = err == nil
+			if slow {
+				f.Close()
+			}
+		}
+		if slow {
+			time.Sleep(time.Duration(ms) * time.Millisecond) // and then applied, however late
+		}
 	}
 	if v.ConfigId == "mode" && os.Getenv("FAKE_MODES") == "broken" {
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInternalError(map[string]any{"why": "no modes today"})

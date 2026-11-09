@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Turn, toolState, type Tool } from "./turn";
+import { Turn, toolState, usageTurn, type Tool } from "./turn";
 
 const tool = (o: Partial<Tool> = {}): Tool => ({ id: "t", started: 0, ...o });
 
@@ -46,5 +46,32 @@ describe("Turn with events it cannot use (P3)", () => {
   it("shows that the node kept no more events", () => {
     const t = new Turn().add([ev(1, "truncated", "later events were not kept (limits.max_events_per_message)")]);
     expect(t.blocks[0]).toMatchObject({ t: "notice", severity: "warning" });
+  });
+});
+
+describe("usage of a turn and its deltas", () => {
+  it("a delta adds to its turn: the tokens stay, the cost comes", () => {
+    const t = new Turn();
+    t.add([
+      { seq: 1, time: "", kind: "usage", data: JSON.stringify({ turn: "t1", input: 100, total: 100, model: "m" }) },
+      { seq: 2, time: "", kind: "usage", data: JSON.stringify({ turn: "t1#2", cost: 0.25, currency: "USD" }) },
+    ]);
+    expect(t.usage?.input).toBe(100);
+    expect(t.usage?.cost).toBe(0.25);
+    expect(t.usage?.turn).toBe("t1");
+  });
+  it("another turn's usage stands for itself", () => {
+    const t = new Turn();
+    t.add([
+      { seq: 1, time: "", kind: "usage", data: JSON.stringify({ turn: "t1", input: 100 }) },
+      { seq: 2, time: "", kind: "usage", data: JSON.stringify({ turn: "t2", input: 7 }) },
+    ]);
+    expect(t.usage?.input).toBe(7);
+  });
+  it("only #2 and on are deltas, digits only (the same cases as the store's TestDeltaOfRule)", () => {
+    const cases: Record<string, string> = { "t1#2": "t1", "t1#10": "t1", "t1#1": "", "t1#+2": "", "t1#02": "", "t1#": "", "#2": "", "a#b": "", "t1": "" };
+    for (const [id, want] of Object.entries(cases)) {
+      expect(usageTurn(id)).toEqual(want ? { turn: want, delta: true } : { turn: id, delta: false });
+    }
   });
 });
