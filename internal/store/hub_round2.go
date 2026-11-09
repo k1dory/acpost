@@ -15,17 +15,6 @@ var CopyOrigins = []string{"remote", "forwarding", "unsent"}
 // localWork is the condition every query over "this node's work for an agent" adds.
 var localWork = "origin NOT IN ('" + strings.Join(CopyOrigins, "', '") + "')"
 
-// copyRecipient is the recipient a local copy takes from its hub's message: the hub names an agent
-// on another node qualified (agent:bot@other), and one of its own unqualified (agent:bot), which
-// here would read as this node's agent. A qualified answer is taken; otherwise the copy keeps the
-// address it was sent to (agent:bot@hub). FinishForward applies the same rule in SQL.
-func copyRecipient(hubTo, cur string) string {
-	if strings.Contains(hubTo, "@") || cur == "" {
-		return hubTo
-	}
-	return cur
-}
-
 // ErrStaleDelivery: a delivery of a message older than the one its copy here already is (the
 // hub's attempt number is lower) — the hub handed it again since, and that delivery owns the copy.
 var ErrStaleDelivery = errors.New("an older delivery of the message than the one its copy is")

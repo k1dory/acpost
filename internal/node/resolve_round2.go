@@ -3,10 +3,12 @@ package node
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -136,4 +138,27 @@ func (n *Node) disownForward(id string, local store.Message, key string) bool {
 		return err == nil
 	}
 	return n.foundOnHub(id, local, m)
+}
+
+// hubAddress is a recipient as the hub names it, as this node names it: the hub's own agents are
+// unqualified there (agent:bot), here they are the hub's (agent:bot@hub), never this node's nor
+// those of the address a send asked for (a repeat of a key may name another agent). The hub's
+// name is asked once (its status); not known yet, the recipient stays as the hub gave it, which no
+// query of this node's own work takes (store.CopyOrigins).
+func (n *Node) hubAddress(ctx context.Context, to string) string {
+	if strings.Contains(to, "@") || to == "" {
+		return to
+	}
+	name, _ := n.hubName.Load().(string)
+	if name == "" {
+		sctx, done := context.WithTimeout(ctx, hubCallTimeout)
+		st, err := n.hub.Status(sctx)
+		done()
+		if err != nil || !config.ValidName(st.Node) {
+			return to
+		}
+		name = st.Node
+		n.hubName.Store(name)
+	}
+	return to + "@" + name
 }

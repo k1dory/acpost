@@ -58,6 +58,7 @@ func hubPairWith(t *testing.T, wrap func(http.Handler) http.Handler) (hub, edge 
 	hub, _ = startPairNode(t, fmt.Sprintf(`node: {name: hub}
 agents:
   bot: {driver: inbox}
+  other: {driver: inbox}
 tokens:
   - {name: edge, sha256: %s, node: true}
 `, hex.EncodeToString(sum[:])))
@@ -111,5 +112,26 @@ func TestSendToHubAgentNotTakenByLocalNamesake(t *testing.T) {
 	}
 	if got.To != "agent:bot@hub" {
 		t.Errorf("the finished copy is addressed %q", got.To)
+	}
+}
+
+// A repeat of a key addressed to another of the hub's agents is answered with the key's first
+// message: its copy names the agent that message went to, by the hub's name, not the repeat's.
+func TestRepeatOfKeyKeepsFirstRecipient(t *testing.T) {
+	ctx := context.Background()
+	hub, edge, _ := hubPair(t)
+	user := edge.LocalUser()
+	// The key's first send reached the hub; its copy here is gone (a store from before, a restart).
+	first, _, err := hub.Send(ctx, node.Principal{Kind: "node", Name: "edge"}, node.SendRequest{To: "agent:bot", Body: "for bot",
+		ID: store.NewID(), From: user.Address() + "@edge", IdemKey: "same"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := edge.Send(ctx, user, node.SendRequest{To: "agent:other@hub", Body: "for other", IdemKey: "same"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != first.ID || got.To != "agent:bot@hub" {
+		t.Fatalf("the repeat's copy is %s to %s; the key's first is %s to agent:bot@hub", got.ID, got.To, first.ID)
 	}
 }

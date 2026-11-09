@@ -113,33 +113,35 @@ func TestLocalWorkStillCounted(t *testing.T) {
 	}
 }
 
-// A copy takes the hub's resolved address when the hub names a node, and keeps the address it was
-// sent to when the hub names its own agent unqualified.
+// A copy finished from the hub's message takes its qualified address, and keeps the address it
+// was sent to when the hub's is unqualified (the node could not qualify it). A copy replaced by the
+// hub's message for a key takes the hub's address as given: the node qualifies it, and the
+// repeat's own address may name another agent.
 func TestCopyKeepsQualifiedAddress(t *testing.T) {
-	for _, tc := range []struct{ sentTo, hubTo, want string }{
-		{"agent:bot@hub", "agent:bot", "agent:bot@hub"},
-		{"agent:bot", "agent:bot@other", "agent:bot@other"},
-		{"agent:bot@other", "agent:bot@other", "agent:bot@other"},
+	for _, tc := range []struct{ path, sentTo, hubTo, want string }{
+		{"FinishForward", "agent:bot@hub", "agent:bot", "agent:bot@hub"},
+		{"FinishForward", "agent:bot", "agent:bot@other", "agent:bot@other"},
+		{"FinishForward", "agent:bot@hub", "agent:bot@hub", "agent:bot@hub"},
+		{"ReplaceForward", "agent:b@hub", "agent:a@hub", "agent:a@hub"},
+		{"ReplaceForward", "agent:b@hub", "agent:a", "agent:a"},
 	} {
-		for _, path := range []string{"FinishForward", "ReplaceForward"} {
-			s := openTest(t, Options{})
-			m := mustInsert(t, s, &Message{ID: NewID(), From: "user:u@edge", To: tc.sentTo, Body: "b", Origin: "forwarding"})
-			hub := Message{ID: m.ID, To: tc.hubTo, Body: "b"}
-			if path == "ReplaceForward" {
-				hub.ID = NewID()
-				if _, err := s.ReplaceForward(ctx, m.ID, "forwarding", "remote", hub); err != nil {
-					t.Fatal(err)
-				}
-			} else if ok, err := s.FinishForward(ctx, m.ID, "forwarding", "remote", hub); err != nil || !ok {
-				t.Fatal(ok, err)
-			}
-			got, err := s.Get(ctx, hub.ID)
-			if err != nil {
+		s := openTest(t, Options{})
+		m := mustInsert(t, s, &Message{ID: NewID(), From: "user:u@edge", To: tc.sentTo, Body: "b", Origin: "forwarding"})
+		hub := Message{ID: m.ID, To: tc.hubTo, Body: "b"}
+		if tc.path == "ReplaceForward" {
+			hub.ID = NewID()
+			if _, err := s.ReplaceForward(ctx, m.ID, "forwarding", "remote", hub); err != nil {
 				t.Fatal(err)
 			}
-			if got.To != tc.want {
-				t.Errorf("%s: sent to %s, hub says %s: the copy reads %s, want %s", path, tc.sentTo, tc.hubTo, got.To, tc.want)
-			}
+		} else if ok, err := s.FinishForward(ctx, m.ID, "forwarding", "remote", hub); err != nil || !ok {
+			t.Fatal(ok, err)
+		}
+		got, err := s.Get(ctx, hub.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.To != tc.want {
+			t.Errorf("%s: sent to %s, hub says %s: the copy reads %s, want %s", tc.path, tc.sentTo, tc.hubTo, got.To, tc.want)
 		}
 	}
 }

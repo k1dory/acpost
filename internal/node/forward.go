@@ -90,6 +90,7 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 		}
 		return store.Message{}, false, hubErr(err)
 	}
+	sent.To = n.hubAddress(ctx, sent.To)
 	if !created && sent.ID != m.ID {
 		copied, err := n.takeHubRepeat(ctx, m.ID, sent)
 		if err != nil {
@@ -129,6 +130,7 @@ func (n *Node) takeHubRepeat(ctx context.Context, id string, sent store.Message)
 	// download, the store's room, a write) holds it back. The copy is replaced at this try or a
 	// later one.
 	n.cancelThrough(id, sent.ID)
+	sent.To = n.hubAddress(ctx, sent.To) // the hub's own agent, by the hub's name: never the repeat's address
 	if listed := pick(sent.Files, false); len(listed) > 0 {
 		fctx, done := context.WithTimeout(ctx, hubFilesTimeout)
 		got, err := n.fetchFiles(fctx, sent.ID, false, listed, "the message")
@@ -293,6 +295,7 @@ func (n *Node) foundOnHub(id string, local, hm store.Message) bool {
 		}
 		return false // the cancel did not reach the hub: again later
 	}
+	hm.To = n.hubAddress(n.ctx, hm.To)
 	ok, err := finishForward(n.st, n.ctx, id, originForwarding, originRemote, hm)
 	if err != nil || !ok {
 		return false // a write failed, or the copy changed (cancelled): again, from what it is then

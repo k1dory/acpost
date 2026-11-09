@@ -122,6 +122,7 @@ type Node struct {
 	resolving sync.Map   // ids of forwarded messages resolveForward runs for (forward.go)
 
 	resolvers resolverPool // the tries of resolveForward, bounded (resolve_round2.go)
+	hubName   atomic.Value // string: the hub's node name, once known (hubAddress, resolve_round2.go)
 }
 
 type agentToken struct {
