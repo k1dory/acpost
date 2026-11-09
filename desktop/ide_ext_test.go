@@ -5,6 +5,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -69,7 +70,14 @@ func TestEmbeddedExtension(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	files := []string{m.Main, "workbench.css", "fonts/onest-latin.woff2", "fonts/jetbrains-mono-cyrillic-400.woff2"}
+	files := []string{m.Main, "workbench.css"}
+	fonts := ideFonts()
+	if len(fonts) == 0 {
+		t.Fatal("no fonts in fonts/fonts.json")
+	}
+	for _, f := range fonts {
+		files = append(files, "fonts/"+f.File)
+	}
 	for _, th := range m.Contributes.Themes {
 		files = append(files, th.Path)
 	}
@@ -94,12 +102,14 @@ func TestIDEInstallOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := filepath.Join(data, "calls")
-	script := "#!/bin/sh\necho \"$@\" >> " + log + "\nmkdir -p \"$2/extensions/acpost.acpost-ide-" + ideExtension().version + "\"\n"
+	// As VS Code's installer: the .vsix's extension/ unpacked into the extension's folder.
+	dir := "$2/extensions/acpost.acpost-ide-" + ideExtension().version
+	script := "#!/bin/sh\necho \"$@\" >> " + log + "\nset -e\nt=$(mktemp -d)\nunzip -q \"$4\" -d \"$t\"\nmkdir -p \"" + dir + "\"\ncp -R \"$t/extension/.\" \"" + dir + "/\"\nrm -rf \"$t\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "code-server"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := ideInstall(data); err != nil {
+		if err := ideInstall(context.Background(), data); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -108,7 +118,7 @@ func TestIDEInstallOnce(t *testing.T) {
 		t.Fatalf("installer ran %d times: %s", n, b)
 	}
 	os.WriteFile(filepath.Join(ideExtDir(data, ideExtension().version), ".acpost-hash"), []byte("old"), 0o600)
-	if err := ideInstall(data); err != nil {
+	if err := ideInstall(context.Background(), data); err != nil {
 		t.Fatal(err)
 	}
 	b, _ = os.ReadFile(log)
