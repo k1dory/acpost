@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -20,7 +21,6 @@ import (
 	"github.com/k1dory/acpost/internal/store"
 	"github.com/k1dory/acpx"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 // Node is the app's link to the local acpost node: what the interface calls (bindings) and the
@@ -32,36 +32,65 @@ type Node struct {
 	mu       sync.Mutex
 	c        *client.Client
 	url      string
-	follows  map[string]context.CancelFunc
-	terms    map[string]context.CancelFunc
+	follows  map[string]*follow
+	terms    map[string]*term
 	stopNode context.CancelFunc // the node the app runs itself, if it does
-	notes    *notifications.NotificationService
+	nodeDone chan struct{}      // closed when that node has stopped
+	nodeOK   bool               // that node got ready (else it is starting or stopping)
+	startMu  sync.Mutex         // one ensureNode at a time
+	closed   bool               // the app is quitting: no node starts, no terminal opens
+	opening  sync.WaitGroup     // terminals being opened
+	notes    notifier
 	noteOK   int // 0 not asked, 1 allowed, -1 refused
+	noteAsk  sync.Once
 	startErr string
+	emitFn   func(name string, data any) // tests: where events go instead of the window
 }
 
-// ServiceStartup connects to the node (a failure is told by Status, the app still opens).
+// ServiceStartup connects to the node in the background: the window opens meanwhile (a node
+// that is slow to start held it for up to 20 s), and Status waits for the outcome.
 func (n *Node) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	n.follows = map[string]context.CancelFunc{}
-	n.terms = map[string]context.CancelFunc{}
-	if err := n.ensureNode(); err != nil {
-		n.startErr = err.Error()
-	}
+	n.follows = map[string]*follow{}
+	n.terms = map[string]*term{}
+	n.startErr = "starting" // Status goes through ensureNode, which waits for this start
+	go n.ensureNode()
 	return nil
 }
 
-// ServiceShutdown stops the streams.
+// ServiceShutdown stops the streams, closes the terminals the app opened (a node of another
+// machine kept their shells) and stops the app's own node, waiting for it to clean up (its
+// socket, its pid file). No node starts after it.
 func (n *Node) ServiceShutdown() error {
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	for _, stop := range n.follows {
+	n.closed = true
+	for _, f := range n.follows {
+		f.cancel()
+	}
+	var terms []string
+	for id, t := range n.terms {
+		t.stop()
+		terms = append(terms, id)
+	}
+	clear(n.terms)
+	stop, done := n.stopNode, n.nodeDone
+	n.mu.Unlock()
+	opened := make(chan struct{})
+	go func() { n.opening.Wait(); close(opened) }()
+	select { // a terminal opening now closes itself when its id comes: waited for as long as an open may take
+	case <-opened:
+	case <-time.After(termOpenTimeout + 3*time.Second):
+	}
+	if len(terms) > 0 {
+		closeTerminals(n, terms)
+	}
+	if stop != nil {
 		stop()
 	}
-	for _, stop := range n.terms {
-		stop()
-	}
-	if n.stopNode != nil {
-		n.stopNode()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
 	}
 	return nil
 }
@@ -104,15 +133,7 @@ func localURL(cfg *config.Config) string {
 }
 
 func call[T any](n *Node, fn func(ctx context.Context, c *client.Client) (T, error)) (T, error) {
-	var zero T
-	c, err := n.client()
-	if err != nil {
-		return zero, withHint(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	out, err := fn(ctx, c)
-	return out, withHint(err)
+	return callLong(n, 30*time.Second, fn)
 }
 
 // withHint hands the interface the node's error whole — its code, message and hint (what to do
@@ -141,20 +162,25 @@ type Connection struct {
 
 // Status says whether the node answers, and what it is.
 func (n *Node) Status() Connection {
+	n.mu.Lock()
+	failed := n.startErr != ""
+	n.mu.Unlock()
+	if failed {
+		if err := n.ensureNode(); err != nil {
+			return Connection{Error: err.Error()}
+		}
+	}
 	c, err := n.client()
 	if err != nil {
 		return Connection{Error: err.Error()}
 	}
-	if n.startErr != "" {
-		if err := n.ensureNode(); err != nil {
-			return Connection{Error: err.Error()}
-		}
-		n.startErr = ""
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	st, err := c.Status(ctx)
-	out := Connection{URL: n.url, OK: err == nil, Status: st}
+	n.mu.Lock()
+	url := n.url
+	n.mu.Unlock()
+	out := Connection{URL: url, OK: err == nil, Status: st}
 	if err != nil {
 		out.Error = err.Error()
 		if errors.Is(err, client.ErrUnavailable) {
@@ -169,43 +195,12 @@ func (n *Node) Agents() ([]client.AgentInfo, error) {
 	return call(n, func(ctx context.Context, c *client.Client) ([]client.AgentInfo, error) { return c.Agents(ctx) })
 }
 
-// ConversationPage is a page of conversations.
-type ConversationPage struct {
-	Items []store.Conversation `json:"items"`
-	Next  string               `json:"next,omitempty"`
-}
-
-// Conversations lists threads, the most recently active first.
-func (n *Node) Conversations(before string) (ConversationPage, error) {
-	return call(n, func(ctx context.Context, c *client.Client) (ConversationPage, error) {
-		items, next, err := c.Conversations(ctx, before, 50)
-		return ConversationPage{Items: items, Next: next}, err
-	})
-}
-
-// Thread is a conversation's messages, the oldest first, with their bodies and replies.
+// Thread is a conversation's messages, the oldest first, with their bodies and replies: the
+// whole thread, or its last threadMax messages. A message that cannot be read fails it.
 func (n *Node) Thread(thread string) ([]store.Message, error) {
-	return call(n, func(ctx context.Context, c *client.Client) ([]store.Message, error) {
-		page, err := c.List(ctx, client.ListFilter{Thread: thread, Limit: 200})
-		if err != nil {
-			return nil, err
-		}
-		out := make([]store.Message, 0, len(page.Items))
-		for _, m := range page.Items {
-			full, err := c.Get(ctx, m.ID)
-			if err != nil {
-				full = m
-			}
-			out = append(out, full)
-		}
-		sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-		return out, nil
+	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) ([]store.Message, error) {
+		return threadOf(ctx, c, thread)
 	})
-}
-
-// Message is one message as it is now.
-func (n *Node) Message(id string) (store.Message, error) {
-	return call(n, func(ctx context.Context, c *client.Client) (store.Message, error) { return c.Get(ctx, id) })
 }
 
 // Upload is a file the composer attaches.
@@ -213,20 +208,6 @@ type Upload struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Data string `json:"data"` // base64
-}
-
-// Send sends a message: to an agent, in a thread (a new one when empty).
-func (n *Node) Send(to, body, thread string, files []Upload) (store.Message, error) {
-	return call(n, func(ctx context.Context, c *client.Client) (store.Message, error) {
-		r := client.SendRequest{To: to, Body: body, Thread: thread}
-		fs, err := decodeUploads(files)
-		if err != nil {
-			return store.Message{}, err
-		}
-		r.Files = fs
-		m, _, err := c.Send(ctx, r, "")
-		return m, err
-	})
 }
 
 // Cancel cancels a message.
@@ -265,24 +246,28 @@ type EventBatch struct {
 func (n *Node) Follow(id string, after int64) error {
 	c, err := n.client()
 	if err != nil {
-		return err
+		return withHint(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	me := &follow{cancel: cancel}
 	n.mu.Lock()
-	if stop := n.follows[id]; stop != nil {
-		stop()
+	if old := n.follows[id]; old != nil {
+		old.cancel()
 	}
-	n.follows[id] = cancel
+	n.follows[id] = me
 	n.mu.Unlock()
 	go func() {
+		// Only this stream's own entry goes: a Follow meanwhile put a newer one there.
 		defer func() {
 			n.mu.Lock()
-			if n.follows[id] != nil {
+			if n.follows[id] == me {
 				delete(n.follows, id)
 			}
 			n.mu.Unlock()
 		}()
-		// Events come one at a time; they reach the interface a few times a second.
+		// Events come one at a time; they reach the interface a few times a second. One
+		// goroutine emits at a time, the final after the last batch: the window drops a batch
+		// whose seq is not after the last it applied.
 		var mu sync.Mutex
 		var pending []store.Event
 		flush := func() {
@@ -291,13 +276,16 @@ func (n *Node) Follow(id string, after int64) error {
 			pending = nil
 			mu.Unlock()
 			if len(evs) > 0 {
-				n.app.Event.Emit("events:"+id, EventBatch{ID: id, Events: evs})
+				n.emitFollow(id, me, EventBatch{ID: id, Events: evs})
 			}
 		}
 		tick := time.NewTicker(120 * time.Millisecond)
 		defer tick.Stop()
 		done := make(chan struct{})
+		var ticking sync.WaitGroup
+		ticking.Add(1)
 		go func() {
+			defer ticking.Done()
 			for {
 				select {
 				case <-done:
@@ -314,17 +302,18 @@ func (n *Node) Follow(id string, after int64) error {
 			return nil
 		})
 		close(done)
+		ticking.Wait()
 		flush()
 		if ctx.Err() != nil {
 			return
 		}
 		b := EventBatch{ID: id}
 		if err != nil {
-			b.Error = err.Error()
+			b.Error = withHint(err).Error()
 		} else {
 			b.Final = &final
 		}
-		n.app.Event.Emit("events:"+id, b)
+		n.emitFollow(id, me, b)
 	}()
 	return nil
 }
@@ -333,8 +322,8 @@ func (n *Node) Follow(id string, after int64) error {
 func (n *Node) Unfollow(id string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if stop := n.follows[id]; stop != nil {
-		stop()
+	if f := n.follows[id]; f != nil {
+		f.cancel()
 		delete(n.follows, id)
 	}
 }
@@ -392,34 +381,108 @@ func (n *Node) CILog(agent, job, target string) (string, error) {
 	})
 }
 
-// OpenTerminal opens a shell (in the agent's working directory when one is named) and streams
-// its output as "term:<id>" (base64 chunks).
+// OpenTerminal opens a shell (in the agent's working directory when one is named). Its output
+// comes once the window attaches (TermAttach): the window subscribes to "term:<id>" first.
 func (n *Node) OpenTerminal(agent string, cols, rows int) (client.Terminal, error) {
-	t, err := call(n, func(ctx context.Context, c *client.Client) (client.Terminal, error) {
+	// An open in flight is counted: shutdown waits for it, and a shell whose id comes after the
+	// app began quitting is closed, not kept (on a node of another machine it would go on).
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return client.Terminal{}, errQuitting
+	}
+	n.opening.Add(1)
+	n.mu.Unlock()
+	defer n.opening.Done()
+	t, err := callLong(n, termOpenTimeout, func(ctx context.Context, c *client.Client) (client.Terminal, error) {
 		return c.OpenTerminal(ctx, client.TermRequest{Agent: agent, Cols: cols, Rows: rows})
 	})
 	if err != nil {
 		return t, err
 	}
-	c, _ := n.client()
-	ctx, cancel := context.WithCancel(context.Background())
 	n.mu.Lock()
-	n.terms[t.ID] = cancel
+	if n.closed {
+		n.mu.Unlock()
+		closeTerminals(n, []string{t.ID})
+		return client.Terminal{}, errQuitting
+	}
+	if n.terms[t.ID] == nil {
+		n.terms[t.ID] = &term{}
+	}
+	n.mu.Unlock()
+	return t, nil
+}
+
+// TermAttach streams a terminal's output from offset from as "term:<id>": {data} (base64),
+// {lost, error} while the connection is down (it comes back where it stopped), {exit, code}
+// when the shell ends, {exit, error} when the node says the terminal is gone. Attaching again
+// restarts the stream.
+func (n *Node) TermAttach(id string, from int64) error {
+	c, err := n.client()
+	if err != nil {
+		return withHint(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	me := &term{cancel: cancel}
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		cancel()
+		return errQuitting
+	}
+	if old := n.terms[id]; old != nil {
+		old.stop()
+	}
+	n.terms[id] = me
 	n.mu.Unlock()
 	go func() {
-		final, err := c.TermOutput(ctx, t.ID, 0, func(_ int64, b []byte) error {
-			n.app.Event.Emit("term:"+t.ID, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
-			return nil
-		})
-		if ctx.Err() == nil {
-			ev := map[string]any{"exit": true, "code": final.ExitCode}
-			if err != nil {
-				ev["error"] = err.Error()
+		// The terminal stays the app's (CloseTerminal, shutdown) until its shell is known to have
+		// ended: its end came, or the node says there is no such terminal.
+		ended := false
+		defer func() {
+			n.mu.Lock()
+			if ended && n.terms[id] == me {
+				delete(n.terms, id)
 			}
-			n.app.Event.Emit("term:"+t.ID, ev)
+			n.mu.Unlock()
+		}()
+		lost, wait := false, time.Second
+		for {
+			final, err := c.TermOutput(ctx, id, from, func(next int64, b []byte) error {
+				from, lost, wait = next, false, time.Second
+				n.emitTerm(id, me, map[string]any{"data": base64.StdEncoding.EncodeToString(b)})
+				return nil
+			})
+			if ctx.Err() != nil {
+				return
+			}
+			switch termOutcome(err) {
+			case termEnded:
+				ended = true
+				n.emitTerm(id, me, map[string]any{"exit": true, "code": final.ExitCode})
+				return
+			case termGone:
+				ended = true
+				n.emitTerm(id, me, map[string]any{"exit": true, "error": withHint(err).Error()})
+				return
+			case termRetry:
+				if !lost {
+					lost = true
+					n.emitTerm(id, me, map[string]any{"lost": true, "error": withHint(err).Error()})
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+				wait = min(2*wait, 10*time.Second)
+			default: // refused, invalid: said, and the terminal still closed with the app
+				n.emitTerm(id, me, map[string]any{"exit": true, "error": withHint(err).Error()})
+				return
+			}
 		}
 	}()
-	return t, nil
+	return nil
 }
 
 // TermInput types into a terminal (base64).
@@ -445,8 +508,8 @@ func (n *Node) TermResize(id string, cols, rows int) error {
 // CloseTerminal ends a terminal.
 func (n *Node) CloseTerminal(id string) error {
 	n.mu.Lock()
-	if stop := n.terms[id]; stop != nil {
-		stop()
+	if t := n.terms[id]; t != nil {
+		t.stop()
 		delete(n.terms, id)
 	}
 	n.mu.Unlock()
@@ -456,7 +519,23 @@ func (n *Node) CloseTerminal(id string) error {
 	return err
 }
 
-func decodeUploads(files []Upload) ([]store.File, error) {
+// decodeUploads decodes the composer's files, the node's limits (when it says them) checked
+// first on the encoded sizes: what is over them is never decoded.
+func decodeUploads(files []Upload, lim *client.Limits) ([]store.File, error) {
+	if lim != nil {
+		if lim.MaxFiles > 0 && len(files) > lim.MaxFiles {
+			return nil, &client.Error{Code: "invalid", Message: fmt.Sprintf("%d files: the node takes at most %d", len(files), lim.MaxFiles),
+				Hint: "Send fewer files at once."}
+		}
+		var size int64
+		for _, f := range files {
+			size += int64(base64.StdEncoding.DecodedLen(len(f.Data)))
+		}
+		if lim.MaxFilesSize > 0 && size > lim.MaxFilesSize+2*int64(len(files)) { // DecodedLen counts the padding
+			return nil, &client.Error{Code: "invalid", Message: fmt.Sprintf("the files come to %d MiB: the node takes at most %d MiB", size>>20, lim.MaxFilesSize>>20),
+				Hint: "Attach smaller files, or give the agent a path on this Mac instead."}
+		}
+	}
 	var out []store.File
 	for _, f := range files {
 		b, err := base64.StdEncoding.DecodeString(f.Data)
@@ -467,3 +546,155 @@ func decodeUploads(files []Upload) ([]store.File, error) {
 	}
 	return out, nil
 }
+
+// emit sends an event to the window (to emitFn in tests).
+func (n *Node) emit(name string, data any) {
+	if n.emitFn != nil {
+		n.emitFn(name, data)
+		return
+	}
+	n.app.Event.Emit(name, data)
+}
+
+// follow is a message's stream; its own goroutine removes it, when it is still the one there.
+type follow struct{ cancel context.CancelFunc }
+
+// threadMax bounds what a thread shows: its latest messages.
+const threadMax = 2000
+
+func threadOf(ctx context.Context, c *client.Client, thread string) ([]store.Message, error) {
+	// The list pages by id, the oldest first: read to the end, keep the end.
+	var list []store.Message
+	after := ""
+	for {
+		page, err := c.List(ctx, client.ListFilter{Thread: thread, After: after, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, page.Items...)
+		if len(list) > threadMax {
+			list = list[len(list)-threadMax:]
+		}
+		if page.Next == "" || page.Next == after || len(page.Items) == 0 {
+			break
+		}
+		after = page.Next
+	}
+	// The list has no bodies: each message read, a few at a time; the first failure ends it.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	out := make([]store.Message, len(list))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for range min(8, len(list)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				m, err := c.Get(ctx, list[i].ID)
+				if err != nil {
+					cancel(fmt.Errorf("message %s: %w", list[i].ID, err))
+					continue
+				}
+				out[i] = m
+			}
+		}()
+	}
+feed:
+	for i := range list {
+		select {
+		case next <- i:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(next)
+	wg.Wait()
+	if err := context.Cause(ctx); err != nil {
+		var e *client.Error
+		if errors.As(err, &e) {
+			return nil, &client.Error{Status: e.Status, Code: e.Code, Message: err.Error(), Hint: e.Hint}
+		}
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+// term is a terminal the app opened; cancel stops its output stream, once attached.
+type term struct{ cancel context.CancelFunc }
+
+func (t *term) stop() {
+	if t.cancel != nil {
+		t.cancel()
+	}
+}
+
+// closeTerminals ends terminals on the node, all at once, for at most two seconds.
+func closeTerminals(n *Node, ids []string) {
+	c, err := n.client()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = c.CloseTerminal(ctx, id) }()
+	}
+	wg.Wait()
+}
+
+// emitFollow emits a stream's batch only while the stream is the one registered for its
+// message: a batch of a stream replaced meanwhile would land in the new one's turn.
+func (n *Node) emitFollow(id string, me *follow, b EventBatch) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.follows[id] == me {
+		n.emit("events:"+id, b)
+	}
+}
+
+var errQuitting = &client.Error{Code: "unavailable", Message: "the app is quitting"}
+
+const (
+	termEnded  = iota // the shell's end came
+	termGone          // the node has no such terminal
+	termRetry         // the connection, or the node for now: read again from where it stopped
+	termFailed        // refused, invalid: not to be retried
+)
+
+// termOutcome is what a terminal stream's end means.
+func termOutcome(err error) int {
+	if err == nil {
+		return termEnded
+	}
+	if errors.Is(err, client.ErrUnavailable) {
+		return termRetry
+	}
+	var e *client.Error
+	if errors.As(err, &e) {
+		switch {
+		case e.Code == "not_found" || e.Status == http.StatusNotFound:
+			return termGone
+		case e.Status >= 500 || e.Status == http.StatusTooManyRequests || e.Code == "unavailable" || e.Code == "timeout":
+			return termRetry
+		}
+	}
+	return termFailed
+}
+
+// emitTerm emits a terminal stream's event only while the stream is the one attached: a chunk
+// of a stream replaced meanwhile would interleave with the new one's (terminal output has no
+// seq to drop it by).
+func (n *Node) emitTerm(id string, me *term, ev map[string]any) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.terms[id] == me {
+		n.emit("term:"+id, ev)
+	}
+}
+
+// termOpenTimeout bounds an open of a terminal; shutdown waits for opens in flight that long.
+const termOpenTimeout = 30 * time.Second
