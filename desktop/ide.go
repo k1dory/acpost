@@ -96,6 +96,8 @@ type ideServer struct {
 	budget  time.Duration
 	starts  func(port int) // called just before the server starts on port
 	owned   func()         // called once the lock is taken (or not), before the orphan is looked for
+	// the pane's reload (zero: the native one)
+	paneReload func()
 }
 
 var ide ideServer
@@ -855,12 +857,25 @@ func (n *Node) IDEShow(url string, x, y, w, h float64) error {
 	return nil
 }
 
-// IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
-// again if it ended, and its answer is checked against what is shown before anything navigates).
-func (n *Node) IDEReload() {
-	ide.pane.Lock()
-	defer ide.pane.Unlock()
-	preview.IDEReload()
+// IDEReload loads the IDE's page again when url is the address it shows (the interface asks
+// IDEStart first: that starts the server again if it ended). It comes through the interface's one
+// queue of the pane's calls, in order with them; one for an address no longer shown (a view since
+// gone, another folder opened) is dropped.
+func (n *Node) IDEReload(url string) { ide.reload(url) }
+
+// reload is IDEReload: whether the page was reloaded.
+func (s *ideServer) reload(url string) bool {
+	s.pane.Lock()
+	defer s.pane.Unlock()
+	if u := strings.TrimSpace(url); u == "" || u != s.shown {
+		return false
+	}
+	if s.paneReload != nil {
+		s.paneReload()
+	} else {
+		preview.IDEReload()
+	}
+	return true
 }
 
 // IDETheme gives the IDE the app's theme: VS Code follows light or dark.
