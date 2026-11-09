@@ -678,32 +678,33 @@ func portFree(port int) bool {
 	return true
 }
 
-// ideOrphan is the process the pid file names when it is this app's server for data (serve-web
-// with this server folder, leading its own group), else 0.
+// ideOrphan is the process group the pid file names when it is provably this app's server for
+// data, else 0 (nothing is signalled on a guess). Proof: the record is of this boot, and either its
+// leader runs, started when the record says, leads its own group, and is serve-web with this
+// server folder; or the leader is gone and every process left in its group is VS Code's of this
+// folder (a group's id is not taken again while it has a process, but the number may have been
+// taken again since the server ended: by a group whose leader has gone too).
 func ideOrphan(data string) int {
 	b, err := os.ReadFile(filepath.Join(data, idePidFile))
 	if err != nil {
 		return 0
 	}
 	var rec ideRecord
-	if json.Unmarshal(b, &rec) != nil {
+	if json.Unmarshal(b, &rec) != nil || rec.Pid <= 1 || rec.Start == "" || rec.Boot == "" || rec.Boot != ideBoot() {
 		return 0
 	}
 	pid := rec.Pid
-	if pid <= 1 {
-		return 0
-	}
-	if g, err := syscall.Getpgid(pid); err != nil {
-		// Its leader gone, its group still there: that group is the server's (a group's id is not
-		// taken again while it has a process), what is left of it.
-		if !groupGone(pid, 0) {
+	g, start, ok := ideProc(pid)
+	if !ok {
+		if ideGroupOf(pid, data) {
 			return pid
 		}
 		return 0
-	} else if g != pid {
+	}
+	if g != pid || start != rec.Start {
 		return 0
 	}
-	cmdline, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	cmdline, err := idePS("-ww", "-o", "command=", "-p", strconv.Itoa(pid))
 	if err != nil {
 		return 0
 	}
@@ -712,6 +713,38 @@ func ideOrphan(data string) int {
 		return 0
 	}
 	return pid
+}
+
+// ideMembers gives the command lines of the processes in group pg (for tests: a group made up).
+var ideMembers = func(pg int) []string {
+	out, err := idePS("-A", "-ww", "-o", "pgid=,command=")
+	if err != nil {
+		return nil
+	}
+	var cmds []string
+	for _, l := range strings.Split(string(out), "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 2 && f[0] == strconv.Itoa(pg) {
+			cmds = append(cmds, strings.Join(f[1:], " "))
+		}
+	}
+	return cmds
+}
+
+// ideGroupOf is whether the leaderless group pg is what is left of a server of data's: it has
+// processes, and each names data's folder in its command line (VS Code's server is run from the
+// CLI's folder there, with its server folder there).
+func ideGroupOf(pg int, data string) bool {
+	cmds := ideMembers(pg)
+	if len(cmds) == 0 {
+		return false
+	}
+	for _, c := range cmds {
+		if !strings.Contains(c, filepath.Join(data)+string(filepath.Separator)) {
+			return false
+		}
+	}
+	return true
 }
 
 // endGroup ends the group pid leads: SIGTERM, then SIGKILL; whether it is gone.

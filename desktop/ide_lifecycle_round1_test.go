@@ -764,6 +764,15 @@ func TestIDEStuckGroupRefusesStart(t *testing.T) {
 		orphan := f.current()
 		f.disown()
 		ideStuckGroup.Store(int64(orphan.cmd.Process.Pid))
+		// The made-up group's process, once its leader is gone: VS Code's of this folder.
+		members := ideMembers
+		defer func() { ideMembers = members }()
+		ideMembers = func(pg int) []string {
+			if int64(pg) == ideStuckGroup.Load() {
+				return []string{filepath.Join(f.data, "cli", "node") + " server-main.js"}
+			}
+			return members(pg)
+		}
 		g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
 		t.Cleanup(g.stop)
 		_, err := g.open("")

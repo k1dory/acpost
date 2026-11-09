@@ -5,8 +5,10 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -59,4 +61,69 @@ func TestIDERecordWrittenOrStartFails(t *testing.T) {
 			t.Fatalf("temporary files left: %v", m)
 		}
 	})
+}
+
+func writeRecord(t *testing.T, data string, rec ideRecord) {
+	t.Helper()
+	b, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(data, idePidFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Round 2, 1: nothing is signalled on a record that does not prove the group is this app's server:
+// a number taken again by a group whose leader has gone (its processes not VS Code's of this
+// folder), a live server whose start time is not the recorded one, a record of another boot.
+func TestIDEOrphanOwnershipProven(t *testing.T) {
+	t.Run("leaderless foreign group", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		// A group of this test's: its leader ends at once, a process of it stays.
+		sh := exec.Command("/bin/sh", "-c", "sleep 30 & exit 0")
+		sh.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := sh.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pg := sh.Process.Pid
+		t.Cleanup(func() { syscall.Kill(-pg, syscall.SIGKILL) })
+		sh.Wait()
+		if groupGone(pg, 0) {
+			t.Fatal("the group under test is gone")
+		}
+		writeRecord(t, f.data, ideRecord{Pid: pg, Boot: ideBoot(), Start: "Mon Jan  1 00:00:00 2024"})
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		if groupGone(pg, 300*time.Millisecond) {
+			t.Fatal("a group not this app's was ended as its orphan")
+		}
+	})
+	for _, c := range []struct {
+		name string
+		edit func(*ideRecord)
+	}{
+		{"another start time", func(r *ideRecord) { r.Start = "Mon Jan  1 00:00:00 2024" }},
+		{"another boot", func(r *ideRecord) { r.Boot = "00000000-0000-0000-0000-000000000000" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeIDE(t, "serve")
+			if _, err := f.open(""); err != nil {
+				t.Fatal(err)
+			}
+			other := f.current()
+			f.disown()
+			rec := readRecord(t, f.data)
+			c.edit(&rec)
+			writeRecord(t, f.data, rec)
+			g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+			t.Cleanup(g.stop)
+			if _, err := g.open(""); err != nil {
+				t.Fatal(err)
+			}
+			if waitClosed(other.done, 300*time.Millisecond) {
+				t.Fatal("a server the record does not prove was ended")
+			}
+		})
+	}
+	// The proven cases still end it: covered by TestIDEOrphanEndedSamePort (leader there) and
+	// TestIDEStuckGroupRefusesStart (leaderless).
 }
