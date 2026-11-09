@@ -10,8 +10,11 @@ vi.mock("./api", async () => {
   return { ...errors, Node, on: (n: string, f: (d: any) => void) => fake.on(n, f), b64: (s: string) => s, unb64: () => new Uint8Array() };
 });
 
+/** An attachment as the app makes one (attachment(): its identity given). */
+let attach: (f: { name: string; type: string; size: number; data: string }) => import("./composer.svelte").Attachment;
 async function load() {
   const { app } = await import("./state.svelte");
+  attach = (await import("./composer.svelte")).attachment; // the app's own instance: identities do not collide
   app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }, { name: "codex", address: "agent:codex", driver: "acp", queued: 0, running: 0 }];
   app.conn = { ok: true };
   return app;
@@ -198,7 +201,7 @@ describe("send, review round 1", () => {
 });
 
 describe("send, review round 2", () => {
-  const file = (name: string) => ({ name, type: "text/plain", size: 1, data: "YQ==" });
+  const file = (name: string) => attach({ name, type: "text/plain", size: 1, data: "YQ==" });
 
   it("a late answer does not edit the new task started meanwhile (R2.1)", async () => {
     const app = await load();
@@ -459,7 +462,7 @@ describe("send, review round 5", () => {
     fake.Node.CloudHistory.mockResolvedValue([]);
     await app.open(C);
     const d = app.draftOf();
-    d.text = "build it"; d.files = [{ name: "spec.md", type: "text/markdown", size: 1, data: "YQ==" }];
+    d.text = "build it"; d.files = [attach({ name: "spec.md", type: "text/markdown", size: 1, data: "YQ==" })];
     fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout"));
     expect(await app.submit(d)).toBe(false);
     fake.Node.Chats.mockResolvedValue({ items: [T] });
@@ -789,7 +792,7 @@ describe("send, review round 10: a draft edited into another task keeps all it h
       app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
       fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
       const d = app.draftOf();
-      d.text = "Implement a search endpoint"; d.files = [spec];
+      d.text = "Implement a search endpoint"; d.files = [attach(spec)];
       const sent = deferred();
       fake.Node.SendTask.mockReturnValueOnce(sent.promise);
       const going = app.submit(d);
@@ -807,7 +810,7 @@ describe("send, review round 10: a draft edited into another task keeps all it h
     app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
     fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
     const d = app.draftOf();
-    d.text = "Implement a search endpoint"; d.files = [spec];
+    d.text = "Implement a search endpoint"; d.files = [attach(spec)];
     const sent = deferred();
     fake.Node.SendTask.mockReturnValueOnce(sent.promise);
     const going = app.submit(d);
@@ -837,7 +840,7 @@ describe("send, review round 11: a task replaced by a new one keeps its continua
       fake.Node.SendTask.mockReturnValueOnce(sent.promise);
       const going = app.submit(a);
       a.text = "Task A\nand then this";                       // typed on while A went
-      a.files = [{ name: "more.md", type: "text/markdown", size: 1, data: "YQ==" }];
+      a.files = [attach({ name: "more.md", type: "text/markdown", size: 1, data: "YQ==" })];
       app.newTask();
       apply(app);
       const b = app.draftOf();

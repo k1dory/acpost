@@ -28,8 +28,7 @@
   // Files handed over by another part of the app (the preview's problems): attached here.
   $effect(() => {
     if (app.pendingFiles.length) {
-      const names = new Set(app.pendingFiles.map(f => f.name)); // a file of the same name: replaced
-      d.files = [...d.files.filter(f => !names.has(f.name)), ...app.pendingFiles];
+      d.take(app.pendingFiles);
       app.pendingFiles = [];
       requestAnimationFrame(() => ta?.focus());
     }

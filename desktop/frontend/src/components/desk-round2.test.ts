@@ -184,3 +184,28 @@ describe("a handoff's form is the unfinished handoff's (review round 3)", () => 
     expect(retry).toEqual(first);
   });
 });
+
+describe("an attachment is itself, not its name and bytes (review round 7)", () => {
+  it("the preview's report attached again while the first send goes: the new one stays for the next message", async () => {
+    const app = await setup();
+    app.thread = "T"; app.target = "agent:claude";
+    const report = { name: "preview-problems.md", type: "text/markdown", size: 4, data: "cHJvYg==" };
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValueOnce(sent.promise);
+    fake.Node.Thread.mockResolvedValue([]);
+    const Composer = (await import("./Composer.svelte")).default;
+    mounted.push(mount(Composer, { target: document.body }));
+    await settle();
+    app.pendingFiles = [report];        // "To the agent"
+    await settle();
+    type(document.querySelector("textarea") as HTMLTextAreaElement, "fix these");
+    (document.querySelector("button.send") as HTMLButtonElement).click();
+    await settle();
+    app.pendingFiles = [{ ...report }];  // the same problems, again, while the send goes
+    await settle();
+    sent.resolve({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    await settle();
+    expect(fake.Node.SendTask.mock.calls[0][0].files.map((f: any) => f.name)).toEqual(["preview-problems.md"]);
+    expect(app.draftOf().files.map(f => f.name)).toEqual(["preview-problems.md"]); // the second one
+  });
+});

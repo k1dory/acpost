@@ -7,8 +7,16 @@ import type { Limits } from "./state.svelte";
 import { newId } from "./ids";
 import { freeName } from "./paste";
 
-/** A file attached. rid: the read that brought it (its own, of all reads). */
-export type Attachment = { name: string; type: string; size: number; data: string; rid?: number };
+/** A file attached. rid: its identity, given once as it enters a composer (attachment()), kept in
+ * every copy (a send's): what a send sent leaves the composer by it, never by name or bytes (the
+ * same file attached again is another attachment). Also the order files were delivered in. */
+export type Attachment = { name: string; type: string; size: number; data: string; readonly rid: number };
+
+let rids = 0;
+/** The one way an attachment is made: with an identity of its own. */
+export function attachment(f: { name: string; type: string; size: number; data: string }): Attachment {
+  return { name: f.name, type: f.type, size: f.size, data: f.data, rid: ++rids };
+}
 /** A file to attach (a File, or what a test gives). */
 export type FileLike = { name: string; type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
 type Namer = (f: { name: string; type: string }, taken: string[]) => string;
@@ -16,8 +24,6 @@ type Namer = (f: { name: string; type: string }, taken: string[]) => string;
 /** One add(): the files it read, in order, as they were read (whatever the form does with them
  * after). done: settled once all are read (or refused). */
 type ReadJob = { results: Attachment[]; done: Promise<void> };
-
-let rids = 0;
 
 /** The files a send takes, owned by it from the click: the form's list then, and what the reads
  * still going then bring after it (each read delivers to the send too, not only to the form; what
@@ -41,7 +47,7 @@ export function sendFiles(d: ComposerDraft): { wait: Promise<void>; files: () =>
  * files make the same request, and a retry has the first one's key. */
 export function withReads(list: Attachment[], reads: Attachment[]): Attachment[] {
   const out = list.map(f => ({ ...f }));
-  for (const r of [...reads].sort((a, b) => (a.rid ?? 0) - (b.rid ?? 0))) out.push({ ...r, name: freeName(r.name, out.map(x => x.name)) });
+  for (const r of [...reads].sort((a, b) => a.rid - b.rid)) out.push({ ...r, name: freeName(r.name, out.map(x => x.name)) });
   return out;
 }
 
@@ -116,6 +122,13 @@ export class ComposerDraft {
   /** What a send made is let go: the next message is a new one (a new task, a sent message). */
   forget() { this.op = new SendOp(); this.epoch++; }
 
+  /** Attaches files handed over whole by another part of the app (the preview's problems): each
+   * a new attachment, with its own identity; one of a name already attached replaces that one. */
+  take(list: { name: string; type: string; size: number; data: string }[]) {
+    const names = new Set(list.map(f => f.name));
+    this.files = [...this.files.filter(f => !names.has(f.name)), ...list.map(attachment)];
+  }
+
   /** Attaches files within the node's limits, one at a time: two drops at once cannot both pass a
    * check made before either was read. A file over the limits is said (fail) and not read; one
    * that cannot be read is said too, and the next is read. `name` gives the name it is attached
@@ -137,7 +150,7 @@ export class ComposerDraft {
         const over = overLimits(d.files, f, limits);
         if (over) { fail(over, f.name); return; }
         // Its name, chosen here: against all attached by now, those added just before it included.
-        const a: Attachment = { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data, rid: ++rids };
+        const a = attachment({ name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data });
         job.results.push({ ...a });
         d.files = withReads(d.files, [a]);
       }

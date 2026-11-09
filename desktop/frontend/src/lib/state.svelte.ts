@@ -635,8 +635,9 @@ class App {
       // A draft edited into another task keeps all it holds: it is that task, sent text and all.
       if (sent && same) {
         d.text = afterSent(d.text, sent.text);
-        // (the send's copies: a file of the click's, or one a read of then brought)
-        d.files = d.files.filter(f => !sent.files.some(s => s.rid !== undefined ? s.rid === f.rid : s.name === f.name && s.data === f.data));
+        // Exactly the attachments it sent, by identity: the same file attached again meanwhile stays.
+        const gone = new Set(sent.files.map(f => f.rid));
+        d.files = d.files.filter(f => !gone.has(f.rid));
       }
       if (same) this.moveDraft(d, "thread:" + m.thread);
       else d.forget();

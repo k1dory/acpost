@@ -9,8 +9,11 @@ vi.mock("./api", async () => {
   return { ...errors, Node, on: (n: string, f: (d: any) => void) => fake.on(n, f), b64: (s: string) => s, unb64: () => new Uint8Array() };
 });
 
+/** An attachment as the app makes one (attachment(): its identity given). */
+let attach: (f: { name: string; type: string; size: number; data: string }) => import("./composer.svelte").Attachment;
 async function load() {
   const { app } = await import("./state.svelte");
+  attach = (await import("./composer.svelte")).attachment; // the app's own instance: identities do not collide
   app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
   app.conn = { ok: true };
   return app;
@@ -237,7 +240,7 @@ describe("a send waits for the files being read (finding 4)", () => {
     fake.Node.SendTask.mockResolvedValue(msg("m1", "T"));
     const d = app.draftOf();
     d.text = "both";
-    d.files = [{ name: "a.txt", type: "text/plain", size: 1, data: "YQ==" }];
+    d.files = [attach({ name: "a.txt", type: "text/plain", size: 1, data: "YQ==" })];
     const read = deferred<ArrayBuffer>();
     d.add([file("b.txt", read.promise)], null, () => {});
     const going = app.submit(d);
@@ -261,7 +264,7 @@ describe("the suite runs the state as the app does", () => {
   it("a $state array gives back proxies (Svelte's client build, not the server's plain objects)", async () => {
     const { ComposerDraft } = await import("./composer.svelte");
     const d = new ComposerDraft("new");
-    const a = { name: "a", type: "", size: 0, data: "" };
+    const a = attach({ name: "a", type: "", size: 0, data: "" });
     d.files = [a];
     expect(d.files[0]).not.toBe(a);
   });
@@ -358,7 +361,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
 
   it("two files of one name, the ready one removed after Send while the other is read: both go, named apart", async () => {
     const { app, d, add, sent } = await setupSend();
-    d.files = [{ name: "a.txt", type: "text/plain", size: 1, data: "MQ==" }];
+    d.files = [attach({ name: "a.txt", type: "text/plain", size: 1, data: "MQ==" })];
     const b = slow("a.txt", "2");
     add([b.f]);
     const going = app.submit(d);
@@ -433,7 +436,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
   it("any reads, removals and pastes before and after the click: what goes is the click's files and what the reads of then brought after it, named apart; a retry is the first request", async () => {
     const { pasteName, freeName } = await import("./paste");
     let seed = 11;
-    const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed % n; };
+    const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return Math.floor(seed / 2 ** 31 * n); }; // high bits: the low ones of this generator repeat
     for (let run = 0; run < 80; run++) {
       vi.resetModules();
       fake = fakeNode();
@@ -463,12 +466,15 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         d.add(group, null, () => {}, paste ? (f, t) => pasteName(mark(f), t) : (f, t) => freeName(mark(f).name, t));
       };
       const end = (r: (typeof reads)[number]) => { r.s.done(); r.ended = true; };
+      // A file handed over whole (the preview's report): the same report again is another attachment.
+      const takeOne = () => { const k = rnd(2); d.take([{ name: "preview-problems.md", type: "text/markdown", size: 1, data: btoa("report" + k) }]); };
       // Each draft starts with a read going: merged, the two run at once.
       { const keep = d; d = other; addSome(); d = main; addSome(); d = keep; }
       // Before the click: adds, reads ending, files removed (some from an add() still reading).
       for (let step = 0; step < 6; step++) {
-        const k = rnd(4);
-        if (k === 3 && !merged) { (app as any).moveDraft(other, "thread:T"); d = main; merged = true; }
+        const k = rnd(5);
+        if (k === 4) takeOne();
+        else if (k === 3 && !merged) { (app as any).moveDraft(other, "thread:T"); d = main; merged = true; }
         else if (k === 3) d = main;
         else if (k === 0) addSome();
         else if (k === 1 && reads.length) end(reads[rnd(reads.length)]);
@@ -478,17 +484,25 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       if (!merged) { (app as any).moveDraft(other, "thread:T"); d = main; }
       if (!reads.length) addSome();
       const atClick = d.files.map(f => atob(f.data));
+      const clickRids = new Set(d.files.map(f => f.rid));
+      let formAtSend: { rid: number; data: string }[] = [];
+      // The node answers once all is done (the composer as it is then is what the answer cleans).
+      let answer = () => {};
+      if (!retry) fake.Node.SendTask.mockImplementation(() => new Promise(r => { answer = () => { formAtSend = d.files.map(f => ({ rid: f.rid, data: f.data })); r(msg("m1", "T")); }; }));
       const going = app.submit(d);
       const pendingAtClick = reads.filter(r => !delivered.has(r.v)).map(r => r.v); // not in the form yet
       // After the click: none of this is the message's.
       for (let step = 0; step < 6; step++) {
-        const k = rnd(3);
-        if (!retry && k === 0) addSome();
+        const k = rnd(4);
+        if (!retry && k === 3) takeOne();
+        else if (!retry && k === 0) addSome();
         else if (!retry && k === 1 && d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
         else if (reads.length) end(reads[rnd(reads.length)]);
         await flush();
       }
       for (const r of reads) end(r);
+      for (let i = 0; i < 5; i++) await flush();
+      answer();
       await going;
       const want = [...atClick, ...pendingAtClick].sort();
       const firstReq = fake.Node.SendTask.mock.calls[0][0];
@@ -499,6 +513,12 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       expect(got.slice(0, atClick.length)).toEqual(atClick);
       expect(got.slice(atClick.length)).toEqual(deliveryOrder.filter(v => pendingAtClick.includes(v)));
       expect(new Set(files.map((f: any) => f.name)).size).toBe(files.length);
+      if (!retry) {
+        // What it sent leaves the composer, exactly those: a file attached after the click stays,
+        // the same report attached again included.
+        const sentHere = (f: { rid: number; data: string }) => clickRids.has(f.rid) || pendingAtClick.includes(atob(f.data));
+        expect(d.files.map(f => f.rid)).toEqual(formAtSend.filter(f => !sentHere(f)).map(f => f.rid));
+      }
       if (retry) {
         await app.submit(d);
         expect(fake.Node.SendTask.mock.calls[1][0]).toEqual(firstReq);
