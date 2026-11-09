@@ -381,36 +381,95 @@ describe("a send owns its attachments from the click (review round 4)", () => {
     expect(sent()).toEqual(["x.txt", "y.txt"]);
   });
 
-  it("any adds, removals and reads after the click: what goes is the click's files and what the reads of then brought", async () => {
-    let seed = 7;
+  it("a file read and removed before Send, in an add() still reading another, does not go", async () => {
+    const { app, d, add, sent } = await setupSend();
+    const a = slow("a.txt", "a"), b = slow("b.txt", "b");
+    add([a.f, b.f]);
+    a.done(); await flush();
+    d.files = [];                // a.txt removed while b.txt is read
+    const going = app.submit(d);
+    b.done();
+    await going;
+    expect(sent()).toEqual(["b.txt"]);
+  });
+
+  it("a screenshot pasted and sent before it is read, the answer lost: the retry is the same request, key and all", async () => {
+    const app = await load();
+    const { pasteName } = await import("./paste");
+    app.thread = "T"; app.target = "agent:claude";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(msg("m1", "T"));
+    const d = app.draftOf();
+    d.text = "this";
+    const img = slow("image.png", "png");
+    d.add([{ ...img.f, type: "image/png" }], null, () => {}, (f, taken) => pasteName(f, taken));
+    const first = app.submit(d);
+    img.done();
+    expect(await first).toBe(false);
+    expect(await app.submit(d)).toBe(true);
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(a.files[0].name).toMatch(/^pasted-\d{6}-\d+\.png$/);
+    expect(b).toEqual(a);
+  });
+
+  it("any reads, removals and pastes before and after the click: what goes is the click's files and what the reads of then brought after it, named apart; a retry is the first request", async () => {
+    const { pasteName, freeName } = await import("./paste");
+    let seed = 11;
     const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed % n; };
-    for (let run = 0; run < 60; run++) {
+    for (let run = 0; run < 80; run++) {
       vi.resetModules();
       fake = fakeNode();
       fake.Node.Chats.mockResolvedValue({ items: [] });
       fake.Node.Agents.mockResolvedValue([]);
-      const { app, d, add } = await setupSend();
-      const want: string[] = [];
-      const pending: ReturnType<typeof slow>[] = [];
+      const { app, d } = await setupSend();
+      const retry = run % 2 === 0; // half the runs: the first answer lost, nothing done after the click, sent again
+      if (retry) fake.Node.SendTask.mockRejectedValueOnce(new Error("lost"));
       let n = 0;
-      for (let i = rnd(3); i > 0; i--) { const v = "r" + n++; d.files = [...d.files, { name: rnd(2) ? "same.txt" : v, type: "text/plain", size: 1, data: btoa(v) }]; want.push(v); }
-      for (let i = 1 + rnd(3); i > 0; i--) { const v = "p" + n++; const s = slow(rnd(2) ? "same.txt" : v, v); pending.push(s); add([s.f]); want.push(v); }
-      const going = app.submit(d);
-      // After the click: none of this is the message's.
-      const later: ReturnType<typeof slow>[] = [];
-      for (let step = 0; step < 8; step++) {
+      const reads: { s: ReturnType<typeof slow>; v: string; ended: boolean }[] = [];
+      const delivered = new Set<string>(); // the namer runs as a read's file is put in the form
+      const addSome = () => {
+        const paste = rnd(2) === 0;
+        const group = Array.from({ length: 1 + rnd(3) }, () => {
+          const v = "f" + n++;
+          const s = slow(paste ? "image.png" : (rnd(2) ? "same.txt" : v + ".txt"), v);
+          const r = { s, v, ended: false };
+          reads.push(r);
+          return { ...s.f, type: paste ? "image/png" : "text/plain", v };
+        });
+        const mark = (f: any) => { delivered.add(f.v); return f; };
+        d.add(group, null, () => {}, paste ? (f, t) => pasteName(mark(f), t) : (f, t) => freeName(mark(f).name, t));
+      };
+      const end = (r: (typeof reads)[number]) => { r.s.done(); r.ended = true; };
+      // Before the click: adds, reads ending, files removed (some from an add() still reading).
+      for (let step = 0; step < 6; step++) {
         const k = rnd(3);
-        if (k === 0 && d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
-        else if (k === 1) { const v = "late" + n++; const s = slow("same.txt", v); later.push(s); add([s.f]); }
-        else { const all = [...pending, ...later]; all[rnd(all.length)].done(); } // a read ends (resolving twice is a no-op)
+        if (k === 0) addSome();
+        else if (k === 1 && reads.length) end(reads[rnd(reads.length)]);
+        else if (d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
         await flush();
       }
-      for (const s of [...pending, ...later]) s.done();
+      if (!reads.length) addSome();
+      const atClick = d.files.map(f => atob(f.data));
+      const going = app.submit(d);
+      const pendingAtClick = reads.filter(r => !delivered.has(r.v)).map(r => r.v); // not in the form yet
+      // After the click: none of this is the message's.
+      for (let step = 0; step < 6; step++) {
+        const k = rnd(3);
+        if (!retry && k === 0) addSome();
+        else if (!retry && k === 1 && d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
+        else if (reads.length) end(reads[rnd(reads.length)]);
+        await flush();
+      }
+      for (const r of reads) end(r);
       await going;
-      const files = fake.Node.SendTask.mock.calls[0][0].files;
-      const datas = files.map((f: any) => atob(f.data)).sort();
-      expect(datas).toEqual([...want].sort());
-      expect(new Set(files.map((f: any) => f.name)).size).toBe(files.length); // never two of one name
+      const want = [...atClick, ...pendingAtClick].sort();
+      const firstReq = fake.Node.SendTask.mock.calls[0][0];
+      const files = firstReq.files ?? [];
+      expect(files.map((f: any) => atob(f.data)).sort()).toEqual(want);
+      expect(new Set(files.map((f: any) => f.name)).size).toBe(files.length);
+      if (retry) {
+        await app.submit(d);
+        expect(fake.Node.SendTask.mock.calls[1][0]).toEqual(firstReq);
+      }
     }
   });
 });

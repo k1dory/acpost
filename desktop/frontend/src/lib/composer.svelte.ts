@@ -5,34 +5,34 @@ import { overLimits } from "./draft";
 import { b64bytes } from "./base64";
 import type { Limits } from "./state.svelte";
 import { newId } from "./ids";
+import { freeName } from "./paste";
 
-/** A file attached. rid: the read that brought it (its own, of all reads), source: the name of the
- * file read (before it was named against those attached). */
-export type Attachment = { name: string; type: string; size: number; data: string; rid?: number; source?: string };
+/** A file attached. rid: the read that brought it (its own, of all reads). */
+export type Attachment = { name: string; type: string; size: number; data: string; rid?: number };
 /** A file to attach (a File, or what a test gives). */
 export type FileLike = { name: string; type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
 type Namer = (f: { name: string; type: string }, taken: string[]) => string;
 
 /** One add(): the files it read, in order, as they were read (whatever the form does with them
- * after), and how they are named. done: settled once all are read (or refused). */
-type ReadJob = { results: Attachment[]; name: Namer; done: Promise<void> };
+ * after). done: settled once all are read (or refused). */
+type ReadJob = { results: Attachment[]; done: Promise<void> };
 
 let rids = 0;
 
-/** The files a send takes, owned by it from the click: the files attached then, and what the
- * reads already going then bring (each read delivers to the send too, not only to the form),
- * named against the send's own list. The form after the click is not asked: a file removed
- * from it, or attached to it, is the next message's business. wait() is when those reads end. */
+/** The files a send takes, owned by it from the click: the form's list then, and what the reads
+ * still going then bring after it (each read delivers to the send too, not only to the form; what
+ * they brought before the click is in that list, or was removed from it). A read's file keeps the
+ * name it was given once, when read (a pasted picture's pasted-…-n is not made again); one that
+ * the send's own list has already is told apart there (freeName). The form after the click is not
+ * asked. wait() is when those reads end. */
 export function sendFiles(d: ComposerDraft): { wait: Promise<void>; files: () => Attachment[] } {
-  const had = [...d.files], jobs = [...d.reading];
+  const had = [...d.files], jobs = [...d.reading].map(j => ({ j, from: j.results.length }));
   return {
-    wait: Promise.all(jobs.map(j => j.done)).then(() => {}),
+    wait: Promise.all(jobs.map(({ j }) => j.done)).then(() => {}),
     files: () => {
       const out = had.map(f => ({ ...f }));
-      const have = new Set<number | undefined>(had.map(f => f.rid).filter(r => r !== undefined));
-      for (const j of jobs) for (const r of j.results) {
-        if (have.has(r.rid)) continue; // read before the click: in the click's list already
-        out.push({ ...r, name: j.name({ name: r.source ?? r.name, type: r.type }, out.map(x => x.name)) });
+      for (const { j, from } of jobs) for (const r of j.results.slice(from)) {
+        out.push({ ...r, name: freeName(r.name, out.map(x => x.name)) });
       }
       return out;
     },
@@ -118,7 +118,7 @@ export class ComposerDraft {
     name: Namer = f => f.name): Promise<void> {
     const files = [...list];
     const at = this.live();
-    const job: ReadJob = { results: [], name, done: Promise.resolve() };
+    const job: ReadJob = { results: [], done: Promise.resolve() };
     at.reading.add(job);
     at.adding = at.adding.then(async () => {
       for (const f of files) {
@@ -131,7 +131,7 @@ export class ComposerDraft {
         const over = overLimits(d.files, f, limits);
         if (over) { fail(over, f.name); return; }
         // Its name, chosen here: against all attached by now, those added just before it included.
-        const a: Attachment = { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data, rid: ++rids, source: f.name };
+        const a: Attachment = { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data, rid: ++rids };
         job.results.push({ ...a });
         d.files = [...d.files, a];
       }
