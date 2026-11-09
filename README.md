@@ -352,7 +352,8 @@ message instead of creating another; keys are per sender and kept as long as the
 through the hub whose answer is not known yet makes a repeat fail with `unavailable` (try again
 shortly); one the hub refused releases its key, so the next repeat sends it. One the hub still has no
 trace of after 30 s may yet arrive late: the node has the hub disown it, and the hub either has it
-(the copy follows it) or refuses it from then on, however late it comes, and the key is released. A
+(the copy follows it) or refuses it if it comes within the next seven days (far past any retry),
+and the key is released. A
 hub of a version before disown cannot refuse a late send: there, as before, the copy ends as not sent
 after 30 s and a send held longer on its way can still run. A `cancel` of
 such a message returns it unfinished: it ends with the hub's outcome once the hub has answered
@@ -495,7 +496,7 @@ ends with `event: acpost-error` carrying the same envelope and `status` (event k
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
-| `POST /v1/messages/{id}/disown` | (a joined node, to its hub) `{"from":"…@<node>","key":"…"}`: give up a send whose answer never came. `{"found":true,"message":{…}}` when the hub has it (under the id or the key), else `{"found":false}` and the id is refused from then on (a 404 is a hub without disown) |
+| `POST /v1/messages/{id}/disown` | (a joined node, to its hub) `{"from":"…@<node>","key":"…"}`: give up a send whose answer never came. `{"found":true,"message":{…}}` when the hub has it (under the id or the key), else `{"found":false}` and the id is refused for seven days (a 404 is a hub without disown) |
 | `GET /v1/messages/by-idem?from=&key=` | (a joined node, to its hub) the message one of its senders (`…@<node>`) sent with an idempotency key: what became of a send whose answer was lost. `{"found":true,"message":{…}}`, or `{"found":false}` (a 404 is a hub without the lookup, not an answer) |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |
 | `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…","files":[…]}` or `{"lease":"…","error":"…"}` |

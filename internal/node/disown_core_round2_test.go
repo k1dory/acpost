@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,4 +122,46 @@ func TestHubDisown(t *testing.T) {
 	if _, _, err := hub.Send(ctx, peer, node.SendRequest{To: "agent:bot", Body: "late", ID: id, From: "user:u@edge"}); err == nil {
 		t.Fatal("a disowned send was taken")
 	}
+}
+
+// A hub before disown: the route is missing there and its catch-all answers 404 not_found. Past
+// the wait the copy ends as not sent, as on main, its key free: not forwarding for ever.
+func TestOldHubWithoutDisownEndsLostSend(t *testing.T) {
+	node.FastHubForTest(t, 30*time.Millisecond)
+	l := &lostSend{release: make(chan struct{}), late: make(chan int, 1)}
+	old := func(h http.Handler) http.Handler {
+		h = l.wrap(h)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/disown") {
+				r.URL.Path += "-unknown" // what this hub's mux does not have: its catch-all answers
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+	_, edge, edgeStore := hubPairWith(t, old)
+	ctx := context.Background()
+	user := edge.LocalUser()
+	if _, _, err := edge.Send(ctx, user, node.SendRequest{To: "agent:bot@hub", Body: "lost", IdemKey: "old"}); err == nil {
+		t.Fatal("the lost send succeeded")
+	}
+	m, err := edgeStore.ByIdem(ctx, user.Address(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := edgeStore.Get(ctx, m.ID)
+		if err == nil && got.Origin == "unsent" && got.State == store.Failed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the copy is %s %q: blocked on a hub without disown", got.State, got.Origin)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := edgeStore.ByIdem(ctx, user.Address(), "old"); err == nil {
+		t.Fatal("the key stayed taken")
+	}
+	close(l.release)
+	<-l.late
 }

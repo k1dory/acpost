@@ -1583,9 +1583,10 @@ func (c *Client) Disown(ctx context.Context, id, from, key string) (store.Messag
 		Message wireMessage `json:"message"`
 	}
 	code, err := c.do(ctx, "POST", "/v1/messages/"+url.PathEscape(id)+"/disown", nil, DisownRequest{From: from, Key: key}, &out, nil)
-	var ce *Error
-	if err != nil && (code == http.StatusNotFound || code == http.StatusMethodNotAllowed) && errors.As(err, &ce) && ce.Code != "not_found" {
-		return store.Message{}, false, ErrNoDisown // no such route: an older hub
+	if err != nil && (code == http.StatusNotFound || code == http.StatusMethodNotAllowed) {
+		// No such route: an older hub (its catch-all answers not_found, JSON or not). The route
+		// never answers 404 itself: a message it does not have is found false.
+		return store.Message{}, false, ErrNoDisown
 	}
 	if err != nil {
 		return store.Message{}, false, err

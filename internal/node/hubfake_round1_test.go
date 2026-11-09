@@ -135,7 +135,9 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&rq)
 		_ = json.NewEncoder(w).Encode(map[string]int64{"relayed": rq.After + int64(len(rq.Events))})
 	case r.Method == "POST" && part == "disown" && f.oldRoutes:
-		http.NotFound(w, r) // a hub before disown: no such route
+		// A hub before disown: its catch-all for a route it does not have, as main's mux answers.
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": r.Method + " " + r.URL.Path + ": no such endpoint"}})
 	case r.Method == "POST" && part == "disown":
 		var rq client.DisownRequest
 		_ = json.NewDecoder(r.Body).Decode(&rq)

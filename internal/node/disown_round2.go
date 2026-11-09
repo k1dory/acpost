@@ -11,6 +11,7 @@ import (
 // Disown is a joined node giving up a message it sent through this hub as from (key: its
 // idempotency key, or "") and never had the answer for: found, the hub has it and the node's copy
 // follows it; not found, the id is refused from now on (a send of it that comes late is not run).
+// It never answers not_found: a node reads a 404 on the route as a hub without it (client.Disown).
 func (n *Node) Disown(ctx context.Context, p Principal, id, from, key string) (store.Message, bool, error) {
 	if p.Kind != "node" {
 		return store.Message{}, false, errf("refused", "only a joined node disowns its sends")
