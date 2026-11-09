@@ -211,17 +211,13 @@ func saveFiles(files []store.File, dir string, force bool, exists string) ([]sav
 	return out, nil
 }
 
-// writeIn writes name in root: a new file (O_EXCL: an existing name, a symlink too, is refused), or
-// with force a new file renamed over the old one, which keeps the old one's mode; a symlink is
-// replaced, its target never written.
+// writeIn writes name in root: a new file (an existing name, a symlink too, is refused), or with
+// force a new file renamed over the old one, which keeps the old one's mode; a symlink is
+// replaced, its target never written. Either way the name appears only once all of it is written:
+// a full disk or a killed process leaves no cut file that the next run would call existing.
 func writeIn(root *os.Root, name string, data []byte, force bool) error {
 	if !force {
-		w, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(data)
-		return errors.Join(err, w.Close())
+		return createIn(root, name, data)
 	}
 	mode := os.FileMode(0o644) // and the umask, applied by the system
 	keep := false
@@ -405,4 +401,36 @@ func saveReplyFiles(ctx context.Context, c *client.Client, m store.Message, dir 
 		}
 	}
 	return saveFiles(reply, dir, false, "--save names another directory; `acpost files "+m.ID+" --reply -o DIR --force` overwrites")
+}
+
+// createIn writes a new file: whole under a name of its own, then linked to name (link(2) refuses
+// a name that exists, as O_EXCL does). Where links are not had (some network or FAT file
+// systems), written in place, and removed when the write fails.
+func createIn(root *os.Root, name string, data []byte) error {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	tmp := ".acpost-" + hex.EncodeToString(b[:])
+	w, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	if err = errors.Join(err, w.Close()); err != nil {
+		_ = root.Remove(tmp)
+		return err
+	}
+	err = root.Link(tmp, name)
+	_ = root.Remove(tmp)
+	if err == nil || errors.Is(err, os.ErrExist) {
+		return err
+	}
+	w, err = root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	if err = errors.Join(err, w.Close()); err != nil {
+		_ = root.Remove(name)
+	}
+	return err
 }

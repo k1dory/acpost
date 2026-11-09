@@ -3,7 +3,6 @@ package main
 // End to end: the built binary, a node it serves, and the commands an agent or a script would run.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -33,7 +32,7 @@ func TestMain(m *testing.M) {
 	}
 	binDir = dir
 	for pkg, name := range map[string]string{".": "acpost", "../../internal/acptest/fakeagent": "fakeagent"} {
-		out, err := exec.Command("go", "build", "-o", filepath.Join(dir, name), pkg).CombinedOutput()
+		out, err := exec.Command("go", buildArgs(filepath.Join(dir, name), pkg)...).CombinedOutput()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "build %s: %v\n%s", pkg, err, out)
 			os.Exit(1)
@@ -70,6 +69,7 @@ func newEnv(t *testing.T, yaml string) *env {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	e := &env{t: t, dir: dir, config: filepath.Join(dir, "config.yaml"), sock: filepath.Join(dir, "s", "acpost.sock")}
+	t.Cleanup(e.checkChildren) // after the nodes stop, before the directory goes
 	full := fmt.Sprintf("node:\n  name: %s\n  listen: [unix://%s]\nstore: sqlite://%s/s/store.db\n%s",
 		"n"+filepath.Base(dir), e.sock, dir, yaml)
 	if strings.Contains(yaml, "node:") {
@@ -89,21 +89,7 @@ type result struct {
 
 func (e *env) run(stdin string, args ...string) result {
 	e.t.Helper()
-	cmd := exec.Command(filepath.Join(binDir, "acpost"), args...)
-	cmd.Env = append(cleanEnv(), e.vars...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	err := cmd.Run()
-	code := 0
-	if ee, ok := err.(*exec.ExitError); ok {
-		code = ee.ExitCode()
-	} else if err != nil {
-		e.t.Fatal(err)
-	}
-	return result{out.String(), errb.String(), code}
+	return e.runFor(childBound, stdin, args...)
 }
 
 func cleanEnv() []string {
@@ -140,7 +126,12 @@ func (e *env) serve(extra ...string) {
 		once.Do(func() {
 			cmd.Process.Signal(syscall.SIGTERM)
 			done := make(chan struct{})
-			go func() { cmd.Wait(); close(done) }()
+			go func() {
+				if err := cmd.Wait(); err != nil {
+					e.t.Errorf("the node exited badly: %v (serve.log says why)", err)
+				}
+				close(done)
+			}()
 			select {
 			case <-done:
 			case <-time.After(10 * time.Second):
@@ -159,7 +150,7 @@ func (e *env) serve(extra ...string) {
 	})
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if r := e.run("", "status"); r.code == 0 {
+		if e.answers() {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -490,7 +481,9 @@ tokens:
 	hubCmd.Start()
 	t.Cleanup(func() {
 		hubCmd.Process.Signal(syscall.SIGTERM)
-		hubCmd.Wait()
+		if err := hubCmd.Wait(); err != nil {
+			t.Errorf("the hub exited badly: %v", err)
+		}
 		if t.Failed() {
 			b, _ := os.ReadFile(filepath.Join(hub.dir, "serve.log"))
 			t.Logf("hub log:\n%s", b)
@@ -680,6 +673,7 @@ func TestFollowAcrossHub(t *testing.T) {
 	}
 	start := time.Now()
 	var first time.Duration
+	var runningAtFirst bool
 	var text strings.Builder
 	var kinds []string
 	m, err := c.Follow(context.Background(), id, 0, func(e store.Event) error {
@@ -687,6 +681,10 @@ func TestFollowAcrossHub(t *testing.T) {
 		if e.Kind == "text" {
 			if first == 0 {
 				first = time.Since(start)
+				// Asked now, not timed: the message is still going when its text starts to come.
+				if now, err := c.Get(context.Background(), id); err == nil && !now.State.Final() {
+					runningAtFirst = true
+				}
 			}
 			var d map[string]string
 			json.Unmarshal([]byte(e.Data), &d)
@@ -701,8 +699,8 @@ func TestFollowAcrossHub(t *testing.T) {
 	if len(kinds) < 3 || kinds[0] != "thought" {
 		t.Fatalf("kinds %v", kinds)
 	}
-	if first > total-700*time.Millisecond {
-		t.Fatalf("the first text came at %v of %v: not while the turn ran", first, total)
+	if !runningAtFirst {
+		t.Fatalf("the first text came at %v of %v, once the message was final: not while the turn ran", first, total)
 	}
 	// What came is kept on b's copy: show --follow later prints it whole.
 	if r := b.run("", "show", id, "--follow"); r.code != 0 || r.out != m.Reply+"\n" {
@@ -713,7 +711,7 @@ func TestFollowAcrossHub(t *testing.T) {
 // The sender's node restarted while the agent wrote: the events it missed come from the hub's
 // pages before its copy is final.
 func TestFollowAcrossHubAfterRestart(t *testing.T) {
-	_, b := hubPair(t)
+	a, b := hubPair(t)
 	var id string
 	deadline := time.Now().Add(15 * time.Second)
 	for {
@@ -727,9 +725,15 @@ func TestFollowAcrossHubAfterRestart(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	time.Sleep(time.Second)
+	// Stopped once its text has started to come, started again once the agent wrote more.
+	if !until(15*time.Second, func() bool { return b.textEvents(id) > 0 }) {
+		t.Fatal("no text reached the sender's node")
+	}
+	seen := b.textEvents(id)
 	b.stop()
-	time.Sleep(1500 * time.Millisecond) // the agent writes on meanwhile
+	if !until(15*time.Second, func() bool { return a.textEvents(id) > seen }) {
+		t.Fatalf("the agent's node has %d text events, the sender's had %d", a.textEvents(id), seen)
+	}
 	b.serve()
 	out := b.ok("", "wait", id, "--timeout", "30s")
 	evs := b.ok("", "show", id, "--follow", "--json")

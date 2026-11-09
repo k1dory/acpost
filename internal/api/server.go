@@ -1081,21 +1081,21 @@ func (s *server) forgeInfo(w http.ResponseWriter, r *http.Request, p node.Princi
 }
 
 func (s *server) forgePulls(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	items, err := s.n.Pulls(r.Context(), p, forgeQuery(r), r.URL.Query().Get("state"))
+	l, err := s.n.PullList(r.Context(), p, forgeQuery(r), r.URL.Query().Get("state"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items)})
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(l.Items), "truncated": l.Truncated})
 }
 
 func (s *server) forgeChecks(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	items, err := s.n.Checks(r.Context(), p, forgeQuery(r), r.URL.Query().Get("ref"))
+	l, err := s.n.CheckList(r.Context(), p, forgeQuery(r), r.URL.Query().Get("ref"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items)})
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(l.Items), "truncated": l.Truncated})
 }
 
 func (s *server) forgeLog(w http.ResponseWriter, r *http.Request, p node.Principal) {

@@ -9,14 +9,17 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/k1dory/acpost/internal/client"
@@ -27,14 +30,15 @@ import (
 
 // Exit codes.
 const (
-	exitOK       = 0
-	exitError    = 1
-	exitUsage    = 2
-	exitNotFound = 3
-	exitTimeout  = 4
-	exitFailed   = 5
-	exitNoNode   = 6
-	exitRefused  = 7
+	exitOK          = 0
+	exitError       = 1
+	exitUsage       = 2
+	exitNotFound    = 3
+	exitTimeout     = 4
+	exitFailed      = 5
+	exitNoNode      = 6
+	exitRefused     = 7
+	exitInterrupted = 130 // as a shell says a command ended by SIGINT
 )
 
 type exitErr struct {
@@ -53,7 +57,22 @@ type globals struct {
 	node, token, config string
 	json                bool
 	explicitNode        bool
+	cancel              context.CancelFunc // of a quick command's budget
+	status              *client.Status     // what connect's probe was told (nil: not asked)
+	flagErr             bool               // the flags did not parse: g.json is as far as cobra got
 }
+
+// How long the CLI waits for a node that took the connection but does not answer: a probe of the
+// local node (then it is said to be stuck, not started again), and a whole quick command (one
+// that only asks: status, list…). Commands that wait by design (wait, send --wait, recv --wait,
+// show --follow, term, forge open/merge waiting for an approval) keep their own budgets.
+const (
+	probeTimeout = 5 * time.Second
+	quickTimeout = 30 * time.Second
+)
+
+// quick marks a command whose whole run is bounded by quickTimeout.
+var quick = map[string]string{"quick": "1"}
 
 func (g *globals) configPath() string {
 	p := g.config
@@ -70,14 +89,28 @@ func (g *globals) configPath() string {
 func main() {
 	g := &globals{}
 	root := rootCmd(g) // registering the flags sets their defaults
-	// Known before flags are parsed: an error in parsing them is reported in JSON too.
-	g.json = os.Getenv("ACPOST_JSON") == "1" || slices.Contains(os.Args[1:], "--json") || slices.Contains(os.Args[1:], "--json=true")
-	err := root.ExecuteContext(context.Background())
+	// Known before flags are parsed: an error in parsing them is reported in JSON too. Kept apart
+	// from g.json, which cobra sets as it goes and leaves where a bad flag stopped it.
+	parseJSON := jsonWanted(valueFlags(root, os.Args[1:]), os.Args[1:], os.Getenv("ACPOST_JSON"))
+	g.json = parseJSON
+	// Ctrl-C ends a command through its context: term restores the terminal and closes its own,
+	// a save is not cut midway; a second Ctrl-C ends it at once.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	go func() { <-ctx.Done(); stop() }()
+	err := root.ExecuteContext(ctx)
+	// Interrupted is what a Ctrl-C makes it, whatever the command made of its ended context (term
+	// ends cleanly, a cut error body reads as the node's error): only the signal ends ctx.
+	if ctx.Err() != nil || errors.Is(err, errInterrupted) {
+		err = &exitErr{code: exitInterrupted, name: "interrupted", err: errors.New("interrupted")}
+	}
 	if err == nil {
 		return
 	}
 	code := exitCode(err)
 	hint := hintOf(err)
+	if g.flagErr {
+		g.json = parseJSON // the last --json given decides, wherever the bad flag was
+	}
 	if g.json {
 		e := map[string]any{"code": codeName(err), "message": err.Error()}
 		if hint != "" {
@@ -94,6 +127,15 @@ func main() {
 	os.Exit(code)
 }
 
+// codes are the error codes a node says (and --json shows) and the exit codes they are.
+var codes = []struct {
+	exit int
+	name string
+}{
+	{exitUsage, "invalid"}, {exitNotFound, "not_found"}, {exitTimeout, "timeout"},
+	{exitFailed, "failed"}, {exitNoNode, "unavailable"}, {exitRefused, "refused"},
+}
+
 func exitCode(err error) int {
 	var ee *exitErr
 	if errors.As(err, &ee) {
@@ -101,21 +143,14 @@ func exitCode(err error) int {
 	}
 	var ce *client.Error
 	if errors.As(err, &ce) {
-		switch ce.Code {
-		case "invalid":
-			return exitUsage
-		case "not_found":
-			return exitNotFound
-		case "refused":
-			return exitRefused
-		case "timeout":
-			return exitTimeout
-		case "unavailable":
-			return exitNoNode
+		for _, c := range codes {
+			if c.name == ce.Code && c.exit != exitFailed { // a message fails; a request does not
+				return c.exit
+			}
 		}
 		return exitError
 	}
-	if errors.Is(err, client.ErrUnavailable) {
+	if errors.Is(err, client.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded) {
 		return exitNoNode
 	}
 	if isFlagErr(err) {
@@ -139,6 +174,8 @@ func hintOf(err error) string {
 			"run acpost outside the sandbox (allow the command), or reach the node over TCP with --node http://127.0.0.1:PORT --token …"
 	case errors.Is(err, client.ErrUnavailable):
 		return "no node answers there: `acpost serve` starts one, or check --node / ACPOST_NODE"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "the node took the request but did not answer in time: it may be stuck (its log says), or the network slow"
 	case exitCode(err) == exitUsage:
 		return "`acpost <command> --help` shows the flags"
 	}
@@ -154,28 +191,57 @@ func codeName(err error) string {
 	if errors.As(err, &ce) {
 		return ce.Code
 	}
-	switch exitCode(err) {
-	case exitUsage:
-		return "invalid"
-	case exitNotFound:
-		return "not_found"
-	case exitTimeout:
-		return "timeout"
-	case exitFailed:
-		return "failed"
-	case exitNoNode:
-		return "unavailable"
-	case exitRefused:
-		return "refused"
+	code := exitCode(err)
+	for _, c := range codes {
+		if c.exit == code {
+			return c.name
+		}
 	}
 	return "error"
 }
 
+// isFlagErr is cobra's refusal of an unknown command (flags and arguments are wrapped: see
+// usageArgs and SetFlagErrorFunc).
 func isFlagErr(err error) bool {
-	s := err.Error()
-	return strings.HasPrefix(s, "unknown flag") || strings.HasPrefix(s, "unknown shorthand") || strings.Contains(s, "flag needs an argument") ||
-		strings.HasPrefix(s, "invalid argument") || strings.HasPrefix(s, "required flag") || strings.Contains(s, "accepts ") ||
-		strings.HasPrefix(s, "unknown command") || strings.Contains(s, "requires at least")
+	return strings.HasPrefix(err.Error(), "unknown command")
+}
+
+// jsonWanted says whether the output is JSON: the last --json flag given (--json, --json=BOOL),
+// else ACPOST_JSON=1. The value after a flag that takes one (valued) is skipped: --body --json=false
+// is a body.
+func jsonWanted(valued map[string]bool, args []string, env string) bool {
+	want := env == "1"
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		if valued[a] {
+			i++
+		} else if a == "--json" {
+			want = true
+		} else if v, ok := strings.CutPrefix(a, "--json="); ok {
+			if b, err := strconv.ParseBool(v); err == nil {
+				want = b
+			}
+		}
+	}
+	return want
+}
+
+// usageArgs makes the argument checks of a command and those under it usage errors (exit 2).
+func usageArgs(c *cobra.Command) {
+	if check := c.Args; check != nil {
+		c.Args = func(cmd *cobra.Command, args []string) error {
+			if err := check(cmd, args); err != nil {
+				return usageErr(err)
+			}
+			return nil
+		}
+	}
+	for _, sub := range c.Commands() {
+		usageArgs(sub)
+	}
 }
 
 func rootCmd(g *globals) *cobra.Command {
@@ -194,19 +260,24 @@ func rootCmd(g *globals) *cobra.Command {
 			if g.token == "" {
 				g.token = os.Getenv("ACPOST_TOKEN")
 			}
-			if !g.json {
-				g.json = os.Getenv("ACPOST_JSON") == "1"
+			if !cmd.Flags().Changed("json") {
+				g.json = os.Getenv("ACPOST_JSON") == "1" // the flag, when given, wins
 			}
 			if g.config == "" {
 				g.config = os.Getenv("ACPOST_CONFIG")
 			}
+			if cmd.Annotations["quick"] != "" {
+				ctx, cancel := context.WithTimeout(cmd.Context(), quickTimeout)
+				g.cancel = cancel
+				cmd.SetContext(ctx)
+			}
 			return nil
 		},
 	}
-	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErr(err) })
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { g.flagErr = true; return usageErr(err) })
 	pf := root.PersistentFlags()
 	pf.StringVar(&g.node, "node", "", "node to talk to: unix:///path, http(s)://host:port (ACPOST_NODE; default: the local node)")
-	pf.StringVar(&g.token, "token", "", "bearer token (ACPOST_TOKEN)")
+	pf.StringVar(&g.token, "token", "", "bearer token (ACPOST_TOKEN: given here it shows in ps, the variable does not)")
 	pf.BoolVar(&g.json, "json", false, "JSON output (ACPOST_JSON=1)")
 	pf.StringVar(&g.config, "config", "", "configuration file (ACPOST_CONFIG; default ~/.config/acpost/config.yaml)")
 
@@ -217,21 +288,16 @@ func rootCmd(g *globals) *cobra.Command {
 	message := &cobra.Command{Use: "message", Short: "The message commands again (acpost message send … = acpost send …)"}
 	message.AddCommand(msgCmds()...)
 	root.AddCommand(message, filesCmd(g), attachCmd(g), agentsCmd(g), sessionsCmd(g), statusCmd(g), usageCmd(g), changesCmd(g), termCmd(g), forgeCmd(g), conversationsCmd(g), approveCmd(g), serveCmd(g))
+	usageArgs(root)
 	return root
 }
 
 // connect returns a client for the node, starting the local node first if it is not running and
 // none was named explicitly.
 func (g *globals) connect(ctx context.Context) (*client.Client, error) {
-	url := g.node
-	var cfg *config.Config
-	if url == "" {
-		var err error
-		cfg, err = config.Load(g.configPath())
-		if err != nil {
-			return nil, usageErr(err)
-		}
-		url = localURL(cfg)
+	url, cfg, err := g.nodeURL()
+	if err != nil {
+		return nil, err
 	}
 	c, err := client.New(url, g.token, "")
 	if err != nil {
@@ -240,8 +306,21 @@ func (g *globals) connect(ctx context.Context) (*client.Client, error) {
 	if g.explicitNode || cfg == nil || !strings.HasPrefix(url, "unix://") {
 		return c, nil
 	}
-	if _, err := c.Status(ctx); err == nil || !errors.Is(err, client.ErrUnavailable) {
+	st, err := probe(ctx, c)
+	if err == nil {
+		g.status = &st
+	}
+	if err == nil || !errors.Is(err, client.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// Something holds the socket and does not answer: a stuck node, not a missing one
+			// (another started now would find its store taken).
+			return nil, &exitErr{code: exitNoNode, name: "unavailable", err: fmt.Errorf("the node at %s does not answer (%s)", url, probeTimeout),
+				hint: "it may be stuck: its log is " + filepath.Join(filepath.Dir(strings.TrimPrefix(url, "unix://")), "acpost.log")}
+		}
 		return c, nil
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err() // interrupted while asking: not a node to start
 	}
 	if err := autostart(ctx, g, c, strings.TrimPrefix(url, "unix://")); err != nil {
 		return nil, err
@@ -278,7 +357,13 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(self, "serve", "--config", g.configPath())
+	// --config only when one was named: the child finds the implicit default as this command did,
+	// and may find it absent (a named file must exist).
+	args := []string{"serve"}
+	if g.config != "" {
+		args = append(args, "--config", g.configPath())
+	}
+	cmd := exec.Command(self, args...)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Dir = "/"
@@ -289,25 +374,44 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	go func() { _ = cmd.Wait(); close(exited) }()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := c.Status(ctx); err == nil {
-			_ = cmd.Process.Release()
+		if ctx.Err() != nil {
+			return ctx.Err() // the node goes on starting on its own; this command is interrupted
+		}
+		if _, err := probe(ctx, c); err == nil {
+			// Left running, detached (its own session): not Released, which would race the
+			// goroutine waiting for it (the race detector's find).
 			return nil
 		}
 		select {
 		case <-exited:
 			// Another command may have started a node at the same moment: it holds the store.
-			if _, err := c.Status(ctx); err == nil {
+			if _, err := probe(ctx, c); err == nil {
 				return nil
 			}
 			time.Sleep(200 * time.Millisecond)
-			if _, err := c.Status(ctx); err == nil {
+			if _, err := probe(ctx, c); err == nil {
 				return nil
 			}
 			return startFailed(filepath.Join(dir, "acpost.log"), logStart)
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	return &exitErr{code: exitNoNode, err: fmt.Errorf("the local node did not answer within 15s"), hint: "its log is " + filepath.Join(dir, "acpost.log")}
+}
+
+// probe asks the node for its status, waiting probeTimeout at most.
+func probe(ctx context.Context, c *client.Client) (client.Status, error) {
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	st, err := c.Status(pctx)
+	if err != nil && ctx.Err() == nil && errors.Is(pctx.Err(), context.DeadlineExceeded) {
+		// Out of time, whatever the client calls it (a body that stops midway is "unavailable"
+		// there): the node is there and stuck, not missing.
+		return st, fmt.Errorf("%w: %w", context.DeadlineExceeded, err)
+	}
+	return st, err
 }
 
 // startFailed says why the node just started from this command exited: the last line it logged.
@@ -338,17 +442,18 @@ func printJSON(v any) {
 
 // readBody takes the body from --body, --body-file or stdin (when it is not a terminal).
 func readBody(cmd *cobra.Command, body, file string) (string, bool, error) {
+	ctx := cmd.Context()
 	switch {
 	case cmd.Flags().Changed("body"):
 		return body, true, nil
 	case file == "-":
-		b, err := io.ReadAll(os.Stdin)
+		b, err := readCtx(ctx, func() ([]byte, error) { return io.ReadAll(os.Stdin) })
 		return string(b), true, err
 	case file != "":
-		b, err := os.ReadFile(file)
+		b, err := readCtx(ctx, func() ([]byte, error) { return os.ReadFile(file) }) // a FIFO waits too
 		return string(b), true, err
 	case !term.IsTerminal(int(os.Stdin.Fd())):
-		b, err := io.ReadAll(os.Stdin)
+		b, err := readCtx(ctx, func() ([]byte, error) { return io.ReadAll(os.Stdin) })
 		if err != nil {
 			return "", false, err
 		}
@@ -356,6 +461,76 @@ func readBody(cmd *cobra.Command, body, file string) (string, bool, error) {
 	}
 	return "", false, nil
 }
+
+// readCtx is read, given up when ctx ends (Ctrl-C while stdin is still open): a read of a pipe
+// or a terminal cannot be stopped, so it is left behind for the process's exit to end.
+func readCtx(ctx context.Context, read func() ([]byte, error)) ([]byte, error) {
+	type got struct {
+		b   []byte
+		err error
+	}
+	ch := make(chan got, 1)
+	go func() {
+		b, err := read()
+		ch <- got{b, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.b, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// readSecret reads a line from the terminal without echoing it. The terminal's mode is changed
+// and put back here, in this goroutine, before and after the read, never by the reader left behind
+// on a cancel: a context already ended changes nothing, and one that ends meanwhile finds the mode
+// set and puts it back. Raw, a typed Ctrl-C is a byte, read as an interrupt too.
+func readSecret(ctx context.Context, fd int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	old, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, err
+	}
+	defer term.Restore(fd, old)
+	return readCtx(ctx, func() ([]byte, error) {
+		var line []byte
+		var b [1]byte
+		for {
+			n, err := syscall.Read(fd, b[:])
+			if err == syscall.EINTR {
+				continue
+			}
+			if err != nil {
+				return line, err
+			}
+			if n == 0 {
+				return line, io.EOF
+			}
+			switch b[0] {
+			case '\r', '\n':
+				return line, nil
+			case 3: // Ctrl-C
+				return nil, errInterrupted
+			case 4: // Ctrl-D
+				if len(line) == 0 {
+					return nil, io.EOF
+				}
+			case 127, 8: // erase
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+				}
+			default:
+				line = append(line, b[0])
+			}
+		}
+	})
+}
+
+// errInterrupted is a Ctrl-C read as a byte (a terminal in raw mode sends no signal).
+var errInterrupted = errors.New("interrupted")
 
 func sendCmd(g *globals) *cobra.Command {
 	var to, body, bodyFile, task, thread, idem, session, save string
@@ -376,6 +551,22 @@ func sendCmd(g *globals) *cobra.Command {
 			}
 			if save != "" && !wait {
 				return usageErr(errors.New("--save goes with --wait"))
+			}
+			// Every flag is checked before anything happens: no node started, no file read for a
+			// send that a typo refuses.
+			if err := nonNegative(map[string]time.Duration{"--ttl": ttl, "--timeout": timeout}); err != nil {
+				return err
+			}
+			var metas map[string]string
+			for _, kv := range meta {
+				k, v, found := strings.Cut(kv, "=")
+				if !found || k == "" {
+					return usageErr(fmt.Errorf("--meta %q: k=v", kv))
+				}
+				if metas == nil {
+					metas = map[string]string{}
+				}
+				metas[k] = v
 			}
 			text, ok, err := readBody(cmd, body, bodyFile)
 			if err != nil {
@@ -399,21 +590,13 @@ func sendCmd(g *globals) *cobra.Command {
 			}
 			files = append(files, linked...)
 			req := client.SendRequest{To: to, Body: text, Task: task, Thread: thread, Session: session, Files: files,
-				Cwd: cwd, Model: model, Effort: effort, Mode: mode}
-			for _, kv := range meta {
-				k, v, found := strings.Cut(kv, "=")
-				if !found || k == "" {
-					return usageErr(fmt.Errorf("--meta %q: k=v", kv))
-				}
-				if req.Meta == nil {
-					req.Meta = map[string]string{}
-				}
-				req.Meta[k] = v
-			}
+				Cwd: cwd, Model: model, Effort: effort, Mode: mode, Meta: metas}
 			if ttl > 0 {
 				req.TTL = ttl.String()
 			}
-			m, _, err := c.Send(ctx, req, idem)
+			sctx, done := context.WithTimeout(ctx, requestBudget(req.Body, req.Files))
+			m, _, err := c.Send(sctx, req, idem)
+			done()
 			if err != nil {
 				return err
 			}
@@ -465,6 +648,14 @@ func waitAndPrint(ctx context.Context, g *globals, c *client.Client, ids []strin
 			left = max(time.Until(deadline), time.Millisecond)
 		}
 		m, err := c.WaitFinal(ctx, id, left)
+		var ce *client.Error
+		if errors.As(err, &ce) && ce.Code == "timeout" {
+			// The long poll itself ran into the deadline (the node answered late): the message as
+			// it is now, said as any other one still going (its text so far, the hint to go on).
+			gctx, done := context.WithTimeout(ctx, quickTimeout)
+			m, err = c.Get(gctx, id)
+			done()
+		}
 		if err != nil {
 			return err
 		}
@@ -557,6 +748,9 @@ func waitCmd(g *globals) *cobra.Command {
 		Short: "Wait for messages to be answered and print the replies",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, ids []string) error {
+			if err := nonNegative(map[string]time.Duration{"--timeout": timeout}); err != nil {
+				return err
+			}
 			c, err := g.connect(cmd.Context())
 			if err != nil {
 				return err
@@ -664,9 +858,10 @@ func showCmd(g *globals) *cobra.Command {
 func listCmd(g *globals) *cobra.Command {
 	var f client.ListFilter
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List messages, oldest first (a page; --after continues)",
-		Args:  cobra.NoArgs,
+		Use:         "list",
+		Annotations: quick,
+		Short:       "List messages, oldest first (a page; --after continues)",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -709,9 +904,10 @@ func listCmd(g *globals) *cobra.Command {
 
 func cancelCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "cancel ID",
-		Short: "Cancel a message that is not answered yet",
-		Args:  cobra.ExactArgs(1),
+		Use:         "cancel ID",
+		Annotations: quick,
+		Short:       "Cancel a message that is not answered yet",
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -742,6 +938,9 @@ func recvCmd(g *globals) *cobra.Command {
 			if as == "" {
 				return usageErr(errors.New("--as is required"))
 			}
+			if err := nonNegative(map[string]time.Duration{"--wait": wait, "--lease": lease}); err != nil {
+				return err
+			}
 			ctx := cmd.Context()
 			c, err := g.connect(ctx)
 			if err != nil {
@@ -749,7 +948,11 @@ func recvCmd(g *globals) *cobra.Command {
 			}
 			deadline := time.Now().Add(wait)
 			for {
-				m, ok, err := c.Claim(ctx, strings.TrimPrefix(as, "agent:"), max(min(time.Until(deadline), client.MaxWait), 0), lease)
+				step := max(min(time.Until(deadline), client.MaxWait), 0)
+				// The long poll itself is bounded: a node that stalls does not hold recv past it.
+				cctx, done := context.WithTimeout(ctx, step+quickTimeout)
+				m, ok, err := c.Claim(cctx, strings.TrimPrefix(as, "agent:"), step, lease)
+				done()
 				if err != nil {
 					return err
 				}
@@ -818,7 +1021,9 @@ func replyCmd(g *globals) *cobra.Command {
 				return err
 			}
 			r.Files = append(files, linked...)
-			return c.Reply(cmd.Context(), args[0], r)
+			rctx, done := context.WithTimeout(cmd.Context(), requestBudget(r.Body, r.Files))
+			defer done()
+			return c.Reply(rctx, args[0], r)
 		},
 	}
 	f := cmd.Flags()
@@ -833,9 +1038,10 @@ func replyCmd(g *globals) *cobra.Command {
 
 func agentsCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "agents",
-		Short: "List the agents the node knows",
-		Args:  cobra.NoArgs,
+		Use:         "agents",
+		Annotations: quick,
+		Short:       "List the agents the node knows",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -870,9 +1076,10 @@ func printAgents(list []client.AgentInfo) error {
 func sessionsCmd(g *globals) *cobra.Command {
 	var agent, cwd, cursor string
 	cmd := &cobra.Command{
-		Use:   "sessions --agent NAME",
-		Short: "List an ACP agent's sessions, newest first (for send --session)",
-		Args:  cobra.NoArgs,
+		Use:         "sessions --agent NAME",
+		Annotations: quick,
+		Short:       "List an ACP agent's sessions, newest first (for send --session)",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if agent == "" {
 				return usageErr(errors.New("--agent is required"))
@@ -901,11 +1108,7 @@ func sessionsCmd(g *globals) *cobra.Command {
 				if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {
 					updated = t.Local().Format(time.DateTime)
 				}
-				title := si.Title
-				if len(title) > 60 {
-					title = title[:60] + "…"
-				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", si.ID, updated, si.Cwd, title)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", si.ID, updated, si.Cwd, cut(si.Title, 61)) // by runes: UTF-8 stays whole
 			}
 			w.Flush()
 			if next != "" {
@@ -922,9 +1125,10 @@ func sessionsCmd(g *globals) *cobra.Command {
 
 func statusCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Check the node is up",
-		Args:  cobra.NoArgs,
+		Use:         "status",
+		Annotations: quick,
+		Short:       "Check the node is up",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Like every command, status starts the local node when there is none: it is the first
 			// call an agent makes, and it should not tell a story the next command contradicts.
@@ -932,8 +1136,11 @@ func statusCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			s, err := c.Status(cmd.Context())
-			if err != nil {
+			// connect asked already (the local node): not asked twice.
+			s := client.Status{}
+			if g.status != nil {
+				s = *g.status
+			} else if s, err = c.Status(cmd.Context()); err != nil {
 				return err
 			}
 			// One call tells an agent all it needs to start: the node, who it is, whom it can write to.
@@ -956,4 +1163,69 @@ func statusCmd(g *globals) *cobra.Command {
 			return printAgents(agents)
 		},
 	}
+}
+
+// requestBudget is how long a request carrying a body and files may take: quickTimeout, and a
+// second more for each 256 KiB it carries (a slow link uploads; a stuck node is still found).
+func requestBudget(body string, files []store.File) time.Duration {
+	n := len(body)
+	for _, f := range files {
+		n += len(f.Data)
+	}
+	return quickTimeout + time.Duration(n/(256<<10))*time.Second
+}
+
+// nonNegative refuses a negative duration flag: -5s is a typo, not "no limit" (what 0 says).
+func nonNegative(flags map[string]time.Duration) error {
+	for name, d := range flags {
+		if d < 0 {
+			return usageErr(fmt.Errorf("%s %s: a duration of 0 or more", name, d))
+		}
+	}
+	return nil
+}
+
+// nodeURL is the node commands talk to: --node / ACPOST_NODE, else the local node's own address
+// from its configuration (cfg, then, is that configuration).
+func (g *globals) nodeURL() (string, *config.Config, error) {
+	if g.node != "" {
+		return g.node, nil, nil
+	}
+	cfg, err := g.loadConfig()
+	if err != nil {
+		return "", nil, usageErr(err)
+	}
+	return localURL(cfg), cfg, nil
+}
+
+// loadConfig reads the configuration: a file named by --config or ACPOST_CONFIG must exist (a
+// typo is an error, not a node on defaults); only the implicit default may be absent.
+func (g *globals) loadConfig() (*config.Config, error) {
+	if g.config != "" {
+		return config.LoadNamed(g.configPath())
+	}
+	return config.Load(g.configPath())
+}
+
+// valueFlags are the flags that take a value given as the next argument (--name and its -n), of the
+// command args name and those it inherits: what follows them is that value, not a flag. Only that
+// command's: another's flag of the same name may take none (send --wait is a bool, recv's a time).
+func valueFlags(root *cobra.Command, args []string) map[string]bool {
+	out := map[string]bool{}
+	add := func(f *pflag.Flag) {
+		if f.NoOptDefVal != "" {
+			return // a bool: --x alone, its value only as --x=v
+		}
+		out["--"+f.Name] = true
+		if f.Shorthand != "" {
+			out["-"+f.Shorthand] = true
+		}
+	}
+	cmd, _, err := root.Find(args)
+	if err != nil || cmd == nil {
+		cmd = root
+	}
+	cmd.Flags().VisitAll(add)
+	cmd.InheritedFlags().VisitAll(add)
+	return out
 }

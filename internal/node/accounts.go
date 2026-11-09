@@ -102,6 +102,7 @@ func (n *Node) ForgeLogout(ctx context.Context, p Principal, host string) error 
 	if err := userOnly(p, "forge accounts"); err != nil {
 		return err
 	}
+	host = plainHost(host) // as login took it
 	_, st := n.forgeClient()
 	if err := st.Logout(host); err != nil {
 		return errf("unavailable", "%v", err)

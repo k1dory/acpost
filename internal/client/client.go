@@ -1433,6 +1433,28 @@ func (c *Client) Answer(ctx context.Context, msgID string, reply acpx.Reply) err
 	return err
 }
 
+// PullList is Pulls and whether the forge has more than the list holds.
+func (c *Client) PullList(ctx context.Context, q ForgeQuery, state string) (forge.PullList, error) {
+	v := q.values()
+	if state != "" {
+		v.Set("state", state)
+	}
+	var out forge.PullList
+	_, err := c.do(ctx, "GET", "/v1/forge/pulls", v, nil, &out, nil)
+	return out, err
+}
+
+// CheckList is Checks and whether the forge has more than the list holds.
+func (c *Client) CheckList(ctx context.Context, q ForgeQuery, ref string) (forge.CheckList, error) {
+	v := q.values()
+	if ref != "" {
+		v.Set("ref", ref)
+	}
+	var out forge.CheckList
+	_, err := c.do(ctx, "GET", "/v1/forge/checks", v, nil, &out, nil)
+	return out, err
+}
+
 // The bounds on reaching a node and on its health check; variables so tests need not wait them out.
 var (
 	dialTimeout      = 10 * time.Second

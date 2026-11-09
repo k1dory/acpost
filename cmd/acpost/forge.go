@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,11 +18,6 @@ import (
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/forge"
 )
-
-func forgeStore() *forge.Store {
-	home, _ := os.UserHomeDir()
-	return &forge.Store{Dir: filepath.Join(home, ".config", "acpost")}
-}
 
 func forgeCmd(g *globals) *cobra.Command {
 	var q client.ForgeQuery
@@ -43,46 +39,78 @@ func forgeCmd(g *globals) *cobra.Command {
 	var kind string
 	login := &cobra.Command{
 		Use:   "login HOST",
-		Short: "Keep a token for a forge host (macOS: in the keychain); it is read from the terminal or stdin",
+		Short: "Keep a token for a forge host on this machine's node, once the forge accepts it (macOS: in the keychain); read from the terminal or stdin",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := g.ownerOnly(); err != nil {
+				return err // before a token is asked for
+			}
 			var token string
 			if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
 				fmt.Fprintf(os.Stderr, "token for %s: ", args[0])
-				b, err := term.ReadPassword(fd)
+				b, err := readSecret(cmd.Context(), fd)
 				fmt.Fprintln(os.Stderr)
 				if err != nil {
 					return err
 				}
 				token = string(b)
 			} else {
-				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-				token = line
+				b, err := readCtx(cmd.Context(), func() ([]byte, error) {
+					line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+					if err == io.EOF {
+						err = nil // a last line without its newline is the token all the same
+					}
+					return []byte(line), err
+				})
+				if err != nil {
+					return err
+				}
+				token = string(b)
 			}
 			if strings.TrimSpace(token) == "" {
 				return usageErr(errors.New("no token given"))
 			}
-			if err := forgeStore().Login(args[0], kind, token); err != nil {
+			// The node keeps it, where it reads tokens (its keychain or file, its machine for
+			// --node), and only once the forge says whose it is: a wrong token is not kept.
+			c, err := g.connect(cmd.Context())
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "· kept for %s\n", args[0])
+			acc, err := c.ForgeLogin(cmd.Context(), args[0], kind, token)
+			if err != nil {
+				return err
+			}
+			if g.json {
+				printJSON(acc)
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "· kept for %s (%s %s), the token of %s\n", acc.Host, acc.Kind, acc.Version, acc.Login)
 			return nil
 		},
 	}
 	login.Flags().StringVar(&kind, "kind", "", "github, gitlab or forgejo (default: ask the host)")
 	logout := &cobra.Command{
-		Use:   "logout HOST",
-		Short: "Forget a forge host's token",
-		Args:  cobra.ExactArgs(1),
+		Use:         "logout HOST",
+		Annotations: quick,
+		Short:       "Forget a forge host's token (on the node)",
+		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return forgeStore().Logout(args[0])
+			if err := g.ownerOnly(); err != nil {
+				return err
+			}
+			c, err := g.connect(cmd.Context())
+			if err != nil {
+				return err
+			}
+			return c.ForgeLogout(cmd.Context(), args[0])
 		},
 	}
 
 	status := &cobra.Command{
-		Use:   "status",
-		Short: "The repository's forge: host, kind, version, branch, whether a token is kept",
-		Args:  cobra.NoArgs,
+		Use:         "status",
+		Annotations: quick,
+		Short:       "The repository's forge: host, kind, version, branch, whether a token is kept",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {
@@ -111,16 +139,17 @@ func forgeCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := c.Pulls(cmd.Context(), query(), state)
+			l, err := c.PullList(cmd.Context(), query(), state)
 			if err != nil {
 				return err
 			}
+			defer noteCut(l.Truncated, len(l.Items), "pull requests")
 			if g.json {
-				printJSON(items)
+				printJSON(nonNil(l.Items))
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			for _, p := range items {
+			for _, p := range l.Items {
 				fmt.Fprintf(w, "#%d\t%s\t%s → %s\t%s\t%s\n", p.Number, p.State, p.Head, p.Base, p.Author, p.Title)
 			}
 			return w.Flush()
@@ -138,19 +167,23 @@ func forgeCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := c.Checks(cmd.Context(), query(), ref)
+			l, err := c.CheckList(cmd.Context(), query(), ref)
 			if err != nil {
 				return err
 			}
+			defer noteCut(l.Truncated, len(l.Items), "runs")
 			if g.json {
-				printJSON(items)
+				printJSON(nonNil(l.Items))
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			for _, ch := range items {
+			for _, ch := range l.Items {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ch.ID, ch.Status, ch.Name, took(ch.Started, ch.Finished))
 				for _, j := range ch.Jobs {
 					fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", j.ID, j.Status, j.Name, took(j.Started, j.Finished))
+				}
+				if ch.JobsError != "" {
+					fmt.Fprintf(w, "  !\t%s\n", ch.JobsError)
 				}
 			}
 			return w.Flush()
@@ -171,6 +204,10 @@ func forgeCmd(g *globals) *cobra.Command {
 			text, err := c.CILog(cmd.Context(), query(), args[0], target)
 			if err != nil {
 				return err
+			}
+			if g.json {
+				printJSON(map[string]string{"job": args[0], "log": text})
+				return nil
 			}
 			fmt.Print(text)
 			return nil
@@ -196,12 +233,15 @@ func forgeCmd(g *globals) *cobra.Command {
 				printJSON(p)
 				return nil
 			}
+			if p.Existing {
+				fmt.Fprintf(os.Stderr, "· #%d was already open from %s\n", p.Number, p.Head)
+			}
 			fmt.Println(p.URL)
 			return nil
 		},
 	}
 	open.Flags().StringVar(&pr.Title, "title", "", "its title")
-	open.Flags().StringVar(&pr.Base, "base", "main", "the branch it goes into")
+	open.Flags().StringVar(&pr.Base, "base", "", "the branch it goes into (default: the repository's default branch)")
 	open.Flags().StringVar(&pr.Head, "head", "", "the branch it comes from (default: the repository's)")
 	open.Flags().StringVar(&pr.Body, "body", "", "its description")
 	open.Flags().BoolVar(&pr.Draft, "draft", false, "a draft")
@@ -247,4 +287,34 @@ func took(start, end time.Time) string {
 		return "running " + time.Since(start).Round(time.Second).String()
 	}
 	return end.Sub(start).Round(time.Second).String()
+}
+
+// noteCut says on stderr that a list holds only the first of what the forge has.
+func noteCut(cut bool, n int, what string) {
+	if cut {
+		fmt.Fprintf(os.Stderr, "more: the forge has more %s than these %d\n", what, n)
+	}
+}
+
+// nonNil is a list as JSON shows it: [] for none, not null.
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
+// ownerOnly refuses forge accounts over anything but the node's unix socket: the node keeps them
+// for its own user only, and over TCP every token is a client, an agent or a node (refused there
+// in any case, after a token was typed for nothing).
+func (g *globals) ownerOnly() error {
+	url, _, err := g.nodeURL()
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(url, "unix://") {
+		return &exitErr{code: exitRefused, name: "refused", err: fmt.Errorf("forge accounts are kept by the node for its own user, over its unix socket, not over %s", url),
+			hint: "run `acpost forge login` on the node's machine (or in its app's Settings)"}
+	}
+	return nil
 }
