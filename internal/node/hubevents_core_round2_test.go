@@ -25,7 +25,7 @@ func TestHubEventWriteFailureIsNotSkipped(t *testing.T) {
 	})
 	n.hub = f.client(t)
 	// The store refuses the second event, as a busy or full disk would.
-	db, err := sql.Open("sqlite", "file:"+dir+"/store.db")
+	db, err := sql.Open("sqlite", "file:"+dir+"/store.db?_pragma=busy_timeout(10000)")
 	if err != nil {
 		t.Fatal(err)
 	}
