@@ -117,7 +117,7 @@ func (n *Node) relayAll(id, lease string, sent int64, extended time.Time) {
 			case <-time.After(time.Second):
 			}
 		}
-		if time.Since(extended) >= hubLease/3 {
+		if time.Since(extended) >= hubRenew {
 			extended = time.Now()
 			ctx, done := context.WithTimeout(n.ctx, 10*time.Second)
 			err := n.hub.Extend(ctx, id, lease, hubLease)
@@ -133,20 +133,34 @@ func (n *Node) relayAll(id, lease string, sent int64, extended time.Time) {
 // until the message is final there; it returns the final message, or an error when the hub's
 // stream is not to be had (the caller then waits for the outcome alone).
 func (n *Node) followHub(id string) (store.Message, error) {
-	after, err := n.st.EventCount(n.ctx, id) // the events copied before, one for one
+	after, err := n.st.HubCursor(n.ctx, id) // the hub's number of the last event copied
 	if err != nil {
 		return store.Message{}, err
 	}
 	started := false
-	return n.hub.Follow(n.ctx, id, int64(after), func(e store.Event) error {
-		if !started { // the first event: the agent has the message, the local copy says so
-			started = true
-			if m, err := n.hub.Get(n.ctx, id); err == nil && !m.State.Final() {
-				n.settleFrom(id, m, nil)
+	for {
+		// A stream that stays silent past hubStream may be a connection gone dead: opened again,
+		// from the events copied so far.
+		sctx, done := context.WithTimeout(n.ctx, hubStream)
+		m, err := n.hub.Follow(sctx, id, after, func(e store.Event) error {
+			if !started { // the first event: the agent has the message, the local copy says so
+				started = true
+				gctx, gdone := context.WithTimeout(n.ctx, hubCallTimeout)
+				m, err := n.hub.Get(gctx, id)
+				gdone()
+				if err == nil && !m.State.Final() {
+					n.settleFrom(id, m, nil)
+				}
 			}
+			after = e.Seq
+			return n.copyEvent(id, e)
+		})
+		stale := sctx.Err() != nil && n.ctx.Err() == nil
+		done()
+		if !stale {
+			return m, err
 		}
-		return n.copyEvent(id, e)
-	})
+	}
 }
 
 // copyHubEvents copies, page by page, the hub's events of a forwarded message its local copy does
@@ -154,11 +168,11 @@ func (n *Node) followHub(id string) (store.Message, error) {
 // polls), before its outcome is settled. It says whether it got through: if not, the outcome waits
 // for the next try. The hub's numbers lead (this node may keep fewer events than the hub sends).
 func (n *Node) copyHubEvents(id string) bool {
-	count, err := n.st.EventCount(n.ctx, id)
+	cursor, err := n.st.HubCursor(n.ctx, id)
 	if err != nil {
 		return true // the local copy is gone: nothing to settle either
 	}
-	for after := int64(count); n.ctx.Err() == nil; {
+	for after := cursor; n.ctx.Err() == nil; {
 		ctx, done := context.WithTimeout(n.ctx, 10*time.Second)
 		page, err := n.hub.Events(ctx, id, after, hubEventPage)
 		done()
@@ -179,8 +193,14 @@ func (n *Node) copyHubEvents(id string) bool {
 	return false
 }
 
+// copyEvent takes the hub's event e onto the local copy, recording the hub's number with it: a
+// copy resuming (a restart, a stream opened again) starts after it, though this node may keep
+// fewer events than the hub has.
 func (n *Node) copyEvent(id string, e store.Event) error {
-	err := n.addEvent(n.ctx, id, e.Kind, e.Data, false)
+	err := n.st.CopyHubEvent(n.ctx, id, e.Seq, e.Kind, e.Data)
+	if err == nil {
+		n.eventsAdded()
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		return err // the local copy is gone
 	}

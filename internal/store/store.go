@@ -364,6 +364,8 @@ func (s *Store) migrate() error {
 		{"completion", "completion TEXT NOT NULL DEFAULT ''"},
 		// The last hub event a forwarded message's copy took (hubcursor.go); 0: none taken by number.
 		{"hub_seq", "hub_seq INTEGER NOT NULL DEFAULT 0"},
+		// A cancel asked for on a message forwarded to a hub, not yet settled there (forward.go).
+		{"cancel_wanted", "cancel_wanted INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var n int
 		if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = ?", c.name).Scan(&n); err != nil {
@@ -984,7 +986,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 func (s *Store) Expire(ctx context.Context, now time.Time) (int, error) {
 	t := ms(now)
 	res, err := s.w.ExecContext(ctx, `UPDATE messages SET state = 'expired', error = 'expired before an agent took it', error_code = 'expired', updated_at = ?, finished_at = ?
-		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ? AND origin <> 'remote'`, t, t, t)
+		WHERE state = 'queued' AND expires_at > 0 AND expires_at <= ? AND origin NOT IN ('remote', 'forwarding')`, t, t, t)
 	if err != nil {
 		return 0, err
 	}

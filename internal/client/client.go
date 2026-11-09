@@ -176,6 +176,7 @@ type CloudTask struct {
 	Agent string `json:"agent"`
 	Repo  string `json:"repo,omitempty"`
 	Name  string `json:"name,omitempty"`
+	Idem  string `json:"idem,omitempty"` // the same for a retry: the sandbox made the first time is the answer
 }
 
 // CloudAgents lists the cloud tenant's catalogue.
@@ -377,6 +378,7 @@ type HandoffRequest struct {
 	Cwd        string `json:"cwd,omitempty"`
 	CloudAgent string `json:"cloud_agent"`
 	Note       string `json:"note,omitempty"`
+	Idem       string `json:"idem,omitempty"` // the same for a retry: the sandbox and message of the first are the answer
 }
 
 // HandoffResult is the cloud chat it goes on in, and what went with it.
@@ -1470,4 +1472,21 @@ func streamErr(data string) error {
 		return fmt.Errorf("%w: %w", ErrUnavailable, &eb.Error)
 	}
 	return &eb.Error
+}
+
+// ByIdem returns the message a sender of this node sent its hub with an idempotency key (a node
+// learning what became of a send whose answer was lost); found false: the hub says it has none.
+// Any error, a 404 included (a hub without the lookup), leaves that unknown.
+func (c *Client) ByIdem(ctx context.Context, from, key string) (store.Message, bool, error) {
+	var out struct {
+		Found   *bool         `json:"found"`
+		Message store.Message `json:"message"`
+	}
+	if _, err := c.do(ctx, "GET", "/v1/messages/by-idem", url.Values{"from": {from}, "key": {key}}, nil, &out, nil); err != nil {
+		return store.Message{}, false, err
+	}
+	if out.Found == nil {
+		return store.Message{}, false, fmt.Errorf("%w: a lookup by key without its answer", ErrBadResponse)
+	}
+	return out.Message, *out.Found, nil
 }
