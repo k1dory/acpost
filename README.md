@@ -325,7 +325,7 @@ text, when it adds something, is in `error` after the explanation.
 | `turn_timeout` | the turn ran past `turn_timeout` |
 | `agent_stopped` | the agent ended the turn itself (refusal, token limit) |
 | `unsupported` | the agent does not offer what was asked (e.g. `session/list`) |
-| `lease_lost` | an inbox consumer or a node lost its claim too often |
+| `lease_lost` | an inbox consumer or a node let its claim run out: the message goes back to the queue with this code, and fails with it after `max_attempts` |
 | `node_restart` | the node restarted during the last allowed attempt |
 | `files_refused` | a node on the way (the hub, the sender's node) refused the reply's files by its limits; the reply's text is kept |
 | `agent_error` | anything else the agent reported |
