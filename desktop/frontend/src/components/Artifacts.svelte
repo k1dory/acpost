@@ -5,6 +5,8 @@
   import { Node, errText, unb64 } from "../lib/api";
   import Icon from "./Icon.svelte";
   import Markdown from "./Markdown.svelte";
+  import { pageSandbox } from "../lib/sanitize";
+  import { bytes } from "../lib/names";
 
   // Artifacts: the files the agents handed back in this chat (attached to their replies) and the
   // files of this Mac a reply linked to — each shown as what it is: a page, a picture, a PDF,
@@ -23,10 +25,12 @@
   let err = $state("");
   let loading = $state(false);
   let asked = 0;
+  // A page's scripts run only once the person allows them, for that page (another shown: off again).
+  let scripts = $state(false);
   $effect(() => {
     const a = cur;
     const my = ++asked;
-    art = null; err = "";
+    art = null; err = ""; scripts = false;
     if (!a) return;
     loading = true;
     (a.path ? Node.LocalFile(a.path, a.base ?? "") : Node.MessageFile(a.msg!, a.name))
@@ -64,7 +68,6 @@
     return () => URL.revokeObjectURL(url);
   });
   const label = (a: ArtifactRef) => a.name || a.path || "";
-  const size = (n: number) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`);
 
   async function openOutside() {
     if (!art) return;
@@ -89,8 +92,9 @@
     </div>
     <div class="bar">
       <b class="nm" title={art?.path ?? art?.name}>{art?.name ?? cur?.name}</b>
-      {#if art}<span class="muted small">{art.type.split(";")[0]} · {size(art.size)}</span>{/if}
+      {#if art}<span class="muted small">{art.type.split(";")[0]} · {bytes(art.size)}</span>{/if}
       <span class="sp"></span>
+      {#if kind === "html"}<button class="btn ghost sm" class:on={scripts} onclick={() => (scripts = !scripts)} title={t("The page's scripts run in a frame of their own; they reach nothing outside the app")}>{scripts ? t("Scripts on") : t("Allow scripts")}</button>{/if}
       <button class="btn ghost sm" disabled={!art} onclick={openOutside}>{t("Open")}</button>
       <button class="btn ghost sm" disabled={!art} onclick={save}>{t("Save as…")}</button>
     </div>
@@ -99,8 +103,10 @@
       {:else if err}<div class="err selectable">{err}</div>
       {:else if art}
         {#if kind === "html"}
-          <!-- A page by itself: scripts run, but in an origin of its own (no app, no node, no cookies). -->
-          <iframe class="page" title={art.name} sandbox="allow-scripts" srcdoc={text}></iframe>
+          <!-- A page by itself, in an origin of its own (no app, no node, no cookies); its scripts run
+               only when allowed, and the app's policy (lib/csp.ts) keeps them from the network.
+               The frame is made anew when that changes: a sandbox is read as a frame loads. -->
+          {#key scripts}<iframe class="page" title={art.name} sandbox={pageSandbox(scripts)} srcdoc={text}></iframe>{/key}
         {:else if kind === "image"}
           <div class="img"><img alt={art.name} src={`data:${art.type.split(";")[0]};base64,${art.data}`} /></div>
         {:else if kind === "pdf"}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusOnMount } from "../lib/actions";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
@@ -36,7 +37,7 @@
     else if (e.key === "Escape") app.palette = false;
   }
   function go(i: number) { const it = items[i]; app.palette = false; it?.run(); }
-  function focus(el: HTMLInputElement) { requestAnimationFrame(() => el.focus()); }
+  const focus = (el: HTMLInputElement) => focusOnMount(el);
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

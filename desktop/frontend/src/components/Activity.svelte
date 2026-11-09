@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
-  import { app, final } from "../lib/state.svelte";
+  import { app } from "../lib/state.svelte";
   import { intent, toolName, toolState } from "../lib/turn";
   import { who, dur, clock } from "../lib/format";
   import Avatar from "./Avatar.svelte";
@@ -24,12 +24,15 @@
         {:else if r.state === "running"}<span class="chip"><span class="spin"></span> {t("Running")}</span>
         {:else if r.state === "queued"}<span class="chip warn">{t("Queued")}</span>
         {:else if r.state === "failed"}<span class="chip crit">{t("Failed")}</span>
-        {:else}<span class="chip">{t("Done")}</span>{/if}
+        {:else if r.state === "cancelled"}<span class="chip">{t("Cancelled")}</span>
+        {:else if r.state === "expired"}<span class="chip warn">{t("Expired")}</span>
+        {:else if r.state === "done"}<span class="chip">{t("Done")}</span>
+        {:else}<span class="chip">{r.state}</span>{/if}
       </button>
       {#each r.tools as t (t.id)}
-        {@const s = toolState(t, final(r.m.state))}
+        {@const s = toolState(t, r.m.state)}
         <div class="tl" class:failed={s === "failed"}>
-          <span class="dot {s === 'running' ? 'running' : s === 'failed' ? 'failed' : s === 'pending' ? 'queued' : 'done'}"></span>
+          <span class="dot {s === 'running' ? 'running' : s === 'failed' ? 'failed' : s === 'pending' ? 'queued' : s === 'done' ? 'done' : ''}"></span>
           <span class="tn mono">{toolName(t)}</span>
           <span class="ti">{intent(t)}</span>
           <span class="muted num tt">{t.ended ? dur(t.ended - t.started) : clock(new Date(t.started).toISOString())}</span>

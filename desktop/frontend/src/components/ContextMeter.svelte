@@ -12,7 +12,7 @@
     <span class="bar" class:hi={pct > 80}><span style="width:{pct}%"></span></span>
   {/if}
   {#if u.input || u.output}
-    <span class="num muted">in {tokens(u.input ?? 0)} · out {tokens(u.output ?? 0)}{u.cache_read ? ` · cache ${tokens(u.cache_read)}` : ""}</span>
+    <span class="num muted">{t("in {n}", { n: tokens(u.input ?? 0) })} · {t("out {n}", { n: tokens(u.output ?? 0) })}{u.cache_read ? " · " + t("cache {n}", { n: tokens(u.cache_read) }) : ""}</span>
   {/if}
   {#if u.cost !== undefined && u.cost !== null}<span class="num muted">{money(u.cost, u.currency)}</span>{/if}
 </div>

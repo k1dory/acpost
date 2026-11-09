@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { agentLabel, tilde as tildeOf } from "../lib/names";
   import { t, plural } from "../lib/i18n.svelte";
   import { app, type Chat } from "../lib/state.svelte";
   import { ago, who } from "../lib/format";
@@ -41,8 +42,7 @@
   async function remove(it: Item) {
     try { await Node.DeleteBacklogItem(it.id); await loadBacklog(); } catch (e) { app.error = errText(e); }
   }
-  const agentLabel = (a?: string) => { const n = (a ?? "").replace(/^agent:/, ""); return n === "claude" ? "Claude Code" : n === "codex" ? "Codex" : n; };
-  const tilde = (d?: string) => (!d ? "" : app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
+  const tilde = (d?: string) => tildeOf(d, app.home);
 
   // Every agent's work at once: what waits for you, what runs, what failed, what is done.
   const asksByThread = $derived.by(() => {
@@ -126,7 +126,7 @@
                 <span><Icon name={c.kind === "cloud" ? "cloud" : "bot"} size={11} /> {agentName(c)}</span>
                 {#if place(c)}<span class="mono">{place(c)}</span>{/if}
                 <span class="sp"></span>
-                {#if col.key === "wait"}<span class="chip ask">{asksByThread.get(c.key)} to approve</span>{/if}
+                {#if col.key === "wait"}<span class="chip ask">{t("{n} to approve", { n: asksByThread.get(c.key) ?? 0 })}</span>{/if}
                 {#if col.key === "run"}<span class="spin"></span>{/if}
                 <span class="num">{ago(c.updated)}</span>
               </div>

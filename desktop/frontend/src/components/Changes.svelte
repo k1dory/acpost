@@ -4,6 +4,7 @@
   import { Node, errText } from "../lib/api";
   import { splitDiff } from "../lib/turn";
   import { who, clock } from "../lib/format";
+  import { latest } from "../lib/latest";
   import DiffLines from "./DiffLines.svelte";
   import Dropdown from "./Dropdown.svelte";
 
@@ -14,14 +15,15 @@
   let agent = $state("");
   const root = $derived(app.msgs.find(m => m.depth === 0 && m.to.startsWith("agent:"))?.id ?? app.focus);
 
+  // Another chat's changes asked meanwhile: the answer for this one is the one kept.
+  const changes = latest();
   async function load(id: string) {
     if (!id) return;
     loading = true; err = "";
-    try { data = await Node.Changes(id); } catch (e) { err = errText(e); data = null; }
-    loading = false;
+    if (await changes(() => Node.Changes(id), d => (data = d), e => { err = errText(e); data = null; })) loading = false;
   }
-  $effect(() => { load(root); });
-  $effect(() => { app.msgs.map(m => m.state).join(); if (root) load(root); });
+  // Once on opening, and again as a turn of the chat changes state (what it changed is then known).
+  $effect(() => { app.msgs.map(m => m.state).join(); load(root); });
 
   const agents = $derived([...new Set((data?.turns ?? []).map((t: any) => t.agent))] as string[]);
   const turns = $derived((data?.turns ?? []).filter((t: any) => !agent || t.agent === agent));
