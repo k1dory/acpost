@@ -378,7 +378,7 @@ func TestReopenedMessageUsageAgrees(t *testing.T) {
 				}
 			},
 			func(t *testing.T, s *Store, c Message) {
-				if _, err := s.AdoptDelivery(ctx, c.ID, c.From, c.To, "hub:a/", "hub:a/2"); err != nil {
+				if _, err := s.AdoptDelivery(ctx, c.ID, c.From, c.To, "hub:a/", "hub:a/2", 0); err != nil {
 					t.Fatal(err)
 				}
 			}},

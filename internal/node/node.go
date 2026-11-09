@@ -123,6 +123,7 @@ type Node struct {
 
 	resolvers resolverPool // the tries of resolveForward, bounded (resolve_round2.go)
 	hubName   atomic.Value // string: the hub's node name, once known (hubAddress, resolve_round2.go)
+	turnWaits turnWaits    // what agents' turns wait for (turnwaits_round1.go): the node's own, gone with it
 }
 
 type agentToken struct {

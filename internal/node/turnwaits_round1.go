@@ -11,11 +11,16 @@ type turnWaits struct {
 	of map[string]map[string]int // the waiting turn's message → the messages it waits for (how many waits)
 }
 
-var waitsOfNodes sync.Map // *Node → *turnWaits
-
+// waits is the node's record (a field of the node: nothing outside it keeps a node once it is
+// let go). Its map is made on first use, under its lock.
 func (n *Node) waits() *turnWaits {
-	w, _ := waitsOfNodes.LoadOrStore(n, &turnWaits{of: map[string]map[string]int{}})
-	return w.(*turnWaits)
+	w := &n.turnWaits
+	w.mu.Lock()
+	if w.of == nil {
+		w.of = map[string]map[string]int{}
+	}
+	w.mu.Unlock()
+	return w
 }
 
 // noteWait records that p, an agent in a turn, waits for message id; the func returned ends it.
