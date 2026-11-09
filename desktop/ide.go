@@ -79,10 +79,11 @@ type ideServer struct {
 	stopped    bool               // nothing starts any more
 	looked     bool               // the app's look is installed (else tried again on IDEStart)
 	installing bool
-	inst       chan struct{} // one install at a time, the first's and any again
-	owner      *os.File      // the IDE folder's lock, held while this app owns its server
-	claim      sync.Mutex    // held from taking the lock to the end of the orphan's removal; stop waits for it
-	stuck      int           // an orphan's process group that did not end (under claim): no start till it is gone
+	inst       chan struct{}  // one install at a time, the first's and any again
+	installs   sync.WaitGroup // the installs under way (added to under mu, while not stopped): stop waits for them
+	owner      *os.File       // the IDE folder's lock, held while this app owns its server
+	claim      sync.Mutex     // held from taking the lock to the end of the orphan's removal; stop waits for it
+	stuck      int            // an orphan's process group that did not end (under claim): no start till it is gone
 
 	pane  sync.Mutex // the pane's calls, one at a time
 	shown string     // the address the pane has open (under pane)
@@ -347,6 +348,15 @@ func (s *ideServer) why(ctx context.Context, err error) error {
 // lookInstall installs the app's look, one install at a time (the start's and a later one again:
 // two of VS Code's installers would replace the same folder under each other).
 func (s *ideServer) lookInstall(ctx context.Context, data string) {
+	// Counted for stop, which lets the folder go only once no installer is left in it.
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	s.installs.Add(1)
+	s.mu.Unlock()
+	defer s.installs.Done()
 	install := s.install
 	if install == nil {
 		install = ideInstall
@@ -605,7 +615,8 @@ func withFolder(base, folder string) string {
 }
 
 // stop ends VS Code's server (with the app) and waits for its end; a start under way ends with
-// it, and nothing starts after.
+// it, and nothing starts after. The folder's lock goes last: after the server's group and the
+// installers (their context ended with life) are gone, so the next app finds no one at work there.
 func (s *ideServer) stop() {
 	s.mu.Lock()
 	s.stopped = true
@@ -617,6 +628,7 @@ func (s *ideServer) stop() {
 	if run != nil {
 		run.kill()
 	}
+	s.installs.Wait()
 	s.claim.Lock() // an orphan's removal under the lock finishes first
 	s.disown()
 	s.claim.Unlock()

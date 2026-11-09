@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -187,5 +189,46 @@ func TestIDEServerEndsDuringInstall(t *testing.T) {
 	}
 	if run := f.current(); run == nil || !closed(run.done) {
 		t.Fatal("its group is not ended")
+	}
+}
+
+// Round 2, 5: stop lets the IDE folder go only once the installers have ended: a repeat install
+// still running (its server already gone) is cut short and waited for first.
+func TestIDEStopWaitsForInstall(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	var calls atomic.Int32
+	var ended atomic.Bool
+	started := make(chan struct{})
+	f.install = func(ctx context.Context, data string) error {
+		if calls.Add(1) == 1 {
+			return errors.New("first install failed")
+		}
+		close(started)
+		<-ctx.Done()
+		time.Sleep(400 * time.Millisecond) // VS Code's installer ending after its cancel
+		ended.Store(true)
+		return ctx.Err()
+	}
+	if _, err := f.open(""); err != nil {
+		t.Fatal(err)
+	}
+	f.open("") // the repeat install, beside the server
+	if !waitClosed(started, 3*time.Second) {
+		t.Fatal("the repeat install did not start")
+	}
+	run := f.current()
+	http.Get("http://127.0.0.1:" + strconv.Itoa(f.port) + "/exit")
+	if !waitClosed(run.done, 4*time.Second) {
+		t.Fatal("the server did not end")
+	}
+	f.stop()
+	if !ended.Load() {
+		t.Fatal("stop let the folder go while an installer was still in it")
+	}
+	f.mu.Lock()
+	owner := f.owner
+	f.mu.Unlock()
+	if owner != nil {
+		t.Fatal("the lock is still held after stop")
 	}
 }
