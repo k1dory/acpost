@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -55,19 +56,35 @@ func (n *Node) DeleteMCPServer(name string) error {
 
 // Notify shows a notification of the system (asked for once; nothing when refused or unavailable).
 func (n *Node) Notify(title, body string) error {
-	if n.notes == nil || n.noteOK < 0 {
+	if n.notes == nil {
 		return nil
 	}
-	if n.noteOK == 0 {
+	// Asked once, however many replies finish at once; the answer kept for the rest.
+	var askErr error
+	n.noteAsk.Do(func() {
 		ok, err := n.notes.RequestNotificationAuthorization()
-		if err != nil || !ok {
-			n.noteOK = -1
-			return err
+		n.mu.Lock()
+		n.noteOK = -1
+		if ok && err == nil {
+			n.noteOK = 1
 		}
-		n.noteOK = 1
+		n.mu.Unlock()
+		askErr = err
+	})
+	n.mu.Lock()
+	ok := n.noteOK > 0
+	n.mu.Unlock()
+	if !ok {
+		return askErr
 	}
 	return n.notes.SendNotification(notifications.NotificationOptions{
 		ID: fmt.Sprintf("acpost-%d", time.Now().UnixNano()), Title: title, Body: body})
+}
+
+// notifier is what Notify uses of the system's notifications.
+type notifier interface {
+	RequestNotificationAuthorization() (bool, error)
+	SendNotification(notifications.NotificationOptions) error
 }
 
 func (n *Node) Playbooks() ([]store.Playbook, error) {
@@ -144,7 +161,7 @@ func (n *Node) WriteWiki(repo, agent, lang string) (string, error) {
 	m, err := callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) (store.Message, error) {
 		return c.WriteWiki(ctx, repo, agent, lang)
 	})
-	return cmpOr(m.Thread, m.ID), err
+	return cmp.Or(m.Thread, m.ID), err
 }
 
 func (n *Node) DeleteWiki(repo string) error {
@@ -152,11 +169,4 @@ func (n *Node) DeleteWiki(repo string) error {
 		return struct{}{}, c.DeleteWiki(ctx, repo)
 	})
 	return err
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
