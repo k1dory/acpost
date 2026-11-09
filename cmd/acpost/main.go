@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/k1dory/acpost/internal/client"
@@ -90,7 +91,7 @@ func main() {
 	root := rootCmd(g) // registering the flags sets their defaults
 	// Known before flags are parsed: an error in parsing them is reported in JSON too. Kept apart
 	// from g.json, which cobra sets as it goes and leaves where a bad flag stopped it.
-	parseJSON := jsonWanted(os.Args[1:], os.Getenv("ACPOST_JSON"))
+	parseJSON := jsonWanted(valueFlags(root), os.Args[1:], os.Getenv("ACPOST_JSON"))
 	g.json = parseJSON
 	// Ctrl-C ends a command through its context: term restores the terminal and closes its own,
 	// a save is not cut midway; a second Ctrl-C ends it at once.
@@ -206,14 +207,18 @@ func isFlagErr(err error) bool {
 }
 
 // jsonWanted says whether the output is JSON: the last --json flag given (--json, --json=BOOL),
-// else ACPOST_JSON=1.
-func jsonWanted(args []string, env string) bool {
+// else ACPOST_JSON=1. The value after a flag that takes one (valued) is skipped: --body --json=false
+// is a body.
+func jsonWanted(valued map[string]bool, args []string, env string) bool {
 	want := env == "1"
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if a == "--" {
 			break
 		}
-		if a == "--json" {
+		if valued[a] {
+			i++
+		} else if a == "--json" {
 			want = true
 		} else if v, ok := strings.CutPrefix(a, "--json="); ok {
 			if b, err := strconv.ParseBool(v); err == nil {
@@ -1200,4 +1205,29 @@ func (g *globals) loadConfig() (*config.Config, error) {
 		return config.LoadNamed(g.configPath())
 	}
 	return config.Load(g.configPath())
+}
+
+// valueFlags are the flags of any command under root that take a value given as the next argument
+// (--name and its -n): what follows them is that value, not a flag.
+func valueFlags(root *cobra.Command) map[string]bool {
+	out := map[string]bool{}
+	add := func(f *pflag.Flag) {
+		if f.NoOptDefVal != "" {
+			return // a bool: --x alone, its value only as --x=v
+		}
+		out["--"+f.Name] = true
+		if f.Shorthand != "" {
+			out["-"+f.Shorthand] = true
+		}
+	}
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		c.Flags().VisitAll(add)
+		c.PersistentFlags().VisitAll(add)
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(root)
+	return out
 }
