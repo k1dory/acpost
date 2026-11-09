@@ -380,7 +380,7 @@ class App {
         const cur = this.msgs.find(x => x.id === id);
         if (cur?.state === "queued") this.replace({ ...cur, state: "running" });
       }
-      if (b.final) { this.replace(b.final); this.loadChats(); this.loadAgents(); }
+      if (b.final) { this.replace(b.final, true); this.loadChats(); this.loadAgents(); }
       else if (b.error) this.lost(id, turn, off, b.error, tries, gen);
     });
     this.unsub.set(id, { off, sub });
@@ -412,11 +412,23 @@ class App {
     }, Math.min(30_000, 1000 * 2 ** tries));
   }
 
-  replace(m: Msg) {
+  /** A message as it is now. Final, its stream is let go: when its own last batch said so
+   * (`streamed`), all of it came; when another answer did (Cancel's), the stream may still hold
+   * its last batch (the app sends them a few times a second), so what it had not given is read. */
+  replace(m: Msg, streamed = false) {
     const i = this.msgs.findIndex(x => x.id === m.id);
     if (i >= 0) this.msgs[i] = { ...this.msgs[i], ...m };
     else if (m.thread === this.thread) this.msgs = [...this.msgs, m];
-    if (final(m.state)) { this.unsub.get(m.id)?.off(); this.unsub.delete(m.id); this.runningSince.delete(m.id); }
+    if (final(m.state)) {
+      const f = this.unsub.get(m.id);
+      if (f) {
+        f.off();
+        this.unsub.delete(m.id);
+        const t = this.turns[m.id];
+        if (!streamed && t) this.readEvents(m.id, t);
+      }
+      this.runningSince.delete(m.id);
+    }
   }
 
   /** A setting chosen for an agent ("": its default). */

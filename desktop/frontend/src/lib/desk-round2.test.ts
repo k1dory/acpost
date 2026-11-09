@@ -104,3 +104,42 @@ describe("one owner per subscription (finding 2)", () => {
     expect(app.turns.m1.last).toBe(2);
   });
 });
+
+describe("nothing is dropped at the end (finding 3)", () => {
+  async function running() {
+    const app = await load();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
+    const sub = fake.Node.Follow.mock.calls[0][2];
+    fake.emit("events:m1", { id: "m1", sub, events: evs(1, 1) });
+    return app;
+  }
+
+  it("a cancel's answer ends the stream, and the events it still held are read from the last seq", async () => {
+    const app = await running();
+    fake.Node.Cancel.mockResolvedValue(msg("m1", "T", "cancelled"));
+    fake.Node.Events.mockResolvedValue(evs(2, 1)); // the batch still in the app's buffer
+    await app.cancel("m1");
+    await flush();
+    expect(fake.Node.Events).toHaveBeenCalledWith("m1", 1);
+    expect(app.turns.m1.last).toBe(2);
+    expect(app.msgs[0].state).toBe("cancelled");
+  });
+
+  it("a read of them that fails is said on the message", async () => {
+    const app = await running();
+    fake.Node.Cancel.mockResolvedValue(msg("m1", "T", "cancelled"));
+    fake.Node.Events.mockRejectedValue(new Error("down"));
+    await app.cancel("m1");
+    await flush();
+    expect(app.broken.m1).toBeTruthy();
+  });
+
+  it("the stream's own final came after its last batch: nothing more is read", async () => {
+    const app = await running();
+    const sub = fake.Node.Follow.mock.calls[0][2];
+    fake.emit("events:m1", { id: "m1", sub, final: msg("m1", "T", "done") });
+    await flush();
+    expect(fake.Node.Events).not.toHaveBeenCalled();
+  });
+});
