@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { agentLabel, tilde as tildeOf } from "../lib/names";
+  import { mcpRequest, type MCP, type MCPEdit } from "../lib/mcp";
   import { t, i18n, type Lang } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText, errInfo } from "../lib/api";
@@ -6,7 +8,6 @@
   import Dropdown from "./Dropdown.svelte";
 
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
-  type MCP = { name: string; kind: "stdio" | "http"; command?: string; args?: string[]; url?: string; env?: string[]; headers?: string[]; agents?: string[]; enabled: boolean };
 
   let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "general">("git");
   type Note = { name: string; body: string; scope?: string; enabled: boolean; isNew?: boolean };
@@ -28,7 +29,7 @@
     const d = await Node.PickDirectory(note.scope || app.home).catch(() => "");
     if (d) note.scope = d;
   }
-  const tilde = (d?: string) => (!d ? "" : app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
+  const tilde = (d?: string) => tildeOf(d, app.home);
   type Sched = { id?: string; name: string; cron: string; agent: string; body: string; cwd?: string; model?: string; effort?: string; enabled: boolean; next_run?: string; last_run?: string; last_msg?: string; last_err?: string };
   let scheds = $state<Sched[] | null>(null);
   let sc = $state<Sched | null>(null);
@@ -79,8 +80,7 @@
   let token = $state("");
 
   // MCP: the server being edited (null: none).
-  type Pair = { name: string; value: string; kept: boolean };
-  let edit = $state<{ isNew: boolean; name: string; kind: "stdio" | "http"; command: string; args: string; url: string; env: Pair[]; headers: Pair[]; agents: string[]; enabled: boolean } | null>(null);
+  let edit = $state<MCPEdit | null>(null);
 
   async function loadAccounts() {
     try { accounts = ((await Node.ForgeAccounts()) ?? []) as any; } catch (e) { err = errText(e); accounts = []; }
@@ -116,16 +116,9 @@
   async function save() {
     if (!edit) return;
     err = ""; busy = true;
-    const e = edit;
-    const secrets: Record<string, string> = {};
-    for (const p of e.env) if (p.name && (!p.kept || p.value)) secrets["env/" + p.name] = p.value;
-    for (const p of e.headers) if (p.name && (!p.kept || p.value)) secrets["header/" + p.name] = p.value;
-    const m: MCP = {
-      name: e.name.trim(), kind: e.kind, command: e.command.trim(), url: e.url.trim(), enabled: e.enabled, agents: e.agents,
-      args: e.args.split("\n").map(s => s.trim()).filter(Boolean),
-      env: e.env.map(p => p.name.trim()).filter(Boolean), headers: e.headers.map(p => p.name.trim()).filter(Boolean),
-    };
-    try { await Node.PutMCPServer(m as any, secrets); edit = null; await loadServers(); } catch (x) { err = errText(x); }
+    const r = mcpRequest(edit);
+    if ("error" in r) { err = t(r.error, { name: r.name ?? "" }); busy = false; return; }
+    try { await Node.PutMCPServer(r.server as any, r.secrets); edit = null; await loadServers(); } catch (x) { err = errText(x); }
     busy = false;
   }
   async function toggle(m: MCP) {
@@ -134,10 +127,7 @@
   async function remove(name: string) {
     try { await Node.DeleteMCPServer(name); edit = null; await loadServers(); } catch (e) { err = errText(e); }
   }
-  function agentName(a: string) {
-    const n = a.replace(/^agent:/, "");
-    return n === "claude" ? "Claude Code" : n === "codex" ? "Codex" : n;
-  }
+  const agentName = agentLabel;
   let notify = $state(true);
   try { notify = localStorage.getItem("notify") !== "0"; } catch {}
   function setNotify(v: boolean) { notify = v; try { localStorage.setItem("notify", v ? "1" : "0"); } catch {} }
@@ -193,7 +183,7 @@
                 <div class="row">
                   <button class="sw" class:on={m.enabled} onclick={() => toggle(m)} title={m.enabled ? t("On") : t("Off")}><span></span></button>
                   <div class="t"><b>{m.name}</b><span class="muted small mono">{m.kind === "http" ? m.url : [m.command, ...(m.args ?? [])].join(" ")}</span></div>
-                  <span class="chip">{m.agents?.length ? m.agents.map(agentName).join(", ") : "all agents"}</span>
+                  <span class="chip">{m.agents?.length ? m.agents.map(agentName).join(", ") : t("all agents")}</span>
                   <button class="btn ghost sm" onclick={() => editServer(m)}>{t("Edit")}</button>
                 </div>
               {:else}<div class="row muted">{t("No MCP servers yet")}</div>{/each}
@@ -203,7 +193,7 @@
         {:else}
           {@const e = edit}
           <div class="form card">
-            <div class="fh">{e.isNew ? "New MCP server" : e.name}</div>
+            <div class="fh">{e.isNew ? t("New MCP server") : e.name}</div>
             <div class="frow">
               {#if e.isNew}<input class="input" placeholder={t("Name: wiki, github, postgres")} bind:value={e.name} />{/if}
               <div class="seg"><button class:on={e.kind === "stdio"} onclick={() => (e.kind = "stdio")}>{t("Command")}</button><button class:on={e.kind === "http"} onclick={() => (e.kind = "http")}>{t("HTTP")}</button></div>
@@ -234,7 +224,7 @@
                 {@const name = a.address.replace(/^agent:/, "")}
                 <button class="chip pickc" class:on={e.agents.includes(name)} onclick={() => (e.agents = e.agents.includes(name) ? e.agents.filter(x => x !== name) : [...e.agents, name])}>{agentName(a.address)}</button>
               {/each}
-              <span class="muted small">{e.agents.length ? "" : "none chosen: all agents"}</span>
+              <span class="muted small">{e.agents.length ? "" : t("none chosen: all agents")}</span>
             </div>
             <div class="acts">
               {#if !e.isNew}<button class="btn ghost danger" onclick={() => remove(e.name)}>{t("Delete")}</button>{/if}
@@ -314,7 +304,7 @@
                 <Icon name="clock" size={14} />
                 <div class="t">
                   <b>{s.name}</b>
-                  <span class="muted small one">{agentName(s.agent)} · <span class="mono">{s.cron}</span>{#if s.enabled && s.next_run} · next {when(s.next_run)}{/if}{#if s.last_run} · last {when(s.last_run)}{/if}</span>
+                  <span class="muted small one">{agentName(s.agent)} · <span class="mono">{s.cron}</span>{#if s.enabled && s.next_run} · {t("next {when}", { when: when(s.next_run) })}{/if}{#if s.last_run} · {t("last {when}", { when: when(s.last_run) })}{/if}</span>
                   {#if s.last_err}<span class="small bad one">{s.last_err}</span>{/if}
                 </div>
                 <button class="btn ghost sm" onclick={() => runSched(s.id!)}>{t("Run now")}</button>
@@ -335,7 +325,7 @@
             <div class="lbl">{t("Agent and directory")}</div>
             <div class="frow">
               <Dropdown bind:value={sc.agent} icon="bot" items={app.localAgents().map(a => ({ value: a.address, label: agentName(a.address) }))} />
-              <button class="chip pickc" onclick={pickSchedDir} title={sc.cwd}><Icon name="file" size={12} /> {sc.cwd && app.home && sc.cwd.startsWith(app.home) ? "~" + sc.cwd.slice(app.home.length) : sc.cwd || "~"}</button>
+              <button class="chip pickc" onclick={pickSchedDir} title={sc.cwd}><Icon name="file" size={12} /> {tilde(sc.cwd) || "~"}</button>
             </div>
             <div class="lbl">{t("Task")}</div>
             {#if app.playbooks.length}

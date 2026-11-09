@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { agentLabel, tilde as tildeOf } from "../lib/names";
   import { t, i18n } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
@@ -25,8 +26,8 @@
   const tops = $derived(pages.filter(p => !p.parent));
   const kids = (slug: string) => pages.filter(p => p.parent === slug);
   const base = (d: string) => d.split("/").filter(Boolean).pop() || d;
-  const tilde = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
-  const agentName = (a: string) => { const n = a.replace(/^agent:/, ""); return n === "claude" ? "Claude Code" : n === "codex" ? "Codex" : n; };
+  const tilde = (d: string) => tildeOf(d, app.home);
+  const agentName = agentLabel;
 
   // A page's text as shown: links between pages ([[slug]], [[slug|text]]) made links, a first
   // heading that only repeats the title dropped.

@@ -82,27 +82,28 @@
 
 <div class="pv">
   <div class="addr">
-    <button class="btn ghost sm" title={t("Back")} onclick={() => { app.preview.loadAt = Date.now(); Node.PreviewBack(); }}><Icon name="chev" size={12} /></button>
-    <button class="btn ghost sm" title={t("Reload")} onclick={() => { app.preview.loadAt = Date.now(); Node.PreviewReload(); }}><Icon name="refresh" size={13} /></button>
+    <button class="btn ghost sm" title={t("Back")} onclick={() => app.previewBack()}><Icon name="chev" size={12} /></button>
+    <button class="btn ghost sm" title={t("Reload")} onclick={() => app.previewReload()}><Icon name="refresh" size={13} /></button>
     <input class="input url" bind:value={address} onkeydown={e => { if (e.key === "Enter") go(); }} spellcheck="false" />
     <button class="btn ghost sm" title={t("Open in the browser")} onclick={openOutside}><Icon name="link" size={13} /></button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
   <div class="box" bind:this={box}><div class="muted hint">{t("The page shows here (only in the app, not in a browser).")}</div></div>
   <div class="probs" class:open>
-    <button class="ph" onclick={() => (open = !open)}>
-      <span class="dot" class:failed={problems.length > 0} class:done={!problems.length}></span>
-      {problems.length ? t("{n} problems in the page", { n: problems.length }) : cleared ? t("List cleared — the page is not fixed by it") : t("No problems in the page")}
-      <span class="sp"></span>
+    <!-- The header opens the list; its actions are buttons of their own beside it (not inside it). -->
+    <div class="ph">
+      <button class="pt" onclick={() => (open = !open)} aria-expanded={open}>
+        <span class="dot" class:failed={problems.length > 0} class:done={!problems.length}></span>
+        {problems.length ? t("{n} problems in the page", { n: problems.length }) : cleared ? t("List cleared — the page is not fixed by it") : t("No problems in the page")}
+      </button>
       {#if cleared && !problems.length}
-        <span class="link" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.loadAt = Date.now(); Node.PreviewReload(); }} onkeydown={() => {}}>{t("Reload and check")}</span>
+        <button class="link" onclick={() => app.previewReload(true)}>{t("Reload and check")}</button>
       {/if}
       {#if problems.length}
-        <span class="btn primary sm toag" role="button" tabindex="0" onclick={e => { e.stopPropagation(); sendToAgent(); }}
-          onkeydown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); sendToAgent(); } }}><Icon name="send" size={11} /> {t("To the agent")}</span>
-        <span class="link muted" role="button" tabindex="0" onclick={e => { e.stopPropagation(); app.preview.events = []; app.preview.cleared = true; app.preview.clearedAt = Date.now(); app.preview.clearedUrl = app.preview.url; }} onkeydown={() => {}}>{t("Clear")}</span>
+        <button class="btn primary sm toag" onclick={sendToAgent}><Icon name="send" size={11} /> {t("To the agent")}</button>
+        <button class="link muted" onclick={() => app.clearPreview()}>{t("Clear")}</button>
       {/if}
-    </button>
+    </div>
     {#if open}
       <div class="list">
         {#each problems.slice(-100) as e, i (i)}
@@ -124,9 +125,9 @@
   .box { flex: 1; min-height: 80px; position: relative; display: grid; place-items: center; background: var(--page); }
   .hint { font-size: 12px; padding: 20px; text-align: center; }
   .probs { border-top: 1px solid var(--line-soft); flex: none; max-height: 45%; display: flex; flex-direction: column; }
-  .ph { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 8px 10px; font-size: 12px; color: var(--ink-2); text-align: left; }
-  .sp { flex: 1; }
-  .link { color: var(--accent); font-weight: 500; cursor: default; }
+  .ph { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 0; font-size: 12px; }
+  .pt { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 8px 10px; font-size: 12px; color: var(--ink-2); text-align: left; }
+  .link { border: 0; background: transparent; padding: 0; font-size: 12px; color: var(--accent); font-weight: 500; cursor: default; }
   .toag { height: 24px; padding: 0 10px; font-size: 11.5px; gap: 5px; display: inline-flex; align-items: center; }
   .link.muted { color: var(--muted); }
   .list { overflow: auto; padding: 0 8px 8px; display: grid; gap: 4px; }
