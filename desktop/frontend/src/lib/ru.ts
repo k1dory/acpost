@@ -347,6 +347,7 @@ export const ru: Record<string, string> = {
   "This turn is not being followed": "Ход больше не отслеживается",
   "A message takes at most {n} files": "В сообщении не больше {n} файлов",
   "The files are over the node's limit of {n} together": "Файлы вместе больше предела узла: {n}",
+  "Could not read {name}": "Не удалось прочитать {name}",
   "Day": "День",
   "Session": "Сессия",
   "Cancelled": "Отменено",

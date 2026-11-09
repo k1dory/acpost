@@ -143,3 +143,35 @@ describe("nothing is dropped at the end (finding 3)", () => {
     expect(fake.Node.Events).not.toHaveBeenCalled();
   });
 });
+
+describe("a send waits for the files being read (finding 4)", () => {
+  const file = (name: string, read: Promise<ArrayBuffer>) => ({ name, type: "text/plain", size: 2, arrayBuffer: () => read });
+
+  it("a file pasted, then sent at once, goes with the message, to where it was sent", async () => {
+    const app = await load();
+    app.thread = "T"; app.target = "agent:claude";
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "T"));
+    fake.Node.Thread.mockResolvedValue([]);
+    const d = app.draftOf();
+    d.text = "look at this";
+    const read = deferred<ArrayBuffer>();
+    d.add([file("a.txt", read.promise)], null, () => {});
+    const going = app.submit(d);
+    await app.open({ key: "thread:B", kind: "thread", thread: "B", title: "B", updated: "" }); // the screen moves on meanwhile
+    read.resolve(new TextEncoder().encode("hi").buffer as ArrayBuffer);
+    expect(await going).toBe(true);
+    const task = fake.Node.SendTask.mock.calls[0][0];
+    expect(task.files.map((f: any) => f.name)).toEqual(["a.txt"]);
+    expect(task.thread).toBe("T");
+    expect(d.files).toEqual([]); // sent: not left for the next message
+  });
+
+  it("a file that cannot be read is said, and the next one is still read", async () => {
+    const { ComposerDraft } = await import("./composer.svelte");
+    const d = new ComposerDraft("new");
+    const said: string[] = [];
+    await d.add([file("bad.txt", Promise.reject(new Error("gone"))), file("ok.txt", Promise.resolve(new ArrayBuffer(2)))], null, (why, f) => said.push(why + ":" + f));
+    expect(said).toEqual(["read:bad.txt"]);
+    expect(d.files.map(f => f.name)).toEqual(["ok.txt"]);
+  });
+});

@@ -332,9 +332,10 @@ describe("send, review round 3", () => {
     const d = app.draftOf();
     d.text = "task";
     const { r, f } = later();
-    const adding = d.add([f], null, () => {});
     fake.Node.SendTask.mockResolvedValue(msg("m1", "T1"));
-    expect(await app.submit(d)).toBe(true);   // merged into thread:T1's draft
+    const going = app.submit(d);
+    const adding = d.add([f], null, () => {}); // attached after the send: the next message's
+    expect(await going).toBe(true);           // merged into thread:T1's draft
     r.resolve(new Uint8Array([97]).buffer);
     await adding;
     expect(app.draftOf("thread:T1").files.map(x => x.name)).toEqual(["late.txt"]);
@@ -412,10 +413,11 @@ describe("send, review round 4", () => {
     const pa = there.add([a.f], lim, w => fails.push(w));
     const d = app.draftOf();
     d.text = "task";
-    const pb = d.add([b.f], lim, w => fails.push(w));
     fake.Node.SendTask.mockResolvedValue(msg("m1", "T1"));
     there.text = "x";                                              // the thread has a draft: d merges into it
-    await app.submit(d);
+    const going = app.submit(d);
+    const pb = d.add([b.f], lim, w => fails.push(w));              // after the send: the next message's
+    await going;
     a.r.resolve(new Uint8Array([97]).buffer);
     b.r.resolve(new Uint8Array([98]).buffer);
     await Promise.all([pa, pb]);

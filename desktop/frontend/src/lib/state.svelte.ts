@@ -2,7 +2,7 @@ import { t, tr } from "./i18n.svelte";
 import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
-import { ComposerDraft, type Attachment } from "./composer.svelte";
+import { ComposerDraft, filesAsOf, type Attachment } from "./composer.svelte";
 import { afterSent } from "./draft";
 import { Turn, type Ev } from "./turn";
 import { OpKey } from "./opkey";
@@ -552,11 +552,16 @@ class App {
   /** Sends a draft: what was sent leaves it once the node has it; what was typed meanwhile stays
    * (with the chat a new task becomes). True when sent. */
   async submit(d: ComposerDraft): Promise<boolean> {
-    const sent = d.text, sentFiles = d.files;
+    const sent = d.text;
     const body = sent.trim();
     if (!body || d.busy) return false;
     d.busy = true;
-    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles });
+    // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
+    // are part of it: waited for, not left for the next message.
+    const at = this.sendAt(d), files = filesAsOf(d);
+    await d.adding;
+    const sentFiles = files();
+    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles }, at);
     d.busy = false;
     // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
     // put back into the new task's, not lost with the draft no screen shows.
@@ -572,14 +577,13 @@ class App {
   /** Sends a message: true once the node has it, false if not (said in error; the draft keeps the
    * text to send again). The chat it was sent from gets it, whichever is open by then. */
   async send(body: string, files: { name: string; type: string; data: string }[], d = this.draftOf(),
-    sent?: { text: string; files: Attachment[] }): Promise<boolean> {
+    sent?: { text: string; files: Attachment[] }, at = this.sendAt(d)): Promise<boolean> {
     // What the message is for, as it was when sent: the screen may change while it goes.
-    const chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
-    const dest = d.key === "new" ? this.destNow() : ""; // where this new task goes, as it was sent
+    const { chat, thread, draft, epoch, dest } = at;
     // The draft is a thread's already (its conversation became one, the answer lost): what is
     // sent from it goes on in that thread, not to a new one.
     const into = !thread && d.key.startsWith("thread:") ? d.key.slice("thread:".length) : "";
-    let to = this.target;
+    let to = at.target;
     try {
       let task: any = { body, files };
       if (this.limits && new TextEncoder().encode(body).length > this.limits.max_body) {
@@ -654,6 +658,14 @@ class App {
       this.loadChats();
       return true;
     } catch (e) { this.error = errText(e); return false; }
+  }
+
+  /** What a message is for, taken when it is sent: the chat, thread and draft of then. */
+  private sendAt(d: ComposerDraft) {
+    return {
+      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target,
+      dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
+    };
   }
 
   private async sandboxFor(d: ComposerDraft, draft: Draft, body: string, what: string): Promise<string> {

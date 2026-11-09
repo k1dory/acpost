@@ -10,6 +10,17 @@ export type Attachment = { name: string; type: string; size: number; data: strin
 /** A file to attach (a File, or what a test gives). */
 export type FileLike = { name: string; type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
 
+/** Reads asked so far (any draft): a send takes the files of the reads asked before it. */
+let asked = 0;
+const askedAt = new WeakMap<Attachment, number>();
+
+/** The files a send made now takes, once the reads asked before it are done (`adding`): those
+ * attached then, and those those reads bring. What is attached after it is the next message's. */
+export function filesAsOf(d: ComposerDraft): () => Attachment[] {
+  const had = new Set(d.files), upto = asked;
+  return () => d.files.filter(f => had.has(f) || (askedAt.get(f) ?? Infinity) <= upto);
+}
+
 export class ComposerDraft {
   text = $state("");
   files = $state<Attachment[]>([]);
@@ -52,25 +63,30 @@ export class ComposerDraft {
   forget() { this.sandbox = null; this.sandboxOp.done(); this.sending = null; this.epoch++; }
 
   /** Attaches files within the node's limits, one at a time: two drops at once cannot both pass a
-   * check made before either was read. A file over the limits is said (fail) and not read. `name`
-   * gives the name it is attached under, from the names attached right then. */
-  add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size") => void,
+   * check made before either was read. A file over the limits is said (fail) and not read; one
+   * that cannot be read is said too, and the next is read. `name` gives the name it is attached
+   * under, from the names attached right then. A send waits for what is being read (adding). */
+  add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size" | "read", file: string) => void,
     name: (f: FileLike, taken: string[]) => string = f => f.name): Promise<void> {
     const files = [...list];
+    const ticket = ++asked;
     const at = this.live();
     at.adding = at.adding.then(async () => {
       for (const f of files) {
-        if (overLimits(this.live().files, f, limits)) { fail(overLimits(this.live().files, f, limits) as "count" | "size"); return; }
-        const data = b64bytes(new Uint8Array(await f.arrayBuffer()));
+        if (overLimits(this.live().files, f, limits)) { fail(overLimits(this.live().files, f, limits) as "count" | "size", f.name); return; }
+        let data: string;
+        try { data = b64bytes(new Uint8Array(await f.arrayBuffer())); } catch { fail("read", f.name); continue; }
         // Read into whichever draft this one is by now (a new task, the thread it moved into),
         // checked again there: that one may have filled up meanwhile.
         const d = this.live();
         const over = overLimits(d.files, f, limits);
-        if (over) { fail(over); return; }
+        if (over) { fail(over, f.name); return; }
         // Its name, chosen here: against all attached by now, those added just before it included.
-        d.files = [...d.files, { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data }];
+        const a = { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data };
+        askedAt.set(a, ticket);
+        d.files = [...d.files, a];
       }
-    }).catch(() => {});
+    }).catch(() => {}); // what failed was said: the queue goes on
     return at.adding;
   }
 }

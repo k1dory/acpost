@@ -101,9 +101,9 @@
   // Its name is chosen as it is attached (a name already attached gets " (2)"): the node refuses
   // two files of one name in a message.
   function add(list: FileList | File[] | null, name: (f: { name: string; type: string }, taken: string[]) => string = (f, taken) => freeName(f.name, taken)) {
-    d.add(list ?? [], app.limits, over => {
-      app.error = over === "count"
-        ? t("A message takes at most {n} files", { n: app.limits!.max_files })
+    d.add(list ?? [], app.limits, (over, file) => {
+      app.error = over === "read" ? t("Could not read {name}", { name: file })
+        : over === "count" ? t("A message takes at most {n} files", { n: app.limits!.max_files })
         : t("The files are over the node's limit of {n} together", { n: bytes(app.limits!.max_files_size) });
     }, name);
   }
