@@ -9,8 +9,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # Under -race the end-to-end tests build race-detecting nodes: minutes, not hours.
-    timeout-minutes: 30
+    # Under -race the end-to-end tests build race-detecting nodes: minutes, not hours. Above the
+    # per-package test timeout below, so a stuck package is named by go test, not cut by the runner.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -29,7 +30,9 @@ jobs:
         run: |
           if git ls-files -z | xargs -0 file | grep -E 'Mach-O|ELF'; then echo "a compiled binary is tracked"; exit 1; fi
       - run: go vet ./...
-      - run: go test -race -count=1 ./...
+      # One package (cmd/acpost, internal/store) may take several minutes under -race: Go's default
+      # 10 minutes per package is too close.
+      - run: go test -race -count=1 -timeout 25m ./...
   # The desktop app's interface: types, its unit tests (bindings mocked), and that it builds.
   frontend:
     runs-on: ubuntu-latest
