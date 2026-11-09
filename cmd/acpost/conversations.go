@@ -14,10 +14,11 @@ func conversationsCmd(g *globals) *cobra.Command {
 	var before string
 	var limit int
 	cmd := &cobra.Command{
-		Use:     "conversations",
-		Aliases: []string{"convs"},
-		Short:   "Conversations (threads), the most recently active first",
-		Args:    cobra.NoArgs,
+		Use:         "conversations",
+		Annotations: quick,
+		Aliases:     []string{"convs"},
+		Short:       "Conversations (threads), the most recently active first",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := g.connect(cmd.Context())
 			if err != nil {

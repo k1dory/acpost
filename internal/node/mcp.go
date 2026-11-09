@@ -254,9 +254,13 @@ func (a *acpAgent) mcpServers(ctx context.Context, p *acpProc) []acp.McpServer {
 		}
 		switch m.Kind {
 		case "stdio":
+			vals, ok := a.n.mcpValues(kc, m, "env", m.Env)
+			if !ok {
+				continue
+			}
 			env := []acp.EnvVariable{}
-			for _, e := range m.Env {
-				env = append(env, acp.EnvVariable{Name: e, Value: kc.Get(mcpAccount(m.Name, m.SecretVer, "env", e))})
+			for i, e := range m.Env {
+				env = append(env, acp.EnvVariable{Name: e, Value: vals[i]})
 			}
 			args := m.Args
 			if args == nil {
@@ -267,12 +271,33 @@ func (a *acpAgent) mcpServers(ctx context.Context, p *acpProc) []acp.McpServer {
 			if p == nil || !p.init.AgentCapabilities.McpCapabilities.Http {
 				continue
 			}
+			vals, ok := a.n.mcpValues(kc, m, "header", m.Headers)
+			if !ok {
+				continue
+			}
 			hs := []acp.HttpHeader{}
-			for _, h := range m.Headers {
-				hs = append(hs, acp.HttpHeader{Name: h, Value: kc.Get(mcpAccount(m.Name, m.SecretVer, "header", h))})
+			for i, h := range m.Headers {
+				hs = append(hs, acp.HttpHeader{Name: h, Value: vals[i]})
 			}
 			out = append(out, acp.McpServer{Http: &acp.McpServerHttpInline{Name: m.Name, Type: "http", Url: m.URL, Headers: hs}})
 		}
 	}
 	return out
+}
+
+// mcpValues are a server's secrets (where: env or header), "" for one not kept. When one cannot be
+// read (a locked keychain, a headless session) the server is not given to the agent at all, rather
+// than with empty values it would send as its credentials: logged as a warning, the server's name
+// and the store's error only.
+func (n *Node) mcpValues(kc *keychain.Store, m store.MCPServer, where string, names []string) ([]string, bool) {
+	out := make([]string, len(names))
+	for i, name := range names {
+		v, _, err := kc.Lookup(mcpAccount(m.Name, m.SecretVer, where, name))
+		if err != nil {
+			n.log.Warn("MCP server left out of the session: its secrets could not be read", "server", m.Name, "err", err)
+			return nil, false
+		}
+		out[i] = v
+	}
+	return out, true
 }

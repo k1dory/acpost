@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -49,8 +47,7 @@ type probed struct {
 
 func (n *Node) forgeClient() (*forge.Client, *forge.Store) {
 	n.forges.once.Do(func() {
-		home, _ := os.UserHomeDir()
-		st := &forge.Store{Dir: filepath.Join(home, ".config", "acpost"), File: os.Getenv("ACPOST_SECRETS_FILE") == "1"}
+		st := forge.DefaultStore()
 		n.forges.store = st
 		n.forges.client = &forge.Client{Token: st.Token, Kind: st.Kind}
 		n.forges.probed = map[string]probed{}
@@ -131,27 +128,14 @@ func (n *Node) Forge(ctx context.Context, p Principal, q ForgeQuery) (ForgeInfo,
 
 // Pulls lists the pull requests of a repository's forge.
 func (n *Node) Pulls(ctx context.Context, p Principal, q ForgeQuery, state string) ([]forge.Pull, error) {
-	info, err := n.forgeOf(ctx, p, q)
-	if err != nil {
-		return nil, err
-	}
-	c, _ := n.forgeClient()
-	out, err := c.Pulls(ctx, info.Server, info.Repo, state)
-	return out, forgeErr(err)
+	l, err := n.PullList(ctx, p, q, state)
+	return l.Items, err
 }
 
 // Checks lists the CI runs of a ref (the repository's branch when none).
 func (n *Node) Checks(ctx context.Context, p Principal, q ForgeQuery, ref string) ([]forge.Check, error) {
-	info, err := n.forgeOf(ctx, p, q)
-	if err != nil {
-		return nil, err
-	}
-	if ref == "" {
-		ref = info.Branch
-	}
-	c, _ := n.forgeClient()
-	out, err := c.Checks(ctx, info.Server, info.Repo, ref)
-	return out, forgeErr(err)
+	l, err := n.CheckList(ctx, p, q, ref)
+	return l.Items, err
 }
 
 // CILog reads a CI job's log, its secrets masked.
@@ -176,6 +160,12 @@ func (n *Node) OpenPull(ctx context.Context, p Principal, q ForgeQuery, r forge.
 	}
 	if r.Head == "" {
 		r.Head = info.Branch
+	}
+	if r.Base == "" { // the repository's own (main, master, develop…), not a guess
+		c, _ := n.forgeClient()
+		if r.Base, err = c.DefaultBranch(ctx, info.Server, info.Repo); err != nil {
+			return forge.Pull{}, forgeErr(err)
+		}
 	}
 	what := fmt.Sprintf("Open a pull request on %s: %q (%s → %s)", info.Repo.Web, r.Title, r.Head, r.Base)
 	if err := n.approve(ctx, p, what, r.Body, map[string]any{"forge": "open_pull", "repo": info.Repo.Web, "head": r.Head, "base": r.Base, "title": r.Title, "draft": r.Draft}); err != nil {
@@ -259,4 +249,30 @@ func (n *Node) approve(ctx context.Context, p Principal, title, text string, inp
 		return errh("refused", "a person approves it in the app or with `acpost approve`", "%s: %s", title, decision)
 	}
 	return nil
+}
+
+// PullList lists the pull requests of a repository's forge, and says whether it is cut.
+func (n *Node) PullList(ctx context.Context, p Principal, q ForgeQuery, state string) (forge.PullList, error) {
+	info, err := n.forgeOf(ctx, p, q)
+	if err != nil {
+		return forge.PullList{}, err
+	}
+	c, _ := n.forgeClient()
+	out, err := c.PullList(ctx, info.Server, info.Repo, state)
+	return out, forgeErr(err)
+}
+
+// CheckList lists the CI runs of a ref (the repository's branch when none), and says whether it
+// is cut.
+func (n *Node) CheckList(ctx context.Context, p Principal, q ForgeQuery, ref string) (forge.CheckList, error) {
+	info, err := n.forgeOf(ctx, p, q)
+	if err != nil {
+		return forge.CheckList{}, err
+	}
+	if ref == "" {
+		ref = info.Branch
+	}
+	c, _ := n.forgeClient()
+	out, err := c.CheckList(ctx, info.Server, info.Repo, ref)
+	return out, forgeErr(err)
 }

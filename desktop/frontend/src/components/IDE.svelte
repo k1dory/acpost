@@ -6,6 +6,7 @@
 </script>
 
 <script lang="ts">
+  import { headerIcon } from "../lib/ui";
   import { onDestroy } from "svelte";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
@@ -101,7 +102,7 @@
     <span class="sp"></span>
     <!-- Agents waiting for an answer (the sidebar, which shows them, is hidden here). -->
     {#if app.asking.length}<button class="btn ghost sm nodrag ask" onclick={() => (app.view = "board")}>{t("{n} waiting for an answer", { n: app.asking.length })}</button>{/if}
-    <button class="btn ghost sm nodrag" onclick={reload} disabled={starting} title={starting ? t("Starting VS Code… the first time it takes a minute or two.") : t("Reload")}><Icon name="refresh" size={13} /></button>
+    <button class="btn ghost icon nodrag" onclick={reload} disabled={starting} title={starting ? t("Starting VS Code… the first time it takes a minute or two.") : t("Reload")}><Icon name="refresh" size={headerIcon} /></button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
   <div class="box" bind:this={box}>

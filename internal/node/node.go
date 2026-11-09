@@ -116,6 +116,10 @@ type Node struct {
 	turns string
 
 	closed atomic.Bool
+
+	held      heldLeases // the leases of turns running in this process (lease.go)
+	cloudOps  sync.Map   // idempotency key → *sync.Mutex: one cloud task made at a time per key (cloud.go)
+	resolving sync.Map   // ids of forwarded messages resolveForward runs for (forward.go)
 }
 
 type agentToken struct {
@@ -439,7 +443,11 @@ func (n *Node) Send(ctx context.Context, p Principal, r SendRequest) (store.Mess
 
 	// A repeat (same sender, same key) returns the first message before anything is resolved again.
 	if r.IdemKey != "" && p.Kind != "node" {
-		if prev, err := n.st.ByIdem(ctx, p.Address(), r.IdemKey); err == nil {
+		if prev, err := n.st.ByIdem(ctx, p.Address(), r.IdemKey); err == nil && prev.Origin != originUnsent {
+			// (unsent: its key was released between the lookup and the read; it is sent anew)
+			if prev.Origin == originForwarding && !prev.State.Final() {
+				return store.Message{}, false, pendingErr(prev.ID) // not known to be sent: no success yet
+			}
 			return hideLease(prev), false, nil
 		}
 	}
@@ -677,6 +685,14 @@ func (n *Node) Cancel(ctx context.Context, p Principal, id string) (store.Messag
 	nodeOwn := p.Kind == "node" && strings.HasSuffix(m.From, "@"+p.Name)
 	if !p.local() && !nodeOwn && m.From != p.Address() && !n.canServe(p, m.To) {
 		return m, errf("refused", "only the sender may cancel %s", id)
+	}
+	afterCancelRead(id)
+	if m.Origin == originForwarding {
+		cur, done, err := n.cancelForwarding(ctx, p, m)
+		if err != nil || done {
+			return cur, err
+		}
+		m = cur // the send finished meanwhile: as it is now
 	}
 	if m.Origin == originRemote {
 		// The hub owns the outcome: if it already has one, that is what the local copy gets (follow).
@@ -926,6 +942,7 @@ func (n *Node) maintainLoop() {
 		if k, err := n.st.Expire(ctx, now); err == nil {
 			changed += k
 		}
+		n.held.renew(ctx, n.st) // a turn running here is alive, however long this process stood still
 		if k, err := n.st.ReapLeases(ctx, now, n.cfg.Limits.MaxAttempts); err == nil {
 			changed += k
 		}
@@ -994,4 +1011,24 @@ func invalidOr(err error) error {
 		return err
 	}
 	return errf("invalid", "%v", err)
+}
+
+// MessageByIdem returns the message a joined node's sender sent here with an idempotency key: the
+// node asks when a send's answer was lost and the hub kept the message under an earlier send's id.
+func (n *Node) MessageByIdem(ctx context.Context, p Principal, from, key string) (store.Message, error) {
+	if p.Kind != "node" {
+		return store.Message{}, errf("refused", "only a joined node looks a message up by its key")
+	}
+	a, err := ParseAddress(from)
+	if err != nil || a.Node != p.Name || key == "" {
+		return store.Message{}, errf("refused", "node %s may only look up its own senders' messages (…@%s), by a key", p.Name, p.Name)
+	}
+	m, err := n.st.ByIdem(ctx, a.String(), key)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Message{}, errf("not_found", "no message of %s with that key", a)
+	}
+	if err != nil {
+		return store.Message{}, err
+	}
+	return hideLease(m), nil
 }

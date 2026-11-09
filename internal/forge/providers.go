@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -22,79 +23,172 @@ func glProject(path string) string { return strings.ReplaceAll(url.PathEscape(pa
 
 // Pulls lists a repository's pull requests: state open, closed or all.
 func (c *Client) Pulls(ctx context.Context, srv Server, r Repo, state string) ([]Pull, error) {
+	l, err := c.PullList(ctx, srv, r, state)
+	return l.Items, err
+}
+
+// PullList is a list of pull requests, and whether the forge has more than it holds.
+type PullList struct {
+	Items     []Pull `json:"items"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// PullList lists a repository's pull requests a page at a time, up to listPages pages: past
+// them the list says it is cut.
+func (c *Client) PullList(ctx context.Context, srv Server, r Repo, state string) (PullList, error) {
+	return c.listPulls(ctx, srv, r, state, nil)
+}
+
+// listPulls lists pull requests of a state, filter added to the query (head, source_branch…).
+func (c *Client) listPulls(ctx context.Context, srv Server, r Repo, state string, filter url.Values) (PullList, error) {
 	if state == "" {
 		state = "open"
 	}
-	var out []Pull
+	var out PullList
 	switch srv.Kind {
 	case GitHub, Forgejo:
-		var list []struct {
-			Number  int    `json:"number"`
-			Title   string `json:"title"`
-			State   string `json:"state"`
-			Draft   bool   `json:"draft"`
-			HTMLURL string `json:"html_url"`
-			User    struct {
-				Login string `json:"login"`
-			} `json:"user"`
-			Head struct {
-				Ref string `json:"ref"`
-			} `json:"head"`
-			Base struct {
-				Ref string `json:"ref"`
-			} `json:"base"`
-			Updated  time.Time  `json:"updated_at"`
-			MergedAt *time.Time `json:"merged_at"`
-			Merged   bool       `json:"merged"`
-		}
-		q := "?state=" + url.QueryEscape(state) + "&per_page=" + strconv.Itoa(pageLen)
+		q := url.Values{"state": {state}}
+		per := "per_page"
 		if srv.Kind == Forgejo {
-			q = "?state=" + url.QueryEscape(state) + "&limit=" + strconv.Itoa(pageLen)
+			per = "limit"
 		}
-		if _, err := c.get(ctx, srv, r.Host, "/repos/"+r.Path+"/pulls"+q, &list, listMax); err != nil {
-			return nil, err
+		q.Set(per, strconv.Itoa(pageLen))
+		for k, v := range filter {
+			q[k] = v
 		}
-		for _, p := range list {
-			st := p.State
-			if p.Merged || p.MergedAt != nil {
-				st = "merged"
+		var err error
+		out.Truncated, err = c.pages(ctx, srv, r.Host, "/repos/"+r.Path+"/pulls", q, pageLen, func(get func(any) error) (int, error) {
+			var list []struct {
+				Number  int    `json:"number"`
+				Title   string `json:"title"`
+				State   string `json:"state"`
+				Draft   bool   `json:"draft"`
+				HTMLURL string `json:"html_url"`
+				User    struct {
+					Login string `json:"login"`
+				} `json:"user"`
+				Head struct {
+					Ref  string `json:"ref"`
+					Repo *struct {
+						FullName string `json:"full_name"`
+					} `json:"repo"` // null: the fork is gone
+				} `json:"head"`
+				Base struct {
+					Ref string `json:"ref"`
+				} `json:"base"`
+				Updated  time.Time  `json:"updated_at"`
+				MergedAt *time.Time `json:"merged_at"`
+				Merged   bool       `json:"merged"`
 			}
-			out = append(out, Pull{Number: p.Number, Title: p.Title, State: st, Draft: p.Draft, Author: p.User.Login,
-				Head: p.Head.Ref, Base: p.Base.Ref, URL: p.HTMLURL, Updated: p.Updated})
+			if err := get(&list); err != nil {
+				return 0, err
+			}
+			for _, p := range list {
+				st := p.State
+				if p.Merged || p.MergedAt != nil {
+					st = "merged"
+				}
+				pr := Pull{Number: p.Number, Title: p.Title, State: st, Draft: p.Draft, Author: p.User.Login,
+					Head: p.Head.Ref, Base: p.Base.Ref, URL: p.HTMLURL, Updated: p.Updated}
+				if p.Head.Repo != nil {
+					pr.HeadRepo = p.Head.Repo.FullName
+				}
+				out.Items = append(out.Items, pr)
+			}
+			return len(list), nil
+		})
+		if err != nil {
+			return PullList{}, err
 		}
 	case GitLab:
 		gl := map[string]string{"open": "opened", "closed": "closed", "merged": "merged", "all": "all"}[state]
 		if gl == "" {
 			gl = "opened"
 		}
-		var list []struct {
-			IID          int    `json:"iid"`
-			Title        string `json:"title"`
-			State        string `json:"state"`
-			Draft        bool   `json:"draft"`
-			WebURL       string `json:"web_url"`
-			SourceBranch string `json:"source_branch"`
-			TargetBranch string `json:"target_branch"`
-			Author       struct {
-				Username string `json:"username"`
-			} `json:"author"`
-			Updated time.Time `json:"updated_at"`
+		q := url.Values{"state": {gl}, "per_page": {strconv.Itoa(pageLen)}}
+		for k, v := range filter {
+			q[k] = v
 		}
-		if _, err := c.get(ctx, srv, r.Host, "/projects/"+glProject(r.Path)+"/merge_requests?state="+gl+"&per_page="+strconv.Itoa(pageLen), &list, listMax); err != nil {
-			return nil, err
-		}
-		for _, m := range list {
-			st := map[string]string{"opened": "open"}[m.State]
-			if st == "" {
-				st = m.State
+		var err error
+		out.Truncated, err = c.pages(ctx, srv, r.Host, "/projects/"+glProject(r.Path)+"/merge_requests", q, pageLen, func(get func(any) error) (int, error) {
+			var list []struct {
+				IID          int    `json:"iid"`
+				Title        string `json:"title"`
+				State        string `json:"state"`
+				Draft        bool   `json:"draft"`
+				WebURL       string `json:"web_url"`
+				SourceBranch string `json:"source_branch"`
+				TargetBranch string `json:"target_branch"`
+				SourceProj   int64  `json:"source_project_id"`
+				TargetProj   int64  `json:"target_project_id"`
+				Author       struct {
+					Username string `json:"username"`
+				} `json:"author"`
+				Updated time.Time `json:"updated_at"`
 			}
-			out = append(out, Pull{Number: m.IID, Title: m.Title, State: st, Draft: m.Draft, Author: m.Author.Username,
-				Head: m.SourceBranch, Base: m.TargetBranch, URL: m.WebURL, Updated: m.Updated})
+			if err := get(&list); err != nil {
+				return 0, err
+			}
+			for _, m := range list {
+				st := map[string]string{"opened": "open"}[m.State]
+				if st == "" {
+					st = m.State
+				}
+				pr := Pull{Number: m.IID, Title: m.Title, State: st, Draft: m.Draft, Author: m.Author.Username,
+					Head: m.SourceBranch, Base: m.TargetBranch, URL: m.WebURL, Updated: m.Updated, HeadRepo: r.Path}
+				if m.SourceProj != m.TargetProj {
+					pr.HeadRepo = "project " + strconv.FormatInt(m.SourceProj, 10) // a fork's: its path is not in the list
+				}
+				out.Items = append(out.Items, pr)
+			}
+			return len(list), nil
+		})
+		if err != nil {
+			return PullList{}, err
 		}
 	default:
-		return nil, fmt.Errorf("forge kind %q", srv.Kind)
+		return PullList{}, fmt.Errorf("forge kind %q", srv.Kind)
 	}
 	return out, nil
+}
+
+// listPages is how many pages a list reads at most.
+const listPages = 10
+
+// pages reads a list a page at a time (page=1, 2…; q holds the page size, size): each page is
+// given to read, which says how many items it had. It goes on while the forge says there is a next
+// page (GitHub and Forgejo a Link rel="next", GitLab X-Next-Page; a full page when it says
+// neither), up to listPages: cut there, it says so.
+func (c *Client) pages(ctx context.Context, srv Server, host, path string, q url.Values, size int, read func(get func(any) error) (int, error)) (bool, error) {
+	for page := 1; ; page++ {
+		q.Set("page", strconv.Itoa(page))
+		var h http.Header
+		n, err := read(func(out any) error {
+			var err error
+			h, err = c.get(ctx, srv, host, path+"?"+q.Encode(), out, listMax)
+			return err
+		})
+		if err != nil {
+			return false, err
+		}
+		if !hasNext(h, n, size) {
+			return false, nil
+		}
+		if page == listPages {
+			return true, nil
+		}
+	}
+}
+
+// hasNext says whether a page is followed by another.
+func hasNext(h http.Header, n, size int) bool {
+	if l := h.Get("Link"); l != "" {
+		return strings.Contains(l, `rel="next"`)
+	}
+	if _, ok := h["X-Next-Page"]; ok {
+		return h.Get("X-Next-Page") != ""
+	}
+	return n >= size
 }
 
 // PullRequest opens a pull request.
@@ -127,7 +221,7 @@ func (c *Client) OpenPull(ctx context.Context, srv Server, r Repo, p PullRequest
 			body["draft"] = p.Draft
 		}
 		if _, err := c.do(ctx, "POST", srv, r.Host, "/repos/"+r.Path+"/pulls", body, &got, listMax); err != nil {
-			return Pull{}, err
+			return c.alreadyOpen(ctx, srv, r, p, err)
 		}
 		return Pull{Number: got.Number, Title: title, State: "open", Draft: p.Draft, Head: p.Head, Base: p.Base, URL: got.HTMLURL}, nil
 	case GitLab:
@@ -141,7 +235,7 @@ func (c *Client) OpenPull(ctx context.Context, srv Server, r Repo, p PullRequest
 		}
 		body := map[string]any{"source_branch": p.Head, "target_branch": p.Base, "title": title, "description": p.Body}
 		if _, err := c.do(ctx, "POST", srv, r.Host, "/projects/"+glProject(r.Path)+"/merge_requests", body, &got, listMax); err != nil {
-			return Pull{}, err
+			return c.alreadyOpen(ctx, srv, r, p, err)
 		}
 		return Pull{Number: got.IID, Title: title, State: "open", Draft: p.Draft, Head: p.Head, Base: p.Base, URL: got.WebURL}, nil
 	}
@@ -219,14 +313,28 @@ func (c *Client) MergePull(ctx context.Context, srv Server, r Repo, m Merge) err
 
 // Checks lists the CI runs of a ref (a branch, a commit), newest first, with their jobs.
 func (c *Client) Checks(ctx context.Context, srv Server, r Repo, ref string) ([]Check, error) {
+	l, err := c.CheckList(ctx, srv, r, ref)
+	return l.Items, err
+}
+
+// CheckList is a list of CI runs, and whether the forge has more than it holds (runs: the newest
+// few are read; commit statuses: up to listPages pages).
+type CheckList struct {
+	Items     []Check `json:"items"`
+	Truncated bool    `json:"truncated,omitempty"`
+}
+
+// CheckList lists the CI runs of a ref (a branch, a commit), newest first, with their jobs.
+func (c *Client) CheckList(ctx context.Context, srv Server, r Repo, ref string) (CheckList, error) {
 	var out []Check
+	cut := false
 	switch srv.Kind {
 	case GitHub:
-		runs, err := c.actionsRuns(ctx, srv, r, ref)
+		runs, more, err := c.actionsRuns(ctx, srv, r, ref)
 		if err != nil {
-			return nil, err
+			return CheckList{}, err
 		}
-		out = runs
+		out, cut = runs, more
 	case GitLab:
 		var pipes []struct {
 			ID      int64     `json:"id"`
@@ -242,22 +350,27 @@ func (c *Client) Checks(ctx context.Context, srv Server, r Repo, ref string) ([]
 			q += "&ref=" + url.QueryEscape(ref)
 		}
 		proj := "/projects/" + glProject(r.Path)
-		if _, err := c.get(ctx, srv, r.Host, proj+"/pipelines"+q, &pipes, listMax); err != nil {
-			return nil, err
+		h, err := c.get(ctx, srv, r.Host, proj+"/pipelines"+q, &pipes, listMax)
+		if err != nil {
+			return CheckList{}, err
 		}
+		cut = hasNext(h, len(pipes), 10)
 		for _, p := range pipes {
 			ch := Check{ID: strconv.FormatInt(p.ID, 10), Name: "pipeline #" + strconv.FormatInt(p.ID, 10), Status: glStatus(p.Status),
 				URL: p.WebURL, Ref: p.Ref, SHA: p.SHA, Started: p.Created, LogsByJobs: true}
-			var jobs []struct {
-				ID       int64      `json:"id"`
-				Name     string     `json:"name"`
-				Stage    string     `json:"stage"`
-				Status   string     `json:"status"`
-				WebURL   string     `json:"web_url"`
-				Started  *time.Time `json:"started_at"`
-				Finished *time.Time `json:"finished_at"`
-			}
-			if _, err := c.get(ctx, srv, r.Host, proj+"/pipelines/"+ch.ID+"/jobs?per_page=100", &jobs, listMax); err == nil {
+			more, err := c.pages(ctx, srv, r.Host, proj+"/pipelines/"+ch.ID+"/jobs", url.Values{"per_page": {"100"}}, 100, func(get func(any) error) (int, error) {
+				var jobs []struct {
+					ID       int64      `json:"id"`
+					Name     string     `json:"name"`
+					Stage    string     `json:"stage"`
+					Status   string     `json:"status"`
+					WebURL   string     `json:"web_url"`
+					Started  *time.Time `json:"started_at"`
+					Finished *time.Time `json:"finished_at"`
+				}
+				if err := get(&jobs); err != nil {
+					return 0, err
+				}
 				for _, j := range jobs {
 					job := Job{ID: strconv.FormatInt(j.ID, 10), Name: strings.TrimPrefix(j.Stage+" / "+j.Name, " / "), Status: glStatus(j.Status), URL: j.WebURL}
 					if j.Started != nil {
@@ -268,21 +381,23 @@ func (c *Client) Checks(ctx context.Context, srv Server, r Repo, ref string) ([]
 					}
 					ch.Jobs = append(ch.Jobs, job)
 				}
-			}
+				return len(jobs), nil
+			})
+			ch.JobsError = jobsError(more, err)
 			out = append(out, ch)
 		}
 	case Forgejo:
 		// Gitea 1.24+ has GitHub's Actions API (runs, jobs, a job's log); Forgejo and older Gitea
 		// do not: then commit statuses, what Actions (and any CI) report on a commit.
-		if runs, err := c.actionsRuns(ctx, srv, r, ref); err == nil {
-			return runs, nil
+		if runs, more, err := c.actionsRuns(ctx, srv, r, ref); err == nil {
+			return CheckList{Items: runs, Truncated: more}, nil
 		} else if fe, ok := err.(*Error); !ok || fe.Status != 404 {
-			return nil, err
+			return CheckList{}, err
 		}
 		if ref == "" {
-			return nil, fmt.Errorf("checks on a Forgejo/Gitea forge need a branch or commit")
+			return CheckList{}, fmt.Errorf("checks on a Forgejo/Gitea forge need a branch or commit")
 		}
-		var st []struct {
+		type status struct {
 			ID        int64     `json:"id"`
 			Context   string    `json:"context"`
 			Status    string    `json:"status"`
@@ -290,9 +405,19 @@ func (c *Client) Checks(ctx context.Context, srv Server, r Repo, ref string) ([]
 			Created   time.Time `json:"created_at"`
 			Updated   time.Time `json:"updated_at"`
 		}
-		if _, err := c.get(ctx, srv, r.Host, "/repos/"+r.Path+"/commits/"+url.PathEscape(ref)+"/statuses?limit=100", &st, listMax); err != nil {
-			return nil, err
+		var st []status
+		more, err := c.pages(ctx, srv, r.Host, "/repos/"+r.Path+"/commits/"+url.PathEscape(ref)+"/statuses", url.Values{"limit": {"50"}}, 50, func(get func(any) error) (int, error) {
+			var page []status
+			if err := get(&page); err != nil {
+				return 0, err
+			}
+			st = append(st, page...)
+			return len(page), nil
+		})
+		if err != nil {
+			return CheckList{}, err
 		}
+		cut = more
 		latest := map[string]int{}
 		for i, s := range st {
 			if j, ok := latest[s.Context]; !ok || s.Updated.After(st[j].Updated) {
@@ -309,9 +434,20 @@ func (c *Client) Checks(ctx context.Context, srv Server, r Repo, ref string) ([]
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	default:
-		return nil, fmt.Errorf("forge kind %q", srv.Kind)
+		return CheckList{}, fmt.Errorf("forge kind %q", srv.Kind)
 	}
-	return out, nil
+	return CheckList{Items: out, Truncated: cut}, nil
+}
+
+// jobsError says why a run's jobs are not all there: an error reading them, or more pages than read.
+func jobsError(more bool, err error) string {
+	switch {
+	case err != nil:
+		return "its jobs could not be read: " + err.Error()
+	case more:
+		return "more jobs than " + strconv.Itoa(listPages) + " pages: the first shown"
+	}
+	return ""
 }
 
 // Log reads a job's log (GitHub, GitLab: a job id; Forgejo/Gitea: a check's id or its target
@@ -397,9 +533,10 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // actionsRuns lists Actions runs and their jobs the GitHub way (GitHub; Gitea 1.24+): of a branch,
 // or of a commit given in full.
-func (c *Client) actionsRuns(ctx context.Context, srv Server, r Repo, ref string) ([]Check, error) {
+func (c *Client) actionsRuns(ctx context.Context, srv Server, r Repo, ref string) ([]Check, bool, error) {
 	var runs struct {
-		Runs []struct {
+		Total int `json:"total_count"`
+		Runs  []struct {
 			ID         int64     `json:"id"`
 			Name       string    `json:"name"`
 			Title      string    `json:"display_title"`
@@ -425,7 +562,7 @@ func (c *Client) actionsRuns(ctx context.Context, srv Server, r Repo, ref string
 		q += "&branch=" + url.QueryEscape(ref)
 	}
 	if _, err := c.get(ctx, srv, r.Host, "/repos/"+r.Path+"/actions/runs"+q, &runs, listMax); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var out []Check
 	for _, run := range runs.Runs {
@@ -449,11 +586,10 @@ func (c *Client) actionsRuns(ctx context.Context, srv Server, r Repo, ref string
 				Completed  *time.Time `json:"completed_at"`
 			} `json:"jobs"`
 		}
-		for page := 1; page <= 10; page++ { // all its jobs, a page at a time
+		more, err := c.pages(ctx, srv, r.Host, "/repos/"+r.Path+"/actions/runs/"+ch.ID+"/jobs", url.Values{per: {strconv.Itoa(size)}}, size, func(get func(any) error) (int, error) {
 			jobs.Jobs = nil
-			path := "/repos/" + r.Path + "/actions/runs/" + ch.ID + "/jobs?" + per + "=" + strconv.Itoa(size) + "&page=" + strconv.Itoa(page)
-			if _, err := c.get(ctx, srv, r.Host, path, &jobs, listMax); err != nil {
-				break
+			if err := get(&jobs); err != nil {
+				return 0, err
 			}
 			for _, j := range jobs.Jobs {
 				job := Job{ID: strconv.FormatInt(j.ID, 10), Name: j.Name, Status: ghStatus(j.Status, j.Conclusion), URL: j.HTMLURL, Started: j.Started}
@@ -462,13 +598,12 @@ func (c *Client) actionsRuns(ctx context.Context, srv Server, r Repo, ref string
 				}
 				ch.Jobs = append(ch.Jobs, job)
 			}
-			if len(jobs.Jobs) < size {
-				break
-			}
-		}
+			return len(jobs.Jobs), nil
+		})
+		ch.JobsError = jobsError(more, err)
 		out = append(out, ch)
 	}
-	return out, nil
+	return out, runs.Total > len(runs.Runs), nil
 }
 
 // shown is a value a server gave, fit to show: the host's token masked, cut to n.
@@ -489,4 +624,72 @@ func plainURL(s string) string {
 		return "the job's page"
 	}
 	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
+}
+
+// alreadyOpen is what an open refused as a duplicate (GitHub 422, GitLab and Forgejo 409: one is
+// open from this head) gives: the pull request open from that head (its branch in the same source
+// repository: owner:branch names a fork's) into that base, as a repeat of the same open (a retry
+// after a lost answer) expects. Any other refusal is the error it was; a lookup that fails is its
+// own error (a 503, a broken connection: worth a retry), not the duplicate's.
+func (c *Client) alreadyOpen(ctx context.Context, srv Server, r Repo, p PullRequest, err error) (Pull, error) {
+	fe, ok := err.(*Error)
+	if !ok || (fe.Status != 409 && fe.Status != 422) {
+		return Pull{}, err
+	}
+	// The source: src is its owner, srcRepo the repository when known (a bare branch is this
+	// repository's, owner/repo:branch names one; owner:branch is that owner's fork, any name).
+	owner, _, _ := strings.Cut(r.Path, "/")
+	src, srcRepo, ref := owner, r.Path, p.Head
+	if o, b, ok := strings.Cut(p.Head, ":"); ok && srv.Kind != GitLab {
+		src, ref = o, b
+		if o, _, ok := strings.Cut(src, "/"); ok { // owner/repo:branch
+			src, srcRepo = o, src
+		} else if !strings.EqualFold(o, owner) {
+			srcRepo = ""
+		}
+	}
+	var filter url.Values
+	switch srv.Kind {
+	case GitHub:
+		filter = url.Values{"head": {src + ":" + ref}, "base": {p.Base}}
+	case GitLab:
+		filter = url.Values{"source_branch": {ref}, "target_branch": {p.Base}}
+	}
+	list, lerr := c.listPulls(ctx, srv, r, "open", filter)
+	if lerr != nil {
+		return Pull{}, lerr
+	}
+	for _, x := range list.Items {
+		from, _, _ := strings.Cut(x.HeadRepo, "/")
+		if srv.Kind == GitLab {
+			from = map[bool]string{true: src}[x.HeadRepo == r.Path] // a fork's MR is not this one
+		}
+		same := strings.EqualFold(from, src)
+		if srcRepo != "" && srv.Kind != GitLab {
+			same = strings.EqualFold(x.HeadRepo, srcRepo) // one owner's two repositories differ
+		}
+		if x.Head == ref && x.Base == p.Base && same {
+			x.Existing = true
+			return x, nil
+		}
+	}
+	return Pull{}, err
+}
+
+// DefaultBranch is the branch a repository's pull requests go into unless told otherwise.
+func (c *Client) DefaultBranch(ctx context.Context, srv Server, r Repo) (string, error) {
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	path := "/repos/" + r.Path
+	if srv.Kind == GitLab {
+		path = "/projects/" + glProject(r.Path)
+	}
+	if _, err := c.get(ctx, srv, r.Host, path, &repo, listMax); err != nil {
+		return "", err
+	}
+	if repo.DefaultBranch == "" {
+		return "", fmt.Errorf("%s: the forge names no default branch: --base names it", r.Web)
+	}
+	return repo.DefaultBranch, nil
 }

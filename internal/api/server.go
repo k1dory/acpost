@@ -36,6 +36,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/messages", s.auth(s.send))
 	mux.HandleFunc("GET /v1/messages", s.auth(s.list))
 	mux.HandleFunc("GET /v1/messages/{id}", s.auth(s.get))
+	mux.HandleFunc("GET /v1/messages/by-idem", s.auth(s.byIdem))
 	mux.HandleFunc("GET /v1/messages/{id}/wait", s.auth(s.wait))
 	mux.HandleFunc("GET /v1/messages/{id}/events", s.auth(s.events))
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
@@ -1080,21 +1081,21 @@ func (s *server) forgeInfo(w http.ResponseWriter, r *http.Request, p node.Princi
 }
 
 func (s *server) forgePulls(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	items, err := s.n.Pulls(r.Context(), p, forgeQuery(r), r.URL.Query().Get("state"))
+	l, err := s.n.PullList(r.Context(), p, forgeQuery(r), r.URL.Query().Get("state"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items)})
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(l.Items), "truncated": l.Truncated})
 }
 
 func (s *server) forgeChecks(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	items, err := s.n.Checks(r.Context(), p, forgeQuery(r), r.URL.Query().Get("ref"))
+	l, err := s.n.CheckList(r.Context(), p, forgeQuery(r), r.URL.Query().Get("ref"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": nonNilSlice(items)})
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(l.Items), "truncated": l.Truncated})
 }
 
 func (s *server) forgeLog(w http.ResponseWriter, r *http.Request, p node.Principal) {
@@ -1471,4 +1472,17 @@ func (w *cutWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func requestCut(w http.ResponseWriter) bool {
 	cw, ok := w.(*cutWriter)
 	return ok && cw.ctx.Err() != nil
+}
+
+// byIdem: a joined node looks up what one of its senders sent here with an idempotency key. None
+// is a 200 too, {"found":false}: a node tells it from the 404 of a hub without this route (an
+// older version, where the path is read as a message id), which proves nothing.
+func (s *server) byIdem(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	m, err := s.n.MessageByIdem(r.Context(), p, r.URL.Query().Get("from"), r.URL.Query().Get("key"))
+	var e *node.Error
+	if errors.As(err, &e) && e.Code == "not_found" {
+		reply(w, http.StatusOK, map[string]any{"found": false}, nil)
+		return
+	}
+	reply(w, http.StatusOK, map[string]any{"found": true, "message": m}, err)
 }

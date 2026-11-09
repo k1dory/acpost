@@ -25,6 +25,9 @@ import (
 const (
 	originRemote = "remote" // a local copy of a message sent through the hub
 	originHub    = "hub:"   // a message the hub handed to this node; the hub's lease follows
+	// originAcked is a delivered message whose outcome the hub took (or had already): the lease
+	// follows. It is still a delivery (it starts with originHub).
+	originAcked = originHub + "acked:"
 
 	announceEvery = 20 * time.Second
 	announceTTL   = 70 * time.Second
@@ -196,52 +199,6 @@ func isFinalErr(err error) bool {
 	return errors.As(err, &ce) && ce.Code == "conflict"
 }
 
-// forward sends a message to the hub and keeps a local copy that follows it.
-func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store.Message, bool, error) {
-	req := client.SendRequest{To: to.String(), Body: m.Body, Task: m.Task, Thread: m.Thread, Meta: m.Meta, Files: m.Files,
-		ID: m.ID, From: n.qualify(m.From), Parent: m.Parent, Depth: m.Depth}
-	if !m.ExpiresAt.IsZero() {
-		req.TTL = time.Until(m.ExpiresAt).Round(time.Millisecond).String()
-	}
-	idem := ""
-	if m.IdemKey != "" {
-		idem = m.IdemKey
-	}
-	sent, created, err := n.hub.Send(ctx, req, idem)
-	if err != nil {
-		return store.Message{}, false, hubErr(err)
-	}
-	files := m.Files
-	if !created {
-		// A repeat: the hub kept the first send, whose files may differ from this one's.
-		files = nil
-		if listed := pick(sent.Files, false); len(listed) > 0 {
-			got, err := n.fetchFiles(ctx, sent.ID, false, listed, "the message")
-			var e *Error
-			if err != nil && !errors.As(err, &e) {
-				err = hubErr(err)
-			}
-			if err != nil {
-				return store.Message{}, false, err
-			}
-			files = got
-		}
-	}
-	local := &store.Message{ID: sent.ID, From: m.From, To: sent.To, Task: sent.Task, Thread: sent.Thread, Parent: sent.Parent,
-		Depth: sent.Depth, Meta: sent.Meta, Body: sent.Body, ExpiresAt: sent.ExpiresAt, Origin: originRemote, Files: files}
-	got, _, err := n.st.Insert(ctx, local)
-	if err != nil {
-		// Sent before (a repeat with the same key): the local copy exists.
-		if existing, gerr := n.st.Get(ctx, sent.ID); gerr == nil {
-			return hideLease(existing), false, nil
-		}
-		return store.Message{}, false, err
-	}
-	n.notify()
-	n.startFollow(sent.ID)
-	return hideLease(got), created, nil
-}
-
 // maxFollowers bounds the long polls a node keeps on its hub for messages it forwarded; the rest
 // are checked by followSweep.
 const maxFollowers = 64
@@ -254,14 +211,19 @@ func (n *Node) startFollow(id string) {
 	}
 	n.following[id] = true
 	n.followMu.Unlock()
-	n.goLoop(func() {
+	// From a request: a node closing starts no loop (followSweep picks the message up next start).
+	if !n.goWork(func() {
 		defer func() {
 			n.followMu.Lock()
 			delete(n.following, id)
 			n.followMu.Unlock()
 		}()
 		n.follow(id)
-	})
+	}) {
+		n.followMu.Lock()
+		delete(n.following, id)
+		n.followMu.Unlock()
+	}
 }
 
 func (n *Node) wakeFollow() {
@@ -368,7 +330,9 @@ func (n *Node) follow(id string) {
 		return // the local copy is gone
 	}
 	for n.ctx.Err() == nil {
-		m, err := n.hub.Wait(n.ctx, id, client.MaxWait)
+		wctx, done := context.WithTimeout(n.ctx, client.MaxWait+hubCallTimeout)
+		m, err := n.hub.Wait(wctx, id, client.MaxWait)
+		done()
 		if err == nil && m.State.Final() && !n.copyHubEvents(id) {
 			err = errors.New("the hub's events did not come") // again, after the pause below
 		} else if n.settleFrom(id, m, err) {
@@ -403,7 +367,10 @@ func (n *Node) startJoin() {
 	n.goLoop(func() {
 		for {
 			next := announceEvery
-			if err := n.hub.Announce(n.ctx, n.Name(), n.announced()); err != nil && n.ctx.Err() == nil {
+			actx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+			err := n.hub.Announce(actx, n.Name(), n.announced())
+			done()
+			if err != nil && n.ctx.Err() == nil {
 				n.log.Warn("announce to hub", "err", err)
 				next = 2 * time.Second // the hub may be starting: try again soon
 			}
@@ -417,6 +384,10 @@ func (n *Node) startJoin() {
 	n.goLoop(n.hubClaimLoop)
 	// Forwarded messages: the sweep picks up those the last process followed.
 	n.goLoop(n.followSweep)
+	// Outcomes the last process had not handed the hub for certain: handed again.
+	n.goLoop(n.resumeReplies)
+	// Messages it stored to send and did not learn the fate of.
+	n.goLoop(n.resumeForwards)
 	// Delivered messages: few (local queue limits bound them), each relayed under its hub lease.
 	for after := ""; ; {
 		page, err := n.st.UnsettledPage(n.ctx, originHub, after, store.MaxPage)
@@ -441,7 +412,9 @@ func (n *Node) hubClaimLoop() {
 		case <-n.ctx.Done():
 			return
 		}
-		m, ok, err := n.hub.NodeClaim(n.ctx, n.Name(), 30*time.Second, hubLease)
+		cctx, done := context.WithTimeout(n.ctx, hubClaimWait+hubCallTimeout)
+		m, ok, err := n.hub.NodeClaim(cctx, n.Name(), hubClaimWait, hubLease)
+		done()
 		if err != nil || !ok {
 			<-slots
 		}
@@ -471,7 +444,9 @@ func (n *Node) deliver(m store.Message) {
 	ctx := n.ctx
 	to, err := ParseAddress(m.To)
 	refuse := func(why string) {
-		_ = n.hub.Reply(ctx, m.ID, client.ReplyRequest{Lease: m.LeaseID, Error: why})
+		rctx, done := context.WithTimeout(ctx, hubCallTimeout)
+		_ = n.hub.Reply(rctx, m.ID, client.ReplyRequest{Lease: m.LeaseID, Error: why})
+		done()
 	}
 	if err != nil || to.Node != n.Name() || n.agentCfg(to.Name) == nil {
 		refuse("node " + n.Name() + " has no agent " + m.To)
@@ -521,10 +496,20 @@ func (n *Node) deliver(m store.Message) {
 			if err == nil || errors.As(err, &e) || try == 2 || ctx.Err() != nil {
 				break
 			}
-			time.Sleep(time.Second)
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
+		}
+		var e *Error
+		if errors.As(err, &e) {
+			refuse(fmt.Sprintf("node %s: %v", n.Name(), err)) // over the limits, not what was listed: final
+			return
 		}
 		if err != nil {
-			refuse(fmt.Sprintf("node %s: %v", n.Name(), err))
+			// The hub or the way to it failing is passing: its lease runs out and it delivers again
+			// (an attempt spent, not the message).
+			n.log.Warn("delivery's files did not come; left to the next delivery", "id", m.ID, "err", err)
 			return
 		}
 		if leased.IsZero() || time.Since(leased) > hubLease*2/3 {
@@ -536,19 +521,11 @@ func (n *Node) deliver(m store.Message) {
 	}
 	local := &store.Message{ID: m.ID, From: m.From, To: "agent:" + to.Name, Task: m.Task, Thread: m.Thread, Parent: m.Parent,
 		Depth: m.Depth, Meta: m.Meta, Body: m.Body, ExpiresAt: m.ExpiresAt, Origin: originHub + m.LeaseID, Files: files}
-	if _, _, err := n.st.InsertLimited(ctx, local, lim.MaxQueuedPerAgent); err != nil {
-		if errors.Is(err, store.ErrQueueFull) {
-			refuse(fmt.Sprintf("node %s: %s has a full queue (limits.max_queued_per_agent)", n.Name(), local.To))
-			return
+	if why, ok := n.takeDelivery(ctx, local, lim.MaxQueuedPerAgent); !ok {
+		if why != "" {
+			refuse(why)
 		}
-		prev, gerr := n.st.Get(ctx, m.ID)
-		// Only an earlier delivery of this same message is adopted, never a local message with the id.
-		if gerr != nil || !strings.HasPrefix(prev.Origin, originHub) || prev.To != local.To || prev.From != local.From {
-			refuse("node " + n.Name() + ": message id " + m.ID + " is already in use here")
-			return
-		}
-		// Delivered again (the hub's lease ran out before): keep the copy, follow it under the new lease.
-		_ = n.st.SetOrigin(ctx, m.ID, originHub+m.LeaseID)
+		return
 	}
 	n.notify()
 	n.goLoop(func() { n.relay(m.ID, m.LeaseID) })
@@ -589,33 +566,19 @@ func (n *Node) relay(id, lease string) {
 			if m.Origin != originHub+lease {
 				return
 			}
-			for try := 0; n.ctx.Err() == nil; try++ {
-				err := n.hub.Reply(n.ctx, id, r)
-				if err != nil && len(r.Files) > 0 && filesRefused(err) {
-					// The hub takes no such files: the sender still gets the text, and why the files are missing.
-					r.Files, r.Error, r.ErrorCode = nil, "the reply's files were refused by the hub: "+err.Error(), "files_refused"
-					continue
-				}
-				if err == nil || isFinalErr(err) || try >= 20 {
-					return
-				}
-				time.Sleep(time.Second)
-			}
+			n.replyHub(id, lease, r, extended)
 			return
 		}
 		if m.Origin != originHub+lease {
 			return // delivered again under another lease: that delivery's relay takes over
 		}
-		if time.Since(extended) >= hubLease/3 {
+		if time.Since(extended) >= hubRenew {
 			extended = time.Now()
-			if err := n.hub.Extend(n.ctx, id, lease, hubLease); err != nil && isFinalErr(err) {
-				// The hub gave the message up (cancelled, or the lease went to another delivery).
-				if cur, _ := n.st.Get(n.ctx, id); cur.Origin != originHub+lease {
-					return
-				}
-				if _, err := n.st.Cancel(n.ctx, id); err == nil {
-					n.notify()
-				}
+			ectx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+			err := n.hub.Extend(ectx, id, lease, hubLease)
+			done()
+			if err != nil && isFinalErr(err) {
+				n.hubLeaseGone(id, lease)
 				return
 			}
 		}
@@ -625,9 +588,172 @@ func (n *Node) relay(id, lease string) {
 		select {
 		case <-evs:
 		case <-changed:
-		case <-time.After(hubLease/3 - time.Since(extended)):
+		case <-time.After(hubRenew - time.Since(extended)):
 		case <-n.ctx.Done():
 			return
 		}
+	}
+}
+
+// takeDelivery makes a delivery the local copy of its message. An earlier delivery of the same
+// message is adopted first, in one step with its new lease (a full queue does not refuse what is
+// already here); only a new one is admitted under the queue's limit. Not ok: why is the refusal
+// for the hub, or "" when the delivery is left to the hub's lease (a passing failure of the store).
+func (n *Node) takeDelivery(ctx context.Context, local *store.Message, maxQueued int) (why string, ok bool) {
+	for range 2 {
+		_, err := n.st.AdoptDelivery(ctx, local.ID, local.From, local.To, originHub, local.Origin)
+		switch {
+		case err == nil:
+			return "", true
+		case errors.Is(err, store.ErrIDInUse):
+			// Only an earlier delivery of this same message is adopted, never a local message with the id.
+			return "node " + n.Name() + ": message id " + local.ID + " is already in use here", false
+		case !errors.Is(err, store.ErrNotFound):
+			n.log.Warn("take a delivery", "id", local.ID, "err", err)
+			return "", false
+		}
+		_, _, err = n.st.InsertLimited(ctx, local, maxQueued)
+		switch {
+		case err == nil:
+			return "", true
+		case errors.Is(err, store.ErrQueueFull):
+			return fmt.Sprintf("node %s: %s has a full queue (limits.max_queued_per_agent)", n.Name(), local.To), false
+		case errors.Is(err, store.ErrStoreFull):
+			return fmt.Sprintf("node %s: %v", n.Name(), err), false
+		}
+		// Another delivery of it was stored meanwhile (the id is taken): that one is adopted.
+	}
+	n.log.Warn("take a delivery: the id is taken and not adoptable", "id", local.ID)
+	return "", false
+}
+
+// hubLeaseGone is what a relay does when the hub no longer takes its lease on a delivered message.
+// The hub cancelled it, or ended it without this node (it gave up after the lease was lost too
+// often): the copy here ends too, if it is still this delivery's. Otherwise the lease went to
+// another delivery, or the hub's lease ran out and it delivers again: the copy is left as it is (a
+// turn running goes on) for the next delivery to adopt, and watched until then; it is not
+// cancelled for good.
+func (n *Node) hubLeaseGone(id, lease string) {
+	// The hub's word is needed: without it (the hub did not answer, the store failed) it is asked
+	// again, a pause longer each time, until it answers or another delivery owns the copy.
+	for pause := hubRetry; n.ctx.Err() == nil; pause = min(2*pause, time.Minute) {
+		if cur, err := n.st.Get(n.ctx, id); err == nil && (cur.Origin != originHub+lease || cur.State.Final()) {
+			return // adopted by another delivery, or ended here
+		} else if errors.Is(err, store.ErrNotFound) {
+			return
+		}
+		if n.hubLeaseVerdict(id, lease) {
+			return
+		}
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+	}
+}
+
+// hubLeaseVerdict asks the hub once what became of a delivered message whose lease it no longer
+// takes, and acts on the answer; it reports whether it had one.
+func (n *Node) hubLeaseVerdict(id, lease string) bool {
+	ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+	hm, err := n.hub.Get(ctx, id)
+	done()
+	var ce *client.Error
+	code, why := "", ""
+	switch {
+	case err == nil && hm.State == store.Cancelled:
+	case err == nil && hm.State.Final(), errors.As(err, &ce) && ce.Code == "not_found":
+		code, why = store.CodeHubGaveUp, "the hub ended the message without this node"
+		if err == nil && hm.Error != "" {
+			why += ": " + hm.Error
+		}
+	default:
+		// Not ended there (queued for its next delivery), or no answer: watched on, until a
+		// delivery adopts the copy or the hub ends the message (a cancel comes with no delivery).
+		return false
+	}
+	ok, err := n.st.CancelIfOrigin(n.ctx, id, originHub+lease, code, why)
+	if err != nil {
+		return false
+	}
+	if ok {
+		n.notify()
+	}
+	return true
+}
+
+// replyHub hands the hub a delivered message's outcome under its lease (last renewed at
+// extended). It keeps trying while the lease is this delivery's, renewing it between tries, so a
+// hub away for a while gets the outcome when it is back instead of reaping the lease and running
+// the message again; an outcome taken is marked (originAcked) so a restart does not hand it again.
+func (n *Node) replyHub(id, lease string, r client.ReplyRequest, extended time.Time) {
+	pause := hubRetry
+	for n.ctx.Err() == nil {
+		ctx, done := context.WithTimeout(n.ctx, hubReplyTimeout)
+		err := n.hub.Reply(ctx, id, r)
+		done()
+		if err != nil && len(r.Files) > 0 && filesRefused(err) {
+			// The hub takes no such files: the sender still gets the text, and why the files are missing.
+			r.Files, r.Error, r.ErrorCode = nil, "the reply's files were refused by the hub: "+err.Error(), "files_refused"
+			continue
+		}
+		if err == nil || isFinalErr(err) {
+			// Taken, or the hub has an outcome or another delivery of it (which hands its own).
+			_, _ = n.st.SetOriginIf(n.ctx, id, originHub+lease, originAcked+lease)
+			return
+		}
+		if cur, err := n.st.Get(n.ctx, id); err != nil || cur.Origin != originHub+lease {
+			return // gone, or adopted by another delivery: its relay hands the outcome
+		}
+		if time.Since(extended) >= hubRenew {
+			ectx, edone := context.WithTimeout(n.ctx, hubCallTimeout)
+			eerr := n.hub.Extend(ectx, id, lease, hubLease)
+			edone()
+			if eerr == nil {
+				extended = time.Now()
+			} else if isFinalErr(eerr) {
+				return // the lease is gone: the hub delivers again (that delivery hands the outcome) or gave up
+			}
+		}
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+		pause = min(2*pause, hubRenew)
+	}
+}
+
+// hubReplyWindow is how far back a start looks for outcomes the hub did not confirm: past it the
+// hub has delivered the message again or given it up long since.
+const hubReplyWindow = 24 * time.Hour
+
+// resumeReplies hands the hub again, a few at once, the outcomes of delivered messages it did not
+// confirm taking before the last process stopped.
+func (n *Node) resumeReplies() {
+	slots := make(chan struct{}, hubDeliveries)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	since := time.Now().Add(-hubReplyWindow)
+	for after := ""; n.ctx.Err() == nil; {
+		page, err := n.st.FinalOfOrigin(n.ctx, originHub, originAcked, since, after, store.MaxPage)
+		if err != nil || len(page) == 0 {
+			return
+		}
+		for _, it := range page {
+			id, lease := it[0], strings.TrimPrefix(it[1], originHub)
+			select {
+			case slots <- struct{}{}:
+			case <-n.ctx.Done():
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer func() { <-slots; wg.Done() }()
+				n.relay(id, lease)
+			}()
+		}
+		after = page[len(page)-1][0]
 	}
 }

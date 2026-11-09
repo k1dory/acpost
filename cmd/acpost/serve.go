@@ -22,7 +22,7 @@ func serveCmd(g *globals) *cobra.Command {
 		Short: "Run a node (or a hub): the store, the agents and the API",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load(g.configPath())
+			cfg, err := g.loadConfig()
 			if err != nil {
 				return usageErr(err)
 			}

@@ -154,6 +154,14 @@ func TestEveryFinalizerPublishesCountedUsage(t *testing.T) {
 			c := running(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
 			return c.ID + must(t, s.Settle(ctx, c.ID, Done, "ok", "", "", 1))
 		}},
+		{"cancelled by its origin (a hub's delivery given up)", func(t *testing.T, s *Store) string {
+			c := running(t, s, &Message{ID: NewID(), From: "user:a@other", To: "agent:x", Body: "hi", Origin: "hub:L1"})
+			ok, err := s.CancelIfOrigin(ctx, c.ID, "hub:L1", "", "")
+			if !ok {
+				t.Fatal("not cancelled")
+			}
+			return c.ID + must(t, err)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := Open("memory:", Options{})

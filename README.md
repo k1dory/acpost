@@ -199,9 +199,11 @@ and its version, it asks the host (`/api/v1/version`, `/api/v4/version`,
 branch with their jobs (GitHub Actions runs, GitLab pipelines, Forgejo/Gitea commit statuses),
 reads a job's log (secrets masked; Forgejo and Gitea before 1.24 give none over their API, and
 the error says so) and opens a pull request from the repository's branch. Tokens are kept by
-`acpost forge login HOST` (read from the terminal or stdin): in the macOS keychain (service
-`acpost-forge`, given to `security` on its stdin), elsewhere in `~/.config/acpost/forge-tokens.json`
-(0600). For the node's user and its agents.
+`acpost forge login HOST` (read from the terminal or stdin) on the node's machine, over its unix
+socket (the node's user's; refused over `--node` TCP), once the forge says whose the token is (a
+refused one is not kept): in the macOS keychain
+(service `acpost-forge`, given to `security` on its stdin), elsewhere or with
+`ACPOST_SECRETS_FILE=1` in `~/.config/acpost/forge-tokens.json` (0600). For the node's user and its agents.
 
 **An agent's pull request waits for a person.** An agent that opens or merges a pull request
 (`acpost forge open`, `acpost forge merge N [--method squash] [--sha S]`, the same through the
@@ -340,12 +342,17 @@ text, when it adds something, is in `error` after the explanation.
 | 3 | no such message or agent |
 | 4 | `--timeout` reached; the message keeps going |
 | 5 | the message ended `failed`, `cancelled` or `expired` |
-| 6 | no node to talk to |
+| 6 | no node to talk to, or it does not answer |
 | 7 | refused: not allowed, a limit, a chain too deep |
+| 130 | interrupted (Ctrl-C): what the command opened is closed first; the message keeps going |
 
 `--timeout` defaults to no limit for `wait` and is advisable from an agent, whose shell tool has its
 own. `--idempotency-key` makes a repeated `send` (a retry after a network error) return the first
-message instead of creating another; keys are per sender and kept as long as the message.
+message instead of creating another; keys are per sender and kept as long as the message. A send
+through the hub whose answer is not known yet makes a repeat fail with `unavailable` (try again
+shortly); one found not to have reached the hub releases its key, so the next repeat sends it. A `cancel` of
+such a message returns it unfinished: it ends with the hub's outcome once the hub has answered
+(cancelled, or the result it had already), and cancelled if the hub never got it.
 
 ## Configuration
 
@@ -424,7 +431,9 @@ names an agent-sandbox tenant: its URL and token from the env file as `sandboxct
 (`SANDBOXD_URL`, `SANDBOXD_TOKEN`; the token is never written out). Each sandbox of the tenant is an
 agent of the node named by its id (`agent:sb_…`), added when the node's user first writes to it;
 it takes messages from the node's user and its own agents only, never through the hub. A new cloud
-task makes a sandbox of an agent of the tenant's catalogue (`POST /v1/cloud/tasks`).
+task makes a sandbox of an agent of the tenant's catalogue (`POST /v1/cloud/tasks`); with `idem`
+in the request (a handoff takes one too), a retry takes the sandbox the first try made instead of
+making another.
 
 **A task's directory and settings.** `acpost send --cwd DIR` starts a task's ACP session in that
 directory (the thread's next messages stay there); `--model`, `--effort`, `--mode` select them in
@@ -482,6 +491,7 @@ ends with `event: acpost-error` carrying the same envelope and `status` (event k
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
+| `GET /v1/messages/by-idem?from=&key=` | (a joined node, to its hub) the message one of its senders (`…@<node>`) sent with an idempotency key: what became of a send whose answer was lost. `{"found":true,"message":{…}}`, or `{"found":false}` (a 404 is a hub without the lookup, not an answer) |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |
 | `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…","files":[…]}` or `{"lease":"…","error":"…"}` |
 | `POST /v1/messages/{id}/lease` | extend a claim |

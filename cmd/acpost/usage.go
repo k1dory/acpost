@@ -16,11 +16,15 @@ func usageCmd(g *globals) *cobra.Command {
 	var since time.Duration
 	var from, to string
 	cmd := &cobra.Command{
-		Use:   "usage",
-		Short: "What agents' turns used and cost: tokens, cache, cost, by agent, model, day or session",
-		Args:  cobra.NoArgs,
+		Use:         "usage",
+		Annotations: quick,
+		Short:       "What agents' turns used and cost: tokens, cache, cost, by agent, model, day or session",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+			if err := nonNegative(map[string]time.Duration{"--since": since}); err != nil {
+				return err
+			}
 			var err error
 			if f.From, err = day(from); err != nil {
 				return usageErr(fmt.Errorf("--from: %w", err))
