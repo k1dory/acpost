@@ -199,7 +199,7 @@ func TestHungFilesDownloadRecovers(t *testing.T) {
 	n := newNode(t, hubCfg)
 	f := newFakeHub(t, "")
 	first := store.Message{ID: store.NewID(), From: "user:tester@edge", To: "agent:far@other", Body: "work", Thread: "t", State: store.Queued,
-		Files: store.Files{{Name: "f.bin", Size: 1, SHA256: strings.Repeat("0", 64)}}}
+		Files: store.Files{{Name: "f.bin", Size: 1, SHA256: store.Hash([]byte("x"))}}} // what the fake serves
 	f.set(func(f *fakeHub) {
 		f.state, f.missing, f.loseAnswer, f.hangFiles = store.Queued, true, 1, 1
 		f.msgs[first.ID], f.keys["user:tester@edge|f1"] = first, first.ID

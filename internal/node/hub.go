@@ -182,6 +182,9 @@ func (n *Node) fetchFiles(ctx context.Context, id string, reply bool, listed []s
 	if err := n.checkFiles(files, nil, side); err != nil {
 		return nil, err
 	}
+	if err := asListed(listed, files, side); err != nil {
+		return nil, err
+	}
 	for i := range files {
 		files[i].Reply = reply
 	}
