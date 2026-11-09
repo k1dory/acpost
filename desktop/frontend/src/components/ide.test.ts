@@ -57,6 +57,18 @@ describe("the pane's queue", () => {
     expect(await r).toBe(false);
     expect(n.log).toEqual(["show A", "show B"]); // the hide replaced by the show after it
   });
+  it("drops the reload of an owner a newer one took the pane from before it closed", async () => {
+    const n = native(), owner = paneOwners(n.calls);
+    const a = owner();
+    a.show("U", R);
+    const r = a.reload("U");
+    const b = owner();
+    a.close();
+    b.show("U", R);
+    while (n.out.length) await n.next();
+    expect(await r).toBe(false);
+    expect(n.log).toEqual(["show U", "show U"]);
+  });
 });
 
 describe("the IDE view", () => {

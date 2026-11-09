@@ -113,6 +113,8 @@ export function paneOwners(calls: PaneCalls): () => PaneOwner {
   const q = new Pane(calls);
   let last = 0;
   return () => {
+    // A new owner: the previous one's reload not sent yet is dropped (it was for that view).
+    q.dropReload();
     const me = ++last;
     let closed = false;
     const mine = () => !closed && me === last;
