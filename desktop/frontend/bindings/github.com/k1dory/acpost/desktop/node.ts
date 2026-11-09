@@ -262,11 +262,13 @@ export function IDEHide(): $CancellablePromise<void> {
 }
 
 /**
- * IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
- * again if it ended, and its answer is checked against what is shown before anything navigates).
+ * IDEReload loads the IDE's page again when url is the address it shows (the interface asks
+ * IDEStart first: that starts the server again if it ended). It comes through the interface's one
+ * queue of the pane's calls, in order with them; one for an address no longer shown (a view since
+ * gone, another folder opened) is dropped.
  */
-export function IDEReload(): $CancellablePromise<void> {
-    return $Call.ByID(3178862189);
+export function IDEReload(url: string): $CancellablePromise<void> {
+    return $Call.ByID(3178862189, url);
 }
 
 /**

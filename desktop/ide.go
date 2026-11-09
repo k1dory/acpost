@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +48,10 @@ var (
 	ideProbeEvery = time.Second     // the readiness probe's pace
 )
 
-var errIDEQuitting = errors.New("the app is quitting")
+var (
+	errIDEQuitting = errors.New("the app is quitting")
+	errIDEOtherApp = errors.New("VS Code's folder is another acpost's, running beside this one (an installed app and a build, two launches): its IDE is there; quit it to have the IDE here")
+)
 
 // ideStart is one start of the server: its result, ready once it is known.
 type ideStart struct {
@@ -75,10 +79,11 @@ type ideServer struct {
 	stopped    bool               // nothing starts any more
 	looked     bool               // the app's look is installed (else tried again on IDEStart)
 	installing bool
-	inst       chan struct{} // one install at a time, the first's and any again
-	owner      *os.File      // the IDE folder's lock, held while this app owns its server
-	claim      sync.Mutex    // held from taking the lock to the end of the orphan's removal; stop waits for it
-	stuck      int           // an orphan's process group that did not end (under claim): no start till it is gone
+	inst       chan struct{}  // one install at a time, the first's and any again
+	installs   sync.WaitGroup // the installs under way (added to under mu, while not stopped): stop waits for them
+	owner      *os.File       // the IDE folder's lock, held while this app owns its server
+	claim      sync.Mutex     // held from taking the lock to the end of the orphan's removal; stop waits for it
+	stuck      int            // an orphan's process group that did not end (under claim): no start till it is gone
 
 	pane  sync.Mutex // the pane's calls, one at a time
 	shown string     // the address the pane has open (under pane)
@@ -91,6 +96,8 @@ type ideServer struct {
 	budget  time.Duration
 	starts  func(port int) // called just before the server starts on port
 	owned   func()         // called once the lock is taken (or not), before the orphan is looked for
+	// the pane's reload (zero: the native one)
+	paneReload func()
 }
 
 var ide ideServer
@@ -202,18 +209,50 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	// The server before this one ends first: the two would share VS Code's folders and port.
-	s.mu.Lock()
-	prev := s.run
-	s.mu.Unlock()
-	if prev != nil {
-		prev.kill()
-		if !closed(prev.done) {
-			return "", nil, fmt.Errorf("VS Code's previous server (process group %d) has not ended: not starting another beside it", prev.cmd.Process.Pid)
-		}
+	if err := s.prevEnded(); err != nil {
+		return "", nil, err
 	}
 	port, err := s.choosePort(data)
 	if err != nil {
+		return "", nil, err
+	}
+	for {
+		base, run, err := s.serveOn(ctx, cli, data, port)
+		// The port was free when looked at and taken before the server listened (another program
+		// starting at the same moment): the server picks a free one itself, within the same deadline.
+		if errors.Is(err, errIDEPortLost) && port != 0 && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "acpost: IDE: port %d was taken as VS Code started; it starts on another, without its settings and state\n", port)
+			port = 0
+			continue
+		}
+		return base, run, err
+	}
+}
+
+// prevEnded ends the server before this one and says whether it is gone: the two would share
+// VS Code's folders, port and record, so none starts beside a group that has not ended.
+func (s *ideServer) prevEnded() error {
+	s.mu.Lock()
+	prev := s.run
+	s.mu.Unlock()
+	if prev == nil {
+		return nil
+	}
+	prev.kill()
+	if !closed(prev.done) {
+		return fmt.Errorf("VS Code's previous server (process group %d) has not ended: not starting another beside it", prev.cmd.Process.Pid)
+	}
+	return nil
+}
+
+// errIDEPortLost: the server ended as it started, its port taken by another.
+var errIDEPortLost = errors.New("VS Code's port was taken as it started")
+
+// serveOn runs the server on port (0: one it picks) and waits for it to serve VS Code, its end, or
+// ctx; what it started is ended when it fails.
+func (s *ideServer) serveOn(ctx context.Context, cli, data string, port int) (string, *ideRun, error) {
+	// Every start passes here (the first, a retry on another port, a restart).
+	if err := s.prevEnded(); err != nil {
 		return "", nil, err
 	}
 	token, tokFile, err := ideTokenFile()
@@ -249,16 +288,18 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	run := &ideRun{cmd: cmd, out: out, exited: make(chan struct{}), done: make(chan struct{})}
 	s.run = run
 	pidFile := filepath.Join(data, idePidFile)
-	pid := strconv.Itoa(cmd.Process.Pid)
-	if s.owner != nil { // another app's server is not this one's to name
-		_ = os.WriteFile(pidFile, []byte(pid), 0o600)
-	}
+	// The record of the server, published whole (a new file renamed over the old one) or not at
+	// all: a server it does not name could not be found again after a crash, so it is not kept.
+	rec, recErr := ideWriteRecord(data, cmd.Process.Pid)
 	s.mu.Unlock()
-	go run.wait(tokFile, pidFile, pid)
+	go run.wait(tokFile, pidFile, string(rec))
 
 	fail := func(err error) (string, *ideRun, error) {
 		run.kill()
 		return "", nil, err
+	}
+	if recErr != nil {
+		return fail(fmt.Errorf("VS Code's server is not recorded (%w): not kept running", recErr))
 	}
 	select {
 	case u := <-out.found:
@@ -276,11 +317,32 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 		}
 		// The app's look for it, installed (or brought up to date) now that VS Code's server is
 		// there, within the same deadline; without it VS Code is plain, not broken (and it is
-		// tried again on the next IDEStart).
-		s.lookInstall(ctx, data)
+		// tried again on the next IDEStart). The install ends with the server.
+		ictx, icancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-run.exited:
+				icancel()
+			case <-ictx.Done():
+			}
+		}()
+		s.lookInstall(ictx, data)
+		icancel()
+		// Its address is given only while it is there: the server may have ended, or the app begun
+		// to quit, while the look was installed.
+		if closed(run.exited) {
+			run.kill()
+			return "", nil, out.with(errors.New("VS Code's server stopped as it started"))
+		}
+		if s.life.Err() != nil {
+			return fail(errIDEQuitting)
+		}
 		return base, run, nil
 	case <-run.exited:
 		run.kill() // its group: ended, waited for
+		if port != 0 && !portFree(port) {
+			return "", nil, errIDEPortLost
+		}
 		return "", nil, out.with(errors.New("VS Code's server stopped as it started"))
 	case <-ctx.Done():
 		return fail(out.with(s.why(ctx, ctx.Err())))
@@ -301,6 +363,15 @@ func (s *ideServer) why(ctx context.Context, err error) error {
 // lookInstall installs the app's look, one install at a time (the start's and a later one again:
 // two of VS Code's installers would replace the same folder under each other).
 func (s *ideServer) lookInstall(ctx context.Context, data string) {
+	// Counted for stop, which lets the folder go only once no installer is left in it.
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	s.installs.Add(1)
+	s.mu.Unlock()
+	defer s.installs.Done()
 	install := s.install
 	if install == nil {
 		install = ideInstall
@@ -375,7 +446,8 @@ func ideBase(u, token string) (string, error) {
 }
 
 // wait is the one place a process's end is seen: what is left of its group is ended, its token
-// and pid files removed (the pid file only while it is still this process's), then done closed.
+// and pid files removed (the pid file only while it is still this process's record, pid), then
+// done closed.
 func (r *ideRun) wait(tokFile, pidFile, pid string) {
 	_ = r.cmd.Wait()
 	close(r.exited)
@@ -393,7 +465,7 @@ func (r *ideRun) wait(tokFile, pidFile, pid string) {
 		}
 	}
 	os.Remove(tokFile)
-	if b, err := os.ReadFile(pidFile); err == nil && string(b) == pid {
+	if b, err := os.ReadFile(pidFile); err == nil && pid != "" && string(b) == pid {
 		os.Remove(pidFile)
 	}
 	close(r.done)
@@ -558,7 +630,8 @@ func withFolder(base, folder string) string {
 }
 
 // stop ends VS Code's server (with the app) and waits for its end; a start under way ends with
-// it, and nothing starts after.
+// it, and nothing starts after. The folder's lock goes last: after the server's group and the
+// installers (their context ended with life) are gone, so the next app finds no one at work there.
 func (s *ideServer) stop() {
 	s.mu.Lock()
 	s.stopped = true
@@ -570,6 +643,7 @@ func (s *ideServer) stop() {
 	if run != nil {
 		run.kill()
 	}
+	s.installs.Wait()
 	s.claim.Lock() // an orphan's removal under the lock finishes first
 	s.disown()
 	s.claim.Unlock()
@@ -577,26 +651,39 @@ func (s *ideServer) stop() {
 
 // own takes the IDE folder's lock for this app's life, when no other running app of this kind
 // holds it: the one that holds it owns the server the pid file names. The lock ends with the
-// process, so a crashed app's server is no one's: the next app takes the lock and ends it.
+// process, so a crashed app's server is no one's: the next app takes the lock and ends it. An
+// app that is quitting lets it go in a moment: it is waited for that long (ideOwnWait).
 func (s *ideServer) own(data string) bool {
+	for end := time.Now().Add(ideOwnWait); ; time.Sleep(50 * time.Millisecond) {
+		if owned, done := s.tryOwn(data); done || !time.Now().Before(end) {
+			return owned
+		}
+	}
+}
+
+// ideOwnWait is how long a start waits for another app to let the IDE folder go.
+var ideOwnWait = 3 * time.Second
+
+// tryOwn is one try at the lock: whether it is held, and whether trying again is of no use.
+func (s *ideServer) tryOwn(data string) (owned, done bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.owner != nil {
-		return true
+		return true, true
 	}
 	if s.stopped { // quitting: nothing to own
-		return false
+		return false, true
 	}
 	f, err := os.OpenFile(filepath.Join(data, ideLockFile), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return false
+		return false, true
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return false
+		return false, false
 	}
 	s.owner = f
-	return true
+	return true, true
 }
 
 // disown lets the lock go (the app quitting; its server has ended).
@@ -623,10 +710,11 @@ func (s *ideServer) choosePort(data string) (int, error) {
 	if want == 0 {
 		want = idePort
 	}
+	// Only the lock's holder starts a server: the folder's server, settings, extensions and record
+	// are its. Another app running beside it (an installed app and a build of it, two launches)
+	// starts none: a server of its would share all that, and no record would name it.
 	// A server no running app owns (its app crashed) is ended first, whatever port it is on (it
-	// may have started on another one; its folder is this one): its group waited for. Only the
-	// lock's holder does so: another instance's server (an installed app and a build of it, two
-	// launches) is live and stays.
+	// may have started on another one; its folder is this one): its group waited for.
 	// The lock is held throughout (stop lets it go only after): the pid file read is the one this
 	// app's lock covers, never one another app wrote after taking the lock.
 	s.claim.Lock()
@@ -634,11 +722,23 @@ func (s *ideServer) choosePort(data string) (int, error) {
 	if s.owned != nil {
 		s.owned()
 	}
+	if !owner {
+		s.claim.Unlock()
+		if s.life.Err() != nil {
+			return 0, errIDEQuitting
+		}
+		return 0, errIDEOtherApp
+	}
 	if s.stuck != 0 && groupGone(s.stuck, 0) {
 		s.stuck = 0
 	}
 	if s.stuck == 0 {
-		if pid := ideOrphan(data); owner && pid > 0 && !endGroup(pid) {
+		pid, err := ideOrphan(data)
+		if err != nil {
+			s.claim.Unlock()
+			return 0, err
+		}
+		if pid > 0 && !endGroup(pid) {
 			s.stuck = pid
 		}
 	}
@@ -653,11 +753,7 @@ func (s *ideServer) choosePort(data string) (int, error) {
 	}
 	// Taken: the server picks a free port itself as it listens (one picked here could be taken
 	// before it starts); its address says which.
-	who := "something else"
-	if !owner {
-		who = "another acpost"
-	}
-	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by %s; VS Code starts on another, without its settings and state\n", want, who)
+	fmt.Fprintf(os.Stderr, "acpost: IDE: port %d is taken by something else; VS Code starts on another, without its settings and state\n", want)
 	return 0, nil
 }
 
@@ -670,36 +766,88 @@ func portFree(port int) bool {
 	return true
 }
 
-// ideOrphan is the process the pid file names when it is this app's server for data (serve-web
-// with this server folder, leading its own group), else 0.
-func ideOrphan(data string) int {
-	b, err := os.ReadFile(filepath.Join(data, idePidFile))
+// ideOrphan is the process group the pid file names when it is provably this app's server for
+// data, else 0 (nothing is signalled on a guess). Proof: the record is of this boot, and either its
+// leader runs, started when the record says, leads its own group, and is serve-web with this
+// server folder; or the leader is gone and every process left in its group is VS Code's of this
+// folder (a group's id is not taken again while it has a process, but the number may have been
+// taken again since the server ended: by a group whose leader has gone too).
+// A record of the app's earlier versions is a bare number: its group, when there, is taken as the
+// server's by the same test as a leaderless one; one that does not pass it is not signalled, and
+// no start is made beside it (its server may be the earlier app's, on these folders), its record
+// kept: the error says so.
+func ideOrphan(data string) (int, error) {
+	name := filepath.Join(data, idePidFile)
+	b, err := os.ReadFile(name)
 	if err != nil {
-		return 0
+		return 0, nil
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 1 {
-		return 0
-	}
-	if g, err := syscall.Getpgid(pid); err != nil {
-		// Its leader gone, its group still there: that group is the server's (a group's id is not
-		// taken again while it has a process), what is left of it.
-		if !groupGone(pid, 0) {
-			return pid
+	if old, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+		switch {
+		case old <= 1 || groupGone(old, 0):
+			os.Remove(name) // its server is gone
+			return 0, nil
+		case ideGroupOf(old, data):
+			return old, nil
 		}
-		return 0
-	} else if g != pid {
-		return 0
+		return 0, fmt.Errorf("%s names process group %d, which runs and is not provably VS Code's server of this folder: not starting another beside it (remove the file if that group is not VS Code's)", name, old)
 	}
-	cmdline, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	var rec ideRecord
+	if json.Unmarshal(b, &rec) != nil || rec.Pid <= 1 || rec.Start <= 0 || rec.Boot == "" || rec.Boot != ideBoot() {
+		return 0, nil
+	}
+	pid := rec.Pid
+	g, start, ok := ideProc(pid)
+	if !ok {
+		if ideGroupOf(pid, data) {
+			return pid, nil
+		}
+		return 0, nil
+	}
+	if g != pid || start != rec.Start {
+		return 0, nil
+	}
+	cmdline, err := idePS("-ww", "-o", "command=", "-p", strconv.Itoa(pid))
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 	c := string(cmdline)
 	if !strings.Contains(c, " serve-web ") || !strings.Contains(c, "--server-data-dir "+filepath.Join(data, "server")) {
-		return 0
+		return 0, nil
 	}
-	return pid
+	return pid, nil
+}
+
+// ideMembers gives the command lines of the processes in group pg (for tests: a group made up).
+var ideMembers = func(pg int) []string {
+	out, err := idePS("-A", "-ww", "-o", "pgid=,command=")
+	if err != nil {
+		return nil
+	}
+	var cmds []string
+	for _, l := range strings.Split(string(out), "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 2 && f[0] == strconv.Itoa(pg) {
+			cmds = append(cmds, strings.Join(f[1:], " "))
+		}
+	}
+	return cmds
+}
+
+// ideGroupOf is whether the leaderless group pg is what is left of a server of data's: it has
+// processes, and each names data's folder in its command line (VS Code's server is run from the
+// CLI's folder there, with its server folder there).
+func ideGroupOf(pg int, data string) bool {
+	cmds := ideMembers(pg)
+	if len(cmds) == 0 {
+		return false
+	}
+	for _, c := range cmds {
+		if !strings.Contains(c, filepath.Join(data)+string(filepath.Separator)) {
+			return false
+		}
+	}
+	return true
 }
 
 // endGroup ends the group pid leads: SIGTERM, then SIGKILL; whether it is gone.
@@ -742,12 +890,25 @@ func (n *Node) IDEShow(url string, x, y, w, h float64) error {
 	return nil
 }
 
-// IDEReload loads the IDE's page again (the interface asks IDEStart first: that starts the server
-// again if it ended, and its answer is checked against what is shown before anything navigates).
-func (n *Node) IDEReload() {
-	ide.pane.Lock()
-	defer ide.pane.Unlock()
-	preview.IDEReload()
+// IDEReload loads the IDE's page again when url is the address it shows (the interface asks
+// IDEStart first: that starts the server again if it ended). It comes through the interface's one
+// queue of the pane's calls, in order with them; one for an address no longer shown (a view since
+// gone, another folder opened) is dropped.
+func (n *Node) IDEReload(url string) { ide.reload(url) }
+
+// reload is IDEReload: whether the page was reloaded.
+func (s *ideServer) reload(url string) bool {
+	s.pane.Lock()
+	defer s.pane.Unlock()
+	if u := strings.TrimSpace(url); u == "" || u != s.shown {
+		return false
+	}
+	if s.paneReload != nil {
+		s.paneReload()
+	} else {
+		preview.IDEReload()
+	}
+	return true
 }
 
 // IDETheme gives the IDE the app's theme: VS Code follows light or dark.
@@ -778,4 +939,77 @@ func ideDataDir() (string, error) {
 	}
 	d := filepath.Join(base, "acpost", "vscode")
 	return d, os.MkdirAll(d, 0o700)
+}
+
+// ideRecord is what the pid file says of the server: its process, the boot it ran in and when its
+// process started. A process of that number in another boot, or started at another time, is not
+// it (numbers are taken again).
+type ideRecord struct {
+	Pid   int    `json:"pid"`
+	Boot  string `json:"boot"`
+	Start int64  `json:"start"` // Unix seconds: the same in every time zone and locale
+}
+
+// ideBoot names this boot of the Mac.
+func ideBoot() string {
+	b, _ := syscall.Sysctl("kern.bootsessionuuid")
+	return b
+}
+
+// idePS runs ps in the C locale and UTC: its dates read the same whatever the app's or the Mac's
+// time zone is now (it may have changed since the record was written: travel, another TZ).
+func idePS(args ...string) ([]byte, error) {
+	c := exec.Command("ps", args...)
+	c.Env = append(os.Environ(), "LC_ALL=C", "TZ=UTC")
+	return c.Output()
+}
+
+// ideProc is what ps says of pid: its process group and the time it started (Unix seconds); ok
+// is false when there is no such process.
+func ideProc(pid int) (pgid int, start int64, ok bool) {
+	out, err := idePS("-o", "pgid=,lstart=", "-p", strconv.Itoa(pid))
+	f := strings.Fields(string(out))
+	if err != nil || len(f) < 2 {
+		return 0, 0, false
+	}
+	pgid, err = strconv.Atoi(f[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	t, err := time.Parse("Mon Jan 2 15:04:05 2006", strings.Join(f[1:], " "))
+	if err != nil {
+		return 0, 0, false
+	}
+	return pgid, t.Unix(), true
+}
+
+// ideWriteRecord names the server pid in the pid file in data: written to a new file and renamed
+// over the old one (a reader sees the old record or the new, never part of one). It gives what it
+// wrote.
+func ideWriteRecord(data string, pid int) ([]byte, error) {
+	_, start, ok := ideProc(pid)
+	boot := ideBoot()
+	if !ok || boot == "" {
+		return nil, errors.New("its process is not known to ps")
+	}
+	b, err := json.Marshal(ideRecord{Pid: pid, Boot: boot, Start: start})
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(data, ".serve-web.pid-*")
+	if err != nil {
+		return nil, err
+	}
+	_, werr := f.Write(b)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(f.Name(), filepath.Join(data, idePidFile))
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+		return nil, werr
+	}
+	return b, nil
 }
