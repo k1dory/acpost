@@ -13,12 +13,13 @@ export class ComposerDraft {
   text = $state("");
   files = $state<Attachment[]>([]);
   busy = $state(false);
-  /** The cloud sandbox made for this draft when its send failed after it: the next try goes there. */
+  /** The cloud sandbox made for this draft when its send failed after it: the next try goes there
+   * (for: the destination it was made for, App.destNow()). */
   sandbox: { for: string; agent: string } | null = null;
   /** The message being sent (all of it but its key) and its idempotency key: the same message
    * tried again has the same key, so the node runs it once even when its first answer was lost.
    * content is the message without where it goes; task, the request as it was made. */
-  sending: { what: string; key: string; content: string; task: any; moved?: boolean } | null = null;
+  sending: { what: string; key: string; content: string; task: any; dest: string; moved?: boolean } | null = null;
   /** Where this draft went (a new task's, a thread's it merged into): what is still being read
    * into it goes there. */
   movedTo: ComposerDraft | null = null;

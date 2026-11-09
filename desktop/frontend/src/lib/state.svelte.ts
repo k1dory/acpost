@@ -462,6 +462,7 @@ class App {
       there.text = [there.text, d.text].filter(Boolean).join("\n");
       there.files = [...there.files, ...d.files];
       if (!there.sending && d.sending) there.sending = d.sending;
+      if (!there.sandbox && d.sandbox) there.sandbox = d.sandbox;
       d.forward(there);
     } else {
       d.key = to;
@@ -469,6 +470,21 @@ class App {
     }
     this.drafts++;
   }
+  /** Where a new task goes as the draft says now: the place, and this Mac's agent and directory or
+   * the cloud's catalogue agent and repository. */
+  destNow(): string {
+    const d = this.draft;
+    return d.where === "cloud" ? `cloud\u0000${d.cloudAgent}\u0000${d.repo}` : `mac\u0000${d.agent}\u0000${d.cwd}`;
+  }
+
+  /** Whether a draft still describes the message sent from it to `dest`. A chat's draft always
+   * does (the chat is where it goes); a new task's while its place, agent, directory or repository
+   * are as they were when it was sent. Every outcome of a send and every automatic link of a draft
+   * asks this before it moves the draft, keeps its sandbox or key, or changes the screen. */
+  stillFor(d: ComposerDraft, dest: string | undefined): boolean {
+    return d.key !== "new" || !dest || dest === this.destNow();
+  }
+
   /** A thread the node made of a session or a cloud sandbox continued here, that conversation's
    * chat gone from the list (the answer to its first message may have been lost): its draft is the
    * thread's. While the conversation's own chat is still listed, its draft stays its own. */
@@ -480,7 +496,7 @@ class App {
       if (c.agent?.startsWith("agent:sb_")) from.push("cloud:" + c.agent.slice("agent:".length)); // a sandbox's thread
       for (const key of from) {
         const d = this.draftMap.get(key);
-        if (!d || d.busy || this.chats.some(x => x.key === key)) continue;
+        if (!d || d.busy || this.chats.some(x => x.key === key) || !this.stillFor(d, d.sending?.dest)) continue;
         if (d.sending) d.sending.moved = true;
         this.moveDraft(d, "thread:" + c.thread);
       }
@@ -492,7 +508,7 @@ class App {
       // choice: where it goes is the chat itself.)
       const n = this.draftMap.get("new");
       if (n && !n.busy && n.sending && n.sandbox && n.sandbox.agent === c.agent) {
-        if (this.draft.where !== "cloud" || n.sandbox.for !== this.draft.cloudAgent + "\u0000" + this.draft.repo) {
+        if (!this.stillFor(n, n.sending.dest)) {
           n.forget();
           continue;
         }
@@ -523,7 +539,10 @@ class App {
     d.busy = false;
     // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
     // put back into the new task's, not lost with the draft no screen shows.
-    if (!ok && ![...this.draftMap.values()].includes(d)) this.moveDraft(d, "new");
+    if (!ok && ![...this.draftMap.values()].includes(d)) {
+      if (!this.stillFor(d, d.sending?.dest)) d.forget(); // the text comes back; its key and sandbox were another task's
+      this.moveDraft(d, "new");
+    }
     return ok;
   }
 
@@ -533,6 +552,7 @@ class App {
     sent?: { text: string; files: Attachment[] }): Promise<boolean> {
     // What the message is for, as it was when sent: the screen may change while it goes.
     const chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
+    const dest = d.key === "new" ? this.destNow() : ""; // where this new task goes, as it was sent
     // The draft is a thread's already (its conversation became one, the answer lost): what is
     // sent from it goes on in that thread, not to a new one.
     const into = !thread && d.key.startsWith("thread:") ? d.key.slice("thread:".length) : "";
@@ -547,7 +567,7 @@ class App {
         // A new task: here or in the cloud.
         if (draft.where === "cloud") {
           if (!draft.cloudAgent) { this.error = t("Choose an agent of the cloud's catalogue"); return false; }
-          to = await this.sandboxFor(d, draft, body);
+          to = await this.sandboxFor(d, draft, body, dest);
         } else {
           to = draft.agent;
           task.cwd = draft.cwd;
@@ -572,20 +592,24 @@ class App {
         task = { ...d.sending.task };
         what = d.sending.what;
       }
-      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task } };
+      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest };
       const key = d.sending.key;
       task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;
       if (d.sending?.key === key) d.forget();
       // The conversation it was sent from is still the one open (not the screen's generation: a
       // chat left and opened again is still it).
-      const here = !this.thread && (chat ? this.chat?.key === chat.key : !this.chat && this.draftMap.get("new") === d);
+      // The draft may have been edited into another task while it went (another place, agent,
+      // repository): then it stays the new task's, and the screen stays where it is.
+      const same = this.stillFor(d, dest);
+      const here = !this.thread && (chat ? this.chat?.key === chat.key : !this.chat && this.draftMap.get("new") === d && same);
       // What was sent leaves the draft, what was typed meanwhile stays; the draft is the thread's now.
       if (sent) {
         d.text = afterSent(d.text, sent.text);
         d.files = d.files.filter(f => !sent.files.includes(f));
       }
-      this.moveDraft(d, "thread:" + m.thread);
+      if (same) this.moveDraft(d, "thread:" + m.thread);
+      else d.forget();
       if (here) {
         this.thread = m.thread;
         this.target = to;
@@ -608,8 +632,7 @@ class App {
     } catch (e) { this.error = errText(e); return false; }
   }
 
-  private async sandboxFor(d: ComposerDraft, draft: Draft, body: string): Promise<string> {
-    const what = draft.cloudAgent + "\u0000" + draft.repo;
+  private async sandboxFor(d: ComposerDraft, draft: Draft, body: string, what: string): Promise<string> {
     if (d.sandbox?.for === what) return d.sandbox.agent;
     const epoch = d.epoch;
     const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40));
