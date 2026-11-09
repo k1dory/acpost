@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 )
@@ -62,23 +63,32 @@ func migrateSchedules(s *Store) error {
 var ErrNoSchedule = errors.New("no such schedule")
 
 func (s *Store) Schedules(ctx context.Context) ([]Schedule, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT id, name, cron, agent, body, cwd, model, effort, enabled, next_run, last_run, last_msg, last_err, pending
-		FROM schedules ORDER BY name`)
+	rows, err := s.r.QueryContext(ctx, `SELECT `+scheduleCols+` FROM schedules ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Schedule{}
 	for rows.Next() {
-		var sc Schedule
-		var next, last, pending int64
-		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Cron, &sc.Agent, &sc.Body, &sc.Cwd, &sc.Model, &sc.Effort, &sc.Enabled, &next, &last, &sc.LastMsg, &sc.LastErr, &pending); err != nil {
+		sc, err := scanSchedule(rows)
+		if err != nil {
 			return nil, err
 		}
-		sc.NextRun, sc.LastRun, sc.Pending = fromMS(next), fromMS(last), fromMS(pending)
 		out = append(out, sc)
 	}
 	return out, rows.Err()
+}
+
+const scheduleCols = `id, name, cron, agent, body, cwd, model, effort, enabled, next_run, last_run, last_msg, last_err, pending`
+
+func scanSchedule(row interface{ Scan(...any) error }) (Schedule, error) {
+	var sc Schedule
+	var next, last, pending int64
+	if err := row.Scan(&sc.ID, &sc.Name, &sc.Cron, &sc.Agent, &sc.Body, &sc.Cwd, &sc.Model, &sc.Effort, &sc.Enabled, &next, &last, &sc.LastMsg, &sc.LastErr, &pending); err != nil {
+		return Schedule{}, err
+	}
+	sc.NextRun, sc.LastRun, sc.Pending = fromMS(next), fromMS(last), fromMS(pending)
+	return sc, nil
 }
 
 // PutSchedule adds or replaces a schedule (its last run kept; disabled, an occurrence pending is dropped).
@@ -92,18 +102,13 @@ func (s *Store) PutSchedule(ctx context.Context, sc Schedule) error {
 	return err
 }
 
-// Schedule is one schedule.
+// Schedule is one schedule (the scheduler asks for each due one: one row, not the table).
 func (s *Store) Schedule(ctx context.Context, id string) (Schedule, error) {
-	list, err := s.Schedules(ctx)
-	if err != nil {
-		return Schedule{}, err
+	sc, err := scanSchedule(s.r.QueryRowContext(ctx, `SELECT `+scheduleCols+` FROM schedules WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Schedule{}, ErrNoSchedule
 	}
-	for _, sc := range list {
-		if sc.ID == id {
-			return sc, nil
-		}
-	}
-	return Schedule{}, ErrNoSchedule
+	return sc, err
 }
 
 // FailedSchedule notes why a pending occurrence could not be sent yet; it stays pending.

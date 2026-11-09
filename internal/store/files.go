@@ -276,6 +276,9 @@ func (s *Store) AttachReply(ctx context.Context, id, lease string, files []File,
 		if err != nil {
 			return err
 		}
+		if files, err = notAttached(ctx, t, seq, files); err != nil || len(files) == 0 {
+			return err // all of them attached already: nothing to weigh against the limits
+		}
 		var count int
 		var size int64
 		if err := t.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(CASE WHEN uri = '' THEN size ELSE 0 END), 0) FROM files WHERE msg = ? AND reply = 1", seq).Scan(&count, &size); err != nil {
@@ -298,9 +301,13 @@ func (s *Store) HasContent(ctx context.Context, hash string) (bool, error) {
 
 // dropOrphans deletes content no file refers to any more.
 func dropOrphans(ctx context.Context, t *sql.Tx) error {
-	_, err := t.ExecContext(ctx, "DELETE FROM blobs WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.hash = blobs.hash)")
+	_, err := t.ExecContext(ctx, orphanBlobs)
 	return err
 }
+
+// orphanBlobs repeats the partial index's condition (a non-empty hash), or SQLite cannot use
+// files_hash and scans every file for every blob on each collection.
+const orphanBlobs = "DELETE FROM blobs WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.hash = blobs.hash AND f.hash <> '')"
 
 // ReplyFiles counts the files and bytes attached to a message's reply so far.
 func (s *Store) ReplyFiles(ctx context.Context, id string) (count int, size int64, err error) {
@@ -322,4 +329,25 @@ func (s *Store) roomFor(ctx context.Context, t *sql.Tx, n int64) error {
 		return ErrStoreFull
 	}
 	return nil
+}
+
+// notAttached leaves out the files a reply has already, by name and content: the repeat of an
+// attach whose response was lost is no error. The same name with other content still is.
+func notAttached(ctx context.Context, t *sql.Tx, seq int64, files []File) ([]File, error) {
+	out := files[:0:0]
+	for _, f := range files {
+		hash, size := "", f.Size // a link's size is as given
+		if !f.Link() {
+			hash, size = Hash(f.Data), len(f.Data)
+		}
+		var n int
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM files WHERE msg = ? AND reply = 1 AND name = ? AND type = ? AND size = ? AND hash = ? AND uri = ?",
+			seq, f.Name, f.Type, size, hash, f.URI).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }
