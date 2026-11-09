@@ -379,7 +379,7 @@ limits:
   max_files: 16                      # files attached to a message, and to its reply (at most 256)
   max_files_size: 16MiB              # their bytes together, each side
   max_depth: 4                       # parent chain length
-  max_queued_per_agent: 1000
+  max_queued_per_agent: 1000         # and, on a joined node, sends to one address the hub has not answered yet
   max_events_per_message: 1000
   max_store: 2GiB                    # sends are refused (exit 7) above this
   max_attempts: 3

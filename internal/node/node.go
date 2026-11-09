@@ -120,6 +120,8 @@ type Node struct {
 	held      heldLeases // the leases of turns running in this process (lease.go)
 	cloudOps  sync.Map   // idempotency key → *sync.Mutex: one cloud task made at a time per key (cloud.go)
 	resolving sync.Map   // ids of forwarded messages resolveForward runs for (forward.go)
+
+	resolvers resolverPool // the tries of resolveForward, bounded (resolve_round2.go)
 }
 
 type agentToken struct {

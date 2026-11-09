@@ -535,7 +535,7 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 		}
 		if maxQueued > 0 {
 			var q int
-			if err := t.QueryRowContext(ctx, `SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ? AND state = 'queued' AND `+localWork, out.To).Scan(&q); err != nil {
+			if err := t.QueryRowContext(ctx, `SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ? AND state = 'queued' AND `+queueOf(out.Origin), out.To).Scan(&q); err != nil {
 				return err
 			}
 			if q >= maxQueued {

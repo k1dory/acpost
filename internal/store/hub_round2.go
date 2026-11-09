@@ -29,3 +29,13 @@ func copyRecipient(hubTo, cur string) string {
 // ErrStaleDelivery: a delivery of a message older than the one its copy here already is (the
 // hub's attempt number is lower) — the hub handed it again since, and that delivery owns the copy.
 var ErrStaleDelivery = errors.New("an older delivery of the message than the one its copy is")
+
+// queueOf is the queue a new message with origin joins, for InsertLimited's limit: a copy stored to
+// be sent through the hub waits among the copies the hub has not answered for yet (a hub away
+// does not let them grow without bound); any other message among this node's work.
+func queueOf(origin string) string {
+	if origin == "forwarding" {
+		return "origin = 'forwarding'"
+	}
+	return localWork
+}

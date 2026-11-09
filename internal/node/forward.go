@@ -13,7 +13,7 @@ import (
 // copy. The copy is stored before the hub is asked (origin forwarding), under the sender's key, so
 // a request that ends after the hub took the message still leaves it. Then:
 //
-//	forwarding  the hub's answer is not known yet: resolveForward learns it from the hub
+//	forwarding  the hub's answer is not known yet: the resolvers learn it from the hub (resolveOnce)
 //	remote      the hub has it: the copy follows the hub's (followSweep, follow)
 //	unsent      not sent for certain (refused, or the hub never got it); its key is free again
 //
@@ -67,7 +67,13 @@ func (n *Node) forward(ctx context.Context, m *store.Message, to Address) (store
 		}
 	}()
 	handOn := func() { owned = false; n.resolveOwned(m.ID) }
-	got, created, err := n.st.Insert(lctx, &pending)
+	// Copies the hub has not answered for count against the limit of the address they go to.
+	lim := n.cfg.Limits.MaxQueuedPerAgent
+	got, created, err := n.st.InsertLimited(lctx, &pending, lim)
+	if errors.Is(err, store.ErrQueueFull) {
+		return store.Message{}, false, errh("unavailable", "send again once the hub answers",
+			"%s has %d messages waiting for the hub's answer (limits.max_queued_per_agent)", pending.To, lim)
+	}
 	if err != nil {
 		return store.Message{}, false, n.fileErr(err, m.ID)
 	}
@@ -166,7 +172,7 @@ func (n *Node) notSent(ctx context.Context, id string, why error) bool {
 	return true
 }
 
-// resolveLater starts resolveForward for a message, unless something owns it already (its send,
+// resolveLater hands a message to the resolvers, unless something owns it already (its send,
 // or a resolver).
 func (n *Node) resolveLater(id string) {
 	if _, busy := n.resolving.LoadOrStore(id, true); busy {
@@ -175,35 +181,18 @@ func (n *Node) resolveLater(id string) {
 	n.resolveOwned(id)
 }
 
-// resolveOwned starts resolveForward for a message the caller owns (n.resolving holds it); the
-// resolver lets it go when done.
+// resolveOwned hands a message the caller owns (n.resolving holds it) to the resolvers, which let
+// it go when it is settled. They learn from the hub what became of a message stored to be sent
+// through it (the hub did not answer, the request ended, the node stopped, the copy was cancelled
+// meanwhile), trying again with a growing pause until they know, a bounded number at once
+// (resolverPool). They do not send the message again: its sender was told the send failed.
 func (n *Node) resolveOwned(id string) {
-	if !n.goWork(func() {
-		defer n.resolving.Delete(id)
-		n.resolveForward(id)
-	}) {
+	if !n.resolvers.add(n, id) {
 		n.resolving.Delete(id)
 	}
 }
 
-// resolveForward learns from the hub what became of a message stored to be sent through it (the
-// hub did not answer, the request ended, the node stopped, the copy was cancelled meanwhile),
-// trying again with a growing pause until it knows. It does not send the message again: its
-// sender was told the send failed.
-func (n *Node) resolveForward(id string) {
-	for pause := hubRetry; n.ctx.Err() == nil; pause = min(2*pause, time.Minute) {
-		select {
-		case <-n.ctx.Done():
-			return
-		case <-time.After(pause):
-		}
-		if n.resolveOnce(id) {
-			return
-		}
-	}
-}
-
-// resolveOnce is one try of resolveForward; it reports whether the message is settled.
+// resolveOnce is one try of the resolvers; it reports whether the message is settled.
 func (n *Node) resolveOnce(id string) bool {
 	local, err := n.st.Get(n.ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
