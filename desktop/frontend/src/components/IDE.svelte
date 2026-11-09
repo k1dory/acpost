@@ -2,7 +2,7 @@
   import { paneOwners as owners } from "./idePane";
   import { Node as N } from "../lib/api";
   // One native pane: one queue for every IDE view, made once.
-  const newPaneOwner = owners({ show: (u, r) => N.IDEShow(u, r.x, r.y, r.w, r.h), hide: () => N.IDEHide() });
+  const newPaneOwner = owners({ show: (u, r) => N.IDEShow(u, r.x, r.y, r.w, r.h), hide: () => N.IDEHide(), reload: u => N.IDEReload(u) });
 </script>
 
 <script lang="ts">
@@ -45,7 +45,8 @@
     try {
       const u = await Node.IDEStart(dir);
       if (!alive || my !== gen) return;
-      if (again && u === url) Node.IDEReload().catch(() => {});
+      // Through the pane's queue, for this address: the native side reloads only what it shows.
+      if (again && u === url) pane.reload(u).catch(() => {});
       else { url = u; pending = u; place(); }
     } catch (e) { if (alive && my === gen) err = errText(e); }
     finally { if (alive && my === gen) starting = false; }
