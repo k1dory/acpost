@@ -4,7 +4,7 @@
 import { overLimits } from "./draft";
 import { b64bytes } from "./base64";
 import type { Limits } from "./state.svelte";
-import { OpKey } from "./opkey";
+import { newId } from "./ids";
 
 /** A file attached; asked: the read that brought it (a send takes the reads asked before it).
  * Kept in the attachment: the $state array gives back proxies, not the objects put in. */
@@ -22,25 +22,32 @@ export function filesAsOf(d: ComposerDraft): () => Attachment[] {
   return () => d.files.filter(f => had.has(f) || (f.asked ?? Infinity) <= upto);
 }
 
+/** A cloud sandbox asked for (for: the destination, App.destNow()). */
+export type SandboxReq = { for: string; agent: string; repo: string; name: string; idem: string };
+
 /** What a send of a draft made so far. */
 export class SendOp {
   /** The cloud sandbox made for the draft when its send failed after it: the next try goes there
    * (for: the destination it was made for, App.destNow()). */
   sandbox: { for: string; agent: string } | null = null;
-  /** The key of the sandbox being made, from before its first request: a retry after a lost
-   * answer gets the sandbox made the first time. */
-  sandboxKey = new OpKey();
+  /** The sandbox being made: its whole request, frozen at the first try (catalogue agent,
+   * repository, name, key). A retry after a lost answer sends it as it was: the node finds the
+   * sandbox by its name and key, and a name made again from edited text is another machine. */
+  sandboxReq: SandboxReq | null = null;
   /** The message being sent (all of it but its key) and its idempotency key: the same message
    * tried again has the same key, so the node runs it once even when its first answer was lost.
    * content is the message without where it goes; task, the request as it was made. */
   sending: { what: string; key: string; content: string; task: any; dest: string; moved?: boolean } | null = null;
 
   /** Something was made or asked that a retry must reuse. */
-  pending(): boolean { return !!(this.sending || this.sandbox || this.sandboxKey.held() !== undefined); }
+  pending(): boolean { return !!(this.sending || this.sandbox || this.sandboxReq); }
   /** Where what it made goes (a new task's destination), if it says. */
-  dest(): string | undefined {
-    const k = this.sandboxKey.held();
-    return this.sending?.dest || this.sandbox?.for || (typeof k === "string" ? k : undefined);
+  dest(): string | undefined { return this.sending?.dest || this.sandbox?.for || this.sandboxReq?.for; }
+
+  /** The sandbox request for destination `dest`: the one frozen for it, or a new one made now. */
+  sandboxFor(dest: string, make: () => Omit<SandboxReq, "for" | "idem">): SandboxReq {
+    if (this.sandboxReq?.for !== dest) this.sandboxReq = { ...make(), for: dest, idem: newId() };
+    return this.sandboxReq;
   }
 }
 
@@ -55,7 +62,6 @@ export class ComposerDraft {
   set sandbox(v) { this.op.sandbox = v; }
   get sending() { return this.op.sending; }
   set sending(v) { this.op.sending = v; }
-  get sandboxOp() { return this.op.sandboxKey; }
   /** Where this draft went (a new task's, a thread's it merged into): what is still being read
    * into it goes there. */
   movedTo: ComposerDraft | null = null;

@@ -57,6 +57,7 @@ describe("a form's new record has its id from the draft (finding 5)", () => {
     expect(ids.length).toBe(2);
     expect(ids[0]).toMatch(/^bl_[0-9a-f]{32}$/);
     expect(ids[1]).toBe(ids[0]);
+    expect(fake.Node.PutBacklogItem.mock.calls[1]).toEqual(fake.Node.PutBacklogItem.mock.calls[0]); // the same request, whole
   });
 
   it("a schedule saved again after a lost answer is the same schedule; the next new one another", async () => {
@@ -83,6 +84,7 @@ describe("a form's new record has its id from the draft (finding 5)", () => {
     expect(calls.length).toBe(3);
     expect(calls[0].id).toMatch(/^sch_[0-9a-f]{32}$/);
     expect(calls[1].id).toBe(calls[0].id);
+    expect(calls[1]).toEqual(calls[0]); // the same request, whole
     expect(calls[2].id).not.toBe(calls[0].id);
     expect("isNew" in calls[0]).toBe(false);
   });

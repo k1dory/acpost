@@ -250,3 +250,76 @@ describe("the suite runs the state as the app does", () => {
     expect(d.files[0]).not.toBe(a);
   });
 });
+
+describe("an operation started is a frozen request (review round 2)", () => {
+  const opts = { agent: "agent:claude", options: [{ id: "m", name: "Model", category: "model", current: "a", values: [{ value: "a", name: "A" }, { value: "b", name: "B" }] }] };
+
+  it("a model chosen while the message's file is read is the next message's: this one goes with the one of the click", async () => {
+    const app = await load();
+    app.options = { "agent:claude": opts };
+    app.thread = "T"; app.target = "agent:claude";
+    app.setSetting("agent:claude", "model", "a");
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "T"));
+    const d = app.draftOf();
+    d.text = "look";
+    const read = deferred<ArrayBuffer>();
+    d.add([{ name: "f.txt", type: "text/plain", size: 1, arrayBuffer: () => read.promise }], null, () => {});
+    const going = app.submit(d);
+    app.setSetting("agent:claude", "model", "b");
+    read.resolve(new ArrayBuffer(1));
+    await going;
+    expect(fake.Node.SendTask.mock.calls[0][0].model).toBe("a");
+  });
+
+  it("the first line edited after a sandbox's answer was lost: the retry asks the same sandbox, name and key", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
+    fake.Node.CreateCloudTask.mockRejectedValueOnce(new Error("lost")).mockResolvedValueOnce({ agent: "agent:sb_1" });
+    fake.Node.SendTask.mockResolvedValue(msg("m1", "t1", "queued", "agent:sb_1"));
+    const d = app.draftOf();
+    d.text = "fix a";
+    expect(await app.submit(d)).toBe(false);
+    d.text = "fix b, and the tests";
+    expect(await app.submit(d)).toBe(true);
+    const [a, b] = fake.Node.CreateCloudTask.mock.calls;
+    expect(b).toEqual(a);
+  });
+
+  it("handoffs of A (answer lost), then B, then A again: A's retry is A's first request, key and all", async () => {
+    const app = await load();
+    const A = { thread: "A", agent: "", session: "", cwd: "/a", cloud_agent: "ref1", note: "" };
+    const B = { thread: "B", agent: "", session: "", cwd: "/b", cloud_agent: "ref1", note: "" };
+    fake.Node.Handoff.mockRejectedValueOnce(new Error("lost")).mockResolvedValue({ chat: { key: "cloud:sb" } });
+    await app.handoff(A).catch(() => {});
+    await app.handoff(B);
+    await app.handoff({ ...A });
+    const [a1, b, a2] = fake.Node.Handoff.mock.calls.map(c => c[0]);
+    expect(a2).toEqual(a1);
+    expect(b.idem).not.toBe(a1.idem);
+  });
+
+  // Every creator of the app: its first request lost, the retry is the same request, whole.
+  const creators: { name: string; run: (app: any) => Promise<unknown>; calls: () => any[][] }[] = [
+    { name: "a message", calls: () => fake.Node.SendTask.mock.calls,
+      run: async app => { app.thread = "T"; app.target = "agent:claude"; const d = app.draftOf(); d.text = "do it"; await app.submit(d); } },
+    { name: "a new task on this Mac", calls: () => fake.Node.SendTask.mock.calls,
+      run: async app => { app.draft.cwd = "/w"; const d = app.draftOf(); d.text = "do it"; await app.submit(d); } },
+    { name: "a cloud task's sandbox", calls: () => fake.Node.CreateCloudTask.mock.calls,
+      run: async app => { app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "r"; const d = app.draftOf(); d.text = "do it"; await app.submit(d); } },
+    { name: "a handoff", calls: () => fake.Node.Handoff.mock.calls,
+      run: async app => { await app.handoff({ thread: "T", agent: "", session: "", cwd: "/w", cloud_agent: "ref1", note: "n" }).catch(() => {}); } },
+  ];
+  for (const c of creators) {
+    it(`${c.name}: a retry sends a request deep-equal to the first`, async () => {
+      const app = await load();
+      app.options = { "agent:claude": opts };
+      app.setSetting("agent:claude", "model", "b");
+      for (const k of ["SendTask", "CreateCloudTask", "Handoff"]) fake.Node[k].mockRejectedValue(new Error("lost"));
+      await c.run(app);
+      await c.run(app);
+      const [first, retry] = c.calls();
+      expect(first).toBeDefined();
+      expect(retry).toEqual(first);
+    });
+  }
+});

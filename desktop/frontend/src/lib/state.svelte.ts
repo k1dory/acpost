@@ -5,7 +5,6 @@ import { newId } from "./ids";
 import { ComposerDraft, filesAsOf, type Attachment } from "./composer.svelte";
 import { afterSent } from "./draft";
 import { Turn, type Ev } from "./turn";
-import { OpKey } from "./opkey";
 
 export type Msg = {
   id: string; from: string; to: string; thread: string; parent?: string; depth: number; state: string;
@@ -608,7 +607,8 @@ class App {
         task.thread = thread;
       }
       if (!to) { this.error = t("Choose an agent"); return false; }
-      Object.assign(task, { to }, this.settingsFor(to));
+      // The settings chosen when it was sent (a model picked while its file was read is the next one's).
+      Object.assign(task, { to }, to === at.agent ? at.settings : this.settingsFor(to));
       // The same message is all of it the same (files' bytes and types, settings): only then the same key.
       let what = JSON.stringify(task);
       const { to: _to, thread: _th, session: _se, cwd: _cwd, ...rest } = task;
@@ -663,31 +663,41 @@ class App {
 
   /** What a message is for, taken when it is sent: the chat, thread and draft of then. */
   private sendAt(d: ComposerDraft) {
+    // The agent it goes to, when this Mac's (a cloud task's sandbox is known later, and has no
+    // settings of this Mac's), and the settings chosen for it then.
+    const agent = !this.chat && !this.thread ? (this.draft.where === "cloud" ? "" : this.draft.agent) : this.target;
     return {
       chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target,
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
+      agent, settings: this.settingsFor(agent),
     };
   }
 
   private async sandboxFor(d: ComposerDraft, draft: Draft, body: string, what: string): Promise<string> {
     if (d.sandbox?.for === what) return d.sandbox.agent;
     const epoch = d.epoch;
-    // Its key is made before the first request and kept with where it goes: the answer lost, the
-    // retry gets the sandbox made then (a second would be a second machine).
-    const idem = d.sandboxOp.for(what);
-    const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40), idem);
+    // Its request is frozen at the first try and kept with where it goes: the answer lost, the
+    // retry is that request again, and gets the sandbox made then (a second is a second machine).
+    const r = d.op.sandboxFor(what, () => ({ agent: draft.cloudAgent, repo: draft.repo, name: body.split("\n")[0].slice(0, 40) }));
+    const sb: any = await Node.CreateCloudTask(r.agent, r.repo, r.name, r.idem);
     if (d.epoch === epoch) d.sandbox = { for: what, agent: sb.agent };
     return sb.agent;
   }
 
-  /** A local chat sent on to the cloud: the cloud chat it goes on in. The key is kept with what
-   * is asked until an answer comes: asked again after a lost answer, the node gives the sandbox
-   * and message of the first instead of making a second. */
-  private handoffOp = new OpKey();
-  async handoff(req: { thread: string; agent: string; session: string; cwd: string; cloud_agent: string; note: string }): Promise<Chat> {
-    const idem = this.handoffOp.for(req);
-    const res: any = await Node.Handoff({ ...req, idem } as any);
-    this.handoffOp.done(idem);
+  /** A local chat sent on to the cloud: the cloud chat it goes on in. Each chat's unfinished
+   * handoff is kept, its request frozen with its key, until an answer comes: asked again after a
+   * lost answer (other chats handed off meanwhile or not), the same request goes, and the node
+   * gives the sandbox and message of the first. Another cloud agent or note is another handoff. */
+  private handoffs = new Map<string, HandoffReq & { idem: string }>();
+  async handoff(req: HandoffReq): Promise<Chat> {
+    const from = req.thread ? "thread:" + req.thread : `session:${req.agent}/${req.session}`;
+    let r = this.handoffs.get(from);
+    if (!r || JSON.stringify({ ...r, idem: undefined }) !== JSON.stringify({ ...req, idem: undefined })) {
+      r = { ...req, idem: newId() };
+      this.handoffs.set(from, r);
+    }
+    const res: any = await Node.Handoff({ ...r } as any);
+    if (this.handoffs.get(from) === r) this.handoffs.delete(from);
     await this.loadChats();
     return this.chats.find(x => x.key === res.chat.key) ?? res.chat;
   }
@@ -852,6 +862,8 @@ class App {
     return m?.meta?.acp_cwd || m?.meta?.acp_session_cwd || this.chat?.cwd || "";
   }
 }
+
+export type HandoffReq = { thread: string; agent: string; session: string; cwd: string; cloud_agent: string; note: string };
 
 /** A replayed conversation split at its user's messages. */
 const stage: Record<string, number> = { queued: 0, running: 1, done: 2, failed: 2, cancelled: 2, expired: 2 };
