@@ -604,7 +604,8 @@ class App {
       const same = this.stillFor(d, dest);
       const here = !this.thread && (chat ? this.chat?.key === chat.key : !this.chat && this.draftMap.get("new") === d && same);
       // What was sent leaves the draft, what was typed meanwhile stays; the draft is the thread's now.
-      if (sent) {
+      // A draft edited into another task keeps all it holds: it is that task, sent text and all.
+      if (sent && same) {
         d.text = afterSent(d.text, sent.text);
         d.files = d.files.filter(f => !sent.files.includes(f));
       }

@@ -774,6 +774,50 @@ describe("send, review round 9: a draft edited into another task is not the sent
   });
 });
 
+describe("send, review round 10: a draft edited into another task keeps all it holds", () => {
+  const changes: [string, (app: any) => void][] = [
+    ["repository", app => { app.draft.repo = "github.com/me/b"; }],
+    ["place", app => { app.draft.where = "mac"; app.draft.agent = "agent:claude"; app.draft.cwd = "/Users/me/b"; }],
+    ["catalogue agent", app => { app.draft.cloudAgent = "ref2"; }],
+  ];
+  const spec = { name: "spec.md", type: "text/markdown", size: 1, data: "YQ==" };
+  for (const [name, apply] of changes) {
+    it(`success answered after the ${name} changed, the text only added to: text and file kept whole`, async () => {
+      const app = await load();
+      app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
+      fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
+      const d = app.draftOf();
+      d.text = "Implement a search endpoint"; d.files = [spec];
+      const sent = deferred();
+      fake.Node.SendTask.mockReturnValueOnce(sent.promise);
+      const going = app.submit(d);
+      apply(app);
+      d.text = "Implement a search endpoint\nUse the API for project B"; // the same start, more after it
+      sent.resolve({ ...msg("m1", "T1"), to: "agent:sb_1" });
+      expect(await going).toBe(true);
+      expect(app.thread).toBe("");
+      expect(app.draftOf("new").text).toBe("Implement a search endpoint\nUse the API for project B");
+      expect(app.draftOf("new").files.map(f => f.name)).toEqual(["spec.md"]);
+    });
+  }
+  it("unchanged, what was sent still leaves the draft and what was added stays", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
+    fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
+    const d = app.draftOf();
+    d.text = "Implement a search endpoint"; d.files = [spec];
+    const sent = deferred();
+    fake.Node.SendTask.mockReturnValueOnce(sent.promise);
+    const going = app.submit(d);
+    d.text = "Implement a search endpoint\nand tests";
+    sent.resolve({ ...msg("m1", "T1"), to: "agent:sb_1" });
+    await going;
+    expect(app.thread).toBe("T1");
+    expect(app.draftOf().text).toBe("and tests");
+    expect(app.draftOf().files).toEqual([]);
+  });
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");
