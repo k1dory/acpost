@@ -26,6 +26,10 @@ func newerHub(t *testing.T) *Client {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/files"):
 			fmt.Fprint(w, `{"items":[`+newerFile+`]}`)
+		case strings.HasSuffix(r.URL.Path, "/by-idem"), strings.HasSuffix(r.URL.Path, "/disown"):
+			fmt.Fprint(w, `{"found":true,"message":`+newerMessage+`}`)
+		case r.URL.Path == "/v1/messages":
+			fmt.Fprint(w, `{"items":[`+newerMessage+`],"next":"n"}`)
 		case r.URL.Query().Get("follow") != "":
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, "event: end\ndata: "+newerMessage+"\n\n")
@@ -69,6 +73,25 @@ func TestResponsesTakeNewerFileFields(t *testing.T) {
 	check("SideFiles", files, err)
 	files, err = c.Files(ctx, "msg_1")
 	check("Files", files, err)
+	m, ok, err = c.ByIdem(ctx, "user:u@edge", "k")
+	if err == nil && !ok {
+		err = fmt.Errorf("not found")
+	}
+	check("ByIdem", m.Files, err)
+	m, ok, err = c.Disown(ctx, "msg_1", "user:u@edge", "k")
+	if err == nil && !ok {
+		err = fmt.Errorf("not found")
+	}
+	check("Disown", m.Files, err)
+	page, err := c.List(ctx, ListFilter{})
+	if err == nil && (len(page.Items) != 1 || page.Next != "n") {
+		err = fmt.Errorf("page %+v", page)
+	}
+	if err == nil {
+		check("List", page.Items[0].Files, nil)
+	} else {
+		check("List", nil, err)
+	}
 	m, err = c.Follow(ctx, "msg_1", 0, func(store.Event) error { return nil })
 	check("Follow's end", m.Files, err)
 	if m.LeaseID != "L1" || m.State != store.Done {
