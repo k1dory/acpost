@@ -306,6 +306,9 @@ func (g *globals) connect(ctx context.Context) (*client.Client, error) {
 		}
 		return c, nil
 	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err() // interrupted while asking: not a node to start
+	}
 	if err := autostart(ctx, g, c, strings.TrimPrefix(url, "unix://")); err != nil {
 		return nil, err
 	}
@@ -352,6 +355,9 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	go func() { _ = cmd.Wait(); close(exited) }()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return ctx.Err() // the node goes on starting on its own; this command is interrupted
+		}
 		if _, err := probe(ctx, c); err == nil {
 			// Left running, detached (its own session): not Released, which would race the
 			// goroutine waiting for it (the race detector's find).
@@ -368,6 +374,8 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 				return nil
 			}
 			return startFailed(filepath.Join(dir, "acpost.log"), logStart)
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
