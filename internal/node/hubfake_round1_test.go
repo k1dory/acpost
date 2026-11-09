@@ -49,6 +49,7 @@ type fakeHub struct {
 	hangFiles  int           // the next GETs of files never answer
 	events     []store.Event // the message's events, numbered from 1
 	eventsFrom []int64       // the after of each GET of events
+	oldRoutes  bool          // routes of a hub before the lookup by key
 }
 
 func newFakeHub(t *testing.T, lease string) *fakeHub {
@@ -193,15 +194,18 @@ func (f *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.state = store.Cancelled
 		_ = json.NewEncoder(w).Encode(store.Message{ID: id, State: store.Cancelled})
+	case r.Method == "GET" && part == "by-idem" && f.oldRoutes:
+		// A hub before the lookup: the path is read as a message id.
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "no message by-idem"}})
 	case r.Method == "GET" && part == "by-idem":
 		q := r.URL.Query()
 		id := f.keys[q.Get("from")+"|"+q.Get("key")]
 		if id == "" {
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "none"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"found": false})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(f.msgs[id])
+		_ = json.NewEncoder(w).Encode(map[string]any{"found": true, "message": f.msgs[id]})
 	case part == "wait":
 		f.mu.Unlock()
 		select {

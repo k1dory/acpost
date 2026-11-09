@@ -488,7 +488,7 @@ ends with `event: acpost-error` carrying the same envelope and `status` (event k
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
-| `GET /v1/messages/by-idem?from=&key=` | (a joined node, to its hub) the message one of its senders (`…@<node>`) sent with an idempotency key: what became of a send whose answer was lost |
+| `GET /v1/messages/by-idem?from=&key=` | (a joined node, to its hub) the message one of its senders (`…@<node>`) sent with an idempotency key: what became of a send whose answer was lost. `{"found":true,"message":{…}}`, or `{"found":false}` (a 404 is a hub without the lookup, not an answer) |
 | `POST /v1/agents/{name}/claim?wait=30s&lease=5m` | an inbox consumer takes a message (200) or none came (204) |
 | `POST /v1/messages/{id}/reply` | `{"lease":"…","body":"…","files":[…]}` or `{"lease":"…","error":"…"}` |
 | `POST /v1/messages/{id}/lease` | extend a claim |

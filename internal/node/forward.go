@@ -114,19 +114,27 @@ func hubRefused(err error) bool {
 // takeHubRepeat replaces the copy stored for a send (id) with a copy of the message the hub kept
 // for the same key before (sent): its first send, whose local copy is gone or was never made. The
 // replacement is one store step, a cancel done here meanwhile carried over.
+//
+// Files this node refuses for good (over its limits) are left out: the copy still takes the key and
+// the cancel, and follows the hub's outcome. While a download fails for a passing cause, a cancel
+// asked for goes to the hub's message at once; the copy is made at a later try.
 func (n *Node) takeHubRepeat(ctx context.Context, id string, sent store.Message) (store.Message, error) {
 	if listed := pick(sent.Files, false); len(listed) > 0 {
 		fctx, done := context.WithTimeout(ctx, hubFilesTimeout)
 		got, err := n.fetchFiles(fctx, sent.ID, false, listed, "the message")
 		done()
 		var e *Error
-		if err != nil && !errors.As(err, &e) {
-			err = hubErr(err)
+		switch {
+		case err == nil:
+			sent.Files = got
+		case errors.As(err, &e) || filesRefused(err):
+			n.log.Warn("the files of a message the hub kept are refused here; its copy goes without them",
+				"id", sent.ID, "err", err)
+			sent.Files = nil
+		default:
+			n.cancelThrough(id, sent.ID)
+			return store.Message{}, hubErr(err)
 		}
-		if err != nil {
-			return store.Message{}, err
-		}
-		sent.Files = got
 	} else {
 		sent.Files = nil
 	}
@@ -223,18 +231,19 @@ func (n *Node) resolveOnce(id string) bool {
 	}
 	if key != "" {
 		ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
-		first, err := n.hub.ByIdem(ctx, n.qualify(local.From), key)
+		first, found, err := n.hub.ByIdem(ctx, n.qualify(local.From), key)
 		done()
 		switch {
-		case err == nil && first.ID != id:
+		case err != nil:
+			// No answer, or a hub without the lookup (an older version answers 404 for any
+			// path): it may hold the send under an earlier id, so the copy and its key stay
+			// until it can say.
+			return false
+		case found && first.ID != id:
 			_, err := n.takeHubRepeat(n.ctx, id, first)
 			return err == nil
-		case err == nil:
+		case found:
 			return false // there now under this id: the next try finds it
-		case errors.As(err, &ce) && (ce.Code == "not_found" || ce.Status == 404 || ce.Status == 405):
-			// None (or a hub without the lookup).
-		default:
-			return false
 		}
 	}
 	if time.Since(local.CreatedAt) < hubAbsence {
@@ -331,4 +340,19 @@ func (n *Node) cancelForwarding(ctx context.Context, p Principal, m store.Messag
 	}
 	cur, err := n.Get(ctx, p, m.ID)
 	return cur, false, err
+}
+
+// cancelThrough sends the hub a cancel asked for on a forwarding copy (id) to the message the hub
+// kept for it (hubID), before the copy is replaced; the resolver confirms it once it is.
+func (n *Node) cancelThrough(id, hubID string) {
+	local, err := n.st.Get(n.ctx, id)
+	if err != nil || local.Origin != originForwarding {
+		return
+	}
+	if wanted, err := n.st.CancelWanted(n.ctx, id); err != nil || (!wanted && !local.State.Final()) {
+		return
+	}
+	ctx, done := context.WithTimeout(n.ctx, hubCallTimeout)
+	_, _ = n.hub.Cancel(ctx, hubID)
+	done()
 }

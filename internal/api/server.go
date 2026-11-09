@@ -1474,8 +1474,15 @@ func requestCut(w http.ResponseWriter) bool {
 	return ok && cw.ctx.Err() != nil
 }
 
-// byIdem: a joined node looks up what one of its senders sent here with an idempotency key.
+// byIdem: a joined node looks up what one of its senders sent here with an idempotency key. None
+// is a 200 too, {"found":false}: a node tells it from the 404 of a hub without this route (an
+// older version, where the path is read as a message id), which proves nothing.
 func (s *server) byIdem(w http.ResponseWriter, r *http.Request, p node.Principal) {
 	m, err := s.n.MessageByIdem(r.Context(), p, r.URL.Query().Get("from"), r.URL.Query().Get("key"))
-	reply(w, http.StatusOK, m, err)
+	var e *node.Error
+	if errors.As(err, &e) && e.Code == "not_found" {
+		reply(w, http.StatusOK, map[string]any{"found": false}, nil)
+		return
+	}
+	reply(w, http.StatusOK, map[string]any{"found": true, "message": m}, err)
 }
