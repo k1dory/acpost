@@ -618,12 +618,16 @@ type Client struct {
 // caFile, when set, is the CA bundle a https node's certificate is checked against.
 func New(nodeURL, token, caFile string) (*Client, error) {
 	c := &Client{token: token, URL: nodeURL}
-	tr := &http.Transport{MaxIdleConnsPerHost: 16, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 0}
+	// Reaching the node is bounded: a host that drops the connect or stalls the TLS handshake is
+	// unavailable within seconds. The answer is not: long polls hold it up to MaxWait, and an
+	// agent's forge request waits for a person's approval (ask_timeout); callers bound those.
+	d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	tr := &http.Transport{MaxIdleConnsPerHost: 16, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: handshakeTimeout,
+		DialContext: d.DialContext}
 	switch {
 	case strings.HasPrefix(nodeURL, "unix://"):
 		sock := strings.TrimPrefix(nodeURL, "unix://")
 		tr.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
 			return d.DialContext(ctx, "unix", sock)
 		}
 		c.base = "http://acpost"
@@ -662,7 +666,10 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, body)
+	// The request has its own cancel: it is what cuts a drain that does not end (see below).
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, method, u, body)
 	if err != nil {
 		return 0, err
 	}
@@ -685,6 +692,15 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, in, 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return resp.StatusCode, respErr(method, path, resp)
+	}
+	if out == nil {
+		// Read what is left of a small answer, so the connection goes back to the pool; not
+		// for long: a body that does not come is cut, and the call has its answer already. Cut by
+		// cancelling the request, not by closing the body: a gzip answer whose header does not
+		// come holds the body's lock while it reads, and Close would wait for it.
+		cut := time.AfterFunc(drainTimeout, cancel)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		cut.Stop()
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
 		cr := &capReader{r: resp.Body, left: c.MaxResponse}
@@ -749,9 +765,11 @@ func (c *Client) WaitFinal(ctx context.Context, id string, timeout time.Duration
 			step = 0
 		}
 		// The request itself is bounded: a node that stalls cannot hold the caller past its timeout.
-		rctx, done := context.WithTimeout(ctx, step+5*time.Second)
-		if !deadline.IsZero() {
-			done()
+		var rctx context.Context
+		var done context.CancelFunc
+		if deadline.IsZero() {
+			rctx, done = context.WithTimeout(ctx, step+5*time.Second)
+		} else {
 			rctx, done = context.WithDeadline(ctx, deadline.Add(50*time.Millisecond))
 		}
 		m, err := c.Wait(rctx, id, step)
@@ -890,9 +908,20 @@ func (c *Client) Agents(ctx context.Context) ([]AgentInfo, error) {
 	return out, err
 }
 
+// Status is cheap for a node that works: one that does not answer it within statusTimeout is
+// unavailable (unless ctx has a deadline of its own).
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	var s Status
+	parent := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var done context.CancelFunc
+		ctx, done = context.WithTimeout(ctx, statusTimeout)
+		defer done()
+	}
 	_, err := c.do(ctx, "GET", "/v1/health", nil, nil, &s, nil)
+	if errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil { // our bound, not the caller's
+		return s, fmt.Errorf("%w: %s: no answer to a health check within %v", ErrUnavailable, c.URL, statusTimeout)
+	}
 	return s, err
 }
 
@@ -911,7 +940,17 @@ func (c *Client) NodeClaim(ctx context.Context, node string, wait, lease time.Du
 }
 
 // respErr is the API error a response of status 400 or more carries.
-func respErr(method, path string, resp *http.Response) *Error {
+func respErr(method, path string, resp *http.Response) error {
+	e := respError(method, path, resp)
+	if e.Code == "unavailable" {
+		// The node says what a refused connection says: not now, maybe the next time or node.
+		return fmt.Errorf("%w: %w", ErrUnavailable, e)
+	}
+	return e
+}
+
+// respError is the API error a response of status 400 or more carries.
+func respError(method, path string, resp *http.Response) *Error {
 	var eb struct {
 		Error Error `json:"error"`
 	}
@@ -928,16 +967,24 @@ func respErr(method, path string, resp *http.Response) *Error {
 // that seq. A broken stream is reopened where it stopped (Last-Event-ID); an API error or fn's
 // error ends it.
 func (c *Client) Follow(ctx context.Context, id string, after int64, fn func(store.Event) error) (store.Message, error) {
+	pause := followRetry
 	for {
+		seen := after
 		m, done, err := c.followOnce(ctx, id, &after, fn)
 		if done || err != nil && (ctx.Err() != nil || !errors.Is(err, ErrUnavailable)) {
 			return m, err
 		}
-		select { // the connection dropped: again, from the last event seen
+		// The connection dropped: again, from the last event seen; sooner when it was moving, ever
+		// later (to a ceiling) while a node that is down stays down.
+		if after > seen {
+			pause = followRetry
+		}
+		select {
 		case <-ctx.Done():
 			return m, ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(pause):
 		}
+		pause = min(2*pause, followRetryMax)
 	}
 }
 
@@ -986,6 +1033,9 @@ func (c *Client) followOnce(ctx context.Context, id string, after *int64, fn fun
 			if data.Len() == 0 {
 				kind = ""
 				continue
+			}
+			if kind == streamErrorEvent {
+				return store.Message{}, false, streamErr(data.String())
 			}
 			if kind == "end" {
 				var m store.Message
@@ -1159,11 +1209,11 @@ func (c *Client) TermInput(ctx context.Context, id string, b []byte) error {
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+		return c.unreachable(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return respErr("POST", "/v1/terminals/input", resp)
+		return respErr("POST", "/v1/terminals/"+id+"/input", resp)
 	}
 	return nil
 }
@@ -1193,7 +1243,7 @@ func (c *Client) TermOutput(ctx context.Context, id string, from int64, fn func(
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return Terminal{}, fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+		return Terminal{}, c.unreachable(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -1227,6 +1277,8 @@ func (c *Client) TermOutput(ctx context.Context, id string, from int64, fn func(
 					return t, fmt.Errorf("%w: terminal end: %w", ErrBadResponse, err)
 				}
 				return t, nil
+			case streamErrorEvent:
+				return Terminal{}, streamErr(data)
 			}
 			kind, data = "", ""
 		case strings.HasPrefix(line, "event:"):
@@ -1310,7 +1362,7 @@ func (c *Client) CILog(ctx context.Context, q ForgeQuery, job, target string) (s
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+		return "", c.unreachable(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -1399,4 +1451,45 @@ func (c *Client) CheckList(ctx context.Context, q ForgeQuery, ref string) (forge
 	var out forge.CheckList
 	_, err := c.do(ctx, "GET", "/v1/forge/checks", v, nil, &out, nil)
 	return out, err
+}
+
+// The bounds on reaching a node and on its health check; variables so tests need not wait them out.
+var (
+	dialTimeout      = 10 * time.Second
+	handshakeTimeout = 10 * time.Second
+	statusTimeout    = 30 * time.Second
+	drainTimeout     = 2 * time.Second
+)
+
+// followRetry and followRetryMax pace Follow's reconnects.
+var followRetry, followRetryMax = time.Second, 30 * time.Second
+
+// unreachable is the error of a request that got no response: ctx's own when ctx ended (the
+// caller gave up: not the node's fault), else ErrUnavailable.
+func (c *Client) unreachable(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("%w: %s: %w", ErrUnavailable, c.URL, err)
+}
+
+// streamErrorEvent is the event a node's stream fails with (an event kind has no dash: an
+// agent's `error` event is an event like any other).
+const streamErrorEvent = "acpost-error"
+
+// streamErr is the error an `event: acpost-error` of a stream carries: the node's own, which ends the
+// stream for good, unless the node says it is unavailable (then reopening it may work).
+func streamErr(data string) error {
+	var eb struct {
+		Status int   `json:"status"`
+		Error  Error `json:"error"`
+	}
+	if json.Unmarshal([]byte(data), &eb) != nil || eb.Error.Code == "" {
+		return fmt.Errorf("%w: a stream error: %.200s", ErrBadResponse, data)
+	}
+	eb.Error.Status = eb.Status
+	if eb.Error.Code == "unavailable" {
+		return fmt.Errorf("%w: %w", ErrUnavailable, &eb.Error)
+	}
+	return &eb.Error
 }

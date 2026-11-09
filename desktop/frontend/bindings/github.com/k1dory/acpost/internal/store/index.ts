@@ -4,7 +4,6 @@
 export {
     BacklogItem,
     ChangedFile,
-    Conversation,
     Event,
     File,
     Folder,

@@ -2,7 +2,8 @@
 # Builds bin/acpost.app (macOS): the interface, the binary, the bundle, an ad-hoc signature.
 set -eu
 cd "$(dirname "$0")"
-(cd frontend && npm install --no-audit --no-fund >/dev/null && npm run build >/dev/null)
+# npm ci: the lock file as it is. Vite empties dist, .keep (go:embed needs a file there) comes back.
+(cd frontend && npm ci --no-audit --no-fund >/dev/null && npm run build >/dev/null && touch dist/.keep)
 export CGO_ENABLED=1 CGO_CFLAGS=-mmacosx-version-min=12.0 CGO_LDFLAGS=-mmacosx-version-min=12.0 MACOSX_DEPLOYMENT_TARGET=12.0
 go build -tags production -trimpath -buildvcs=false -ldflags="-w -s" -o bin/acpost .
 app=bin/acpost.app

@@ -7,17 +7,27 @@ node's socket (`ACPOST_NODE`/`ACPOST_TOKEN` for another node).
 
 ```sh
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
-cd desktop/frontend && npm install && npm run build && cd ..
+cd desktop
 ./build-app.sh                      # bin/acpost.app (open it, or drag it to /Applications)
 wails3 task dev                     # live reload while working on the interface
 ```
+
+`build-app.sh` is the one way the bundle is made: the interface from the lock file (`npm ci`), the
+binary, `build/darwin/Info.plist`, an ad-hoc signature. The Taskfiles serve `wails3 task dev`.
+The bundle's identity (`dev.acpost.desktop`, the version) is set in `build/config.yml`;
+`wails3 task common:update:build-assets` writes it into the plists, which stay as it writes them.
 
 `go build -tags server` builds the same app as a local HTTP server (http://localhost:8080) for
 looking at the interface in a browser. Bindings in `frontend/bindings` are generated:
 `wails3 generate bindings -ts -d frontend/bindings ./`.
 
 The IDE view is VS Code (the one installed on the Mac runs `serve-web`, pinned to `ideCommit` in
-`ide.go`; its server, settings and extensions live in `~/Library/Application Support/acpost/vscode`)
+`ide_ext.go`; its server, settings and extensions live in `~/Library/Application Support/acpost/vscode`)
 dressed as the app by the extension in `ide/extension`: colour themes made from the app's tokens,
-Lucide icons in place of VS Code's, the app's fonts and `workbench.css`. Its generated files are
-committed; after changing the tokens or the icon map: `cd ide && npm install && npm run build`.
+Lucide icons in place of VS Code's, the app's fonts and `workbench.css`; the app's VS Code settings
+are the extension's `configurationDefaults` (the user's own win), the few application-wide ones
+written by `ide/page/seed.js`. Its generated files are committed; after changing the tokens or the
+icon map: `cd ide && npm install && npm run build`. VS Code keeps its state in the page, by its
+address `127.0.0.1:47823`: a server left by an app that crashed is ended by the next start (the
+running app holds `serve-web.lock` beside it); when another running acpost, or anything else,
+holds the port, VS Code starts on another one, without that state.

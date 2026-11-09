@@ -12,6 +12,13 @@ function tokens(selector) {
   return out;
 }
 const light = tokens(":root"), dark = { ...light, ...tokens(':root[data-theme="dark"]') };
+// A token the themes name that app.css does not have is an error, not "undefined" in a colour.
+const strict = (o, name) => new Proxy(o, {
+  get(t, k) {
+    if (typeof k === "string" && !(k in t)) throw new Error("no --" + k + " in app.css (" + name + ")");
+    return t[k];
+  },
+});
 const hl = {
   light: { kw: "#a626a4", str: "#50a14f", num: "#b76b01", fn: "#4078f2", var: "#c45a2c", type: "#c18401" },
   dark: { kw: "#c792ea", str: "#a5d6a7", num: "#f7c37a", fn: "#82aaff", var: "#f2a37a", type: "#ffcb6b" },
@@ -109,6 +116,6 @@ function theme(name, type, p, h) {
   return { name, type, semanticHighlighting: true, colors: colors(p), tokenColors: tokenColors(h, p),
     semanticTokenColors: { function: h.fn, method: h.fn, type: h.type, class: h.type, interface: h.type, parameter: h.var, property: h.var, keyword: h.kw, string: h.str, number: h.num } };
 }
-writeFileSync("extension/themes/acpost-light.json", JSON.stringify(theme("acpost Light", "light", light, hl.light), null, 2) + "\n");
-writeFileSync("extension/themes/acpost-dark.json", JSON.stringify(theme("acpost Dark", "dark", dark, hl.dark), null, 2) + "\n");
+writeFileSync("extension/themes/acpost-light.json", JSON.stringify(theme("acpost Light", "light", strict(light, "light"), hl.light), null, 2) + "\n");
+writeFileSync("extension/themes/acpost-dark.json", JSON.stringify(theme("acpost Dark", "dark", strict(dark, "dark"), hl.dark), null, 2) + "\n");
 console.log("themes from", Object.keys(light).length, "tokens");

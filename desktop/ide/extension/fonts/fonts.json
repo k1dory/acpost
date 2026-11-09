@@ -1,0 +1,32 @@
+[
+  {
+    "family": "Onest",
+    "file": "onest-latin.woff2",
+    "weight": "100 900"
+  },
+  {
+    "family": "JetBrains Mono",
+    "file": "jetbrains-mono-latin-400.woff2",
+    "weight": "400"
+  },
+  {
+    "family": "JetBrains Mono",
+    "file": "jetbrains-mono-latin-500.woff2",
+    "weight": "500"
+  },
+  {
+    "family": "Onest",
+    "file": "onest-cyrillic.woff2",
+    "weight": "100 900"
+  },
+  {
+    "family": "JetBrains Mono",
+    "file": "jetbrains-mono-cyrillic-400.woff2",
+    "weight": "400"
+  },
+  {
+    "family": "JetBrains Mono",
+    "file": "jetbrains-mono-cyrillic-500.woff2",
+    "weight": "500"
+  }
+]

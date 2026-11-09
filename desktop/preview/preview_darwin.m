@@ -82,6 +82,8 @@ static void apEnsure(NSView *host) {
 		[uc addScriptMessageHandler:apDelegate name:@"acpostPreview"];
 		[uc addUserScript:[[WKUserScript alloc] initWithSource:apScript ?: @"" injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
 		cfg.userContentController = uc;
+		// Sites looked at leave no cookies or storage behind: the default store is the app's, shared with the IDE pane.
+		cfg.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
 		apView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:cfg];
 		apView.navigationDelegate = apDelegate;
 		if ([apView respondsToSelector:@selector(setInspectable:)]) [apView setValue:@YES forKey:@"inspectable"]; // Safari's Web Inspector (macOS 13.3+)
