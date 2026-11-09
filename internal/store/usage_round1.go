@@ -20,16 +20,30 @@ import (
 // merge cannot make a turn's count more than what was read of it, and a final message publishes
 // the growth at once.
 func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool) error {
+	_, err := s.putUsage(ctx, id, lease, data, event)
+	return err
+}
+
+// PutReading is PutUsage without an event of its own, saying whether the message was final already
+// (the reading was published at once): a driver then keeps further readings of the attempt to
+// itself and stores them once, at its end, so a cancel costs one event an attempt, not one a line.
+func (s *Store) PutReading(ctx context.Context, id, lease, data string) (final bool, err error) {
+	return s.putUsage(ctx, id, lease, data, false)
+}
+
+func (s *Store) putUsage(ctx context.Context, id, lease, data string, event bool) (bool, error) {
 	u, ok := readUsage(data)
 	if !ok {
-		return fmt.Errorf("store: not a turn's usage")
+		return false, fmt.Errorf("store: not a turn's usage")
 	}
 	now := time.Now()
-	return s.tx(ctx, func(t *sql.Tx) error {
-		seq, n, final, err := usageMessage(ctx, t, id, lease)
+	var final bool
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		seq, n, fin, err := usageMessage(ctx, t, id, lease)
 		if err != nil {
 			return err
 		}
+		final = fin
 		if err := putUsageTx(ctx, t, id, u, now); err != nil {
 			return err
 		}
@@ -41,6 +55,7 @@ func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool
 		}
 		return nil
 	})
+	return final, err
 }
 
 // PublishUsage puts among message id's events the usage of each of its turns that is counted and
@@ -226,7 +241,14 @@ func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int,
 			return err
 		}
 		if have >= maxUsageEvents {
-			break
+			// No room for another usage event: the growth is folded away, the turn's count put back
+			// to what its events carry (none: not counted), so this node's count is never more than
+			// what every other node can sum. The last event a message has room for carries the
+			// whole growth of its turn (ev is the count minus what was published).
+			if err := foldUsageTx(ctx, t, turn, p); err != nil {
+				return err
+			}
+			continue
 		}
 		b, err := json.Marshal(ev)
 		if err != nil {
@@ -250,6 +272,18 @@ func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int,
 	}
 	// Published here: none of them waits for a finalizer any more.
 	_, err = t.ExecContext(ctx, "DELETE FROM usage_unpublished WHERE msg = ?", id)
+	return err
+}
+
+// foldUsageTx puts a turn's count back to what was published of it (p; nil: nothing, the count
+// goes).
+func foldUsageTx(ctx context.Context, t *sql.Tx, turn string, p *published) error {
+	if p == nil {
+		_, err := t.ExecContext(ctx, "DELETE FROM turn_usage WHERE turn = ?", turn)
+		return err
+	}
+	_, err := t.ExecContext(ctx, `UPDATE turn_usage SET input = ?, output = ?, cache_read = ?, cache_write = ?, thought = ?, total = ?,
+		cost = ? WHERE turn = ?`, p.Input, p.Output, p.CacheRead, p.CacheWrite, p.Thought, p.Total, p.Cost, turn)
 	return err
 }
 

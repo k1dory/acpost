@@ -444,6 +444,9 @@ type sandboxTurn struct {
 	used   bool
 	// onUsage stores the turn's usage as read so far, under the attempt's lease (set by handle).
 	onUsage func()
+	// ended: the store said the message is final (a cancel): further readings stay in usage and are
+	// stored once, at the attempt's end (keepUsage), one event an attempt, not one a line.
+	ended atomic.Bool
 	// asks are the sandbox's requests waiting here, by the sandbox's request id.
 	asks map[string]*sandboxAsk
 	// after is the last event of the stream this turn has read.
@@ -1167,8 +1170,9 @@ func (a *sandboxAgent) handle(m store.Message) {
 	t.onUsage = func() {
 		sandboxUsageRead() // tests: between reading a usage line and storing it
 		// Under this attempt's lease, also once it ended (a cancel, the lease lost): the store takes
-		// the reading unless another attempt runs the message now.
-		if n.ctx.Err() == nil {
+		// the reading unless another attempt runs the message now. Once the message is final, the
+		// rest waits for the attempt's end.
+		if n.ctx.Err() == nil && !t.ended.Load() {
 			a.recordUsage(m.ID, m.LeaseID, t)
 		}
 	}
@@ -1276,10 +1280,15 @@ func (a *sandboxAgent) recordUsage(msgID, lease string, t *sandboxTurn) {
 		u.Model = a.cfg.Model
 	}
 	u.Total = u.Input + u.Output + u.CacheRead + u.CacheWrite
-	if err := n.st.PutUsage(n.ctx, msgID, lease, eventJSON(u), false); err != nil {
+	final, err := n.st.PutReading(n.ctx, msgID, lease, eventJSON(u))
+	if err != nil {
 		if n.ctx.Err() == nil {
 			n.log.Debug("usage", "err", err)
 		}
+		return
+	}
+	if final {
+		t.ended.Store(true)
 	}
 }
 

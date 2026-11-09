@@ -527,3 +527,29 @@ func TestPublishedUsageGoesWithRetention(t *testing.T) {
 		t.Fatalf("%d published rows outlive their turns", n)
 	}
 }
+
+// More readings after a message is final than it has room for usage events: the growth that finds
+// no room is folded away, never counted here alone; the count, the sum of the events and a
+// receiving store's count agree, with no more than maxUsageEvents events.
+func TestUsagePastTheEventRoomAgrees(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t, Options{})
+	c := claimedWithUsage(t, s, map[string]int{"t1": 100})
+	if _, err := s.Cancel(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 2; i <= 25; i++ {
+		if err := s.PutUsage(ctx, c.ID, c.LeaseID, usageOf("t1", 100*i), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := usageEvents(t, s, c.ID)
+	if len(got) > maxUsageEvents {
+		t.Fatalf("%d usage events, at most %d", len(got), maxUsageEvents)
+	}
+	sum := 0
+	for _, u := range got {
+		sum += u.Input
+	}
+	agree(t, s, c.ID, sum)
+}
