@@ -2,7 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -194,4 +198,123 @@ func must(t *testing.T, err error) string {
 		t.Fatal(err)
 	}
 	return ""
+}
+
+// usageOf is a usage event's data for a turn of n input tokens.
+func usageOf(turn string, n int) string {
+	b, _ := json.Marshal(Usage{Turn: turn, Agent: "agent:x@n", Model: "m", Reported: true, Input: n, Total: n})
+	return string(b)
+}
+
+// claimedWithUsage is a running message of agent:x whose attempt counted turns (no events).
+func claimedWithUsage(t *testing.T, s *Store, turns map[string]int) Message {
+	t.Helper()
+	ctx := context.Background()
+	m := Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"}
+	if _, _, err := s.Insert(ctx, &m); err != nil {
+		t.Fatal(err)
+	}
+	c, ok, err := s.Claim(ctx, "agent:x", time.Minute)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	for turn, n := range turns {
+		if err := s.PutUsage(ctx, c.ID, c.LeaseID, usageOf(turn, n), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return c
+}
+
+func usageEvents(t *testing.T, s *Store, id string) []Usage {
+	t.Helper()
+	evs, err := s.Events(context.Background(), id, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []Usage
+	for _, e := range evs {
+		if e.Kind == "usage" {
+			u, _ := readUsage(e.Data)
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// The trigger publishes no more than the room left for usage events: 15 there, two turns counted
+// without one, one more goes (16 in all).
+func TestFinalUsageKeepsToItsRoom(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t, Options{})
+	c := claimedWithUsage(t, s, map[string]int{"late_a": 5, "late_b": 6})
+	for i := 0; i < 15; i++ {
+		if err := s.AddEvent(ctx, c.ID, "usage", usageOf(fmt.Sprintf("early_%02d", i), 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Cancel(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := usageEvents(t, s, c.ID); len(got) != maxUsageEvents {
+		t.Fatalf("%d usage events, want %d", len(got), maxUsageEvents)
+	}
+	if err := s.AddEvent(ctx, c.ID, "notice", `{"text":"after"}`); err != nil {
+		t.Fatalf("an event after: %v", err)
+	}
+}
+
+// A final message's count stays the one its event published: a later, fuller reading (a cancelled
+// attempt's last word) does not move the count away from the event.
+func TestFinalCountIsThePublishedOne(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t, Options{})
+	c := claimedWithUsage(t, s, map[string]int{"t1": 100})
+	if _, err := s.Cancel(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutUsage(ctx, c.ID, "", usageOf("t1", 150), true); err != nil {
+		t.Fatal(err)
+	}
+	got := usageEvents(t, s, c.ID)
+	sums, err := s.UsageOf(ctx, UsageQuery{})
+	if err != nil || len(got) != 1 || len(sums) != 1 || int64(got[0].Input) != sums[0].Input {
+		t.Fatalf("event %+v, counted %+v %v: the event and the count must agree", got, sums, err)
+	}
+}
+
+// A store opened over one whose trigger an earlier version installed gets the current trigger.
+func TestUsageTriggerReplacedOnOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s", "store.db")
+	s, err := Open("sqlite://"+path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TRIGGER usage_published_when_final;
+		CREATE TRIGGER usage_published_when_final AFTER UPDATE OF state ON messages BEGIN SELECT 1; END;`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err = Open("sqlite://"+path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var body string
+	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'usage_published_when_final'").Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "INSERT INTO events") {
+		t.Fatalf("the trigger is still the old one: %s", body)
+	}
 }

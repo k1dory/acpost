@@ -22,11 +22,13 @@ func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool
 	}
 	now := time.Now()
 	return s.tx(ctx, func(t *sql.Tx) error {
-		seq, n, err := leasedMessage(ctx, t, id, lease)
+		seq, n, final, err := leasedMessage(ctx, t, id, lease)
 		if err != nil {
 			return err
 		}
-		if err := putUsageTx(ctx, t, id, u, now); err != nil {
+		// A final message's count is the one its event published (as it turned final): a reading
+		// after that (a cancelled attempt's last word) does not move it away from the event.
+		if err := putUsageTx(ctx, t, id, u, now, !final); err != nil {
 			return err
 		}
 		if !event {
@@ -43,7 +45,7 @@ func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool
 func (s *Store) PublishUsage(ctx context.Context, id, lease string) error {
 	now := time.Now()
 	return s.tx(ctx, func(t *sql.Tx) error {
-		seq, n, err := leasedMessage(ctx, t, id, lease)
+		seq, n, _, err := leasedMessage(ctx, t, id, lease)
 		if err != nil {
 			return err
 		}
@@ -51,28 +53,29 @@ func (s *Store) PublishUsage(ctx context.Context, id, lease string) error {
 	})
 }
 
-// leasedMessage is a message's seq and event count, checked to be running under lease (when given).
-func leasedMessage(ctx context.Context, t *sql.Tx, id, lease string) (int64, int, error) {
+// leasedMessage is a message's seq, event count and whether it is final, checked to be running
+// under lease (when given).
+func leasedMessage(ctx context.Context, t *sql.Tx, id, lease string) (int64, int, bool, error) {
 	var seq int64
 	var n int
 	var state State
 	var cur string
 	err := t.QueryRowContext(ctx, "SELECT seq, events, state, lease_id FROM messages WHERE id = ?", id).Scan(&seq, &n, &state, &cur)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, 0, ErrNotFound
+		return 0, 0, false, ErrNotFound
 	}
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	if lease != "" && (state != Running || cur != lease) {
-		return 0, 0, ErrLeaseLost
+		return 0, 0, false, ErrLeaseLost
 	}
-	return seq, n, nil
+	return seq, n, state.Final(), nil
 }
 
-// putUsageTx counts a turn's usage, or replaces its count by a fuller reading of the same turn
-// (more tokens), never by a lesser one.
-func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Time) error {
+// putUsageTx counts a turn's usage, or (raise) replaces its count by a fuller reading of the same
+// turn (more tokens), never by a lesser one.
+func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Time, raise bool) error {
 	var had int
 	err := t.QueryRowContext(ctx, "SELECT total FROM turn_usage WHERE turn = ?", u.Turn).Scan(&had)
 	switch {
@@ -80,7 +83,7 @@ func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Tim
 		return addUsage(ctx, t, id, u, now)
 	case err != nil:
 		return err
-	case u.Total <= had:
+	case !raise || u.Total <= had:
 		return nil
 	}
 	_, err = t.ExecContext(ctx, `UPDATE turn_usage SET ts = ?, model = ?, reported = ?, input = ?, output = ?, cache_read = ?,
@@ -149,10 +152,13 @@ func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int,
 // write, the usage of its turns that is counted and has no event yet: an attempt that was retried
 // counts what it read without an event, and whatever ends the message after it (a cancel between
 // attempts, say) must not leave that usage to this node alone. The event is built from the counted
-// row as PublishUsage builds it (Usage's JSON), up to maxUsageEvents usage events a message.
+// row as PublishUsage builds it (Usage's JSON), up to maxUsageEvents usage events a message: the
+// selection is cut to the room left. The trigger is dropped and made again each time the store
+// opens, so a store keeps the current body, not one an earlier version installed.
 const usagePublishSchema = `
 CREATE INDEX IF NOT EXISTS turn_usage_msg ON turn_usage (msg);
-CREATE TRIGGER IF NOT EXISTS usage_published_when_final AFTER UPDATE OF state ON messages
+DROP TRIGGER IF EXISTS usage_published_when_final;
+CREATE TRIGGER usage_published_when_final AFTER UPDATE OF state ON messages
 WHEN NEW.state IN ('done', 'failed', 'cancelled', 'expired') AND OLD.state NOT IN ('done', 'failed', 'cancelled', 'expired')
 BEGIN
 	INSERT INTO events (msg, seq, ts, kind, data)
@@ -165,7 +171,8 @@ BEGIN
 	FROM turn_usage u
 	WHERE u.msg = NEW.id
 		AND NOT EXISTS (SELECT 1 FROM events e WHERE e.msg = NEW.seq AND e.kind = 'usage' AND json_extract(e.data, '$.turn') = u.turn)
-		AND (SELECT count(*) FROM events e WHERE e.msg = NEW.seq AND e.kind = 'usage') < 16;
+	ORDER BY u.ts, u.turn
+	LIMIT max(0, 16 - (SELECT count(*) FROM events e WHERE e.msg = NEW.seq AND e.kind = 'usage'));
 	UPDATE messages SET events = (SELECT coalesce(max(e.seq), 0) FROM events e WHERE e.msg = NEW.seq)
 	WHERE seq = NEW.seq AND events < (SELECT coalesce(max(e.seq), 0) FROM events e WHERE e.msg = NEW.seq);
 END;

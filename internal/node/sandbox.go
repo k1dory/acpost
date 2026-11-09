@@ -442,6 +442,8 @@ type sandboxTurn struct {
 	last   strings.Builder
 	usage  store.Usage
 	used   bool
+	// onUsage stores the turn's usage as read so far, under the attempt's lease (set by handle).
+	onUsage func()
 	// asks are the sandbox's requests waiting here, by the sandbox's request id.
 	asks map[string]*sandboxAsk
 	// after is the last event of the stream this turn has read.
@@ -778,6 +780,9 @@ func (t *sandboxTurn) line(s string) (sandboxEnd, bool) {
 			u.Cost, u.Currency = &c, "USD"
 		}
 		t.mu.Unlock()
+		if t.onUsage != nil {
+			t.onUsage() // counted as read: whatever ends the message next publishes this reading
+		}
 	case "acp.thought":
 		t.add("thought", l.Text)
 	case "acp.plan":
@@ -1177,6 +1182,11 @@ func (a *sandboxAgent) handle(m store.Message) {
 	}
 	had, _ := n.st.EventCount(n.ctx, m.ID)
 	t := &sandboxTurn{a: a, msgID: m.ID, run: run, limit: int(n.cfg.Limits.MaxReply), after: live, mark: m.ID}
+	t.onUsage = func() {
+		if n.ctx.Err() == nil && !tl.lost.Load() {
+			a.recordUsage(m.ID, m.LeaseID, t, false)
+		}
+	}
 	t.stream = &textStream{record: func(kind string, data any) {
 		b := eventJSON(data)
 		if l := t.label.Load(); l > 0 && strings.HasPrefix(b, "{") && b != "{}" && !strings.Contains(b, `"sandbox_event":`) {
