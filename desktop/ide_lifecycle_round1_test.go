@@ -227,6 +227,8 @@ func TestIDEStartOnceForAll(t *testing.T) {
 // I2/Z3: a CLI that ends while a child of its holds the output pipe is seen to end (its child
 // with it), its token file is removed, and the next IDEStart starts it again.
 func TestIDEEndSeenWithGrandchild(t *testing.T) {
+	// The token files counted are this test's only (another run's IDE tests share the system's).
+	t.Setenv("TMPDIR", t.TempDir())
 	f := newFakeIDE(t, "grandchild")
 	before := tokenFiles(t)
 	base, err := f.open("")
