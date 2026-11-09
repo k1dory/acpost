@@ -305,7 +305,9 @@ func writeTarget(p string) (string, error) {
 		}
 		next := filepath.Join(cur, c)
 		st, err := os.Lstat(next)
-		if errors.Is(err, fs.ErrNotExist) && last(rest) {
+		// A trailing "/" or "/." says "a directory": only a name with nothing at all after it
+		// may be a file, missing or not.
+		if errors.Is(err, fs.ErrNotExist) && len(rest) == 0 {
 			return next, nil
 		}
 		if err != nil {
@@ -325,20 +327,17 @@ func writeTarget(p string) (string, error) {
 			rest = append(strings.Split(to, string(filepath.Separator)), rest...)
 			continue
 		}
-		if !st.IsDir() && !last(rest) {
+		if !st.IsDir() && len(rest) > 0 {
 			return "", &fs.PathError{Op: "save", Path: next, Err: syscall.ENOTDIR}
 		}
 		cur = next
 	}
-	return cur, nil
-}
-
-// last says whether what is left of a path names nothing more.
-func last(rest []string) bool {
-	for _, c := range rest {
-		if c != "" && c != "." {
-			return false
-		}
+	// The walk ended on a directory (a link to ".", "..", a folder): the system would not
+	// write it as a file.
+	if st, err := os.Lstat(cur); err != nil {
+		return "", err
+	} else if st.IsDir() {
+		return "", &fs.PathError{Op: "save", Path: cur, Err: syscall.EISDIR}
 	}
-	return true
+	return cur, nil
 }
