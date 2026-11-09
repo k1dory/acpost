@@ -130,6 +130,11 @@ func (s *acpSlot) applySettings(ctx context.Context, p *acpProc, sid acp.Session
 			continue
 		}
 		next, err := acpx.Configure(ctx, p.conn, sid, st, set.s, set.want)
+		if err != nil && ctx.Err() != nil {
+			// Cut short by the attempt's end: the setting may still be applied by the agent, so the
+			// turn ends here (and its process with it), not as if the setting were only refused.
+			return fmt.Errorf("%s %s: %w", set.s.Name, set.want, err)
+		}
 		if err != nil && set.s.Name == acpx.ModeSetting.Name && m.Meta[metaModeStrict] == "1" {
 			return fmt.Errorf("the mode %s could not be set: %v", set.want, err)
 		}

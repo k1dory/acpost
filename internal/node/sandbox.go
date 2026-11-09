@@ -1106,23 +1106,23 @@ func (a *sandboxAgent) handle(m store.Message) {
 	tl := n.watchTurn(m, a.cfg.Lease.D())
 	defer tl.stop()
 	ctx := tl.ctx
-	// keepUsage records the turn's usage once the attempt's outcome is known (set once the turn is
-	// read): a message completed, or released for good.
-	keepUsage := func() {}
+	// keepUsage records what the attempt read of its turn's usage (set once the turn is read), under
+	// its lease and before its outcome: final, with the usage's event; not final (the message is
+	// tried again), only counted, to be replaced by a fuller reading of the same turn.
+	keepUsage := func(final bool, lease string) {}
 	complete := func(state store.State, reply string, f Failure) {
-		keepUsage()
+		keepUsage(true, m.LeaseID)
 		if err := n.st.Complete(n.ctx, m.ID, m.LeaseID, state, capReply(reply, int(n.cfg.Limits.MaxReply)), f.Code, f.Message); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("complete", "id", m.ID, "err", err)
 		}
 		n.notify()
 	}
 	release := func(f Failure) {
-		st, err := n.st.Release(n.ctx, m.ID, m.LeaseID, f.Code, f.Message, n.cfg.Limits.MaxAttempts)
-		if err != nil && !errors.Is(err, store.ErrLeaseLost) {
+		// The release fails the message when its attempts are spent: then what was read of the turn
+		// is all there is, recorded as final.
+		keepUsage(m.Attempts >= n.cfg.Limits.MaxAttempts, m.LeaseID)
+		if _, err := n.st.Release(n.ctx, m.ID, m.LeaseID, f.Code, f.Message, n.cfg.Limits.MaxAttempts); err != nil && !errors.Is(err, store.ErrLeaseLost) {
 			n.log.Warn("release", "id", m.ID, "err", err)
-		}
-		if err == nil && st.Final() {
-			keepUsage() // its attempts are spent: what was read of the turn is all there is
 		}
 		n.notify()
 	}
@@ -1206,15 +1206,15 @@ func (a *sandboxAgent) handle(m store.Message) {
 	}
 	t.mu.Unlock()
 	t.stream.close()
-	// The usage is recorded with the attempt's outcome, not before it: an attempt that is retried
-	// (its replay broke off after part of the turn's usage) leaves it to the next, which reads the
-	// whole turn again under the same usage id; the store keeps the first record of an id. An
-	// attempt that lost its lease (or a node stopping) records nothing either.
-	keepUsage = sync.OnceFunc(func() {
+	// The usage goes with the attempt's outcome, ahead of it: a retried attempt (its replay broke
+	// off after part of the turn's usage) keeps what it read, which the next one's fuller reading of
+	// the same turn replaces; the final one adds the usage's event. An attempt that lost its lease
+	// (or a node stopping) records nothing.
+	keepUsage = func(final bool, lease string) {
 		if n.ctx.Err() == nil && !tl.lost.Load() {
-			a.recordUsage(m.ID, t)
+			a.recordUsage(m.ID, lease, t, final)
 		}
-	})
+	}
 	reply := t.reply(a.cfg.Reply)
 
 	if err != nil || timedOut {
@@ -1227,7 +1227,7 @@ func (a *sandboxAgent) handle(m store.Message) {
 		switch {
 		case n.ctx.Err() != nil || tl.lost.Load():
 		case tl.cancelled.Load():
-			keepUsage() // the canceller ends the message: what the turn used is counted
+			keepUsage(true, "") // the canceller ended the message (no lease): what the turn used is counted
 		case timedOut:
 			complete(store.Failed, reply, failf("turn_timeout", "the turn ran past %s (turn_timeout); the sandbox's run was cancelled", a.cfg.TurnTimeout.D()))
 		default:
@@ -1242,7 +1242,8 @@ func (a *sandboxAgent) handle(m store.Message) {
 	complete(store.Failed, reply, failf("agent_stopped", "the sandbox's agent stopped: %s", end.reason))
 }
 
-func (a *sandboxAgent) recordUsage(msgID string, t *sandboxTurn) {
+// recordUsage records a turn's usage under an attempt's lease ("": none), final with its event.
+func (a *sandboxAgent) recordUsage(msgID, lease string, t *sandboxTurn, final bool) {
 	t.mu.Lock()
 	u, used := t.usage, t.used
 	t.mu.Unlock()
@@ -1261,8 +1262,14 @@ func (a *sandboxAgent) recordUsage(msgID string, t *sandboxTurn) {
 		u.Model = a.cfg.Model
 	}
 	u.Total = u.Input + u.Output + u.CacheRead + u.CacheWrite
-	if err := n.addEvent(n.ctx, msgID, "usage", eventJSON(u), false); err != nil && n.ctx.Err() == nil {
-		n.log.Debug("usage", "err", err)
+	if err := n.st.PutUsage(n.ctx, msgID, lease, eventJSON(u), final); err != nil {
+		if n.ctx.Err() == nil {
+			n.log.Debug("usage", "err", err)
+		}
+		return
+	}
+	if final {
+		n.eventsAdded()
 	}
 }
 

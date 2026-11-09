@@ -549,7 +549,18 @@ func (a *fakeAgent) SetSessionConfigOption(ctx context.Context, p acp.SetSession
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("a value")
 	}
 	if ms, _ := strconv.Atoi(os.Getenv("FAKE_SLOW_SET")); ms > 0 { // a slow session setup
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		// FAKE_SLOW_ONCE: only the first setting of all the processes is slow (it marks the file).
+		slow := true
+		if mark := os.Getenv("FAKE_SLOW_ONCE"); mark != "" {
+			f, err := os.OpenFile(mark, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			slow = err == nil
+			if slow {
+				f.Close()
+			}
+		}
+		if slow {
+			time.Sleep(time.Duration(ms) * time.Millisecond) // and then applied, however late
+		}
 	}
 	if v.ConfigId == "mode" && os.Getenv("FAKE_MODES") == "broken" {
 		return acp.SetSessionConfigOptionResponse{}, acp.NewInternalError(map[string]any{"why": "no modes today"})

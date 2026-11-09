@@ -82,6 +82,9 @@ type acpSlot struct {
 	// slot's process, to open a session it holds, only between its turns (freeSession).
 	turn    sync.Mutex
 	freeing atomic.Bool // waiting in freeSession for another slot's turn to end
+	// cur is the message of the turn the slot runs (nil between turns): another slot that waits for
+	// this one's turn to end sees whether that turn is waiting for it (its message's sender).
+	cur atomic.Pointer[store.Message]
 }
 
 type acpProc struct {
@@ -542,6 +545,11 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 		want string
 	}{{acpx.ModeSetting, a.cfg.Mode}, {acpx.ModelSetting, a.cfg.Model}, {acpx.ThoughtLevelSetting, a.cfg.ThoughtLevel}} {
 		next, err := acpx.Configure(ctx, p.conn, sid, st, set.s, set.want)
+		if err != nil && ctx.Err() != nil {
+			// The attempt's time ran out (or it was cancelled) in the call: the agent may still apply
+			// the setting, and this process's idea of the session would be behind it.
+			return "", fmt.Errorf("configure the session (%s): %w", set.s.Name, err)
+		}
 		if err != nil {
 			n.log.Warn("configure session", "agent", a.name, "setting", set.s.Name, "err", err)
 			continue
@@ -564,8 +572,14 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 // its turns, and the session is opened again.
 func (s *acpSlot) openFreed(ctx context.Context, p *acpProc, id acp.SessionId, cwd string) (acpx.SessionState, error) {
 	st, err := s.openSession(ctx, p, id, cwd)
-	if err != nil && explainACP(err, "", true).Code == "session_busy" && s.freeSession(ctx, string(id)) {
-		st, err = s.openSession(ctx, p, id, cwd)
+	if err != nil && explainACP(err, "", true).Code == "session_busy" {
+		freed, ferr := s.freeSession(ctx, string(id))
+		if ferr != nil {
+			return st, ferr
+		}
+		if freed {
+			st, err = s.openSession(ctx, p, id, cwd)
+		}
 	}
 	return st, err
 }
@@ -573,28 +587,53 @@ func (s *acpSlot) openFreed(ctx context.Context, p *acpProc, id acp.SessionId, c
 // freeSession stops the process of the slot that last ran a session, once that slot is between
 // turns, so another process can open the session. It says whether it did. Two slots each waiting
 // for the other: the higher one gives up (its message is retried).
-func (s *acpSlot) freeSession(ctx context.Context, sid string) bool {
+func (s *acpSlot) freeSession(ctx context.Context, sid string) (bool, error) {
 	o := s.a.ownerOf(sid)
 	if s.idx < 0 || o < 0 || o == s.idx || o >= len(s.a.slots) {
-		return false
+		return false, nil
 	}
 	other := s.a.slots[o]
+	senders := s.senders(ctx)
 	s.freeing.Store(true)
 	defer s.freeing.Store(false)
 	for !other.turn.TryLock() {
 		if other.freeing.Load() && other.idx < s.idx {
-			return false
+			return false, nil
+		}
+		// The turn holding the session is this message's sender (or its sender's), waiting for the
+		// answer: it never ends first. Said at once, not after the sender's time runs out.
+		if c := other.cur.Load(); c != nil && senders[c.ID] {
+			return false, failf("refused", "the session %s is open in the agent's process of the turn that sent this message (%s), which waits for this answer; send it with a --task whose session that turn has not opened", sid, c.ID)
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return false, nil
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
 	defer other.turn.Unlock()
 	s.a.n.log.Info("stopping a slot's process: another slot opens its session", "agent", s.a.name, "slot", o, "session", sid)
 	other.stopProc()
-	return true
+	return true, nil
+}
+
+// senders are the messages the slot's current message was sent from: its parent, the parent's, and
+// so on (a few levels, read from the store).
+func (s *acpSlot) senders(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	m := s.cur.Load()
+	if m == nil {
+		return out
+	}
+	for id := m.Parent; id != "" && !out[id] && len(out) < 16; {
+		out[id] = true
+		p, err := s.a.n.st.Get(ctx, id)
+		if err != nil {
+			break
+		}
+		id = p.Parent
+	}
+	return out
 }
 
 // explainStart says why an agent process did not start.
@@ -700,6 +739,9 @@ func (s *acpSlot) handle(m store.Message) {
 	}
 	s.turn.Lock()
 	defer s.turn.Unlock()
+	cur := m
+	s.cur.Store(&cur)
+	defer s.cur.Store(nil)
 	n.setCurrent(s.token, m.ID, m.LeaseID)
 	defer n.setCurrent(s.token, "", "")
 
@@ -778,6 +820,11 @@ func (s *acpSlot) handle(m store.Message) {
 		endCall()
 		switch {
 		case n.ctx.Err() != nil || cancelled.Load() || lost.Load():
+			if agent && turnCtx.Err() != nil && !stuck.Load() {
+				// A call to the agent cut short may still land (a setting applied late): the process
+				// goes, before the session's locks do.
+				s.dropProc(p)
+			}
 		case pastDeadline():
 			if agent && !stuck.Load() {
 				s.dropProc(p) // the call it did not answer in time may still hold the session
@@ -1365,7 +1412,7 @@ func openFailure(err error, key string) (Failure, bool) {
 	named := strings.HasPrefix(key, "session:")
 	f := explainACP(err, "open the session", named)
 	switch f.Code {
-	case "session_not_found", "agent_auth", "unsupported":
+	case "session_not_found", "agent_auth", "unsupported", "refused":
 		return f, true
 	}
 	return f, named
