@@ -29,5 +29,7 @@ are the extension's `configurationDefaults` (the user's own win), the few applic
 written by `ide/page/seed.js`. Its generated files are committed; after changing the tokens or the
 icon map: `cd ide && npm install && npm run build`. VS Code keeps its state in the page, by its
 address `127.0.0.1:47823`: a server left by an app that crashed is ended by the next start (the
-running app holds `serve-web.lock` beside it); when another running acpost, or anything else,
-holds the port, VS Code starts on another one, without that state.
+running app holds `serve-web.lock` beside it; `serve-web.pid` records the server's process, boot
+and start time, and nothing it does not prove is signalled). A second acpost running beside the
+first gets no IDE of its own (it would share the first's folders): its IDE view says so. When
+something else holds the port, VS Code starts on another one, without that state.

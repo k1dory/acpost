@@ -1,0 +1,377 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func readRecord(t *testing.T, data string) ideRecord {
+	t.Helper()
+	var rec ideRecord
+	b, err := os.ReadFile(filepath.Join(data, idePidFile))
+	if err == nil {
+		err = json.Unmarshal(b, &rec)
+	}
+	if err != nil {
+		t.Fatalf("pid file: %v (%q)", err, b)
+	}
+	return rec
+}
+
+// Round 2, 3: the server is recorded (pid, boot, start time) whole, or the start fails and its
+// group is ended: a server no record names could not be found again after a crash.
+func TestIDERecordWrittenOrStartFails(t *testing.T) {
+	t.Run("written", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		rec := readRecord(t, f.data)
+		run := f.current()
+		if _, start, ok := ideProc(run.cmd.Process.Pid); rec.Pid != run.cmd.Process.Pid || rec.Boot != ideBoot() || !ok || rec.Start != start {
+			t.Fatalf("record %+v, server %d started %d", rec, run.cmd.Process.Pid, start)
+		}
+		if m, _ := filepath.Glob(filepath.Join(f.data, ".serve-web.pid-*")); len(m) != 0 {
+			t.Fatalf("temporary files left: %v", m)
+		}
+	})
+	t.Run("not writable", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		// The pid file's name taken by a folder: the record cannot be put there.
+		if err := os.Mkdir(filepath.Join(f.data, idePidFile), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_, err := f.open("")
+		if err == nil || !strings.Contains(err.Error(), "not recorded") {
+			t.Fatalf("a start without its record: %v", err)
+		}
+		run := f.current()
+		if run == nil || !waitClosed(run.done, 3*time.Second) {
+			t.Fatal("the unrecorded server still runs")
+		}
+		if m, _ := filepath.Glob(filepath.Join(f.data, ".serve-web.pid-*")); len(m) != 0 {
+			t.Fatalf("temporary files left: %v", m)
+		}
+	})
+}
+
+func writeRecord(t *testing.T, data string, rec ideRecord) {
+	t.Helper()
+	b, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(data, idePidFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Round 2, 1: nothing is signalled on a record that does not prove the group is this app's server:
+// a number taken again by a group whose leader has gone (its processes not VS Code's of this
+// folder), a live server whose start time is not the recorded one, a record of another boot.
+func TestIDEOrphanOwnershipProven(t *testing.T) {
+	t.Run("leaderless foreign group", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		// A group of this test's: its leader ends at once, a process of it stays.
+		sh := exec.Command("/bin/sh", "-c", "sleep 30 & exit 0")
+		sh.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := sh.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pg := sh.Process.Pid
+		t.Cleanup(func() { syscall.Kill(-pg, syscall.SIGKILL) })
+		sh.Wait()
+		if groupGone(pg, 0) {
+			t.Fatal("the group under test is gone")
+		}
+		writeRecord(t, f.data, ideRecord{Pid: pg, Boot: ideBoot(), Start: 1704067200})
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		if groupGone(pg, 300*time.Millisecond) {
+			t.Fatal("a group not this app's was ended as its orphan")
+		}
+	})
+	for _, c := range []struct {
+		name string
+		edit func(*ideRecord)
+	}{
+		{"another start time", func(r *ideRecord) { r.Start = 1704067200 }},
+		{"another boot", func(r *ideRecord) { r.Boot = "00000000-0000-0000-0000-000000000000" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeIDE(t, "serve")
+			if _, err := f.open(""); err != nil {
+				t.Fatal(err)
+			}
+			other := f.current()
+			f.disown()
+			rec := readRecord(t, f.data)
+			c.edit(&rec)
+			writeRecord(t, f.data, rec)
+			g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+			t.Cleanup(g.stop)
+			if _, err := g.open(""); err != nil {
+				t.Fatal(err)
+			}
+			if waitClosed(other.done, 300*time.Millisecond) {
+				t.Fatal("a server the record does not prove was ended")
+			}
+		})
+	}
+	// The proven cases still end it: covered by TestIDEOrphanEndedSamePort (leader there) and
+	// TestIDEStuckGroupRefusesStart (leaderless).
+}
+
+// Round 2, 6: the IDE's port free when looked at and taken before the server listens (another
+// program starting at the same moment): the start goes on, on a port the server picks.
+func TestIDEPortTakenAsItStarts(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	var thief net.Listener
+	f.ideServer.starts = func(port int) {
+		if port == f.port && thief == nil {
+			thief, _ = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+		}
+	}
+	t.Cleanup(func() {
+		if thief != nil {
+			thief.Close()
+		}
+	})
+	base, err := f.open("")
+	if err != nil {
+		t.Fatalf("a start whose port was taken as it started: %v", err)
+	}
+	if thief == nil {
+		t.Fatal("the port was not taken: nothing under test")
+	}
+	if p := portOf(t, base); p == f.port || p == 0 {
+		t.Fatalf("port %d", p)
+	}
+	if n := f.starts(); n != 2 {
+		t.Fatalf("the CLI ran %d times", n)
+	}
+}
+
+// Round 2, 4: a server that ends while the app's look is installed (it served, then its CLI
+// ended) is not given as started: the install is cut short and the start fails.
+func TestIDEServerEndsDuringInstall(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	cut := make(chan bool, 1)
+	f.install = func(ctx context.Context, data string) error {
+		http.Get("http://127.0.0.1:" + strconv.Itoa(f.port) + "/exit")
+		select {
+		case <-ctx.Done():
+			cut <- true
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			cut <- false
+			return nil
+		}
+	}
+	_, err := f.open("")
+	if err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("a start whose server ended during the install: %v", err)
+	}
+	if !<-cut {
+		t.Error("the install was not cut short by the server's end")
+	}
+	if run := f.current(); run == nil || !closed(run.done) {
+		t.Fatal("its group is not ended")
+	}
+}
+
+// Round 2, 5: stop lets the IDE folder go only once the installers have ended: a repeat install
+// still running (its server already gone) is cut short and waited for first.
+func TestIDEStopWaitsForInstall(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	var calls atomic.Int32
+	var ended atomic.Bool
+	started := make(chan struct{})
+	f.install = func(ctx context.Context, data string) error {
+		if calls.Add(1) == 1 {
+			return errors.New("first install failed")
+		}
+		close(started)
+		<-ctx.Done()
+		time.Sleep(400 * time.Millisecond) // VS Code's installer ending after its cancel
+		ended.Store(true)
+		return ctx.Err()
+	}
+	if _, err := f.open(""); err != nil {
+		t.Fatal(err)
+	}
+	f.open("") // the repeat install, beside the server
+	if !waitClosed(started, 3*time.Second) {
+		t.Fatal("the repeat install did not start")
+	}
+	run := f.current()
+	http.Get("http://127.0.0.1:" + strconv.Itoa(f.port) + "/exit")
+	if !waitClosed(run.done, 4*time.Second) {
+		t.Fatal("the server did not end")
+	}
+	f.stop()
+	if !ended.Load() {
+		t.Fatal("stop let the folder go while an installer was still in it")
+	}
+	f.mu.Lock()
+	owner := f.owner
+	f.mu.Unlock()
+	if owner != nil {
+		t.Fatal("the lock is still held after stop")
+	}
+}
+
+// Round 2 review, 1: a record of the app's earlier versions (a bare number). Its server, left by
+// a crash, is ended and the start takes its port (VS Code's state is the port's); a live group that
+// is not provably its server is not signalled and no start is made beside it, the record kept; a
+// gone group's record is dropped.
+func TestIDELegacyRecord(t *testing.T) {
+	t.Run("its server", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		old := f.current()
+		f.disown() // the earlier app crashed
+		os.WriteFile(filepath.Join(f.data, idePidFile), []byte(strconv.Itoa(old.cmd.Process.Pid)), 0o600)
+		g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+		t.Cleanup(g.stop)
+		base, err := g.open("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !waitClosed(old.done, 3*time.Second) {
+			t.Fatal("the earlier app's server still runs")
+		}
+		if portOf(t, base) != f.port {
+			t.Fatalf("port %d, want %d", portOf(t, base), f.port)
+		}
+	})
+	t.Run("a foreign live group", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		sh := exec.Command("/bin/sh", "-c", "sleep 30; :")
+		sh.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := sh.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pg := sh.Process.Pid
+		t.Cleanup(func() { syscall.Kill(-pg, syscall.SIGKILL); sh.Wait() })
+		rec := []byte(strconv.Itoa(pg))
+		os.WriteFile(filepath.Join(f.data, idePidFile), rec, 0o600)
+		_, err := f.open("")
+		if err == nil || !strings.Contains(err.Error(), idePidFile) {
+			t.Fatalf("a start beside a group not provably the server: %v", err)
+		}
+		if f.starts() != 0 {
+			t.Fatalf("the CLI ran %d times", f.starts())
+		}
+		if groupGone(pg, 300*time.Millisecond) {
+			t.Fatal("the foreign group was signalled")
+		}
+		if b, _ := os.ReadFile(filepath.Join(f.data, idePidFile)); string(b) != string(rec) {
+			t.Fatalf("record %q, was %q", b, rec)
+		}
+	})
+	t.Run("gone", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		c := exec.Command("/usr/bin/true")
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := c.Run(); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(f.data, idePidFile), []byte(strconv.Itoa(c.Process.Pid)), 0o600)
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		if rec := readRecord(t, f.data); rec.Pid != f.current().cmd.Process.Pid {
+			t.Fatalf("record %+v", rec)
+		}
+	})
+}
+
+// Round 2 review, 2: the retry on another port passes the same gate as every start: with the
+// first attempt's group not ended, no second server starts beside it, its record untouched.
+func TestIDEPortRetryWaitsForGroup(t *testing.T) {
+	old := ideTermWait
+	ideTermWait = 100 * time.Millisecond
+	f := newFakeIDE(t, "serve")
+	defer func() {
+		// The stuck group let go, and its wait (which reads ideTermWait) over, before the reset.
+		ideStuckGroup.Store(0)
+		if r := f.current(); r != nil && !waitClosed(r.done, 10*time.Second) {
+			t.Error("the first attempt's group did not end")
+		}
+		ideTermWait = old
+	}()
+	var thief net.Listener
+	f.ideServer.starts = func(port int) {
+		if port == f.port && thief == nil {
+			thief, _ = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+			// The first attempt's group, once published (under the lock this is called in): stuck.
+			go func() {
+				f.mu.Lock()
+				r := f.run
+				f.mu.Unlock()
+				ideStuckGroup.Store(int64(r.cmd.Process.Pid))
+			}()
+		}
+	}
+	t.Cleanup(func() {
+		if thief != nil {
+			thief.Close()
+		}
+	})
+	_, err := f.open("")
+	if err == nil || !strings.Contains(err.Error(), "has not ended") {
+		t.Fatalf("a retry beside a group not ended: %v", err)
+	}
+	if n := f.starts(); n != 1 {
+		t.Fatalf("the CLI ran %d times", n)
+	}
+	first := f.current()
+	if rec := readRecord(t, f.data); rec.Pid != first.cmd.Process.Pid {
+		t.Fatalf("record %+v, first attempt %d", rec, first.cmd.Process.Pid)
+	}
+}
+
+// Round 2 review 2: the record's start time is the same in every time zone: a server recorded
+// under one is proven the app's under another (the Mac's zone changed, or the app's TZ), ended as
+// its orphan, and the start keeps its port. A zone with summer time and one without, both ways.
+func TestIDERecordAcrossTimeZones(t *testing.T) {
+	for _, z := range [][2]string{{"UTC", "Europe/Moscow"}, {"America/New_York", "Australia/Lord_Howe"}, {"Europe/Moscow", "UTC"}} {
+		t.Run(z[0]+" to "+z[1], func(t *testing.T) {
+			t.Setenv("TZ", z[0])
+			f := newFakeIDE(t, "serve")
+			if _, err := f.open(""); err != nil {
+				t.Fatal(err)
+			}
+			orphan := f.current()
+			f.disown() // the app crashed
+			t.Setenv("TZ", z[1])
+			g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+			t.Cleanup(g.stop)
+			base, err := g.open("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !waitClosed(orphan.done, 3*time.Second) {
+				t.Fatal("the server recorded in another time zone still runs")
+			}
+			if portOf(t, base) != f.port {
+				t.Fatalf("port %d, want %d", portOf(t, base), f.port)
+			}
+		})
+	}
+}
