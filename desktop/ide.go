@@ -209,15 +209,8 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	// The server before this one ends first: the two would share VS Code's folders and port.
-	s.mu.Lock()
-	prev := s.run
-	s.mu.Unlock()
-	if prev != nil {
-		prev.kill()
-		if !closed(prev.done) {
-			return "", nil, fmt.Errorf("VS Code's previous server (process group %d) has not ended: not starting another beside it", prev.cmd.Process.Pid)
-		}
+	if err := s.prevEnded(); err != nil {
+		return "", nil, err
 	}
 	port, err := s.choosePort(data)
 	if err != nil {
@@ -236,12 +229,32 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	}
 }
 
+// prevEnded ends the server before this one and says whether it is gone: the two would share
+// VS Code's folders, port and record, so none starts beside a group that has not ended.
+func (s *ideServer) prevEnded() error {
+	s.mu.Lock()
+	prev := s.run
+	s.mu.Unlock()
+	if prev == nil {
+		return nil
+	}
+	prev.kill()
+	if !closed(prev.done) {
+		return fmt.Errorf("VS Code's previous server (process group %d) has not ended: not starting another beside it", prev.cmd.Process.Pid)
+	}
+	return nil
+}
+
 // errIDEPortLost: the server ended as it started, its port taken by another.
 var errIDEPortLost = errors.New("VS Code's port was taken as it started")
 
 // serveOn runs the server on port (0: one it picks) and waits for it to serve VS Code, its end, or
 // ctx; what it started is ended when it fails.
 func (s *ideServer) serveOn(ctx context.Context, cli, data string, port int) (string, *ideRun, error) {
+	// Every start passes here (the first, a retry on another port, a restart).
+	if err := s.prevEnded(); err != nil {
+		return "", nil, err
+	}
 	token, tokFile, err := ideTokenFile()
 	if err != nil {
 		return "", nil, err
@@ -720,7 +733,12 @@ func (s *ideServer) choosePort(data string) (int, error) {
 		s.stuck = 0
 	}
 	if s.stuck == 0 {
-		if pid := ideOrphan(data); pid > 0 && !endGroup(pid) {
+		pid, err := ideOrphan(data)
+		if err != nil {
+			s.claim.Unlock()
+			return 0, err
+		}
+		if pid > 0 && !endGroup(pid) {
 			s.stuck = pid
 		}
 	}
@@ -754,35 +772,50 @@ func portFree(port int) bool {
 // server folder; or the leader is gone and every process left in its group is VS Code's of this
 // folder (a group's id is not taken again while it has a process, but the number may have been
 // taken again since the server ended: by a group whose leader has gone too).
-func ideOrphan(data string) int {
-	b, err := os.ReadFile(filepath.Join(data, idePidFile))
+// A record of the app's earlier versions is a bare number: its group, when there, is taken as the
+// server's by the same test as a leaderless one; one that does not pass it is not signalled, and
+// no start is made beside it (its server may be the earlier app's, on these folders), its record
+// kept: the error says so.
+func ideOrphan(data string) (int, error) {
+	name := filepath.Join(data, idePidFile)
+	b, err := os.ReadFile(name)
 	if err != nil {
-		return 0
+		return 0, nil
+	}
+	if old, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+		switch {
+		case old <= 1 || groupGone(old, 0):
+			os.Remove(name) // its server is gone
+			return 0, nil
+		case ideGroupOf(old, data):
+			return old, nil
+		}
+		return 0, fmt.Errorf("%s names process group %d, which runs and is not provably VS Code's server of this folder: not starting another beside it (remove the file if that group is not VS Code's)", name, old)
 	}
 	var rec ideRecord
 	if json.Unmarshal(b, &rec) != nil || rec.Pid <= 1 || rec.Start == "" || rec.Boot == "" || rec.Boot != ideBoot() {
-		return 0
+		return 0, nil
 	}
 	pid := rec.Pid
 	g, start, ok := ideProc(pid)
 	if !ok {
 		if ideGroupOf(pid, data) {
-			return pid
+			return pid, nil
 		}
-		return 0
+		return 0, nil
 	}
 	if g != pid || start != rec.Start {
-		return 0
+		return 0, nil
 	}
 	cmdline, err := idePS("-ww", "-o", "command=", "-p", strconv.Itoa(pid))
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 	c := string(cmdline)
 	if !strings.Contains(c, " serve-web ") || !strings.Contains(c, "--server-data-dir "+filepath.Join(data, "server")) {
-		return 0
+		return 0, nil
 	}
-	return pid
+	return pid, nil
 }
 
 // ideMembers gives the command lines of the processes in group pg (for tests: a group made up).

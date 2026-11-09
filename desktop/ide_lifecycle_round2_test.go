@@ -232,3 +232,109 @@ func TestIDEStopWaitsForInstall(t *testing.T) {
 		t.Fatal("the lock is still held after stop")
 	}
 }
+
+// Round 2 review, 1: a record of the app's earlier versions (a bare number). Its server, left by
+// a crash, is ended and the start takes its port (VS Code's state is the port's); a live group that
+// is not provably its server is not signalled and no start is made beside it, the record kept; a
+// gone group's record is dropped.
+func TestIDELegacyRecord(t *testing.T) {
+	t.Run("its server", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		old := f.current()
+		f.disown() // the earlier app crashed
+		os.WriteFile(filepath.Join(f.data, idePidFile), []byte(strconv.Itoa(old.cmd.Process.Pid)), 0o600)
+		g := &ideServer{findCLI: f.findCLI, dataDir: f.dataDir, install: f.install, port: f.port, budget: f.budget}
+		t.Cleanup(g.stop)
+		base, err := g.open("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !waitClosed(old.done, 3*time.Second) {
+			t.Fatal("the earlier app's server still runs")
+		}
+		if portOf(t, base) != f.port {
+			t.Fatalf("port %d, want %d", portOf(t, base), f.port)
+		}
+	})
+	t.Run("a foreign live group", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		sh := exec.Command("/bin/sh", "-c", "sleep 30; :")
+		sh.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := sh.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pg := sh.Process.Pid
+		t.Cleanup(func() { syscall.Kill(-pg, syscall.SIGKILL); sh.Wait() })
+		rec := []byte(strconv.Itoa(pg))
+		os.WriteFile(filepath.Join(f.data, idePidFile), rec, 0o600)
+		_, err := f.open("")
+		if err == nil || !strings.Contains(err.Error(), idePidFile) {
+			t.Fatalf("a start beside a group not provably the server: %v", err)
+		}
+		if f.starts() != 0 {
+			t.Fatalf("the CLI ran %d times", f.starts())
+		}
+		if groupGone(pg, 300*time.Millisecond) {
+			t.Fatal("the foreign group was signalled")
+		}
+		if b, _ := os.ReadFile(filepath.Join(f.data, idePidFile)); string(b) != string(rec) {
+			t.Fatalf("record %q, was %q", b, rec)
+		}
+	})
+	t.Run("gone", func(t *testing.T) {
+		f := newFakeIDE(t, "serve")
+		c := exec.Command("/usr/bin/true")
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := c.Run(); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(f.data, idePidFile), []byte(strconv.Itoa(c.Process.Pid)), 0o600)
+		if _, err := f.open(""); err != nil {
+			t.Fatal(err)
+		}
+		if rec := readRecord(t, f.data); rec.Pid != f.current().cmd.Process.Pid {
+			t.Fatalf("record %+v", rec)
+		}
+	})
+}
+
+// Round 2 review, 2: the retry on another port passes the same gate as every start: with the
+// first attempt's group not ended, no second server starts beside it, its record untouched.
+func TestIDEPortRetryWaitsForGroup(t *testing.T) {
+	old := ideTermWait
+	ideTermWait = 100 * time.Millisecond
+	defer func() { ideTermWait = old; ideStuckGroup.Store(0) }()
+	f := newFakeIDE(t, "serve")
+	var thief net.Listener
+	f.ideServer.starts = func(port int) {
+		if port == f.port && thief == nil {
+			thief, _ = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+			// The first attempt's group, once published (under the lock this is called in): stuck.
+			go func() {
+				f.mu.Lock()
+				r := f.run
+				f.mu.Unlock()
+				ideStuckGroup.Store(int64(r.cmd.Process.Pid))
+			}()
+		}
+	}
+	t.Cleanup(func() {
+		if thief != nil {
+			thief.Close()
+		}
+	})
+	_, err := f.open("")
+	if err == nil || !strings.Contains(err.Error(), "has not ended") {
+		t.Fatalf("a retry beside a group not ended: %v", err)
+	}
+	if n := f.starts(); n != 1 {
+		t.Fatalf("the CLI ran %d times", n)
+	}
+	first := f.current()
+	if rec := readRecord(t, f.data); rec.Pid != first.cmd.Process.Pid {
+		t.Fatalf("record %+v, first attempt %d", rec, first.cmd.Process.Pid)
+	}
+}
