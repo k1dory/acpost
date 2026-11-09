@@ -4,9 +4,11 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -126,4 +128,34 @@ func TestIDEOrphanOwnershipProven(t *testing.T) {
 	}
 	// The proven cases still end it: covered by TestIDEOrphanEndedSamePort (leader there) and
 	// TestIDEStuckGroupRefusesStart (leaderless).
+}
+
+// Round 2, 6: the IDE's port free when looked at and taken before the server listens (another
+// program starting at the same moment): the start goes on, on a port the server picks.
+func TestIDEPortTakenAsItStarts(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	var thief net.Listener
+	f.ideServer.starts = func(port int) {
+		if port == f.port && thief == nil {
+			thief, _ = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+		}
+	}
+	t.Cleanup(func() {
+		if thief != nil {
+			thief.Close()
+		}
+	})
+	base, err := f.open("")
+	if err != nil {
+		t.Fatalf("a start whose port was taken as it started: %v", err)
+	}
+	if thief == nil {
+		t.Fatal("the port was not taken: nothing under test")
+	}
+	if p := portOf(t, base); p == f.port || p == 0 {
+		t.Fatalf("port %d", p)
+	}
+	if n := f.starts(); n != 2 {
+		t.Fatalf("the CLI ran %d times", n)
+	}
 }

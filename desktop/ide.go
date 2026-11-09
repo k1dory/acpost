@@ -220,6 +220,25 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	for {
+		base, run, err := s.serveOn(ctx, cli, data, port)
+		// The port was free when looked at and taken before the server listened (another program
+		// starting at the same moment): the server picks a free one itself, within the same deadline.
+		if errors.Is(err, errIDEPortLost) && port != 0 && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "acpost: IDE: port %d was taken as VS Code started; it starts on another, without its settings and state\n", port)
+			port = 0
+			continue
+		}
+		return base, run, err
+	}
+}
+
+// errIDEPortLost: the server ended as it started, its port taken by another.
+var errIDEPortLost = errors.New("VS Code's port was taken as it started")
+
+// serveOn runs the server on port (0: one it picks) and waits for it to serve VS Code, its end, or
+// ctx; what it started is ended when it fails.
+func (s *ideServer) serveOn(ctx context.Context, cli, data string, port int) (string, *ideRun, error) {
 	token, tokFile, err := ideTokenFile()
 	if err != nil {
 		return "", nil, err
@@ -287,6 +306,9 @@ func (s *ideServer) launch(ctx context.Context) (string, *ideRun, error) {
 		return base, run, nil
 	case <-run.exited:
 		run.kill() // its group: ended, waited for
+		if port != 0 && !portFree(port) {
+			return "", nil, errIDEPortLost
+		}
 		return "", nil, out.with(errors.New("VS Code's server stopped as it started"))
 	case <-ctx.Done():
 		return fail(out.with(s.why(ctx, ctx.Err())))
