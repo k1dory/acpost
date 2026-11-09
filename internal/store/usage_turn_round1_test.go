@@ -69,3 +69,129 @@ func TestFinalUsageEventIsTheCountedReading(t *testing.T) {
 		t.Fatalf("the receiving node counts %+v %v, want 150", sums, err)
 	}
 }
+
+// Whatever makes a message final publishes the usage an attempt counted without an event (it was
+// retried): in the same write, so a cancel between attempts, an expiry, a reaped or interrupted last
+// attempt or a hub's outcome does not leave it to this node alone.
+func TestEveryFinalizerPublishesCountedUsage(t *testing.T) {
+	ctx := context.Background()
+	usage := func() string {
+		b, _ := json.Marshal(Usage{Turn: "sbu_" + NewID(), Agent: "agent:x@n", Model: "m", Reported: true, Input: 100, Total: 100})
+		return string(b)
+	}
+	// running: a message claimed, its attempt's usage counted without an event; queued: then released.
+	running := func(t *testing.T, s *Store, m *Message) Message {
+		if _, _, err := s.Insert(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		c, ok, err := s.Claim(ctx, "agent:x", time.Minute)
+		if err != nil || !ok {
+			t.Fatal(ok, err)
+		}
+		if err := s.PutUsage(ctx, c.ID, c.LeaseID, usage(), false); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	queued := func(t *testing.T, s *Store, m *Message) Message {
+		c := running(t, s, m)
+		if st, err := s.Release(ctx, c.ID, c.LeaseID, "agent_unavailable", "broke", 5); err != nil || st != Queued {
+			t.Fatal(st, err)
+		}
+		return c
+	}
+	for _, tc := range []struct {
+		name string
+		end  func(t *testing.T, s *Store) string
+	}{
+		{"complete", func(t *testing.T, s *Store) string {
+			c := running(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
+			return c.ID + must(t, s.Complete(ctx, c.ID, c.LeaseID, Done, "ok", "", ""))
+		}},
+		{"last release", func(t *testing.T, s *Store) string {
+			c := running(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
+			st, err := s.Release(ctx, c.ID, c.LeaseID, "agent_unavailable", "broke", 1)
+			if st != Failed {
+				t.Fatalf("release: %s", st)
+			}
+			return c.ID + must(t, err)
+		}},
+		{"cancel running", func(t *testing.T, s *Store) string {
+			c := running(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
+			_, err := s.Cancel(ctx, c.ID)
+			return c.ID + must(t, err)
+		}},
+		{"cancel between attempts", func(t *testing.T, s *Store) string {
+			c := queued(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
+			_, err := s.Cancel(ctx, c.ID)
+			return c.ID + must(t, err)
+		}},
+		{"expire between attempts", func(t *testing.T, s *Store) string {
+			c := queued(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi", ExpiresAt: time.Now().Add(time.Hour)})
+			if n, err := s.Expire(ctx, time.Now().Add(2*time.Hour)); err != nil || n != 1 {
+				t.Fatal(n, err)
+			}
+			return c.ID
+		}},
+		{"reaped last attempt", func(t *testing.T, s *Store) string {
+			c := running(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
+			if n, err := s.ReapLeases(ctx, time.Now().Add(2*time.Minute), 1); err != nil || n != 1 {
+				t.Fatal(n, err)
+			}
+			return c.ID
+		}},
+		{"interrupted last attempt", func(t *testing.T, s *Store) string {
+			c := running(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
+			if n, err := s.RequeueRunning(ctx, []string{"agent:x"}, 1); err != nil || n != 1 {
+				t.Fatal(n, err)
+			}
+			return c.ID
+		}},
+		{"settled", func(t *testing.T, s *Store) string {
+			c := running(t, s, &Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi"})
+			return c.ID + must(t, s.Settle(ctx, c.ID, Done, "ok", "", "", 1))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Open("memory:", Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			id := tc.end(t, s)
+			if m, err := s.Get(ctx, id); err != nil || !m.State.Final() {
+				t.Fatalf("not final: %s %v", m.State, err)
+			}
+			evs, err := s.Events(ctx, id, 0, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []Usage
+			for _, e := range evs {
+				if e.Kind == "usage" {
+					u, ok := readUsage(e.Data)
+					if !ok {
+						t.Fatalf("unreadable usage event %s", e.Data)
+					}
+					got = append(got, u)
+				}
+			}
+			if len(got) != 1 || got[0].Input != 100 || !got[0].Reported || got[0].Agent != "agent:x@n" {
+				t.Fatalf("usage events %+v: want one of 100 input tokens", got)
+			}
+			// The message's count of events took the new one: the next event gets a number of its own.
+			if err := s.AddEvent(ctx, id, "notice", `{"text":"after"}`); err != nil {
+				t.Fatalf("an event after the usage: %v", err)
+			}
+		})
+	}
+}
+
+// must is "" when err is nil (and fails the test otherwise).
+func must(t *testing.T, err error) string {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ""
+}

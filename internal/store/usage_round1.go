@@ -143,3 +143,30 @@ func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int,
 	}
 	return nil
 }
+
+// usagePublishSchema makes every move of a message to a final state (complete, the last release,
+// cancel, expire, a reaped or requeued last attempt, a hub's outcome settled) publish, in the same
+// write, the usage of its turns that is counted and has no event yet: an attempt that was retried
+// counts what it read without an event, and whatever ends the message after it (a cancel between
+// attempts, say) must not leave that usage to this node alone. The event is built from the counted
+// row as PublishUsage builds it (Usage's JSON), up to maxUsageEvents usage events a message.
+const usagePublishSchema = `
+CREATE INDEX IF NOT EXISTS turn_usage_msg ON turn_usage (msg);
+CREATE TRIGGER IF NOT EXISTS usage_published_when_final AFTER UPDATE OF state ON messages
+WHEN NEW.state IN ('done', 'failed', 'cancelled', 'expired') AND OLD.state NOT IN ('done', 'failed', 'cancelled', 'expired')
+BEGIN
+	INSERT INTO events (msg, seq, ts, kind, data)
+	SELECT NEW.seq, NEW.events + row_number() OVER (ORDER BY u.ts, u.turn),
+		CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), 'usage',
+		json_object('turn', u.turn, 'at', strftime('%Y-%m-%dT%H:%M:%fZ', u.ts / 1000.0, 'unixepoch'), 'agent', u.agent,
+			'session', u.session, 'model', u.model, 'reported', json(CASE WHEN u.reported THEN 'true' ELSE 'false' END),
+			'input', u.input, 'output', u.output, 'cache_read', u.cache_read, 'cache_write', u.cache_write, 'thought', u.thought,
+			'total', u.total, 'cost', u.cost, 'currency', u.currency, 'context_used', u.context_used, 'context_size', u.context_size)
+	FROM turn_usage u
+	WHERE u.msg = NEW.id
+		AND NOT EXISTS (SELECT 1 FROM events e WHERE e.msg = NEW.seq AND e.kind = 'usage' AND json_extract(e.data, '$.turn') = u.turn)
+		AND (SELECT count(*) FROM events e WHERE e.msg = NEW.seq AND e.kind = 'usage') < 16;
+	UPDATE messages SET events = (SELECT coalesce(max(e.seq), 0) FROM events e WHERE e.msg = NEW.seq)
+	WHERE seq = NEW.seq AND events < (SELECT coalesce(max(e.seq), 0) FROM events e WHERE e.msg = NEW.seq);
+END;
+`
