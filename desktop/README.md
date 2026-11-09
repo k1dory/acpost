@@ -7,10 +7,15 @@ node's socket (`ACPOST_NODE`/`ACPOST_TOKEN` for another node).
 
 ```sh
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
-cd desktop/frontend && npm install && npm run build && cd ..
+cd desktop
 ./build-app.sh                      # bin/acpost.app (open it, or drag it to /Applications)
 wails3 task dev                     # live reload while working on the interface
 ```
+
+`build-app.sh` is the one way the bundle is made: the interface from the lock file (`npm ci`), the
+binary, `build/darwin/Info.plist`, an ad-hoc signature. The Taskfiles serve `wails3 task dev`.
+The bundle's identity (`dev.acpost.desktop`, the version) is set in `build/config.yml`;
+`wails3 task common:update:build-assets` writes it into the plists, which stay as it writes them.
 
 `go build -tags server` builds the same app as a local HTTP server (http://localhost:8080) for
 looking at the interface in a browser. Bindings in `frontend/bindings` are generated:
