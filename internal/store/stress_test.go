@@ -32,6 +32,9 @@ func scale(n, heavyN int) int {
 	if testing.Short() {
 		return max(n/10, 1)
 	}
+	if raceOn { // the same paths, fewer rounds: the package stays well inside CI's test timeout
+		return max(n/4, 1)
+	}
 	return n
 }
 
