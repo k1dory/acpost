@@ -462,13 +462,10 @@ func (s *Store) afterWrite(ctx context.Context, n int64) {
 		return
 	}
 	defer c.Close()
-	if _, err := c.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", checkpointWait.Milliseconds())); err != nil {
-		return
-	}
-	var busy, logPages, done int
-	_ = c.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done)
-	// Back to the connection's own wait, whatever ctx has become.
-	_, _ = c.ExecContext(context.WithoutCancel(ctx), "PRAGMA busy_timeout = 10000")
+	shortWait(ctx, c, checkpointWait, func() {
+		var busy, logPages, done int
+		_ = c.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &done)
+	})
 }
 
 // liveBytes is how much of the file holds data (pages in use).
@@ -1345,3 +1342,15 @@ const (
 
 // checkpointWait bounds how long afterWrite's checkpoint waits for readers (see there).
 const checkpointWait = 250 * time.Millisecond
+
+// shortWait runs fn on c with busy_timeout at d, and puts the connection's own wait back after,
+// whatever ctx has become. The restore is deferred before the change: SQLite applies the PRAGMA
+// while preparing it, so a ctx cancelled after that still errors, and the connection would go
+// back to the pool giving up on readers after d (a later Maintain would leave the WAL as it is).
+func shortWait(ctx context.Context, c *sql.Conn, d time.Duration, fn func()) {
+	defer func() { _, _ = c.ExecContext(context.WithoutCancel(ctx), "PRAGMA busy_timeout = 10000") }()
+	if _, err := c.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", d.Milliseconds())); err != nil {
+		return
+	}
+	fn()
+}
