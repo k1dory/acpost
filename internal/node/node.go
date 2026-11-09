@@ -959,12 +959,26 @@ func clientParty(p Principal) *store.Party {
 func asStored(files []store.File) []store.File {
 	out := slices.Clone(files)
 	for i := range out {
-		f := &out[i]
-		if f.Link() {
-			f.Type = fileType(f.Name, f.Type, nil)
-			continue
-		}
-		f.Type, f.Size = fileType(f.Name, f.Type, f.Data), len(f.Data)
+		storedForm(&out[i])
 	}
 	return out
+}
+
+// storedForm fills in a file as the store keeps it, for checkFiles and asStored alike, so a
+// repeated reply is compared by what was recorded. A link is kept as a link: its type from what
+// was given or its name, its size as said (linkSize). Content: its type, and its length as size.
+func storedForm(f *store.File) {
+	if f.Link() {
+		f.Type, f.Size = fileType(f.Name, f.Type, nil), linkSize(f.Size)
+		return
+	}
+	f.Type, f.Size = fileType(f.Name, f.Type, f.Data), len(f.Data)
+}
+
+// linkSize is the size a link claims, or 0 (not said) when it is negative or over maxLinkSize.
+func linkSize(n int) int {
+	if n < 0 || n > maxLinkSize {
+		return 0
+	}
+	return n
 }
