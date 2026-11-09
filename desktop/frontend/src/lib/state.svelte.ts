@@ -329,8 +329,10 @@ class App {
     try {
       const ms = ((await Node.Thread(thread)) ?? []) as any as Msg[];
       if (this.thread !== thread) return;
-      this.msgs = ms;
-      for (const m of ms) this.watch(m);
+      // What the screen got meanwhile (a message sent, a state streamed) is newer than a list
+      // asked before it: merged, never dropped.
+      this.msgs = mergeMsgs(ms, this.msgs);
+      for (const m of this.msgs) this.watch(m);
       this.focus = ms[ms.length - 1]?.id ?? "";
       const to = ms.find(m => m.to.startsWith("agent:"))?.to;
       if (to) this.target = to;
@@ -769,6 +771,24 @@ class App {
 }
 
 /** A replayed conversation split at its user's messages. */
+const stage: Record<string, number> = { queued: 0, running: 1, done: 2, failed: 2, cancelled: 2, expired: 2 };
+
+/** A thread's messages as loaded, with those the screen already has: one per id, the later of the
+ * two (by updated_at, then by state: a finished one is past a running one), in the loaded order
+ * and then those the load did not have yet. */
+export function mergeMsgs(loaded: Msg[], shown: Msg[]): Msg[] {
+  const byId = new Map(shown.map(m => [m.id, m]));
+  const later = (a: Msg, b: Msg) => {
+    const ta = Date.parse(a.updated_at) || 0, tb = Date.parse(b.updated_at) || 0;
+    if (ta !== tb) return ta > tb ? a : b;
+    return (stage[a.state] ?? 0) >= (stage[b.state] ?? 0) ? a : b;
+  };
+  const out = loaded.map(m => { const s = byId.get(m.id); return s ? later(m, s) : m; });
+  const have = new Set(loaded.map(m => m.id));
+  for (const m of shown) if (!have.has(m.id)) out.push(m);
+  return out;
+}
+
 function without<T>(o: Record<string, T>, k: string): Record<string, T> {
   if (!(k in o)) return o;
   const { [k]: _, ...rest } = o;

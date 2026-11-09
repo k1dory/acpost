@@ -524,6 +524,44 @@ describe("send, review round 6", () => {
   });
 });
 
+describe("send, review round 7", () => {
+  it("a thread list that comes after a message was sent keeps that message, running and stoppable (R7)", async () => {
+    const app = await load();
+    app.draft.where = "cloud"; app.draft.cloudAgent = "ref1";
+    fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
+    app.draftOf().text = "build it";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout"));
+    await app.submit(app.draftOf());
+    const listed = deferred();
+    fake.Node.Thread.mockReturnValue(listed.promise);   // the thread's list, slow
+    fake.Node.Chats.mockResolvedValue({ items: [{ key: "thread:T1", kind: "thread", thread: "T1", agent: "agent:sb_1", title: "", updated: "" }] });
+    await app.loadChats();                               // the screen joins T1, its list asked
+    app.draftOf().text = "build it, in Go";
+    fake.Node.SendTask.mockResolvedValueOnce({ ...msg("m2", "T1"), to: "agent:sb_1" });
+    expect(await app.submit(app.draftOf())).toBe(true);
+    fake.emit("events:m2", { events: [{ seq: 1, time: "", kind: "text", data: '"working"' }] }); // m2 runs
+    listed.resolve([{ ...msg("m1", "T1", "running"), to: "agent:sb_1" }]); // asked before m2 existed
+    await flush();
+    expect(app.msgs.map(m => m.id)).toEqual(["m1", "m2"]);
+    expect(app.runningHere().map(m => m.id)).toEqual(["m1", "m2"]);
+    fake.Node.Cancel.mockImplementation(async (id: string) => ({ ...msg(id, "T1", "cancelled"), to: "agent:sb_1" }));
+    await app.stopHere();
+    expect(fake.Node.Cancel.mock.calls.map(c => c[0]).sort()).toEqual(["m1", "m2"]);
+  });
+
+  it("mergeMsgs keeps the later of the two, and those the load did not have", async () => {
+    const { mergeMsgs } = await import("./state.svelte");
+    const at = (id: string, state: string, t: string) => ({ ...msg(id, "T", state), updated_at: t });
+    const out = mergeMsgs(
+      [at("a", "running", "2026-01-01T00:00:01Z"), at("b", "done", "2026-01-01T00:00:05Z")],
+      [at("a", "done", "2026-01-01T00:00:03Z"), at("b", "running", "2026-01-01T00:00:02Z"), at("c", "queued", "")],
+    );
+    expect(out.map(m => m.id + ":" + m.state)).toEqual(["a:done", "b:done", "c:queued"]);
+    // Same time: a finished state is past a running one.
+    expect(mergeMsgs([at("a", "running", "")], [at("a", "cancelled", "")])[0].state).toBe("cancelled");
+  });
+});
+
 describe("attaching files (R1.6)", () => {
   it("two drops at once do not both pass max_files", async () => {
     const { ComposerDraft } = await import("./composer.svelte");
