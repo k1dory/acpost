@@ -1,6 +1,9 @@
 package store
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // CopyOrigins are the origins of a joined node's local copies of messages its hub holds: sent
 // through the hub (remote), on their way (forwarding), or not sent (unsent). Such a copy is the
@@ -22,3 +25,7 @@ func copyRecipient(hubTo, cur string) string {
 	}
 	return cur
 }
+
+// ErrStaleDelivery: a delivery of a message older than the one its copy here already is (the
+// hub's attempt number is lower) — the hub handed it again since, and that delivery owns the copy.
+var ErrStaleDelivery = errors.New("an older delivery of the message than the one its copy is")

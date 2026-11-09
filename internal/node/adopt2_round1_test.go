@@ -17,7 +17,7 @@ func TestOldRelayCannotCancelAdoptedCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.LeaseID = "L2"
-	if why, ok := n.takeDelivery(ctx, &store.Message{ID: d.ID, From: d.From, To: "agent:bot", Body: d.Body, Origin: originHub + "L2"}, 3); !ok {
+	if why, ok := n.takeDelivery(ctx, &store.Message{ID: d.ID, From: d.From, To: "agent:bot", Body: d.Body, Origin: originHub + "L2"}, 0, 3); !ok {
 		t.Fatal(why)
 	}
 	f.set(func(f *fakeHub) { f.state = store.Cancelled })

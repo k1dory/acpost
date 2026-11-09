@@ -366,6 +366,8 @@ func (s *Store) migrate() error {
 		{"hub_seq", "hub_seq INTEGER NOT NULL DEFAULT 0"},
 		// A cancel asked for on a message forwarded to a hub, not yet settled there (forward.go).
 		{"cancel_wanted", "cancel_wanted INTEGER NOT NULL DEFAULT 0"},
+		// The hub's attempt number of the delivery a joined node's copy is (hub_round2.go): an older one is refused.
+		{"hub_attempt", "hub_attempt INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var n int
 		if err := s.w.QueryRow("SELECT count(*) FROM pragma_table_info('messages') WHERE name = ?", c.name).Scan(&n); err != nil {
