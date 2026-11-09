@@ -17,7 +17,7 @@ func (n *Node) Usage(ctx context.Context, p Principal, q store.UsageQuery) ([]cl
 	}
 	sums, err := n.st.UsageOf(ctx, q)
 	if err != nil {
-		return nil, errf("invalid", "%v", err)
+		return nil, invalidOr(err)
 	}
 	out := make([]client.UsageReport, 0, len(sums))
 	for _, s := range sums {
