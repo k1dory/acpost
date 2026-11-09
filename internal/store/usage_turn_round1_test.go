@@ -271,9 +271,9 @@ func TestFinalUsageKeepsToItsRoom(t *testing.T) {
 	}
 }
 
-// A final message's count stays the one its event published: a later, fuller reading (a cancelled
-// attempt's last word) does not move the count away from the event.
-func TestFinalCountIsThePublishedOne(t *testing.T) {
+// A reading after the message is final (a cancelled attempt's last word) is counted and goes out
+// at once as what the count grew by: the events' sum is the count, the first event unchanged.
+func TestFinalCountAndItsEventsAgree(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t, Options{})
 	c := claimedWithUsage(t, s, map[string]int{"t1": 100})
@@ -284,9 +284,151 @@ func TestFinalCountIsThePublishedOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := usageEvents(t, s, c.ID)
+	if len(got) != 2 || got[0].Input != 100 || got[0].Turn != "t1" || got[1].Input != 50 || got[1].Turn != "t1#2" {
+		t.Fatalf("events %+v: want t1 of 100, then t1#2 of 50", got)
+	}
+	agree(t, s, c.ID, 150)
+}
+
+// agree checks message id's usage: this store counts input tokens, its usage events sum to as
+// many, and a store given those events (a sender's node) counts as many too.
+func agree(t *testing.T, s *Store, id string, input int) {
+	t.Helper()
+	ctx := context.Background()
 	sums, err := s.UsageOf(ctx, UsageQuery{})
-	if err != nil || len(got) != 1 || len(sums) != 1 || int64(got[0].Input) != sums[0].Input {
-		t.Fatalf("event %+v, counted %+v %v: the event and the count must agree", got, sums, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local int64
+	for _, x := range sums {
+		local += x.Input
+	}
+	evs, err := s.Events(ctx, id, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open("memory:", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	rm := Message{ID: id, From: "user:a", To: "agent:x@n", Body: "hi"}
+	if _, _, err := r.Insert(ctx, &rm); err != nil {
+		t.Fatal(err)
+	}
+	sent := 0
+	for _, e := range evs {
+		if e.Kind == "usage" {
+			u, _ := readUsage(e.Data)
+			sent += u.Input
+			if err := r.AddEvent(ctx, id, "usage", e.Data); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rs, err := r.UsageOf(ctx, UsageQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received int64
+	for _, x := range rs {
+		received += x.Input
+	}
+	if local != int64(input) || sent != input || received != int64(input) {
+		t.Fatalf("input tokens: counted here %d, in the events %d, counted by a receiver %d; want %d each", local, sent, received, input)
+	}
+}
+
+// A cost said on a line of its own (after the tokens, the same total) is merged into the count
+// and goes out with the event.
+func TestCostLineOfItsOwnIsKept(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t, Options{})
+	c := claimedWithUsage(t, s, map[string]int{"t1": 100})
+	cost := 0.25
+	b, _ := json.Marshal(Usage{Turn: "t1", Agent: "agent:x@n", Model: "m", Reported: true, Input: 100, Total: 100, Cost: &cost, Currency: "USD"})
+	if err := s.PutUsage(ctx, c.ID, c.LeaseID, string(b), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "ok", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := usageEvents(t, s, c.ID)
+	sums, err := s.UsageOf(ctx, UsageQuery{})
+	if err != nil || len(got) != 1 || got[0].Cost == nil || *got[0].Cost != 0.25 || got[0].Currency != "USD" || len(sums) != 1 || sums[0].Cost != 0.25 {
+		t.Fatalf("event %+v, counted %+v %v: want the cost 0.25 in both", got, sums, err)
+	}
+}
+
+// Whatever reopens a final message (a hub's delivery adopted again, a forward's cancel taken back):
+// the usage published as it ended stays as it was, what a later attempt reads more goes out as
+// what the count grew by, and every count agrees.
+func TestReopenedMessageUsageAgrees(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		origin string
+		end    func(t *testing.T, s *Store, c Message) // the message's first end, usage published
+		reopen func(t *testing.T, s *Store, c Message)
+	}{
+		{"adopted delivery", "hub:a/1",
+			func(t *testing.T, s *Store, c Message) {
+				if ok, err := s.CancelIfOrigin(ctx, c.ID, "hub:a/1", CodeHubGaveUp, "gave up"); err != nil || !ok {
+					t.Fatal(ok, err)
+				}
+			},
+			func(t *testing.T, s *Store, c Message) {
+				if _, err := s.AdoptDelivery(ctx, c.ID, c.From, c.To, "hub:a/", "hub:a/2"); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{"forward reopened", "forwarding",
+			func(t *testing.T, s *Store, c Message) {
+				if _, err := s.Cancel(ctx, c.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			func(t *testing.T, s *Store, c Message) {
+				if ok, err := s.ReopenForward(ctx, c.ID, "forwarding", "hub:a/3"); err != nil || !ok {
+					t.Fatal(ok, err)
+				}
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTest(t, Options{})
+			m := Message{ID: NewID(), From: "user:a", To: "agent:x", Body: "hi", Origin: tc.origin}
+			if _, _, err := s.Insert(ctx, &m); err != nil {
+				t.Fatal(err)
+			}
+			claim := func() Message {
+				c, ok, err := s.Claim(ctx, "agent:x", time.Minute)
+				if err != nil || !ok {
+					t.Fatal(ok, err)
+				}
+				return c
+			}
+			c := claim()
+			if err := s.PutUsage(ctx, c.ID, c.LeaseID, usageOf("r1", 100), false); err != nil {
+				t.Fatal(err)
+			}
+			tc.end(t, s, c)
+			agree(t, s, c.ID, 100)
+			tc.reopen(t, s, c)
+			if got, err := s.Get(ctx, c.ID); err != nil || got.State != Queued {
+				t.Fatalf("reopened: %s %v", got.State, err)
+			}
+			c = claim()
+			if err := s.PutUsage(ctx, c.ID, c.LeaseID, usageOf("r1", 150), false); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Complete(ctx, c.ID, c.LeaseID, Done, "ok", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			agree(t, s, c.ID, 150)
+			if got := usageEvents(t, s, c.ID); len(got) != 2 || got[0].Input != 100 {
+				t.Fatalf("events %+v: the first stays 100, then what grew", got)
+			}
+		})
 	}
 }
 

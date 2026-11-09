@@ -9,12 +9,13 @@ import (
 	"time"
 )
 
-// PutUsage records a turn's usage for message id. Its row in turn_usage is taken, or replaced by a
-// fuller reading of the same turn (more tokens: an attempt that read the whole turn after one that
-// broke off in it), never by a lesser one. With event, the message's counted turns get their
-// "usage" events too (PublishUsage), how the usage reaches the app and the sender's node. With a lease, all of it happens only
-// while that attempt holds the message running (ErrLeaseLost otherwise), in one transaction with
-// the check: what an attempt read of its turn is there before the attempt's outcome is.
+// PutUsage records a reading of a turn's usage for message id: merged into the turn's count field
+// by field (a reading is what an attempt read of the turn so far: a later or fuller one carries
+// more tokens, a cost line, the context; nothing already counted is lost), and marked to be
+// published when the message turns final. With event, or when the message is final already, what
+// the count has grown by since it was last published goes out now (publishUsageTx). With a lease,
+// all of it happens only while that attempt holds the message running (ErrLeaseLost otherwise),
+// in one transaction with the check.
 func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool) error {
 	u, ok := readUsage(data)
 	if !ok {
@@ -26,18 +27,16 @@ func (s *Store) PutUsage(ctx context.Context, id, lease, data string, event bool
 		if err != nil {
 			return err
 		}
-		// A final message's count is the one its event published (as it turned final): a reading
-		// after that (a cancelled attempt's last word) does not move it away from the event.
-		if err := putUsageTx(ctx, t, id, u, now, !final); err != nil {
+		if err := putUsageTx(ctx, t, id, u, now); err != nil {
 			return err
 		}
-		if event {
+		if err := pendUsageTx(ctx, t, id, u.Turn); err != nil {
+			return err
+		}
+		if event || final {
 			return publishUsageTx(ctx, t, id, seq, n, now)
 		}
-		if final {
-			return nil
-		}
-		return pendUsageTx(ctx, t, id, u.Turn)
+		return nil
 	})
 }
 
@@ -76,44 +75,137 @@ func leasedMessage(ctx context.Context, t *sql.Tx, id, lease string) (int64, int
 	return seq, n, state.Final(), nil
 }
 
-// putUsageTx counts a turn's usage, or (raise) replaces its count by a fuller reading of the same
-// turn (more tokens), never by a lesser one.
-func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Time, raise bool) error {
-	var had int
-	err := t.QueryRowContext(ctx, "SELECT total FROM turn_usage WHERE turn = ?", u.Turn).Scan(&had)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return addUsage(ctx, t, id, u, now)
-	case err != nil:
-		return err
-	case !raise || u.Total <= had:
-		return nil
-	}
-	_, err = t.ExecContext(ctx, `UPDATE turn_usage SET ts = ?, model = ?, reported = ?, input = ?, output = ?, cache_read = ?,
-		cache_write = ?, thought = ?, total = ?, cost = ?, currency = ?, context_used = ?, context_size = ? WHERE turn = ?`,
-		usageAt(u.At, now), u.Model, u.Reported, u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Thought, u.Total, u.Cost,
-		u.Currency, u.ContextUsed, u.ContextSize, u.Turn)
-	return err
-}
-
-// publishUsageTx adds a "usage" event for each counted turn of message id that has none: its data
-// is the counted row (the fullest reading of the turn), not whatever an attempt read last. Usage
-// events are kept past the events' limit, up to maxUsageEvents, as insertEvent keeps them.
-func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int, now time.Time) error {
-	all, err := countedUsage(ctx, t, "msg = ?", id)
+// putUsageTx merges a reading of a turn's usage into its count: each number the larger of the two
+// (both are what was read of the same turn from its start), the cost too, a model, session or
+// currency where the count has none yet.
+func putUsageTx(ctx context.Context, t *sql.Tx, id string, u Usage, now time.Time) error {
+	had, err := countedUsage(ctx, t, "turn = ?", u.Turn)
 	if err != nil {
 		return err
 	}
-	for _, u := range all {
-		var have, same int
-		if err := t.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(json_extract(data, '$.turn') = ?), 0) FROM events WHERE msg = ? AND kind = 'usage'",
-			u.Turn, seq).Scan(&have, &same); err != nil {
+	if len(had) == 0 {
+		return addUsage(ctx, t, id, u, now)
+	}
+	m := mergeUsage(had[0], u)
+	_, err = t.ExecContext(ctx, `UPDATE turn_usage SET ts = ?, session = ?, model = ?, reported = ?, input = ?, output = ?, cache_read = ?,
+		cache_write = ?, thought = ?, total = ?, cost = ?, currency = ?, context_used = ?, context_size = ? WHERE turn = ?`,
+		usageAt(m.At, now), m.Session, m.Model, m.Reported, m.Input, m.Output, m.CacheRead, m.CacheWrite, m.Thought, m.Total, m.Cost,
+		m.Currency, m.ContextUsed, m.ContextSize, m.Turn)
+	return err
+}
+
+// mergeUsage is two readings of one turn as one: the larger of each number, what either says.
+func mergeUsage(a, b Usage) Usage {
+	m := a
+	m.Input, m.Output, m.CacheRead, m.CacheWrite = max(a.Input, b.Input), max(a.Output, b.Output), max(a.CacheRead, b.CacheRead), max(a.CacheWrite, b.CacheWrite)
+	m.Thought, m.Total, m.ContextUsed, m.ContextSize = max(a.Thought, b.Thought), max(a.Total, b.Total), max(a.ContextUsed, b.ContextUsed), max(a.ContextSize, b.ContextSize)
+	m.Reported = a.Reported || b.Reported
+	if b.Cost != nil && (a.Cost == nil || *b.Cost > *a.Cost) {
+		c := *b.Cost
+		m.Cost = &c
+	}
+	m.Model, m.Session, m.Currency = cmpOr(a.Model, b.Model), cmpOr(a.Session, b.Session), cmpOr(a.Currency, b.Currency)
+	if b.At.After(a.At) {
+		m.At = b.At
+	}
+	return m
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// published is what of a turn's count its events carry: the sum of them, and how many there are.
+type published struct {
+	Usage
+	events int
+}
+
+// publishedOf is what of turn has been published among message seq's events: kept in
+// usage_published, or (a turn an earlier version published) its one event.
+func publishedOf(ctx context.Context, t *sql.Tx, seq int64, turn string) (*published, error) {
+	var p published
+	var cost sql.NullFloat64
+	err := t.QueryRowContext(ctx, `SELECT events, input, output, cache_read, cache_write, thought, total, cost, context_used, context_size
+		FROM usage_published WHERE turn = ?`, turn).Scan(&p.events, &p.Input, &p.Output, &p.CacheRead, &p.CacheWrite, &p.Thought, &p.Total, &cost,
+		&p.ContextUsed, &p.ContextSize)
+	if err == nil {
+		if cost.Valid {
+			c := cost.Float64
+			p.Cost = &c
+		}
+		return &p, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	var data string
+	err = t.QueryRowContext(ctx, "SELECT data FROM events WHERE msg = ? AND kind = 'usage' AND json_extract(data, '$.turn') = ? LIMIT 1", seq, turn).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	u, _ := readUsage(data)
+	return &published{Usage: u, events: 1}, nil
+}
+
+// publishUsageTx publishes the waiting turns of message id (usage_unpublished): a turn not
+// published yet as one "usage" event of its count; a turn published before (the message reopened,
+// a retry read more of it) as a further event of what the count grew by, its id the turn's and
+// the event's number (turn#2, turn#3, …). An event once out is never changed: every node summing a
+// message's usage events has the count this node has. Up to maxUsageEvents usage events a message.
+func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int, now time.Time) error {
+	rows, err := t.QueryContext(ctx, "SELECT turn FROM usage_unpublished WHERE msg = ? ORDER BY turn", id)
+	if err != nil {
+		return err
+	}
+	var turns []string
+	for rows.Next() {
+		var turn string
+		if err := rows.Scan(&turn); err != nil {
+			rows.Close()
 			return err
 		}
-		if same > 0 || have >= maxUsageEvents {
+		turns = append(turns, turn)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, turn := range turns {
+		got, err := countedUsage(ctx, t, "turn = ?", turn)
+		if err != nil {
+			return err
+		}
+		if len(got) == 0 {
 			continue
 		}
-		b, err := json.Marshal(u)
+		c := got[0]
+		p, err := publishedOf(ctx, t, seq, turn)
+		if err != nil {
+			return err
+		}
+		ev, k := c, 1
+		if p != nil {
+			ev, k = grownBy(c, p.Usage), p.events+1
+			if ev.Total == 0 && ev.Input+ev.Output+ev.CacheRead+ev.CacheWrite+ev.Thought == 0 && ev.Cost == nil {
+				continue // nothing more than what is out
+			}
+			ev.Turn = fmt.Sprintf("%s#%d", turn, k)
+		}
+		var have int
+		if err := t.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE msg = ? AND kind = 'usage'", seq).Scan(&have); err != nil {
+			return err
+		}
+		if have >= maxUsageEvents {
+			break
+		}
+		b, err := json.Marshal(ev)
 		if err != nil {
 			return err
 		}
@@ -124,10 +216,38 @@ func publishUsageTx(ctx context.Context, t *sql.Tx, id string, seq int64, n int,
 		if _, err := t.ExecContext(ctx, "UPDATE messages SET events = events + 1 WHERE seq = ?", seq); err != nil {
 			return err
 		}
+		if _, err := t.ExecContext(ctx, `INSERT INTO usage_published (turn, events, input, output, cache_read, cache_write, thought, total, cost,
+			context_used, context_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (turn) DO UPDATE SET events = excluded.events,
+			input = excluded.input, output = excluded.output, cache_read = excluded.cache_read, cache_write = excluded.cache_write,
+			thought = excluded.thought, total = excluded.total, cost = excluded.cost, context_used = excluded.context_used,
+			context_size = excluded.context_size`, turn, k, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Thought, c.Total, c.Cost,
+			c.ContextUsed, c.ContextSize); err != nil {
+			return err
+		}
 	}
-	// Published here: none of them waits for the trigger any more.
+	// Published here: none of them waits for a finalizer any more.
 	_, err = t.ExecContext(ctx, "DELETE FROM usage_unpublished WHERE msg = ?", id)
 	return err
+}
+
+// grownBy is what count c has more than what was published (p): each number's difference, the cost's
+// too; the context as c has it (a level, not a sum).
+func grownBy(c, p Usage) Usage {
+	d := c
+	d.Input, d.Output, d.CacheRead, d.CacheWrite = max(c.Input-p.Input, 0), max(c.Output-p.Output, 0), max(c.CacheRead-p.CacheRead, 0), max(c.CacheWrite-p.CacheWrite, 0)
+	d.Thought, d.Total = max(c.Thought-p.Thought, 0), max(c.Total-p.Total, 0)
+	d.Cost = nil
+	if c.Cost != nil {
+		was := 0.0
+		if p.Cost != nil {
+			was = *p.Cost
+		}
+		if *c.Cost > was {
+			x := *c.Cost - was
+			d.Cost = &x
+		}
+	}
+	return d
 }
 
 // countedUsage reads turns' counted usage (turn_usage rows matching where), oldest first.
@@ -231,6 +351,21 @@ CREATE TABLE IF NOT EXISTS usage_unpublished (
 	msg  TEXT NOT NULL,
 	turn TEXT NOT NULL,
 	PRIMARY KEY (msg, turn)
+) WITHOUT ROWID;
+-- What of a turn's count its message's usage events carry (their sum, and how many): a turn that
+-- grows after it was published goes out again as what it grew by (publishUsageTx).
+CREATE TABLE IF NOT EXISTS usage_published (
+	turn         TEXT    PRIMARY KEY,
+	events       INTEGER NOT NULL,
+	input        INTEGER NOT NULL DEFAULT 0,
+	output       INTEGER NOT NULL DEFAULT 0,
+	cache_read   INTEGER NOT NULL DEFAULT 0,
+	cache_write  INTEGER NOT NULL DEFAULT 0,
+	thought      INTEGER NOT NULL DEFAULT 0,
+	total        INTEGER NOT NULL DEFAULT 0,
+	cost         REAL,
+	context_used INTEGER NOT NULL DEFAULT 0,
+	context_size INTEGER NOT NULL DEFAULT 0
 ) WITHOUT ROWID;
 `
 
