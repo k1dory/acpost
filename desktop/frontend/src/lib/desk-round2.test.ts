@@ -411,6 +411,25 @@ describe("a send owns its attachments from the click (review round 4)", () => {
     expect(b).toEqual(a);
   });
 
+  for (const first of ["old", "new"]) it(`two drafts merged with their reads going, ${first}.txt read first, the answer lost: the retry is the same request, key and all`, async () => {
+    const { app, d, add } = await setupSend();
+    fake.Node.SendTask.mockReset();
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(msg("m1", "T"));
+    const old = slow("old.txt", "o"), nu = slow("new.txt", "n");
+    add([old.f]);
+    const other = app.draftOf("thread:X");
+    other.add([nu.f], null, () => {});
+    (app as any).moveDraft(other, "thread:T");          // merged, both reads still going
+    const going = app.submit(d);
+    (first === "old" ? old : nu).done(); await flush();
+    (first === "old" ? nu : old).done();
+    expect(await going).toBe(false);
+    expect(await app.submit(d)).toBe(true);
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(a.files.map((f: any) => f.name)).toEqual(first === "old" ? ["old.txt", "new.txt"] : ["new.txt", "old.txt"]);
+    expect(b).toEqual(a);
+  });
+
   it("any reads, removals and pastes before and after the click: what goes is the click's files and what the reads of then brought after it, named apart; a retry is the first request", async () => {
     const { pasteName, freeName } = await import("./paste");
     let seed = 11;
@@ -420,12 +439,17 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       fake = fakeNode();
       fake.Node.Chats.mockResolvedValue({ items: [] });
       fake.Node.Agents.mockResolvedValue([]);
-      const { app, d } = await setupSend();
+      const { app, d: main } = await setupSend();
+      // A second draft with reads of its own, merged into the one sent at some point before the
+      // click (its reads and the other's then run at once: delivery order is the oracle's too).
+      const other = app.draftOf("thread:X");
+      let d = rnd(2) ? other : main, merged = false;
       const retry = run % 2 === 0; // half the runs: the first answer lost, nothing done after the click, sent again
       if (retry) fake.Node.SendTask.mockRejectedValueOnce(new Error("lost"));
       let n = 0;
       const reads: { s: ReturnType<typeof slow>; v: string; ended: boolean }[] = [];
       const delivered = new Set<string>(); // the namer runs as a read's file is put in the form
+      const deliveryOrder: string[] = [];
       const addSome = () => {
         const paste = rnd(2) === 0;
         const group = Array.from({ length: 1 + rnd(3) }, () => {
@@ -435,18 +459,23 @@ describe("a send owns its attachments from the click (review round 4)", () => {
           reads.push(r);
           return { ...s.f, type: paste ? "image/png" : "text/plain", v };
         });
-        const mark = (f: any) => { delivered.add(f.v); return f; };
+        const mark = (f: any) => { delivered.add(f.v); deliveryOrder.push(f.v); return f; };
         d.add(group, null, () => {}, paste ? (f, t) => pasteName(mark(f), t) : (f, t) => freeName(mark(f).name, t));
       };
       const end = (r: (typeof reads)[number]) => { r.s.done(); r.ended = true; };
+      // Each draft starts with a read going: merged, the two run at once.
+      { const keep = d; d = other; addSome(); d = main; addSome(); d = keep; }
       // Before the click: adds, reads ending, files removed (some from an add() still reading).
       for (let step = 0; step < 6; step++) {
-        const k = rnd(3);
-        if (k === 0) addSome();
+        const k = rnd(4);
+        if (k === 3 && !merged) { (app as any).moveDraft(other, "thread:T"); d = main; merged = true; }
+        else if (k === 3) d = main;
+        else if (k === 0) addSome();
         else if (k === 1 && reads.length) end(reads[rnd(reads.length)]);
         else if (d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
         await flush();
       }
+      if (!merged) { (app as any).moveDraft(other, "thread:T"); d = main; }
       if (!reads.length) addSome();
       const atClick = d.files.map(f => atob(f.data));
       const going = app.submit(d);
@@ -465,6 +494,10 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       const firstReq = fake.Node.SendTask.mock.calls[0][0];
       const files = firstReq.files ?? [];
       expect(files.map((f: any) => atob(f.data)).sort()).toEqual(want);
+      // In order: the click's list, then the reads of then as they were delivered.
+      const got = files.map((f: any) => atob(f.data));
+      expect(got.slice(0, atClick.length)).toEqual(atClick);
+      expect(got.slice(atClick.length)).toEqual(deliveryOrder.filter(v => pendingAtClick.includes(v)));
       expect(new Set(files.map((f: any) => f.name)).size).toBe(files.length);
       if (retry) {
         await app.submit(d);

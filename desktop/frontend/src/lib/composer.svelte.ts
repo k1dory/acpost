@@ -30,13 +30,19 @@ export function sendFiles(d: ComposerDraft): { wait: Promise<void>; files: () =>
   return {
     wait: Promise.all(jobs.map(({ j }) => j.done)).then(() => {}),
     files: () => {
-      const out = had.map(f => ({ ...f }));
-      for (const { j, from } of jobs) for (const r of j.results.slice(from)) {
-        out.push({ ...r, name: freeName(r.name, out.map(x => x.name)) });
-      }
-      return out;
+      return withReads(had, jobs.flatMap(({ j, from }) => j.results.slice(from)));
     },
   };
+}
+
+/** A list of files with the files reads brought after it, as both the composer and a send build
+ * it: in the order they were delivered (rid; reads of two drafts merged run at once, so not in
+ * the order of their add()), each told apart from the names before it. One rule, so the same
+ * files make the same request, and a retry has the first one's key. */
+export function withReads(list: Attachment[], reads: Attachment[]): Attachment[] {
+  const out = list.map(f => ({ ...f }));
+  for (const r of [...reads].sort((a, b) => (a.rid ?? 0) - (b.rid ?? 0))) out.push({ ...r, name: freeName(r.name, out.map(x => x.name)) });
+  return out;
 }
 
 /** A cloud sandbox asked for (for: the destination, App.destNow()). */
@@ -133,7 +139,7 @@ export class ComposerDraft {
         // Its name, chosen here: against all attached by now, those added just before it included.
         const a: Attachment = { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data, rid: ++rids };
         job.results.push({ ...a });
-        d.files = [...d.files, a];
+        d.files = withReads(d.files, [a]);
       }
     }).catch(() => {}) // what failed was said: the queue goes on
       .finally(() => { for (let x: ComposerDraft | null = this; x; x = x.movedTo) x.reading.delete(job); });
