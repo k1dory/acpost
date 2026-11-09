@@ -89,7 +89,7 @@ func TestCancelRacingFinishGoesToHub(t *testing.T) {
 	if _, err := n.Cancel(ctx, me, m.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.get().cancels; len(got) != 1 || got[0] != m.ID {
+	if got := f.get().cancels; !f.cancelled(m.ID) {
 		t.Fatalf("the hub got no cancel: %v", got)
 	}
 }

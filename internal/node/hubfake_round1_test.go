@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -309,3 +310,9 @@ limits: {max_queued_per_agent: 3}
 agents:
   bot: {driver: inbox, lease: 1m}
 `
+
+// cancelled says the hub was asked to cancel id, once or more: a cancel is sent again until it is
+// known to have arrived (a conflict for a repeat), so how many arrive is not fixed.
+func (f *fakeHub) cancelled(id string) bool {
+	return slices.Contains(f.get().cancels, id)
+}

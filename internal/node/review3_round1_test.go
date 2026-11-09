@@ -42,8 +42,7 @@ func TestDedupOntoExistingCopyKeepsCancelAndKey(t *testing.T) {
 	release()
 	<-done
 	eventually(t, "the cancel reaches the hub's first message", func() bool {
-		c := f.get().cancels
-		return len(c) == 1 && c[0] == first.ID
+		return f.cancelled(first.ID)
 	})
 	eventually(t, "the copy of the first message is cancelled", func() bool {
 		got, _ := n.st.Get(ctx, first.ID)

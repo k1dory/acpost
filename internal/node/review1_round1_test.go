@@ -92,7 +92,7 @@ func TestCancelDuringForwardReachesHub(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-	eventually(t, "the hub gets the cancel", func() bool { return len(f.get().cancels) == 1 && f.get().cancels[0] == m.ID })
+	eventually(t, "the hub gets the cancel", func() bool { return f.cancelled(m.ID) })
 	eventually(t, "the copy is the hub's", func() bool {
 		got, _ := n.st.Get(ctx, m.ID)
 		return got.Origin == originRemote && got.State == store.Cancelled
