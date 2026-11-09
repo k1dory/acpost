@@ -191,7 +191,7 @@ func (s *Store) MoveChat(ctx context.Context, chat, folder string, alsoOut ...st
 // ActiveRecipients lists the recipients with a message queued or running whose address starts so.
 func (s *Store) ActiveRecipients(ctx context.Context, prefix string) ([]string, error) {
 	rows, err := s.r.QueryContext(ctx, `SELECT DISTINCT recipient FROM messages
-		WHERE state IN ('queued', 'running') AND substr(recipient, 1, length(?1)) = ?1`, prefix)
+		WHERE state IN ('queued', 'running') AND substr(recipient, 1, length(?1)) = ?1 AND `+localWork, prefix)
 	if err != nil {
 		return nil, err
 	}

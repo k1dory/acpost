@@ -119,9 +119,11 @@ func (s *Store) FinishForward(ctx context.Context, id, forwarding, origin string
 		b, _ := json.Marshal(sent.Meta)
 		meta = string(b)
 	}
-	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, recipient = ?, task = ?, thread = ?, parent = ?, depth = ?, meta = ?,
+	// (copyRecipient: the hub's own agent, unqualified, keeps the address the copy was sent to.)
+	res, err := s.w.ExecContext(ctx, `UPDATE messages SET origin = ?, recipient = CASE WHEN instr(?, '@') > 0 THEN ? ELSE recipient END,
+		task = ?, thread = ?, parent = ?, depth = ?, meta = ?,
 		expires_at = ?, updated_at = ? WHERE id = ? AND origin = ? AND state IN ('queued', 'running') AND cancel_wanted = 0`,
-		origin, sent.To, sent.Task, sent.Thread, sent.Parent, sent.Depth, meta, ms(sent.ExpiresAt), ms(time.Now()), id, forwarding)
+		origin, sent.To, sent.To, sent.Task, sent.Thread, sent.Parent, sent.Depth, meta, ms(sent.ExpiresAt), ms(time.Now()), id, forwarding)
 	if err != nil {
 		return false, err
 	}
@@ -212,12 +214,12 @@ func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin strin
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	err := s.tx(ctx, func(t *sql.Tx) error {
 		var seq int64
-		var sender string
+		var sender, recipient string
 		var state State
 		var key sql.NullString
 		var wanted bool
-		err := t.QueryRowContext(ctx, "SELECT seq, sender, state, idem_key, cancel_wanted FROM messages WHERE id = ? AND origin = ?", id, forwarding).
-			Scan(&seq, &sender, &state, &key, &wanted)
+		err := t.QueryRowContext(ctx, "SELECT seq, sender, recipient, state, idem_key, cancel_wanted FROM messages WHERE id = ? AND origin = ?", id, forwarding).
+			Scan(&seq, &sender, &recipient, &state, &key, &wanted)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -278,7 +280,7 @@ func (s *Store) ReplaceForward(ctx context.Context, id, forwarding, origin strin
 			res, err := t.ExecContext(ctx, `INSERT INTO messages
 				(id, sender, recipient, task, thread, parent, depth, state, meta, body_size, created_at, updated_at, expires_at, finished_at, origin, idem_key, cancel_wanted)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				first.ID, sender, first.To, first.Task, thread, first.Parent, first.Depth, st, meta, len(first.Body),
+				first.ID, sender, copyRecipient(first.To, recipient), first.Task, thread, first.Parent, first.Depth, st, meta, len(first.Body),
 				ms(now), ms(now), ms(first.ExpiresAt), finished, o, idem, cw)
 			if err != nil {
 				return err

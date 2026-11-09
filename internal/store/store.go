@@ -533,7 +533,7 @@ func (s *Store) InsertLimited(ctx context.Context, m *Message, maxQueued int) (M
 		}
 		if maxQueued > 0 {
 			var q int
-			if err := t.QueryRowContext(ctx, `SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ? AND state = 'queued'`, out.To).Scan(&q); err != nil {
+			if err := t.QueryRowContext(ctx, `SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ? AND state = 'queued' AND `+localWork, out.To).Scan(&q); err != nil {
 				return err
 			}
 			if q >= maxQueued {
@@ -734,7 +734,7 @@ func (s *Store) ClaimAny(ctx context.Context, recipients []string, lease time.Du
 	err := s.tx(ctx, func(t *sql.Tx) error {
 		var id string
 		err := t.QueryRowContext(ctx, `SELECT id FROM messages INDEXED BY messages_queue
-			WHERE recipient IN (`+ph+`) AND state = 'queued' AND (expires_at = 0 OR expires_at > ?) ORDER BY id LIMIT 1`,
+			WHERE recipient IN (`+ph+`) AND state = 'queued' AND (expires_at = 0 OR expires_at > ?) AND `+localWork+` ORDER BY id LIMIT 1`,
 			args...).Scan(&id)
 		if err != nil {
 			return err
@@ -927,13 +927,13 @@ func (s *Store) ReapLeases(ctx context.Context, now time.Time, maxAttempts int) 
 	var n int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'lease lost after ' || attempts || ' attempts', error_code = 'lease_lost',
-			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND attempts >= ?`, t, t, t, maxAttempts)
+			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND attempts >= ? AND `+localWork, t, t, t, maxAttempts)
 		if err != nil {
 			return err
 		}
 		a, _ := res.RowsAffected()
 		res, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'lease lost', error_code = 'lease_lost', lease_id = '', lease_until = 0, updated_at = ?
-			WHERE state = 'running' AND lease_id <> '' AND lease_until < ?`, t, t)
+			WHERE state = 'running' AND lease_id <> '' AND lease_until < ? AND `+localWork, t, t)
 		if err != nil {
 			return err
 		}
@@ -961,7 +961,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 		}
 		args = append(args, maxAttempts)
 		res, err := t.ExecContext(ctx, `UPDATE messages SET state = 'failed', error = 'interrupted by a node restart after ' || attempts || ' attempts', error_code = 'node_restart',
-			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND attempts >= ?`, args...)
+			lease_id = '', lease_until = 0, updated_at = ?, finished_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND attempts >= ? AND `+localWork, args...)
 		if err != nil {
 			return err
 		}
@@ -971,7 +971,7 @@ func (s *Store) RequeueRunning(ctx context.Context, recipients []string, maxAtte
 			args = append(args, r)
 		}
 		res, err = t.ExecContext(ctx, `UPDATE messages SET state = 'queued', error = 'interrupted: the node restarted', lease_id = '', lease_until = 0,
-			updated_at = ? WHERE state = 'running' AND recipient IN (`+ph+`)`, args...)
+			updated_at = ? WHERE state = 'running' AND recipient IN (`+ph+`) AND `+localWork, args...)
 		if err != nil {
 			return err
 		}
@@ -1046,8 +1046,8 @@ func (s *Store) EditQueued(ctx context.Context, id, body string) (Message, error
 // Counts says how many messages for recipient are queued and running.
 func (s *Store) Counts(ctx context.Context, recipient string) (queued, running int, err error) {
 	err = s.r.QueryRowContext(ctx, `SELECT
-		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'queued'),
-		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'running')`, recipient).Scan(&queued, &running)
+		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'queued' AND `+localWork+`),
+		(SELECT count(*) FROM messages INDEXED BY messages_queue WHERE recipient = ?1 AND state = 'running' AND `+localWork+`)`, recipient).Scan(&queued, &running)
 	return
 }
 
