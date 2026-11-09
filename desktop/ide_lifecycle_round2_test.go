@@ -3,8 +3,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,5 +159,33 @@ func TestIDEPortTakenAsItStarts(t *testing.T) {
 	}
 	if n := f.starts(); n != 2 {
 		t.Fatalf("the CLI ran %d times", n)
+	}
+}
+
+// Round 2, 4: a server that ends while the app's look is installed (it served, then its CLI
+// ended) is not given as started: the install is cut short and the start fails.
+func TestIDEServerEndsDuringInstall(t *testing.T) {
+	f := newFakeIDE(t, "serve")
+	cut := make(chan bool, 1)
+	f.install = func(ctx context.Context, data string) error {
+		http.Get("http://127.0.0.1:" + strconv.Itoa(f.port) + "/exit")
+		select {
+		case <-ctx.Done():
+			cut <- true
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			cut <- false
+			return nil
+		}
+	}
+	_, err := f.open("")
+	if err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("a start whose server ended during the install: %v", err)
+	}
+	if !<-cut {
+		t.Error("the install was not cut short by the server's end")
+	}
+	if run := f.current(); run == nil || !closed(run.done) {
+		t.Fatal("its group is not ended")
 	}
 }

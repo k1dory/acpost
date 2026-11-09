@@ -301,8 +301,26 @@ func (s *ideServer) serveOn(ctx context.Context, cli, data string, port int) (st
 		}
 		// The app's look for it, installed (or brought up to date) now that VS Code's server is
 		// there, within the same deadline; without it VS Code is plain, not broken (and it is
-		// tried again on the next IDEStart).
-		s.lookInstall(ctx, data)
+		// tried again on the next IDEStart). The install ends with the server.
+		ictx, icancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-run.exited:
+				icancel()
+			case <-ictx.Done():
+			}
+		}()
+		s.lookInstall(ictx, data)
+		icancel()
+		// Its address is given only while it is there: the server may have ended, or the app begun
+		// to quit, while the look was installed.
+		if closed(run.exited) {
+			run.kill()
+			return "", nil, out.with(errors.New("VS Code's server stopped as it started"))
+		}
+		if s.life.Err() != nil {
+			return fail(errIDEQuitting)
+		}
 		return base, run, nil
 	case <-run.exited:
 		run.kill() // its group: ended, waited for
