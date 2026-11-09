@@ -17,7 +17,7 @@ func folderErr(err error) error {
 	case errors.Is(err, store.ErrNoFolder):
 		return errf("not_found", "%v", err)
 	default:
-		return errf("invalid", "%v", err)
+		return invalidOr(err)
 	}
 }
 

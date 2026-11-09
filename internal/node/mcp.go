@@ -124,7 +124,7 @@ func (n *Node) PutMCPServer(ctx context.Context, p Principal, m store.MCPServer,
 	}
 	if err := n.st.PutMCPServer(ctx, m); err != nil {
 		undo()
-		return errf("invalid", "%v", err)
+		return invalidOr(err)
 	}
 	// Published: the old version is what nothing refers to now (the new one's notes go at the
 	// next sweep, which spares the versions in use).

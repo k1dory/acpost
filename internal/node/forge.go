@@ -75,6 +75,9 @@ func (n *Node) forgeOf(ctx context.Context, p Principal, q ForgeQuery) (ForgeInf
 		return ForgeInfo{}, errf("invalid", "an agent or a directory")
 	}
 	out, _, err := git(ctx, dir, nil, 4096, "remote", "get-url", "origin")
+	if err != nil && ctx.Err() != nil {
+		return ForgeInfo{}, ctx.Err() // the request ended (the node stops), not "no origin"
+	}
 	if err != nil {
 		return ForgeInfo{}, errh("not_found", "the repository needs a remote named origin", "%s: no origin remote (%v)", dir, err)
 	}
@@ -240,6 +243,9 @@ func (n *Node) approve(ctx context.Context, p Principal, title, text string, inp
 		return errf("unavailable", "the approval could not be asked: %v", err)
 	}
 	reply, ok := pending.Wait(ctx, req.ID, timeout)
+	if !ok && ctx.Err() != nil {
+		return ctx.Err() // the request ended (the node stops): nobody decided, nothing to record
+	}
 	decision, by := "timeout", ""
 	if ok {
 		by = n.answeredBy(req.ID)
