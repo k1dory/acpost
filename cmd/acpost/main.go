@@ -91,7 +91,7 @@ func main() {
 	root := rootCmd(g) // registering the flags sets their defaults
 	// Known before flags are parsed: an error in parsing them is reported in JSON too. Kept apart
 	// from g.json, which cobra sets as it goes and leaves where a bad flag stopped it.
-	parseJSON := jsonWanted(valueFlags(root), os.Args[1:], os.Getenv("ACPOST_JSON"))
+	parseJSON := jsonWanted(valueFlags(root, os.Args[1:]), os.Args[1:], os.Getenv("ACPOST_JSON"))
 	g.json = parseJSON
 	// Ctrl-C ends a command through its context: term restores the terminal and closes its own,
 	// a save is not cut midway; a second Ctrl-C ends it at once.
@@ -1207,9 +1207,10 @@ func (g *globals) loadConfig() (*config.Config, error) {
 	return config.Load(g.configPath())
 }
 
-// valueFlags are the flags of any command under root that take a value given as the next argument
-// (--name and its -n): what follows them is that value, not a flag.
-func valueFlags(root *cobra.Command) map[string]bool {
+// valueFlags are the flags that take a value given as the next argument (--name and its -n), of the
+// command args name and those it inherits: what follows them is that value, not a flag. Only that
+// command's: another's flag of the same name may take none (send --wait is a bool, recv's a time).
+func valueFlags(root *cobra.Command, args []string) map[string]bool {
 	out := map[string]bool{}
 	add := func(f *pflag.Flag) {
 		if f.NoOptDefVal != "" {
@@ -1220,14 +1221,11 @@ func valueFlags(root *cobra.Command) map[string]bool {
 			out["-"+f.Shorthand] = true
 		}
 	}
-	var walk func(c *cobra.Command)
-	walk = func(c *cobra.Command) {
-		c.Flags().VisitAll(add)
-		c.PersistentFlags().VisitAll(add)
-		for _, sub := range c.Commands() {
-			walk(sub)
-		}
+	cmd, _, err := root.Find(args)
+	if err != nil || cmd == nil {
+		cmd = root
 	}
-	walk(root)
+	cmd.Flags().VisitAll(add)
+	cmd.InheritedFlags().VisitAll(add)
 	return out
 }
