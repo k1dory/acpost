@@ -636,12 +636,16 @@ func (c *Client) alreadyOpen(ctx context.Context, srv Server, r Repo, p PullRequ
 	if !ok || (fe.Status != 409 && fe.Status != 422) {
 		return Pull{}, err
 	}
+	// The source: src is its owner, srcRepo the repository when known (a bare branch is this
+	// repository's, owner/repo:branch names one; owner:branch is that owner's fork, any name).
 	owner, _, _ := strings.Cut(r.Path, "/")
-	src, ref := owner, p.Head
+	src, srcRepo, ref := owner, r.Path, p.Head
 	if o, b, ok := strings.Cut(p.Head, ":"); ok && srv.Kind != GitLab {
 		src, ref = o, b
 		if o, _, ok := strings.Cut(src, "/"); ok { // owner/repo:branch
-			src = o
+			src, srcRepo = o, src
+		} else if !strings.EqualFold(o, owner) {
+			srcRepo = ""
 		}
 	}
 	var filter url.Values
@@ -660,7 +664,11 @@ func (c *Client) alreadyOpen(ctx context.Context, srv Server, r Repo, p PullRequ
 		if srv.Kind == GitLab {
 			from = map[bool]string{true: src}[x.HeadRepo == r.Path] // a fork's MR is not this one
 		}
-		if x.Head == ref && x.Base == p.Base && strings.EqualFold(from, src) {
+		same := strings.EqualFold(from, src)
+		if srcRepo != "" && srv.Kind != GitLab {
+			same = strings.EqualFold(x.HeadRepo, srcRepo) // one owner's two repositories differ
+		}
+		if x.Head == ref && x.Base == p.Base && same {
 			x.Existing = true
 			return x, nil
 		}
