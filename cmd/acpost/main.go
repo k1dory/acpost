@@ -97,7 +97,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	go func() { <-ctx.Done(); stop() }()
 	err := root.ExecuteContext(ctx)
-	if err != nil && (ctx.Err() != nil && errors.Is(err, context.Canceled) || errors.Is(err, errInterrupted)) {
+	// Interrupted is what a Ctrl-C makes it, whatever the command made of its ended context (term
+	// ends cleanly, a cut error body reads as the node's error): only the signal ends ctx.
+	if ctx.Err() != nil || errors.Is(err, errInterrupted) {
 		err = &exitErr{code: exitInterrupted, name: "interrupted", err: errors.New("interrupted")}
 	}
 	if err == nil {
