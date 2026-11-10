@@ -1,0 +1,58 @@
+// The cloud's agents as the builder edits them: a definition, what it is checked and deployed as.
+
+export type CloudSpec = { name: string; description: string; policy: string; environment: string; repo: string; instructions: string; connections: string[] };
+export type CloudDef = CloudSpec & { ref: string; shared: boolean; revision: number };
+export type CloudItem = { ref: string; name: string; shared: boolean; revision: number; description?: string };
+export type Catalogue = { agents: CloudDef[]; environments: CloudItem[]; connections: CloudItem[]; policies: string[] };
+export type CloudPlan = { plan: string; valid: boolean; action: string; revision: number; next_revision: number; diff: { path: string; from: string; to: string }[]; errors: string[] };
+
+export const emptySpec = (): CloudSpec => ({ name: "", description: "", policy: "", environment: "", repo: "", instructions: "", connections: [] });
+
+/** A definition as it is sent: what the cloud ignores (spaces around, an empty connection) taken off. */
+export function cleanSpec(s: CloudSpec): CloudSpec {
+  const conns: string[] = [];
+  for (const c of s.connections ?? []) { const v = c.trim(); if (v && !conns.includes(v)) conns.push(v); }
+  return { name: s.name.trim(), description: s.description.trim(), policy: s.policy.trim(), environment: s.environment.trim(), repo: s.repo.trim(), instructions: s.instructions.trim(), connections: conns };
+}
+
+/** What a check was made of: a check stands only while the definition is the one it checked. */
+export const specKey = (s: CloudSpec) => JSON.stringify(cleanSpec(s));
+
+/** What the form cannot send yet (the first thing missing), or "". */
+export function specMissing(s: CloudSpec): string {
+  const c = cleanSpec(s);
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(c.name)) return "A name: lowercase letters, digits and dashes";
+  if (!c.policy) return "Choose a policy";
+  if (!c.environment) return "Choose an environment";
+  return "";
+}
+
+/** A dropdown's items with the value the definition has now among them (an environment stored
+ * with its revision, a policy the list no longer has): choosing nothing must not change it. */
+export function withCurrent(items: { value: string; label: string }[], current: string) {
+  return !current || items.some(i => i.value === current) ? items : [{ value: current, label: current }, ...items];
+}
+
+/** A drafted definition laid over the form's: what the agent left empty keeps the form's value,
+ * and what it named that the cloud does not have is dropped (said in `dropped`). */
+export function mergeDraft(form: CloudSpec, draft: CloudSpec, cat: Catalogue, isNew: boolean): { spec: CloudSpec; dropped: string[] } {
+  const d = cleanSpec(draft), dropped: string[] = [];
+  const known = (v: string, list: string[], what: string) => {
+    if (!v) return "";
+    if (list.includes(v) || list.includes(v.replace(/@\d+$/, ""))) return v;
+    dropped.push(`${what} ${v}`);
+    return "";
+  };
+  const envs = cat.environments.map(e => e.ref), conns = cat.connections.map(c => c.ref);
+  const spec: CloudSpec = {
+    name: isNew ? d.name || form.name : form.name, // an agent in the catalogue keeps its name
+    description: d.description || form.description,
+    policy: known(d.policy, cat.policies, "policy") || form.policy,
+    environment: known(d.environment, envs, "environment") || form.environment,
+    repo: d.repo || form.repo,
+    instructions: d.instructions || form.instructions,
+    connections: d.connections.map(c => known(c, conns, "connection")).filter(Boolean),
+  };
+  if (!d.connections.length) spec.connections = [...form.connections];
+  return { spec, dropped };
+}

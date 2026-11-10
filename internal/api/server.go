@@ -102,6 +102,13 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/cloud/agents", s.auth(s.cloudAgents))
 	mux.HandleFunc("POST /v1/cloud/tasks", s.auth(s.cloudTask))
 	mux.HandleFunc("GET /v1/cloud/sandboxes/{id}/history", s.auth(s.cloudHistory))
+	mux.HandleFunc("GET /v1/cloud", s.auth(s.cloudInfo))
+	mux.HandleFunc("GET /v1/cloud/catalogue", s.auth(s.cloudCatalogue))
+	mux.HandleFunc("POST /v1/cloud/agents/plan", s.auth(s.cloudPlanAgent))
+	mux.HandleFunc("PUT /v1/cloud/agents/{name}", s.auth(s.cloudDeployAgent))
+	mux.HandleFunc("DELETE /v1/cloud/agents/{name}", s.auth(s.cloudDeleteAgent))
+	mux.HandleFunc("POST /v1/cloud/drafts", s.auth(s.cloudDraft))
+	mux.HandleFunc("GET /v1/cloud/drafts/{id}", s.auth(s.cloudDraftResult))
 	mux.HandleFunc("GET /v1/folders", s.auth(s.folders))
 	mux.HandleFunc("POST /v1/folders", s.auth(s.createFolder))
 	mux.HandleFunc("PATCH /v1/folders/{id}", s.auth(s.updateFolder))
@@ -1506,4 +1513,64 @@ func (s *server) disown(w http.ResponseWriter, r *http.Request, p node.Principal
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"found": true, "message": m})
+}
+
+func (s *server) cloudInfo(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.CloudInfo(r.Context(), p)
+	reply(w, http.StatusOK, out, err)
+}
+
+func (s *server) cloudCatalogue(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.CloudCatalogue(r.Context(), p)
+	reply(w, http.StatusOK, out, err)
+}
+
+func (s *server) cloudPlanAgent(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req client.CloudAgentSpec
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := s.n.CloudPlanAgent(r.Context(), p, req)
+	reply(w, http.StatusOK, out, err)
+}
+
+func (s *server) cloudDeployAgent(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req client.CloudAgentSpec
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	if req.Name != r.PathValue("name") {
+		writeErr(w, &node.Error{Code: "invalid", Message: "the definition names another agent than the address"})
+		return
+	}
+	out, err := s.n.CloudDeployAgent(r.Context(), p, req, r.URL.Query().Get("plan"))
+	reply(w, http.StatusOK, out, err)
+}
+
+func (s *server) cloudDeleteAgent(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	if err := s.n.CloudDeleteAgent(r.Context(), p, r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) cloudDraft(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	var req client.CloudDraftRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := s.n.CloudDraft(r.Context(), p, req)
+	reply(w, http.StatusCreated, out, err)
+}
+
+func (s *server) cloudDraftResult(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	out, err := s.n.CloudDraftResult(r.Context(), p, r.PathValue("id"))
+	reply(w, http.StatusOK, out, err)
 }

@@ -423,6 +423,453 @@ export class CloudAgent {
 }
 
 /**
+ * CloudAgentDef is an agent in the catalogue: its definition, its revision, and whether it is the
+ * platform's shared one (the tenant reads it, the admin writes it).
+ */
+export class CloudAgentDef {
+    "name": string;
+    "description": string;
+    "policy": string;
+    "environment": string;
+    "repo": string;
+    "instructions": string;
+    "connections": string[];
+
+    /**
+     * as a task names it: name, or shared/name
+     */
+    "ref": string;
+    "shared": boolean;
+    "revision": number;
+
+    /** Creates a new CloudAgentDef instance. */
+    constructor($$source: Partial<CloudAgentDef> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("description" in $$source)) {
+            this["description"] = "";
+        }
+        if (!("policy" in $$source)) {
+            this["policy"] = "";
+        }
+        if (!("environment" in $$source)) {
+            this["environment"] = "";
+        }
+        if (!("repo" in $$source)) {
+            this["repo"] = "";
+        }
+        if (!("instructions" in $$source)) {
+            this["instructions"] = "";
+        }
+        if (!("connections" in $$source)) {
+            this["connections"] = [];
+        }
+        if (!("ref" in $$source)) {
+            this["ref"] = "";
+        }
+        if (!("shared" in $$source)) {
+            this["shared"] = false;
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudAgentDef instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudAgentDef {
+        const $$createField6_0 = $$createType16;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("connections" in $$parsedSource) {
+            $$parsedSource["connections"] = $$createField6_0($$parsedSource["connections"]);
+        }
+        return new CloudAgentDef($$parsedSource as Partial<CloudAgentDef>);
+    }
+}
+
+/**
+ * CloudAgentSpec is an agent of the cloud's catalogue as a person writes it (agent-sandbox's
+ * AgentDefinition): the policy it runs under, the environment it runs in, the repository it
+ * starts on, what it is told, and the connections it may use.
+ */
+export class CloudAgentSpec {
+    "name": string;
+    "description": string;
+    "policy": string;
+    "environment": string;
+    "repo": string;
+    "instructions": string;
+    "connections": string[];
+
+    /** Creates a new CloudAgentSpec instance. */
+    constructor($$source: Partial<CloudAgentSpec> = {}) {
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("description" in $$source)) {
+            this["description"] = "";
+        }
+        if (!("policy" in $$source)) {
+            this["policy"] = "";
+        }
+        if (!("environment" in $$source)) {
+            this["environment"] = "";
+        }
+        if (!("repo" in $$source)) {
+            this["repo"] = "";
+        }
+        if (!("instructions" in $$source)) {
+            this["instructions"] = "";
+        }
+        if (!("connections" in $$source)) {
+            this["connections"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudAgentSpec instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudAgentSpec {
+        const $$createField6_0 = $$createType16;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("connections" in $$parsedSource) {
+            $$parsedSource["connections"] = $$createField6_0($$parsedSource["connections"]);
+        }
+        return new CloudAgentSpec($$parsedSource as Partial<CloudAgentSpec>);
+    }
+}
+
+/**
+ * CloudCatalogue is what an agent's definition is written from.
+ */
+export class CloudCatalogue {
+    "agents": CloudAgentDef[];
+    "environments": CloudItem[];
+    "connections": CloudItem[];
+    "policies": string[];
+
+    /** Creates a new CloudCatalogue instance. */
+    constructor($$source: Partial<CloudCatalogue> = {}) {
+        if (!("agents" in $$source)) {
+            this["agents"] = [];
+        }
+        if (!("environments" in $$source)) {
+            this["environments"] = [];
+        }
+        if (!("connections" in $$source)) {
+            this["connections"] = [];
+        }
+        if (!("policies" in $$source)) {
+            this["policies"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudCatalogue instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudCatalogue {
+        const $$createField0_0 = $$createType18;
+        const $$createField1_0 = $$createType20;
+        const $$createField2_0 = $$createType20;
+        const $$createField3_0 = $$createType16;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("agents" in $$parsedSource) {
+            $$parsedSource["agents"] = $$createField0_0($$parsedSource["agents"]);
+        }
+        if ("environments" in $$parsedSource) {
+            $$parsedSource["environments"] = $$createField1_0($$parsedSource["environments"]);
+        }
+        if ("connections" in $$parsedSource) {
+            $$parsedSource["connections"] = $$createField2_0($$parsedSource["connections"]);
+        }
+        if ("policies" in $$parsedSource) {
+            $$parsedSource["policies"] = $$createField3_0($$parsedSource["policies"]);
+        }
+        return new CloudCatalogue($$parsedSource as Partial<CloudCatalogue>);
+    }
+}
+
+/**
+ * CloudDeployed is an agent as a deploy left it in the catalogue.
+ */
+export class CloudDeployed {
+    "ref": string;
+    "revision": number;
+    "action": string;
+
+    /** Creates a new CloudDeployed instance. */
+    constructor($$source: Partial<CloudDeployed> = {}) {
+        if (!("ref" in $$source)) {
+            this["ref"] = "";
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+        if (!("action" in $$source)) {
+            this["action"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudDeployed instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudDeployed {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CloudDeployed($$parsedSource as Partial<CloudDeployed>);
+    }
+}
+
+/**
+ * CloudDiff is one field a deploy would change.
+ */
+export class CloudDiff {
+    "path": string;
+    "from": string;
+    "to": string;
+
+    /** Creates a new CloudDiff instance. */
+    constructor($$source: Partial<CloudDiff> = {}) {
+        if (!("path" in $$source)) {
+            this["path"] = "";
+        }
+        if (!("from" in $$source)) {
+            this["from"] = "";
+        }
+        if (!("to" in $$source)) {
+            this["to"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudDiff instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudDiff {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CloudDiff($$parsedSource as Partial<CloudDiff>);
+    }
+}
+
+/**
+ * CloudDraft is a draft's task and, once it ended, the definition it wrote.
+ */
+export class CloudDraft {
+    "msg": string;
+    "thread": string;
+    "state": string;
+    "spec"?: CloudAgentSpec | null;
+    "error"?: string;
+
+    /** Creates a new CloudDraft instance. */
+    constructor($$source: Partial<CloudDraft> = {}) {
+        if (!("msg" in $$source)) {
+            this["msg"] = "";
+        }
+        if (!("thread" in $$source)) {
+            this["thread"] = "";
+        }
+        if (!("state" in $$source)) {
+            this["state"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudDraft instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudDraft {
+        const $$createField3_0 = $$createType22;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("spec" in $$parsedSource) {
+            $$parsedSource["spec"] = $$createField3_0($$parsedSource["spec"]);
+        }
+        return new CloudDraft($$parsedSource as Partial<CloudDraft>);
+    }
+}
+
+/**
+ * CloudDraftRequest asks an agent of the node to write (or rewrite) a definition from a person's
+ * words; Cwd is a repository to read first.
+ */
+export class CloudDraftRequest {
+    "agent": string;
+    "ask": string;
+    "cwd"?: string;
+    "current"?: CloudAgentSpec | null;
+
+    /** Creates a new CloudDraftRequest instance. */
+    constructor($$source: Partial<CloudDraftRequest> = {}) {
+        if (!("agent" in $$source)) {
+            this["agent"] = "";
+        }
+        if (!("ask" in $$source)) {
+            this["ask"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudDraftRequest instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudDraftRequest {
+        const $$createField3_0 = $$createType22;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("current" in $$parsedSource) {
+            $$parsedSource["current"] = $$createField3_0($$parsedSource["current"]);
+        }
+        return new CloudDraftRequest($$parsedSource as Partial<CloudDraftRequest>);
+    }
+}
+
+/**
+ * CloudInfo is the cloud as the node is connected to it: whose key it holds (the tenant, or the
+ * platform's admin), and until when. Error is the cloud's refusal or silence (the key and the URL
+ * stay configured).
+ */
+export class CloudInfo {
+    "configured": boolean;
+    "url"?: string;
+    "tenant"?: string;
+    "admin"?: boolean;
+
+    /**
+     * key:<id>, an OIDC subject, or a static token's name
+     */
+    "subject"?: string;
+    "expires"?: string | null;
+    "error"?: string;
+    "error_code"?: string;
+
+    /** Creates a new CloudInfo instance. */
+    constructor($$source: Partial<CloudInfo> = {}) {
+        if (!("configured" in $$source)) {
+            this["configured"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudInfo instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudInfo {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CloudInfo($$parsedSource as Partial<CloudInfo>);
+    }
+}
+
+/**
+ * CloudItem is something a definition names: an environment or a connection.
+ */
+export class CloudItem {
+    "ref": string;
+    "name": string;
+    "shared": boolean;
+    "revision": number;
+    "description"?: string;
+
+    /** Creates a new CloudItem instance. */
+    constructor($$source: Partial<CloudItem> = {}) {
+        if (!("ref" in $$source)) {
+            this["ref"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("shared" in $$source)) {
+            this["shared"] = false;
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudItem instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudItem {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CloudItem($$parsedSource as Partial<CloudItem>);
+    }
+}
+
+/**
+ * CloudPlan is what deploying a definition would do, as the cloud checked it: nothing is written.
+ * Plan names the check; a deploy carries it and is refused once the catalogue has moved on.
+ */
+export class CloudPlan {
+    "plan": string;
+    "valid": boolean;
+
+    /**
+     * create | update | noop
+     */
+    "action": string;
+    "revision": number;
+    "next_revision": number;
+    "diff": CloudDiff[];
+    "errors": string[];
+
+    /** Creates a new CloudPlan instance. */
+    constructor($$source: Partial<CloudPlan> = {}) {
+        if (!("plan" in $$source)) {
+            this["plan"] = "";
+        }
+        if (!("valid" in $$source)) {
+            this["valid"] = false;
+        }
+        if (!("action" in $$source)) {
+            this["action"] = "";
+        }
+        if (!("revision" in $$source)) {
+            this["revision"] = 0;
+        }
+        if (!("next_revision" in $$source)) {
+            this["next_revision"] = 0;
+        }
+        if (!("diff" in $$source)) {
+            this["diff"] = [];
+        }
+        if (!("errors" in $$source)) {
+            this["errors"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CloudPlan instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CloudPlan {
+        const $$createField5_0 = $$createType24;
+        const $$createField6_0 = $$createType16;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("diff" in $$parsedSource) {
+            $$parsedSource["diff"] = $$createField5_0($$parsedSource["diff"]);
+        }
+        if ("errors" in $$parsedSource) {
+            $$parsedSource["errors"] = $$createField6_0($$parsedSource["errors"]);
+        }
+        return new CloudPlan($$parsedSource as Partial<CloudPlan>);
+    }
+}
+
+/**
  * ForgeAccount is a forge host logged in to.
  */
 export class ForgeAccount {
@@ -486,8 +933,8 @@ export class ForgeInfo {
      * Creates a new ForgeInfo instance from a string or object.
      */
     static createFrom($$source: any = {}): ForgeInfo {
-        const $$createField0_0 = $$createType17;
-        const $$createField1_0 = $$createType18;
+        const $$createField0_0 = $$createType25;
+        const $$createField1_0 = $$createType26;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("repo" in $$parsedSource) {
             $$parsedSource["repo"] = $$createField0_0($$parsedSource["repo"]);
@@ -676,7 +1123,7 @@ export class Status {
      * Creates a new Status instance from a string or object.
      */
     static createFrom($$source: any = {}): Status {
-        const $$createField5_0 = $$createType20;
+        const $$createField5_0 = $$createType28;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("limits" in $$parsedSource) {
             $$parsedSource["limits"] = $$createField5_0($$parsedSource["limits"]);
@@ -884,7 +1331,7 @@ export class UsageReport {
      * Creates a new UsageReport instance from a string or object.
      */
     static createFrom($$source: any = {}): UsageReport {
-        const $$createField14_0 = $$createType22;
+        const $$createField14_0 = $$createType30;
         const $$createField19_0 = $$createType16;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("uncosted" in $$parsedSource) {
@@ -915,9 +1362,17 @@ const $$createType13 = $Create.Array($$createType12);
 const $$createType14 = store$0.Folder.createFrom;
 const $$createType15 = $Create.Array($$createType14);
 const $$createType16 = $Create.Array($Create.Any);
-const $$createType17 = forge$0.Repo.createFrom;
-const $$createType18 = forge$0.Server.createFrom;
-const $$createType19 = Limits.createFrom;
-const $$createType20 = $Create.Nullable($$createType19);
-const $$createType21 = store$0.ModelTokens.createFrom;
-const $$createType22 = $Create.Map($Create.Any, $$createType21);
+const $$createType17 = CloudAgentDef.createFrom;
+const $$createType18 = $Create.Array($$createType17);
+const $$createType19 = CloudItem.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = CloudAgentSpec.createFrom;
+const $$createType22 = $Create.Nullable($$createType21);
+const $$createType23 = CloudDiff.createFrom;
+const $$createType24 = $Create.Array($$createType23);
+const $$createType25 = forge$0.Repo.createFrom;
+const $$createType26 = forge$0.Server.createFrom;
+const $$createType27 = Limits.createFrom;
+const $$createType28 = $Create.Nullable($$createType27);
+const $$createType29 = store$0.ModelTokens.createFrom;
+const $$createType30 = $Create.Map($Create.Any, $$createType29);

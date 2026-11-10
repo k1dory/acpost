@@ -55,6 +55,12 @@ func newCloudAPI(c *config.Cloud) (*cloudAPI, error) {
 }
 
 func (c *cloudAPI) call(ctx context.Context, method, path string, in, out any) error {
+	_, err := c.callStatus(ctx, method, path, in, out)
+	return err
+}
+
+// callStatus is call with the cloud's status (0: it did not answer).
+func (c *cloudAPI) callStatus(ctx context.Context, method, path string, in, out any) (int, error) {
 	var body io.Reader
 	if in != nil {
 		b, _ := json.Marshal(in)
@@ -62,7 +68,7 @@ func (c *cloudAPI) call(ctx context.Context, method, path string, in, out any) e
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.url+path, body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.token)
@@ -71,7 +77,7 @@ func (c *cloudAPI) call(ctx context.Context, method, path string, in, out any) e
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return errf("unavailable", "the cloud: %v", err)
+		return 0, errf("unavailable", "the cloud: %v", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
@@ -90,14 +96,14 @@ func (c *cloudAPI) call(ctx context.Context, method, path string, in, out any) e
 		case resp.StatusCode < 500:
 			code = "invalid"
 		}
-		return errf(code, "the cloud: %s %s: %d %s", method, path, resp.StatusCode, msg)
+		return resp.StatusCode, errf(code, "the cloud: %s %s: %d %s", method, path, resp.StatusCode, msg)
 	}
 	if out != nil {
 		if err := json.Unmarshal(b, out); err != nil {
-			return errf("unavailable", "the cloud: %s: not the API's answer (%v)", path, err)
+			return resp.StatusCode, errf("unavailable", "the cloud: %s: not the API's answer (%v)", path, err)
 		}
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 type cloudSandbox struct {
