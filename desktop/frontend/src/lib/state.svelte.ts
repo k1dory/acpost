@@ -553,7 +553,8 @@ class App {
   async submit(d: ComposerDraft): Promise<boolean> {
     const sent = d.text;
     const body = sent.trim();
-    if (!body || d.busy) return false;
+    // Words, or files alone (a screenshot says it): nothing at all is not a message.
+    if (!d.hasContent || d.busy) return false;
     d.busy = true;
     // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
     // are part of it: waited for, not left for the next message.
@@ -568,7 +569,7 @@ class App {
       this.error = refused.why === "read" ? t("Could not read {name}", { name: refused.file })
         : refused.why === "count" ? t("A message takes at most {n} files", { n: lim?.max_files ?? 0 })
         : t("The files are over the node's limit of {n} together", { n: bytes(lim?.max_files_size ?? 0) });
-    } else {
+    } else if (body || sentFiles.length) { // files only, and none of them came to be: nothing to send
       ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles }, at);
     }
     d.busy = false;

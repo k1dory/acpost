@@ -58,7 +58,7 @@
         onkeydown={e => { if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); saveEdit(); } else if (e.key === "Escape" && !saving) editing = null; }}></textarea>
       <div class="eacts"><button class="btn sm" disabled={saving} onclick={() => (editing = null)}>{t("Cancel")}</button><button class="btn primary sm" disabled={saving} onclick={saveEdit}>{t("Save")}</button></div>
     {:else}
-      <div class="ubody selectable">{m.body}</div>
+      {#if m.body}<div class="ubody selectable">{m.body}</div>{/if}
       {#if m.state === "queued"}
         <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button><button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button></div>
       {/if}
