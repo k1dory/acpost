@@ -2,9 +2,19 @@ import { describe, it, expect } from "vitest";
 import { changeRoots, mergeChanges, joinFiles } from "./changes";
 
 describe("a chat's changes from its messages' (finding 6)", () => {
-  it("the roots are the person's messages to agents, every one of them", () => {
-    const msgs = [{ id: "a", depth: 0, to: "agent:x" }, { id: "b", depth: 1, to: "agent:y" }, { id: "c", depth: 0, to: "agent:x" }, { id: "d", depth: 0, to: "user:me" }];
+  it("the roots are the person's messages to agents, every one of them (a child is its parent's)", () => {
+    const msgs = [{ id: "a", to: "agent:x" }, { id: "b", parent: "a", to: "agent:y" }, { id: "c", to: "agent:x" }, { id: "d", to: "user:me" }];
     expect(changeRoots(msgs)).toEqual(["a", "c"]);
+  });
+
+  it("a task delegated through the hub (depth 1, its parent on another node) is a root here", () => {
+    expect(changeRoots([{ id: "child", parent: "on-another-node", to: "agent:x" }])).toEqual(["child"]);
+  });
+
+  it("no root among the messages: the focused one, as before", () => {
+    expect(changeRoots([], "m9")).toEqual(["m9"]);
+    expect(changeRoots([{ id: "r", to: "user:me" }], "r")).toEqual(["r"]);
+    expect(changeRoots([], "")).toEqual([]);
   });
 
   it("a repository two roots changed is listed once, its files summed, its diffs in order", () => {

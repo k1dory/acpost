@@ -14,9 +14,10 @@
   let loading = $state(false);
   let pick = $state("");
   let agent = $state("");
-  // The whole chat's: each message of the person is a root of its own (a later one is not a
-  // child of the first), so each is asked, and the answers put together.
-  const roots = $derived(changeRoots(app.msgs));
+  // The whole chat's: each root of its tree is asked (each message of the person is one: a later
+  // one is not a child of the first; so is a task delegated here, its parent on another node),
+  // and the answers put together.
+  const roots = $derived(changeRoots(app.msgs, app.focus));
 
   // Another chat's changes asked meanwhile: the answer for this one is the one kept.
   const changes = latest();

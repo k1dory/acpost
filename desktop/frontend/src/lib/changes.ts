@@ -8,9 +8,15 @@ export type TurnChanges = { msg: string; agent: string; start: string; at: strin
 export type RepoDiff = { repo: string; branch?: string; before: string; after: string; files?: File[]; diff?: string; cut?: boolean; parts?: number };
 export type Changes = { turns: TurnChanges[]; repos: RepoDiff[] };
 
-/** The messages a chat's changes are asked of: the person's, to an agent (each a root). */
-export function changeRoots(msgs: { id: string; depth: number; to: string }[]): string[] {
-  return msgs.filter(m => m.depth === 0 && m.to.startsWith("agent:")).map(m => m.id);
+/** The messages a chat's changes are asked of: the roots of its tree, those to an agent whose
+ * parent is not among the chat's messages (the node's answer for one takes its children in). A
+ * task delegated through the hub arrives with depth 1 and a parent on another node: it is a root
+ * here. None (a chat not read yet): the focused message, so the panel is not left empty while
+ * the node has changes. */
+export function changeRoots(msgs: { id: string; parent?: string; to: string }[], focus = ""): string[] {
+  const here = new Set(msgs.map(m => m.id));
+  const roots = msgs.filter(m => m.to.startsWith("agent:") && !(m.parent && here.has(m.parent))).map(m => m.id);
+  return roots.length ? roots : focus ? [focus] : [];
 }
 
 /** The answers for each root, in the chat's order, as one: every turn, and each repository once.

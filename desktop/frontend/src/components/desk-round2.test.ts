@@ -102,12 +102,36 @@ describe("Changes is the open chat's, all of it (findings 6, 7)", () => {
     const app = await setup();
     fake.Node.Changes.mockImplementation(async (id: string) => id === "m1" ? repo("/r1", "a.txt") : repo("/r2", "b.txt"));
     app.thread = "T";
-    app.msgs = [m("m1", 0), m("c1", 1), m("m2", 0)];
+    app.msgs = [m("m1", 0), { ...m("c1", 1), parent: "m1" }, m("m2", 0)];
     const Changes = (await import("./Changes.svelte")).default;
     mounted.push(mount(Changes, { target: document.body }));
     await settle();
     expect(fake.Node.Changes.mock.calls.map(c => c[0]).sort()).toEqual(["m1", "m2"]);
     expect(listed().sort()).toEqual(["/r1/a.txt", "/r2/b.txt"]);
+  });
+
+  it("a task delegated here through the hub (depth 1, its parent on another node): its changes are asked and shown", async () => {
+    const app = await setup();
+    fake.Node.Changes.mockResolvedValue(repo("/r1", "a.txt"));
+    app.thread = "T";
+    app.msgs = [{ ...m("child", 1), parent: "on-another-node" }];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(fake.Node.Changes.mock.calls.map(c => c[0])).toEqual(["child"]);
+    expect(listed()).toEqual(["a.txt"]);
+  });
+
+  it("no message to an agent yet, a message focused: its changes are asked, as before", async () => {
+    const app = await setup();
+    fake.Node.Changes.mockResolvedValue(repo("/r1", "a.txt"));
+    app.thread = "T";
+    app.msgs = [];
+    app.focus = "m7";
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(fake.Node.Changes.mock.calls.map(c => c[0])).toEqual(["m7"]);
   });
 
   it("a new task shows none of the last chat's changes, and an answer still coming for it is dropped", async () => {
