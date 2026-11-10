@@ -1,6 +1,7 @@
 // What the composer holds for one chat: its text and files, and what a send of them made so far.
 // It lives in the app's state, not in the composer: the composer is made anew when a new task
 // becomes a chat, and the whole conversation is taken off screen while the node is down.
+import { SvelteSet } from "svelte/reactivity";
 import { overLimits } from "./draft";
 import { b64bytes } from "./base64";
 import type { Limits } from "./state.svelte";
@@ -187,7 +188,10 @@ export class ComposerDraft {
   movedTo: ComposerDraft | null = null;
   adding: Promise<void> = Promise.resolve();
   /** The reads still going into this draft (a send at the click takes them). */
-  reading = new Set<ReadJob>();
+  reading = new SvelteSet<ReadJob>();
+  /** Whether there is something to send: words, files, or files still being read (seen by the
+   * interface as it changes: a paste into an empty composer is something to send at once). */
+  get hasContent(): boolean { return !!this.text.trim() || this.files.length > 0 || this.reading.size > 0; }
 
   /** The draft that holds this one's text now. */
   live(): ComposerDraft {

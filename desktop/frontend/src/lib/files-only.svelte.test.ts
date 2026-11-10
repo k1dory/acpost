@@ -1,6 +1,7 @@
 // A message of files alone (a screenshot, nothing typed) is a message.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fakeNode, type Fake } from "../test/fake";
+import { fakeNode, deferred, flush, type Fake } from "../test/fake";
+import { afterSent } from "./draft";
 
 let fake: Fake;
 vi.mock("./api", async () => {
@@ -38,5 +39,25 @@ describe("a message without words", () => {
     d.text = "  \n";
     expect(await app.submit(d)).toBe(false);
     expect(fake.Node.SendTask).not.toHaveBeenCalled();
+  });
+
+  it("whose only file could not be read is not sent, and the draft is free again", async () => {
+    const { app } = await import("./state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }] as any;
+    const d = app.draftOf();
+    const read = deferred<ArrayBuffer>();
+    d.add([{ name: "shot.png", type: "image/png", size: 2, arrayBuffer: () => read.promise } as any], null, () => {});
+    const going = app.submit(d);
+    read.reject(new Error("gone"));
+    expect(await going).toBe(false);
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(fake.Node.CreateCloudTask).not.toHaveBeenCalled();
+    expect(d.busy).toBe(false);
+  });
+
+  it("leaves what is typed while it goes exactly as typed", async () => {
+    expect(afterSent("    nextIndentedLine()", "")).toBe("    nextIndentedLine()");
+    expect(afterSent("", "")).toBe("");
+    expect(afterSent("sent more", "sent")).toBe("more");
   });
 });

@@ -554,7 +554,7 @@ class App {
     const sent = d.text;
     const body = sent.trim();
     // Words, or files alone (a screenshot says it): nothing at all is not a message.
-    if ((!body && !d.files.length && !d.reading.size) || d.busy) return false;
+    if (!d.hasContent || d.busy) return false;
     d.busy = true;
     // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
     // are part of it: waited for, not left for the next message.

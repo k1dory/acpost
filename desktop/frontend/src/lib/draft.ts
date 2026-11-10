@@ -2,6 +2,7 @@
 
 /** The text left in the composer after `sent` went, the composer now holding `now`. */
 export function afterSent(now: string, sent: string): string {
+  if (sent === "") return now; // files alone went: no text of theirs to take out
   if (now === sent) return "";
   // Typed on after it while it went: that stays.
   if (now.startsWith(sent)) return now.slice(sent.length).replace(/^\s+/, "");
