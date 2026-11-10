@@ -443,6 +443,7 @@ export const ru: Record<string, string> = {
   "Choose an environment": "Выберите окружение",
   "optional: agents that run in sandboxes of an agent-sandbox cloud": "необязательно: агенты в песочницах облака agent-sandbox",
   "Build agents": "Собрать агентов",
+  "The draft's task was not stopped": "Задача черновика не остановлена",
 };
 
 // The node's messages (English) that have a known form, in Russian.

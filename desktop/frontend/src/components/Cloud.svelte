@@ -1,29 +1,19 @@
 <script lang="ts">
   import { t, tr, i18n } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
-  import { Node, errText, errInfo } from "../lib/api";
+  import { Node } from "../lib/api";
   import { agentLabel, tilde } from "../lib/names";
-  import { cleanSpec, emptySpec, mergeDraft, specKey, specMissing, withCurrent, type Catalogue, type CloudDef, type CloudPlan, type CloudSpec } from "../lib/cloud";
+  import { withCurrent } from "../lib/cloud";
+  import { CloudBuilder } from "../lib/cloudbuild.svelte";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
 
-  // The cloud: connecting one (a tenant's key), and building its agents. An agent of the cloud is a
-  // definition in the tenant's catalogue; deploying is writing a revision of it, after the cloud
-  // checked it. An agent of this Mac can write the definition from a few words.
-
-  type Info = { configured: boolean; url?: string; tenant?: string; admin?: boolean; subject?: string; expires?: string; error?: string; error_code?: string };
-  let info = $state<Info | null>(null);
-  let cat = $state<Catalogue | null>(null);
-  let err = $state("");
-  let note = $state("");
-  let busy = $state<"" | "connect" | "check" | "deploy" | "delete">("");
-
-  async function load() {
-    try { info = (await Node.CloudInfo()) as any; } catch (e) { err = errText(e); info = { configured: false }; cat = null; return; }
-    if (!info?.configured || info.error) { cat = null; return; }
-    try { cat = (await Node.CloudBuild()) as any; } catch (e) { err = errText(e); cat = null; }
-  }
-  load();
+  // The cloud: connecting one (a tenant's key), and building its agents (lib/cloudbuild).
+  const cb = new CloudBuilder();
+  cb.load();
+  const info = $derived(cb.info), cat = $derived(cb.cat), ed = $derived(cb.ed), busy = $derived(cb.busy);
+  const err = $derived(cb.err), note = $derived(cb.note), checked = $derived(cb.checked), missing = $derived(cb.missing);
+  const drafting = $derived(cb.drafting), draft = $derived(cb.draft), draftNote = $derived(cb.draftNote), sure = $derived(cb.sure);
 
   // Connecting: the address and the key.
   let form = $state(false);
@@ -32,119 +22,18 @@
   let ca = $state("");
   const turns = $derived(app.agents.reduce((n, a: any) => n + (a.running ?? 0), 0));
   async function connect() {
-    err = ""; note = ""; busy = "connect";
-    try {
-      const r: any = await Node.CloudConnect(url, key, ca);
-      key = ""; form = false;
-      note = r.restarted ? t("Connected. The node was started again with the cloud.") : t("The key is saved. Restart the node for it to use the cloud.");
-      await Promise.all([load(), app.loadCloudAgents(), app.loadAgents(), app.loadChats()]);
-    } catch (e) { err = errText(e, errInfo(e).code === "refused" ? "The cloud did not accept the key" : undefined); }
-    busy = "";
+    if (await cb.connect(url, key, ca)) { key = ""; form = false; }
   }
   function when(at?: string) {
     return at ? new Date(at).toLocaleDateString(i18n.lang === "ru" ? "ru-RU" : undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
   }
   const soon = $derived(!!info?.expires && new Date(info.expires).getTime() - Date.now() < 7 * 86400e3);
 
-  // The agent being written (null: the list).
-  type Edit = { isNew: boolean; rev: number; spec: CloudSpec; plan: CloudPlan | null; planKey: string };
-  let ed = $state<Edit | null>(null);
-  const specOf = (a: CloudSpec): CloudSpec => ({ name: a.name, description: a.description ?? "", policy: a.policy ?? "", environment: a.environment ?? "", repo: a.repo ?? "", instructions: a.instructions ?? "", connections: [...(a.connections ?? [])] });
-  function open(e: Edit) { ed = e; err = ""; note = ""; ask = ""; draftNote = ""; draft = null; drafting = false; draftRun++; sure = ""; }
-  function newAgent(from?: CloudDef) {
-    const spec = from ? specOf(from) : emptySpec();
-    if (!from && cat?.policies.length === 1) spec.policy = cat.policies[0];
-    if (!from && cat?.environments.length === 1) spec.environment = cat.environments[0].ref;
-    open({ isNew: true, rev: 0, spec, plan: null, planKey: "" });
-  }
-  const editAgent = (a: CloudDef) => open({ isNew: false, rev: a.revision, spec: specOf(a), plan: null, planKey: "" });
-  // A check stands only for the definition it checked.
-  const checked = $derived(!!ed?.plan && ed.planKey === specKey(ed.spec));
-  const missing = $derived(ed ? specMissing(ed.spec) : "");
-
-  async function check() {
-    if (!ed) return;
-    const e = ed, k = specKey(e.spec);
-    err = ""; busy = "check";
-    try { e.plan = (await Node.CloudPlanAgent(cleanSpec(e.spec) as any)) as any; e.planKey = k; } catch (x) { err = errText(x); }
-    busy = "";
-  }
-  async function deploy() {
-    if (!ed?.plan || !checked) return;
-    const e = ed;
-    err = ""; busy = "deploy";
-    try {
-      const r: any = await Node.CloudDeployAgent(cleanSpec(e.spec) as any, e.plan!.plan);
-      note = t("{ref} is revision {n} in the catalogue. New cloud tasks start from it; sandboxes made earlier keep their revision.", { ref: r.ref, n: r.revision });
-      if (ed === e) ed = null;
-      await Promise.all([load(), app.loadCloudAgents()]);
-    } catch (x) {
-      err = errText(x);
-      if (errInfo(x).code === "conflict") e.plan = null; // the catalogue moved on: checked again
-    }
-    busy = "";
-  }
-  let sure = $state(""); // the agent whose delete was clicked once
-  async function remove(name: string) {
-    if (sure !== name) { sure = name; return; }
-    err = ""; busy = "delete";
-    try {
-      await Node.CloudDeleteAgent(name);
-      note = t("{name} is out of the catalogue. Its sandboxes stay.", { name });
-      ed = null;
-      await Promise.all([load(), app.loadCloudAgents()]);
-    } catch (x) { err = errText(x); }
-    busy = ""; sure = "";
-  }
-  function toggleConn(ref: string) {
-    if (!ed) return;
-    const c = ed.spec.connections;
-    ed.spec.connections = c.includes(ref) ? c.filter(x => x !== ref) : [...c, ref];
-  }
-
-  // A draft: an agent of this Mac writes the definition, the person reads and deploys it.
   const locals = $derived(app.agents.filter((a: any) => a.driver === "acp" && !a.node));
-  let ask = $state("");
-  let draftAgent = $state("");
-  let draftDir = $state("");
-  let drafting = $state(false);
-  let draft = $state<{ msg: string; thread: string } | null>(null);
-  let draftNote = $state("");
-  let draftRun = 0;
-  $effect(() => { if (!locals.some((a: any) => a.address === draftAgent)) draftAgent = (locals[0] as any)?.address ?? ""; });
+  $effect(() => { if (!locals.some((a: any) => a.address === cb.draftAgent)) cb.draftAgent = (locals[0] as any)?.address ?? ""; });
   async function pickDir() {
-    const d = await Node.PickDirectory(draftDir || app.home).catch(() => "");
-    if (d) draftDir = d;
-  }
-  async function writeDraft() {
-    if (!ed || !cat || drafting) return;
-    const e = ed, run = ++draftRun;
-    const cur = cleanSpec(e.spec);
-    const has = cur.name || cur.instructions || cur.policy || cur.environment || cur.description;
-    err = ""; draftNote = ""; draft = null; drafting = true;
-    try {
-      let res: any = await Node.CloudDraft({ agent: draftAgent, ask: ask.trim(), cwd: draftDir, current: has ? cur : null } as any);
-      if (run === draftRun) draft = { msg: res.msg, thread: res.thread };
-      while (run === draftRun && ed === e && !res.spec && !res.error) res = await Node.CloudDraftResult(res.msg);
-      if (run !== draftRun || ed !== e) return;
-      if (res.error) err = tr(res.error);
-      else {
-        const m = mergeDraft(e.spec, res.spec, cat, e.isNew);
-        e.spec = m.spec;
-        draftNote = m.dropped.length ? t("The draft named what the cloud does not have, left out: {list}", { list: m.dropped.join(", ") }) : t("The draft is in the form. Read it, check it, deploy it.");
-      }
-    } catch (x) { if (run === draftRun) err = errText(x); }
-    if (run === draftRun) drafting = false;
-  }
-  function stopDraft() {
-    draftRun++; drafting = false;
-    if (draft) Node.Cancel(draft.msg).catch(() => {});
-  }
-  async function openDraft() {
-    if (!draft) return;
-    await app.loadChats();
-    const c = app.chats.find(c => c.thread === draft!.thread);
-    if (c) app.open(c);
+    const d = await Node.PickDirectory(cb.draftDir || app.home).catch(() => "");
+    if (d) cb.draftDir = d;
   }
 </script>
 
@@ -202,12 +91,12 @@
         <div class="t"><b>{a.name}</b><span class="muted small one">{a.description || a.policy}{a.repo ? " · " + a.repo : ""}</span></div>
         {#if a.shared}<span class="chip">{t("shared")}</span>{/if}
         <span class="chip num">{t("revision {n}", { n: a.revision })}</span>
-        {#if mine}<button class="btn ghost sm" onclick={() => editAgent(a)}>{t("Edit")}</button>
-        {:else}<button class="btn ghost sm" onclick={() => newAgent(a)} title={t("A shared agent is the admin's: yours starts as its copy")}>{t("Copy")}</button>{/if}
+        {#if mine}<button class="btn ghost sm" disabled={!!busy} onclick={() => cb.editAgent(a)}>{t("Edit")}</button>
+        {:else}<button class="btn ghost sm" onclick={() => cb.newAgent(a)} title={t("A shared agent is the admin's: yours starts as its copy")}>{t("Copy")}</button>{/if}
       </div>
     {:else}<div class="row muted">{t("No agents yet")}</div>{/each}
   </div></div>
-  <div class="acts left"><button class="btn primary" onclick={() => newAgent()}><Icon name="plus" size={13} /> {t("New agent")}</button></div>
+  <div class="acts left"><button class="btn primary" onclick={() => cb.newAgent()}><Icon name="plus" size={13} /> {t("New agent")}</button></div>
 {/if}
 
 {#if cat && ed}
@@ -217,16 +106,16 @@
 
     <div class="draft">
       <div class="lbl first">{t("Have an agent write it")}</div>
-      <textarea class="input" rows="3" placeholder={t("What this agent is for: a backend developer for the shop, reviews pull requests, keeps the docs up to date…")} bind:value={ask} disabled={drafting}></textarea>
+      <textarea class="input" rows="3" placeholder={t("What this agent is for: a backend developer for the shop, reviews pull requests, keeps the docs up to date…")} bind:value={cb.ask} disabled={drafting}></textarea>
       <div class="frow wrap">
         {#if locals.length}
-          <Dropdown bind:value={draftAgent} icon="bot" items={locals.map((a: any) => ({ value: a.address, label: agentLabel(a.address) }))} />
-          <button class="chip pickc" onclick={pickDir} title={t("A repository the agent reads first, to write instructions that fit it")}><Icon name="file" size={12} /> {draftDir ? tilde(draftDir, app.home) : t("No repository")}</button>
-          {#if draftDir}<button class="btn ghost sm" onclick={() => (draftDir = "")} aria-label={t("No repository")}><Icon name="x" size={11} /></button>{/if}
+          <Dropdown bind:value={cb.draftAgent} icon="bot" items={locals.map((a: any) => ({ value: a.address, label: agentLabel(a.address) }))} />
+          <button class="chip pickc" onclick={pickDir} title={t("A repository the agent reads first, to write instructions that fit it")}><Icon name="file" size={12} /> {cb.draftDir ? tilde(cb.draftDir, app.home) : t("No repository")}</button>
+          {#if cb.draftDir}<button class="btn ghost sm" onclick={() => (cb.draftDir = "")} aria-label={t("No repository")}><Icon name="x" size={11} /></button>{/if}
           <span class="sp"></span>
-          {#if draft}<button class="btn ghost sm" onclick={openDraft}><Icon name="chat" size={12} /> {t("Open its chat")}</button>{/if}
-          {#if drafting}<button class="btn sm" onclick={stopDraft}>{t("Stop")}</button>{/if}
-          <button class="btn sm" disabled={drafting || !ask.trim() || !draftAgent} onclick={writeDraft}>{drafting ? t("Writing…") : t("Write a draft")}</button>
+          {#if draft}<button class="btn ghost sm" onclick={() => cb.openDraft()}><Icon name="chat" size={12} /> {t("Open its chat")}</button>{/if}
+          {#if drafting}<button class="btn sm" onclick={() => cb.stopDraft()}>{t("Stop")}</button>{/if}
+          <button class="btn sm" disabled={drafting || !cb.ask.trim() || !cb.draftAgent} onclick={() => cb.writeDraft()}>{drafting ? t("Writing…") : t("Write a draft")}</button>
         {:else}
           <span class="muted small">{t("No agent of this Mac to write it: Claude Code or Codex over ACP")}</span>
         {/if}
@@ -252,7 +141,7 @@
       <div class="lbl">{t("Connections")}</div>
       <div class="frow wrap">
         {#each [...new Set([...cat.connections.map(c => c.ref), ...e.spec.connections])] as c (c)}
-          <button class="chip pickc" class:on={e.spec.connections.includes(c)} onclick={() => toggleConn(c)}>{c}</button>
+          <button class="chip pickc" class:on={e.spec.connections.includes(c)} onclick={() => cb.toggleConn(c)}>{c}</button>
         {/each}
       </div>
     {/if}
@@ -277,12 +166,12 @@
     {/if}
     <div class="muted small">{t("Check asks the cloud what would change; nothing is written. Deploy writes exactly that as a new revision. Nothing is built or restarted: a new cloud task starts from the latest revision, sandboxes made earlier keep theirs.")}</div>
     <div class="acts">
-      {#if !e.isNew}<button class="btn ghost danger" disabled={!!busy} onclick={() => remove(e.spec.name)}>{sure === e.spec.name ? t("Delete it from the catalogue?") : t("Delete")}</button>{/if}
+      {#if !e.isNew}<button class="btn ghost danger" disabled={!!busy} onclick={() => cb.remove()}>{sure === e.spec.name ? t("Delete it from the catalogue?") : t("Delete")}</button>{/if}
       <span class="sp"></span>
       {#if missing}<span class="muted small">{t(missing)}</span>{/if}
-      <button class="btn" onclick={() => { stopDraft(); ed = null; }}>{t("Cancel")}</button>
-      <button class="btn" disabled={!!busy || !!missing} onclick={check}>{busy === "check" ? t("Checking…") : t("Check")}</button>
-      <button class="btn primary" disabled={!!busy || !checked || !e.plan?.valid || e.plan?.action === "noop"} onclick={deploy}>{busy === "deploy" ? t("Deploying…") : t("Deploy")}</button>
+      <button class="btn" onclick={() => cb.close()}>{t("Cancel")}</button>
+      <button class="btn" disabled={!!busy || !!missing} onclick={() => cb.check()}>{busy === "check" ? t("Checking…") : t("Check")}</button>
+      <button class="btn primary" disabled={!!busy || !checked || !e.plan?.valid || e.plan?.action === "noop"} onclick={() => cb.deploy()}>{busy === "deploy" ? t("Deploying…") : t("Deploy")}</button>
     </div>
   </div>
 {/if}

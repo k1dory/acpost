@@ -33,10 +33,11 @@ export function withCurrent(items: { value: string; label: string }[], current: 
   return !current || items.some(i => i.value === current) ? items : [{ value: current, label: current }, ...items];
 }
 
-/** A drafted definition laid over the form's: what the agent left empty keeps the form's value,
- * and what it named that the cloud does not have is dropped (said in `dropped`). */
-export function mergeDraft(form: CloudSpec, draft: CloudSpec, cat: Catalogue, isNew: boolean): { spec: CloudSpec; dropped: string[] } {
-  const d = cleanSpec(draft), dropped: string[] = [];
+/** A drafted definition laid over the form's. What the agent left empty keeps the form's value;
+ * what it named that the cloud does not have is dropped (said in `dropped`); and a field the
+ * person changed since the draft was asked for (`start`: the form then) stays theirs. */
+export function mergeDraft(form: CloudSpec, draft: CloudSpec, cat: Catalogue, isNew: boolean, start: CloudSpec = form): { spec: CloudSpec; dropped: string[] } {
+  const d = cleanSpec(draft), f = cleanSpec(form), s = cleanSpec(start), dropped: string[] = [];
   const known = (v: string, list: string[], what: string) => {
     if (!v) return "";
     if (list.includes(v) || list.includes(v.replace(/@\d+$/, ""))) return v;
@@ -44,15 +45,18 @@ export function mergeDraft(form: CloudSpec, draft: CloudSpec, cat: Catalogue, is
     return "";
   };
   const envs = cat.environments.map(e => e.ref), conns = cat.connections.map(c => c.ref);
+  const text = (k: "description" | "policy" | "environment" | "repo" | "instructions", v: string) => (f[k] !== s[k] ? form[k] : v || form[k]);
   const spec: CloudSpec = {
-    name: isNew ? d.name || form.name : form.name, // an agent in the catalogue keeps its name
-    description: d.description || form.description,
-    policy: known(d.policy, cat.policies, "policy") || form.policy,
-    environment: known(d.environment, envs, "environment") || form.environment,
-    repo: d.repo || form.repo,
-    instructions: d.instructions || form.instructions,
-    connections: d.connections.map(c => known(c, conns, "connection")).filter(Boolean),
+    name: isNew && f.name === s.name ? d.name || form.name : form.name, // an agent in the catalogue keeps its name
+    description: text("description", d.description),
+    policy: text("policy", known(d.policy, cat.policies, "policy")),
+    environment: text("environment", known(d.environment, envs, "environment")),
+    repo: text("repo", d.repo),
+    instructions: text("instructions", d.instructions),
+    connections: [...form.connections],
   };
-  if (!d.connections.length) spec.connections = [...form.connections];
+  if (d.connections.length && JSON.stringify(f.connections) === JSON.stringify(s.connections)) {
+    spec.connections = d.connections.map(c => known(c, conns, "connection")).filter(Boolean);
+  }
   return { spec, dropped };
 }

@@ -28,6 +28,8 @@ type fakeCatalogue struct {
 	applyStatus string // "" = done
 	noConns     bool
 	deleted     []string
+	byKey       map[string]map[string]any // an apply's key → its bundle and how it ended
+	loseApply   bool                      // the next apply is committed and its answer lost
 	token       string
 }
 
@@ -72,6 +74,7 @@ func (f *fakeCatalogue) handler(w http.ResponseWriter, r *http.Request) {
 		Documents []map[string]any `json:"documents"`
 		Plan, Key string
 	}
+	_ = w.(http.Hijacker)
 	if r.Body != nil && r.Method == "POST" {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
@@ -102,6 +105,15 @@ func (f *fakeCatalogue) handler(w http.ResponseWriter, r *http.Request) {
 		answer(200, f.plan(body.Documents[0]))
 	case "POST /v1/apply":
 		doc := body.Documents[0]
+		// One apply per key: the same key with the same bundle is that apply again, as it ended.
+		if was := f.byKey[body.Key]; was != nil {
+			if b, _ := json.Marshal(doc); string(b) != was["bundle"] {
+				answer(409, map[string]string{"error": "the key was used for another bundle"})
+				return
+			}
+			answer(200, was["apply"])
+			return
+		}
 		if body.Plan != f.fingerprint(doc) {
 			answer(409, map[string]string{"error": "the plan does not match the state"})
 			return
@@ -119,8 +131,22 @@ func (f *fakeCatalogue) handler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			f.agents[name] = map[string]any{"revision": pl["next_revision"].(int), "instructions": doc["spec"].(map[string]any)["instructions"]}
 		}
-		answer(200, map[string]any{"id": "apply_1", "status": status, "error": map[bool]string{true: "", false: "a step failed"}[status == "done"],
-			"steps": []map[string]any{{"kind": "AgentDefinition", "tenant": "acme", "name": name, "action": pl["action"], "status": status, "revision": pl["next_revision"]}}})
+		bundle, _ := json.Marshal(doc)
+		if f.byKey == nil {
+			f.byKey = map[string]map[string]any{}
+		}
+		applied := map[string]any{"id": "apply_1", "status": status, "error": map[bool]string{true: "", false: "a step failed"}[status == "done"],
+			"steps": []map[string]any{{"kind": "AgentDefinition", "tenant": "acme", "name": name, "action": pl["action"], "status": status, "revision": pl["next_revision"]}}}
+		if status == "done" {
+			f.byKey[body.Key] = map[string]any{"bundle": string(bundle), "apply": applied}
+		}
+		if f.loseApply {
+			f.loseApply = false
+			hj, _, _ := w.(http.Hijacker).Hijack()
+			hj.Close() // committed, and its answer never comes
+			return
+		}
+		answer(200, applied)
 	default:
 		if name, ok := strings.CutPrefix(r.URL.Path, "/v1/agents/"); ok && r.Method == "DELETE" {
 			if f.agents[name] == nil {
@@ -234,6 +260,26 @@ func TestCloudBuild(t *testing.T) {
 	if err != nil || dep != (client.CloudDeployed{Ref: "backend", Revision: 5, Action: "update"}) {
 		t.Fatalf("%+v %v", dep, err)
 	}
+	// The same deploy again (its answer was lost, the person clicks once more): the same apply,
+	// its revision, and nothing written twice.
+	if again, err := n.CloudDeployAgent(ctx, me, spec, plan.Plan); err != nil || again != dep || f.applies != 1 {
+		t.Fatalf("the same deploy again: %+v %v, %d applies", again, err, f.applies)
+	}
+	// A deploy the cloud committed and whose answer never came: an error here, and the retry is
+	// that apply, once.
+	lost := client.CloudAgentSpec{Name: "lost", Policy: "backend-dev", Environment: "python-dev", Instructions: "x"}
+	lp, _ := n.CloudPlanAgent(ctx, me, lost)
+	f.mu.Lock()
+	f.loseApply = true
+	f.mu.Unlock()
+	if _, err := n.CloudDeployAgent(ctx, me, lost, lp.Plan); code(err) != "unavailable" {
+		t.Fatalf("an answer lost: %v", err)
+	}
+	if d, err := n.CloudDeployAgent(ctx, me, lost, lp.Plan); err != nil || d != (client.CloudDeployed{Ref: "lost", Revision: 1, Action: "create"}) || f.applies != 2 {
+		t.Fatalf("the retry: %+v %v, %d applies", d, err, f.applies)
+	}
+	delete(f.agents, "lost")
+	f.applies = 1
 	// The catalogue moved on (this very deploy): the same plan writes nothing more.
 	if _, err := n.CloudDeployAgent(ctx, me, client.CloudAgentSpec{Name: "backend", Policy: "backend-dev", Environment: "python-dev", Instructions: "newer"}, plan.Plan); code(err) != "conflict" || hintOf(err) == "" {
 		t.Fatalf("a stale plan: %v", err)

@@ -5,6 +5,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/k1dory/acpost/internal/config"
 )
@@ -175,5 +178,127 @@ func TestWriteCloudKeepsAWorkingConfiguration(t *testing.T) {
 	}
 	if err := writeCloud(filepath.Join(dir, "config.json"), env, &config.Cloud{URL: "https://new", Token: "new"}); err == nil || !strings.Contains(err.Error(), "by hand") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// The configuration's write itself fails (the disk, not the YAML): the key that was there is the
+// key that is there, the very file, and nothing of the new one stays.
+func TestWriteCloudConfigWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	path, env := filepath.Join(dir, "config.yaml"), filepath.Join(dir, cloudEnvName)
+	src := "agents:\n  a: {driver: inbox}\ncloud: {env_file: \"" + env + "\"}\n"
+	os.WriteFile(path, []byte(src), 0o600)
+	os.WriteFile(env, []byte("SANDBOXD_URL=https://old\nSANDBOXD_TOKEN=old\n"), 0o600)
+	before, _ := os.Stat(env)
+	old := writeFile
+	t.Cleanup(func() { writeFile = old })
+	writeFile = func(p string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool) error {
+		if p == path {
+			return errors.New("no space left on device")
+		}
+		return old(p, b, perm, keep, replace)
+	}
+	err := writeCloud(path, env, &config.Cloud{URL: "https://new", Token: "new"})
+	if err == nil || !strings.Contains(err.Error(), "no space") {
+		t.Fatalf("%v", err)
+	}
+	after, _ := os.Stat(env)
+	if b, _ := os.ReadFile(env); !strings.Contains(string(b), "TOKEN=old") || !os.SameFile(before, after) {
+		t.Fatalf("the key's file is not the one that was there: %s", b)
+	}
+	if b, _ := os.ReadFile(path); string(b) != src {
+		t.Fatalf("%s", b)
+	}
+	if list, _ := os.ReadDir(dir); len(list) != 2 {
+		t.Fatalf("left behind: %v", list)
+	}
+	// No key's file before: none after.
+	os.Remove(env)
+	if err := writeCloud(path, env, &config.Cloud{URL: "https://new", Token: "new"}); err == nil {
+		t.Fatal("written")
+	}
+	if _, err := os.Stat(env); !os.IsNotExist(err) {
+		t.Fatalf("a key was left: %v", err)
+	}
+	// The key's write fails: the same.
+	os.WriteFile(env, []byte("SANDBOXD_URL=https://old\nSANDBOXD_TOKEN=old\n"), 0o600)
+	writeFile = func(p string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool) error {
+		return errors.New("read-only file system")
+	}
+	if err := writeCloud(path, env, &config.Cloud{URL: "https://new", Token: "new"}); err == nil {
+		t.Fatal("written")
+	}
+	if b, _ := os.ReadFile(env); !strings.Contains(string(b), "TOKEN=old") {
+		t.Fatalf("%s", b)
+	}
+	// A key's file that cannot be looked at is neither written over nor removed.
+	writeFile = old
+	locked := filepath.Join(dir, "locked")
+	os.Mkdir(locked, 0o700)
+	os.WriteFile(filepath.Join(locked, cloudEnvName), []byte("SANDBOXD_TOKEN=old\n"), 0o600)
+	os.Chmod(locked, 0)
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	if err := writeCloud(path, filepath.Join(locked, cloudEnvName), &config.Cloud{URL: "https://new", Token: "new"}); err == nil {
+		t.Fatal("written over a file that could not be read")
+	}
+	os.Chmod(locked, 0o700)
+	if b, _ := os.ReadFile(filepath.Join(locked, cloudEnvName)); string(b) != "SANDBOXD_TOKEN=old\n" {
+		t.Fatalf("%q", b)
+	}
+}
+
+// Two connects at once, each to its own cloud with its own CA: what is left is one of them whole,
+// the address, the key and the CA of the same cloud.
+func TestCloudConnectAtOnce(t *testing.T) {
+	ownNode(t, func(ctx context.Context, ready func()) error { ready(); <-ctx.Done(); return nil })
+	dir := t.TempDir()
+	type cloud struct{ url, key, ca string }
+	var clouds []cloud
+	for _, k := range []string{"sbk_a", "sbk_b"} {
+		key := k
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+key {
+				w.WriteHeader(401)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"tenant": key})
+		}))
+		t.Cleanup(srv.Close)
+		ca := filepath.Join(dir, key+".pem")
+		os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600)
+		clouds = append(clouds, cloud{srv.URL, key, ca})
+	}
+	n := &Node{emitFn: func(string, any) {}}
+	t.Cleanup(func() { n.ServiceShutdown() })
+	if err := n.ensureNode(); err != nil {
+		t.Fatal(err)
+	}
+	// Each write is slow enough for the other connect to come between the key and the configuration.
+	old := writeFile
+	t.Cleanup(func() { writeFile = old })
+	writeFile = func(p string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool) error {
+		time.Sleep(20 * time.Millisecond)
+		return old(p, b, perm, keep, replace)
+	}
+	for range 5 {
+		var wg sync.WaitGroup
+		for _, c := range clouds {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := n.CloudConnect(c.url, c.key, c.ca); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		wg.Wait()
+		cfg, err := config.Load(os.Getenv("ACPOST_CONFIG"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := cloud{cfg.Cloud.URL, cfg.Cloud.Token, cfg.Cloud.CA}
+		if got != clouds[0] && got != clouds[1] {
+			t.Fatalf("a mix of two clouds: %+v", got)
+		}
 	}
 }

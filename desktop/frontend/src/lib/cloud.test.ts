@@ -44,4 +44,10 @@ describe("a drafted definition", () => {
     expect(r.spec).toEqual({ ...form, instructions: "new" });
     expect(r.dropped).toEqual([]);
   });
+  it("leaves what the person changed while it was written", () => {
+    const start = { ...form };
+    const now = { ...form, instructions: "mine, typed meanwhile", connections: [] };
+    const r = mergeDraft(now, { ...emptySpec(), description: "d", policy: "backend-dev", instructions: "the agent's", connections: ["github"] }, cat, false, start);
+    expect(r.spec).toEqual({ ...now, description: "d" });
+  });
 });

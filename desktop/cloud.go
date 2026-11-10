@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
@@ -78,6 +80,12 @@ type CloudConnected struct {
 	Restarted bool             `json:"restarted"`
 }
 
+// cloudMu serializes CloudConnect's writes and its restart.
+var cloudMu sync.Mutex
+
+// writeFile is writeAtomic (tests fail a write through it).
+var writeFile = writeAtomic
+
 // cloudEnvName is the file the app keeps the cloud's address and key in, beside the configuration.
 const cloudEnvName = "cloud.env"
 
@@ -97,6 +105,10 @@ func (n *Node) CloudConnect(rawURL, token, ca string) (CloudConnected, error) {
 		return out, nodeErr(err)
 	}
 	out.Info = info
+	// One connect at a time, from the files to the restart: two at once would leave one's key
+	// under the other's configuration, or undo each other.
+	cloudMu.Lock()
+	defer cloudMu.Unlock()
 	path := config.DefaultPath()
 	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 		if err := writeDefaultConfig(path); err != nil {
@@ -123,7 +135,9 @@ func nodeErr(err error) error {
 
 // writeCloud writes the key's file, then names it in the configuration: the configuration is
 // changed only where it says cloud (the rest, its comments too, stays), and only to one the node
-// can read. A configuration that fails leaves the key's file as it was.
+// can read. Either both are the new cloud's or both stay as they were: the key's file that was
+// there is kept under another name (its own bytes, not a copy written again) until the
+// configuration is in, and put back by a rename when it is not.
 func writeCloud(path, env string, c *config.Cloud) error {
 	if ext := strings.ToLower(filepath.Ext(path)); ext != ".yaml" && ext != ".yml" {
 		return fmt.Errorf("%s is not YAML: set cloud: {env_file: …} in it by hand", path)
@@ -140,27 +154,47 @@ func writeCloud(path, env string, c *config.Cloud) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	prev, prevErr := os.ReadFile(env)
-	body := "# Written by the acpost app: the cloud's address and key (as sandboxctl reads them).\nSANDBOXD_URL=" + c.URL + "\nSANDBOXD_TOKEN=" + c.Token + "\n"
-	if err := writeAtomic(env, []byte(body), 0o600, nil, true); err != nil {
+	// Whether there is a key's file now: only "there is none" is none (one that cannot be looked
+	// at is not written over, nor removed on the way back).
+	had := true
+	if _, err := os.Lstat(env); errors.Is(err, fs.ErrNotExist) {
+		had = false
+	} else if err != nil {
 		return err
 	}
-	undo := func() {
-		if prevErr == nil {
-			_ = writeAtomic(env, prev, 0o600, nil, true)
-		} else {
-			_ = os.Remove(env)
+	prev := env + ".prev"
+	if had {
+		_ = os.Remove(prev) // one left by a connect cut short
+		if err := os.Link(env, prev); err != nil {
+			return fmt.Errorf("keep the key that is there: %w", err)
 		}
+	}
+	undo := func(cause error) error {
+		var uerr error
+		if had {
+			uerr = os.Rename(prev, env)
+		} else if uerr = os.Remove(env); errors.Is(uerr, fs.ErrNotExist) {
+			uerr = nil
+		}
+		if uerr != nil {
+			return fmt.Errorf("%w; and the key's file could not be put back as it was (%v): %s names the cloud the node will use", cause, uerr, env)
+		}
+		return cause
+	}
+	body := "# Written by the acpost app: the cloud's address and key (as sandboxctl reads them).\nSANDBOXD_URL=" + c.URL + "\nSANDBOXD_TOKEN=" + c.Token + "\n"
+	if err := writeFile(env, []byte(body), 0o600, nil, true); err != nil {
+		return undo(err)
 	}
 	// Read as the node will read it, before it replaces what works now.
 	if _, err := config.Parse(next, ".yaml"); err != nil {
-		undo()
-		return fmt.Errorf("%s with the cloud: %w", path, err)
+		return undo(fmt.Errorf("%s with the cloud: %w", path, err))
 	}
 	mode := fi.Mode().Perm()
-	if err := writeAtomic(path, next, 0o600, &mode, true); err != nil {
-		undo()
-		return err
+	if err := writeFile(path, next, 0o600, &mode, true); err != nil {
+		return undo(err)
+	}
+	if had {
+		_ = os.Remove(prev)
 	}
 	return nil
 }
