@@ -176,7 +176,7 @@
     {#if stopMode}
       <button class="btn primary send stop" title={t("Stop (⌃C)")} onclick={() => app.stopHere()}><span class="sq"></span></button>
     {:else}
-      <button class="btn primary send" disabled={!d.text.trim() || d.busy} onclick={send} title={running ? t("Queue after the running turn") : t("Send")}><Icon name="send" size={14} /></button>
+      <button class="btn primary send" disabled={(!d.text.trim() && !d.files.length && !d.reading.size) || d.busy} onclick={send} title={running ? t("Queue after the running turn") : t("Send")}><Icon name="send" size={14} /></button>
     {/if}
   </div>
 </div>
