@@ -1601,14 +1601,17 @@ func (c *Client) Disown(ctx context.Context, id, from, key string) (store.Messag
 // platform's admin), and until when. Error is the cloud's refusal or silence (the key and the URL
 // stay configured).
 type CloudInfo struct {
-	Configured bool       `json:"configured"`
-	URL        string     `json:"url,omitempty"`
-	Tenant     string     `json:"tenant,omitempty"`
-	Admin      bool       `json:"admin,omitempty"`
-	Subject    string     `json:"subject,omitempty"` // key:<id>, an OIDC subject, or a static token's name
-	Expires    *time.Time `json:"expires,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	ErrorCode  string     `json:"error_code,omitempty"`
+	Configured bool `json:"configured"`
+	// ID names the connection (the address and the key, never the key itself): what was read
+	// from one cloud is written only to that cloud (a plan, a deploy, a delete carry it).
+	ID        string     `json:"id,omitempty"`
+	URL       string     `json:"url,omitempty"`
+	Tenant    string     `json:"tenant,omitempty"`
+	Admin     bool       `json:"admin,omitempty"`
+	Subject   string     `json:"subject,omitempty"` // key:<id>, an OIDC subject, or a static token's name
+	Expires   *time.Time `json:"expires,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	ErrorCode string     `json:"error_code,omitempty"`
 }
 
 // CloudAgentSpec is an agent of the cloud's catalogue as a person writes it (agent-sandbox's
@@ -1644,6 +1647,7 @@ type CloudItem struct {
 
 // CloudCatalogue is what an agent's definition is written from.
 type CloudCatalogue struct {
+	Cloud        string          `json:"cloud"` // the connection it was read from (CloudInfo.ID)
 	Agents       []CloudAgentDef `json:"agents"`
 	Environments []CloudItem     `json:"environments"`
 	Connections  []CloudItem     `json:"connections"`
@@ -1679,6 +1683,7 @@ type CloudDeployed struct {
 // CloudDraftRequest asks an agent of the node to write (or rewrite) a definition from a person's
 // words; Cwd is a repository to read first.
 type CloudDraftRequest struct {
+	Cloud   string          `json:"cloud"` // the connection whose catalogue the form shows
 	Agent   string          `json:"agent"`
 	Ask     string          `json:"ask"`
 	Cwd     string          `json:"cwd,omitempty"`
@@ -1710,22 +1715,22 @@ func (c *Client) CloudBuild(ctx context.Context) (CloudCatalogue, error) {
 }
 
 // CloudPlanAgent has the cloud check a definition: what a deploy would change.
-func (c *Client) CloudPlanAgent(ctx context.Context, a CloudAgentSpec) (CloudPlan, error) {
+func (c *Client) CloudPlanAgent(ctx context.Context, cloud string, a CloudAgentSpec) (CloudPlan, error) {
 	var out CloudPlan
-	_, err := c.do(ctx, "POST", "/v1/cloud/agents/plan", nil, a, &out, nil)
+	_, err := c.do(ctx, "POST", "/v1/cloud/agents/plan", url.Values{"cloud": {cloud}}, a, &out, nil)
 	return out, err
 }
 
 // CloudDeployAgent writes a definition into the catalogue as the plan showed it.
-func (c *Client) CloudDeployAgent(ctx context.Context, a CloudAgentSpec, plan string) (CloudDeployed, error) {
+func (c *Client) CloudDeployAgent(ctx context.Context, cloud string, a CloudAgentSpec, plan string) (CloudDeployed, error) {
 	var out CloudDeployed
-	_, err := c.do(ctx, "PUT", "/v1/cloud/agents/"+url.PathEscape(a.Name), url.Values{"plan": {plan}}, a, &out, nil)
+	_, err := c.do(ctx, "PUT", "/v1/cloud/agents/"+url.PathEscape(a.Name), url.Values{"plan": {plan}, "cloud": {cloud}}, a, &out, nil)
 	return out, err
 }
 
 // CloudDeleteAgent takes an agent out of the catalogue (its sandboxes stay).
-func (c *Client) CloudDeleteAgent(ctx context.Context, name string) error {
-	_, err := c.do(ctx, "DELETE", "/v1/cloud/agents/"+url.PathEscape(name), nil, nil, nil, nil)
+func (c *Client) CloudDeleteAgent(ctx context.Context, cloud, name string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/cloud/agents/"+url.PathEscape(name), url.Values{"cloud": {cloud}}, nil, nil, nil)
 	return err
 }
 

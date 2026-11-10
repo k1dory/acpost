@@ -1531,7 +1531,7 @@ func (s *server) cloudPlanAgent(w http.ResponseWriter, r *http.Request, p node.P
 		writeErr(w, err)
 		return
 	}
-	out, err := s.n.CloudPlanAgent(r.Context(), p, req)
+	out, err := s.n.CloudPlanAgent(r.Context(), p, r.URL.Query().Get("cloud"), req)
 	reply(w, http.StatusOK, out, err)
 }
 
@@ -1548,12 +1548,12 @@ func (s *server) cloudDeployAgent(w http.ResponseWriter, r *http.Request, p node
 		writeErr(w, &node.Error{Code: "invalid", Message: "the definition names another agent than the address"})
 		return
 	}
-	out, err := s.n.CloudDeployAgent(r.Context(), p, req, r.URL.Query().Get("plan"))
+	out, err := s.n.CloudDeployAgent(r.Context(), p, r.URL.Query().Get("cloud"), req, r.URL.Query().Get("plan"))
 	reply(w, http.StatusOK, out, err)
 }
 
 func (s *server) cloudDeleteAgent(w http.ResponseWriter, r *http.Request, p node.Principal) {
-	if err := s.n.CloudDeleteAgent(r.Context(), p, r.PathValue("name")); err != nil {
+	if err := s.n.CloudDeleteAgent(r.Context(), p, r.URL.Query().Get("cloud"), r.PathValue("name")); err != nil {
 		writeErr(w, err)
 		return
 	}

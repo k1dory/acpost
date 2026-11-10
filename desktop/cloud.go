@@ -35,21 +35,24 @@ func (n *Node) CloudBuild() (client.CloudCatalogue, error) {
 }
 
 // CloudPlanAgent has the cloud check a definition: what a deploy would change. Nothing is written.
-func (n *Node) CloudPlanAgent(a client.CloudAgentSpec) (client.CloudPlan, error) {
-	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.CloudPlan, error) { return c.CloudPlanAgent(ctx, a) })
+// cloud (here and below) is the connection the form's catalogue was read from.
+func (n *Node) CloudPlanAgent(cloud string, a client.CloudAgentSpec) (client.CloudPlan, error) {
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.CloudPlan, error) {
+		return c.CloudPlanAgent(ctx, cloud, a)
+	})
 }
 
 // CloudDeployAgent writes a definition into the catalogue as the check (plan) showed it.
-func (n *Node) CloudDeployAgent(a client.CloudAgentSpec, plan string) (client.CloudDeployed, error) {
+func (n *Node) CloudDeployAgent(cloud string, a client.CloudAgentSpec, plan string) (client.CloudDeployed, error) {
 	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) (client.CloudDeployed, error) {
-		return c.CloudDeployAgent(ctx, a, plan)
+		return c.CloudDeployAgent(ctx, cloud, a, plan)
 	})
 }
 
 // CloudDeleteAgent takes an agent out of the catalogue.
-func (n *Node) CloudDeleteAgent(name string) error {
+func (n *Node) CloudDeleteAgent(cloud, name string) error {
 	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
-		return struct{}{}, c.CloudDeleteAgent(ctx, name)
+		return struct{}{}, c.CloudDeleteAgent(ctx, cloud, name)
 	})
 	return err
 }

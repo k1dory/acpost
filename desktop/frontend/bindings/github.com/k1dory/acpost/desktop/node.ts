@@ -137,15 +137,15 @@ export function CloudConnect(rawURL: string, token: string, ca: string): $Cancel
 /**
  * CloudDeleteAgent takes an agent out of the catalogue.
  */
-export function CloudDeleteAgent(name: string): $CancellablePromise<void> {
-    return $Call.ByID(2622911891, name);
+export function CloudDeleteAgent(cloud: string, name: string): $CancellablePromise<void> {
+    return $Call.ByID(2622911891, cloud, name);
 }
 
 /**
  * CloudDeployAgent writes a definition into the catalogue as the check (plan) showed it.
  */
-export function CloudDeployAgent(a: client$0.CloudAgentSpec, plan: string): $CancellablePromise<client$0.CloudDeployed> {
-    return $Call.ByID(1925151599, a, plan).then(($result: any) => {
+export function CloudDeployAgent(cloud: string, a: client$0.CloudAgentSpec, plan: string): $CancellablePromise<client$0.CloudDeployed> {
+    return $Call.ByID(1925151599, cloud, a, plan).then(($result: any) => {
         return $$createType14($result);
     });
 }
@@ -189,9 +189,10 @@ export function CloudInfo(): $CancellablePromise<client$0.CloudInfo> {
 
 /**
  * CloudPlanAgent has the cloud check a definition: what a deploy would change. Nothing is written.
+ * cloud (here and below) is the connection the form's catalogue was read from.
  */
-export function CloudPlanAgent(a: client$0.CloudAgentSpec): $CancellablePromise<client$0.CloudPlan> {
-    return $Call.ByID(2681127083, a).then(($result: any) => {
+export function CloudPlanAgent(cloud: string, a: client$0.CloudAgentSpec): $CancellablePromise<client$0.CloudPlan> {
+    return $Call.ByID(2681127083, cloud, a).then(($result: any) => {
         return $$createType19($result);
     });
 }

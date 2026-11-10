@@ -444,6 +444,7 @@ export const ru: Record<string, string> = {
   "optional: agents that run in sandboxes of an agent-sandbox cloud": "необязательно: агенты в песочницах облака agent-sandbox",
   "Build agents": "Собрать агентов",
   "The draft's task was not stopped": "Задача черновика не остановлена",
+  "What you changed meanwhile is still in the form, not deployed.": "То, что вы изменили за это время, осталось в форме и не развёрнуто",
 };
 
 // The node's messages (English) that have a known form, in Russian.
@@ -472,4 +473,6 @@ export const ruPatterns: [RegExp, string][] = [
   [/^(\S+) has no read-only mode: it would ask to run commands while it reads$/, "у $1 нет режима только для чтения: он будет спрашивать разрешение на команды"],
   [/^choose an agent with a plan or read-only mode \(Claude Code, Codex\)$/, "выберите агента с режимом plan или read-only (Claude Code, Codex)"],
   [/^the wiki of (.+) is being written already$/, "вики $1 уже пишется"],
+  [/^the node is connected to another cloud \(or by another key\) than the one this was read from$/, "узел подключён к другому облаку (или другим ключом), не к тому, из которого это прочитано"],
+  [/^open the cloud's settings again: they show the cloud connected now$/, "откройте настройки облака заново: в них облако, подключённое сейчас"],
 ];

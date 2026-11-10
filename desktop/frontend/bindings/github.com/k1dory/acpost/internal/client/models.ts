@@ -549,6 +549,10 @@ export class CloudAgentSpec {
  * CloudCatalogue is what an agent's definition is written from.
  */
 export class CloudCatalogue {
+    /**
+     * the connection it was read from (CloudInfo.ID)
+     */
+    "cloud": string;
     "agents": CloudAgentDef[];
     "environments": CloudItem[];
     "connections": CloudItem[];
@@ -556,6 +560,9 @@ export class CloudCatalogue {
 
     /** Creates a new CloudCatalogue instance. */
     constructor($$source: Partial<CloudCatalogue> = {}) {
+        if (!("cloud" in $$source)) {
+            this["cloud"] = "";
+        }
         if (!("agents" in $$source)) {
             this["agents"] = [];
         }
@@ -576,22 +583,22 @@ export class CloudCatalogue {
      * Creates a new CloudCatalogue instance from a string or object.
      */
     static createFrom($$source: any = {}): CloudCatalogue {
-        const $$createField0_0 = $$createType18;
-        const $$createField1_0 = $$createType20;
+        const $$createField1_0 = $$createType18;
         const $$createField2_0 = $$createType20;
-        const $$createField3_0 = $$createType16;
+        const $$createField3_0 = $$createType20;
+        const $$createField4_0 = $$createType16;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agents" in $$parsedSource) {
-            $$parsedSource["agents"] = $$createField0_0($$parsedSource["agents"]);
+            $$parsedSource["agents"] = $$createField1_0($$parsedSource["agents"]);
         }
         if ("environments" in $$parsedSource) {
-            $$parsedSource["environments"] = $$createField1_0($$parsedSource["environments"]);
+            $$parsedSource["environments"] = $$createField2_0($$parsedSource["environments"]);
         }
         if ("connections" in $$parsedSource) {
-            $$parsedSource["connections"] = $$createField2_0($$parsedSource["connections"]);
+            $$parsedSource["connections"] = $$createField3_0($$parsedSource["connections"]);
         }
         if ("policies" in $$parsedSource) {
-            $$parsedSource["policies"] = $$createField3_0($$parsedSource["policies"]);
+            $$parsedSource["policies"] = $$createField4_0($$parsedSource["policies"]);
         }
         return new CloudCatalogue($$parsedSource as Partial<CloudCatalogue>);
     }
@@ -704,6 +711,10 @@ export class CloudDraft {
  * words; Cwd is a repository to read first.
  */
 export class CloudDraftRequest {
+    /**
+     * the connection whose catalogue the form shows
+     */
+    "cloud": string;
     "agent": string;
     "ask": string;
     "cwd"?: string;
@@ -711,6 +722,9 @@ export class CloudDraftRequest {
 
     /** Creates a new CloudDraftRequest instance. */
     constructor($$source: Partial<CloudDraftRequest> = {}) {
+        if (!("cloud" in $$source)) {
+            this["cloud"] = "";
+        }
         if (!("agent" in $$source)) {
             this["agent"] = "";
         }
@@ -725,10 +739,10 @@ export class CloudDraftRequest {
      * Creates a new CloudDraftRequest instance from a string or object.
      */
     static createFrom($$source: any = {}): CloudDraftRequest {
-        const $$createField3_0 = $$createType22;
+        const $$createField4_0 = $$createType22;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("current" in $$parsedSource) {
-            $$parsedSource["current"] = $$createField3_0($$parsedSource["current"]);
+            $$parsedSource["current"] = $$createField4_0($$parsedSource["current"]);
         }
         return new CloudDraftRequest($$parsedSource as Partial<CloudDraftRequest>);
     }
@@ -741,6 +755,12 @@ export class CloudDraftRequest {
  */
 export class CloudInfo {
     "configured": boolean;
+
+    /**
+     * ID names the connection (the address and the key, never the key itself): what was read
+     * from one cloud is written only to that cloud (a plan, a deploy, a delete carry it).
+     */
+    "id"?: string;
     "url"?: string;
     "tenant"?: string;
     "admin"?: boolean;

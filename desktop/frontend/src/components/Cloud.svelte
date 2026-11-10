@@ -4,13 +4,12 @@
   import { Node } from "../lib/api";
   import { agentLabel, tilde } from "../lib/names";
   import { withCurrent } from "../lib/cloud";
-  import { CloudBuilder } from "../lib/cloudbuild.svelte";
+  import { cloud as cb } from "../lib/cloudbuild.svelte";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
 
   // The cloud: connecting one (a tenant's key), and building its agents (lib/cloudbuild).
-  const cb = new CloudBuilder();
-  cb.load();
+  if (!cb.busy) cb.load();
   const info = $derived(cb.info), cat = $derived(cb.cat), ed = $derived(cb.ed), busy = $derived(cb.busy);
   const err = $derived(cb.err), note = $derived(cb.note), checked = $derived(cb.checked), missing = $derived(cb.missing);
   const drafting = $derived(cb.drafting), draft = $derived(cb.draft), draftNote = $derived(cb.draftNote), sure = $derived(cb.sure);
@@ -114,7 +113,7 @@
           {#if cb.draftDir}<button class="btn ghost sm" onclick={() => (cb.draftDir = "")} aria-label={t("No repository")}><Icon name="x" size={11} /></button>{/if}
           <span class="sp"></span>
           {#if draft}<button class="btn ghost sm" onclick={() => cb.openDraft()}><Icon name="chat" size={12} /> {t("Open its chat")}</button>{/if}
-          {#if drafting}<button class="btn sm" onclick={() => cb.stopDraft()}>{t("Stop")}</button>{/if}
+          {#if drafting || cb.draftLive}<button class="btn sm" onclick={() => cb.stopDraft()}>{t("Stop")}</button>{/if}
           <button class="btn sm" disabled={drafting || !cb.ask.trim() || !cb.draftAgent} onclick={() => cb.writeDraft()}>{drafting ? t("Writing…") : t("Write a draft")}</button>
         {:else}
           <span class="muted small">{t("No agent of this Mac to write it: Claude Code or Codex over ACP")}</span>

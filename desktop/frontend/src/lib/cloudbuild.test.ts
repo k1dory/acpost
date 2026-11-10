@@ -11,7 +11,7 @@ vi.mock("./api", async () => {
 });
 
 const def = (name: string, extra: any = {}) => ({ ref: name, shared: false, revision: 2, name, description: "", policy: "backend-dev", environment: "python-dev", repo: "", instructions: "old", connections: [], ...extra });
-const catalogue = (...agents: any[]) => ({ agents, environments: [{ ref: "python-dev", name: "python-dev", shared: false, revision: 1 }], connections: [], policies: ["backend-dev"] });
+const catalogue = (...agents: any[]) => ({ cloud: "cloud-a", agents, environments: [{ ref: "python-dev", name: "python-dev", shared: false, revision: 1 }], connections: [], policies: ["backend-dev"] });
 
 async function builder(cat = catalogue(def("backend"), def("docs"))) {
   fake.Node.CloudInfo.mockResolvedValue({ configured: true, url: "https://a", tenant: "a" });
@@ -38,6 +38,7 @@ describe("connecting another cloud", () => {
     expect(cb.sure).toBe("backend");
     fake.Node.CloudConnect.mockResolvedValue({ restarted: true, info: {} });
     fake.Node.CloudInfo.mockResolvedValue({ configured: true, url: "https://b", tenant: "b" });
+    fake.Node.CloudBuild.mockResolvedValue({ ...catalogue(def("backend")), cloud: "cloud-b" });
     expect(await cb.connect("https://b", "sbk_b", "")).toBe(true);
     expect(cb.ed).toBeNull();
     expect(cb.sure).toBe("");
@@ -48,7 +49,7 @@ describe("connecting another cloud", () => {
     await cb.remove();
     expect(fake.Node.CloudDeleteAgent).not.toHaveBeenCalled();
     await cb.remove();
-    expect(fake.Node.CloudDeleteAgent).toHaveBeenCalledWith("backend");
+    expect(fake.Node.CloudDeleteAgent).toHaveBeenCalledWith("cloud-b", "backend");
   });
 
   it("drops a check made in the old cloud, and does not start while something is being written", async () => {
@@ -75,6 +76,80 @@ describe("connecting another cloud", () => {
   });
 });
 
+describe("a connect that failed", () => {
+  it("after the key was saved: the old cloud's catalogue is gone, and what comes back is the new cloud's", async () => {
+    const cb = await builder();
+    cb.editAgent(cb.cat!.agents[0]);
+    await cb.remove(); // armed in A
+    const conn = deferred();
+    fake.Node.CloudConnect.mockReturnValue(conn.promise);
+    const connecting = cb.connect("https://b", "sbk_b", "");
+    // While it connects nothing of A is there to act on.
+    expect(cb.cat).toBeNull();
+    expect(cb.ed).toBeNull();
+    cb.newAgent();
+    expect(cb.ed).toBeNull();
+    // The key is saved, the restart failed: the node is down for now.
+    fake.Node.CloudInfo.mockRejectedValue(new Error(JSON.stringify({ code: "node_down", message: "down" })));
+    conn.reject(new Error("the node did not start in 20s"));
+    expect(await connecting).toBe(false);
+    expect(cb.cat).toBeNull();
+    expect(cb.err).toContain("did not start");
+    await cb.remove();
+    await cb.deploy();
+    expect(fake.Node.CloudDeleteAgent).not.toHaveBeenCalled();
+    // The node comes back, with B: its catalogue, under its own name.
+    fake.Node.CloudInfo.mockResolvedValue({ configured: true, url: "https://b", tenant: "b" });
+    fake.Node.CloudBuild.mockResolvedValue({ ...catalogue(def("backend")), cloud: "cloud-b" });
+    await cb.load();
+    cb.editAgent(cb.cat!.agents[0]);
+    await cb.remove();
+    await cb.remove();
+    expect(fake.Node.CloudDeleteAgent).toHaveBeenCalledTimes(1);
+    expect(fake.Node.CloudDeleteAgent).toHaveBeenCalledWith("cloud-b", "backend");
+  });
+
+  it("the settings left and opened again while it connects show the same builder, still connecting", async () => {
+    await builder();
+    const { cloud } = await import("./cloudbuild.svelte");
+    await cloud.load();
+    cloud.editAgent(cloud.cat!.agents[0]);
+    await cloud.remove();
+    const conn = deferred();
+    fake.Node.CloudConnect.mockReturnValue(conn.promise);
+    const connecting = cloud.connect("https://b", "sbk_b", "");
+    // Opened again: the component takes the app's builder, and does not load over a connect.
+    const again = (await import("./cloudbuild.svelte")).cloud;
+    expect(again).toBe(cloud);
+    expect(again.busy).toBe("connect");
+    expect(again.cat).toBeNull();
+    // A load that was on its way (or is started anyway) does not bring A back over the connect.
+    const info = deferred();
+    fake.Node.CloudInfo.mockReturnValueOnce(info.promise);
+    const loading = again.load();
+    fake.Node.CloudInfo.mockResolvedValue({ configured: true, url: "https://b", tenant: "b" });
+    fake.Node.CloudBuild.mockResolvedValue({ ...catalogue(def("backend")), cloud: "cloud-b" });
+    conn.resolve({ restarted: true, info: {} });
+    await connecting;
+    info.resolve({ configured: true, url: "https://a", tenant: "a" });
+    await loading;
+    expect(again.info?.tenant).toBe("b");
+    expect(again.cat?.cloud).toBe("cloud-b");
+    await again.remove();
+    expect(fake.Node.CloudDeleteAgent).not.toHaveBeenCalled();
+  });
+
+  it("a catalogue that turns out another cloud's closes the editor over it", async () => {
+    const cb = await builder();
+    cb.editAgent(cb.cat!.agents[0]);
+    await cb.remove();
+    fake.Node.CloudBuild.mockResolvedValue({ ...catalogue(def("backend")), cloud: "cloud-b" }); // the node restarted with B by itself
+    await cb.load();
+    expect(cb.ed).toBeNull();
+    expect(cb.sure).toBe("");
+  });
+});
+
 describe("a check and a deploy", () => {
   it("a deploy goes with the check of exactly this definition", async () => {
     const cb = await builder();
@@ -91,7 +166,7 @@ describe("a check and a deploy", () => {
     await cb.check();
     fake.Node.CloudDeployAgent.mockResolvedValue({ ref: "backend", revision: 3, action: "update" });
     await cb.deploy();
-    expect(fake.Node.CloudDeployAgent).toHaveBeenCalledWith(expect.objectContaining({ name: "backend", instructions: "changed after the check" }), "p1");
+    expect(fake.Node.CloudDeployAgent).toHaveBeenCalledWith("cloud-a", expect.objectContaining({ name: "backend", instructions: "changed after the check" }), "p1");
     expect(cb.ed).toBeNull();
     expect(cb.note).toContain("3");
   });
@@ -125,6 +200,26 @@ describe("a check and a deploy", () => {
     await removing;
     expect(cb.ed?.spec.name).toBe("docs");
     expect(cb.ed?.spec.instructions).toBe("typed");
+  });
+});
+
+describe("a deploy answered late", () => {
+  it("keeps what was typed while it was on its way, as not deployed", async () => {
+    const cb = await builder();
+    cb.newAgent();
+    Object.assign(cb.ed!.spec, { name: "fresh", instructions: "first" });
+    fake.Node.CloudPlanAgent.mockResolvedValue({ plan: "p1", valid: true, action: "create", revision: 0, next_revision: 1, diff: [], errors: [] });
+    await cb.check();
+    const dep = deferred();
+    fake.Node.CloudDeployAgent.mockReturnValue(dep.promise);
+    const deploying = cb.deploy();
+    cb.ed!.spec.instructions = "first, and more";
+    dep.resolve({ ref: "fresh", revision: 1, action: "create" });
+    await deploying;
+    expect(fake.Node.CloudDeployAgent.mock.calls[0][1]).toMatchObject({ instructions: "first" });
+    expect(cb.ed).not.toBeNull();
+    expect(cb.ed).toMatchObject({ isNew: false, rev: 1, plan: null, spec: { name: "fresh", instructions: "first, and more" } });
+    expect(cb.checked).toBe(false);
   });
 });
 
@@ -191,5 +286,28 @@ describe("a draft", () => {
     expect(cb.err).toContain("no definition");
     expect(cb.ed!.spec.instructions).toBe("old");
     expect(cb.drafting).toBe(false);
+  });
+  it("whose wait failed still runs: closing the editor, or another draft, cancels it", async () => {
+    const cb = await start();
+    fake.Node.CloudDraft.mockResolvedValue({ msg: "m1", thread: "t1", state: "queued" });
+    fake.Node.CloudDraftResult.mockRejectedValue(new Error("timeout"));
+    await cb.writeDraft();
+    expect(cb.drafting).toBe(false);
+    expect(cb.draftLive).toBe(true);
+    expect(fake.Node.Cancel).not.toHaveBeenCalled();
+    // Another draft: the first task is cancelled, the second is the one waited for.
+    fake.Node.CloudDraft.mockResolvedValue({ msg: "m2", thread: "t2", state: "queued" });
+    await cb.writeDraft();
+    expect(fake.Node.Cancel).toHaveBeenCalledWith("m1");
+    cb.close();
+    expect(fake.Node.Cancel).toHaveBeenCalledWith("m2");
+    expect(cb.draftLive).toBe(false);
+    // One that ended is not cancelled.
+    cb.editAgent(cb.cat!.agents[0]);
+    cb.ask = "x"; cb.draftAgent = "agent:claude";
+    fake.Node.CloudDraft.mockResolvedValue({ msg: "m3", thread: "t3", state: "done", spec: { name: "", description: "d", policy: "", environment: "", repo: "", instructions: "", connections: [] } });
+    await cb.writeDraft();
+    cb.close();
+    expect(fake.Node.Cancel).toHaveBeenCalledTimes(2);
   });
 });

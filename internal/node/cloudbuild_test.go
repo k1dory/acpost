@@ -213,10 +213,10 @@ func TestCloudBuild(t *testing.T) {
 		if _, err := n.CloudInfo(ctx, p); code(err) != "refused" {
 			t.Fatalf("%v read the cloud: %v", p, err)
 		}
-		if _, err := n.CloudDeployAgent(ctx, p, client.CloudAgentSpec{Name: "backend", Policy: "backend-dev"}, "plan"); code(err) != "refused" {
+		if _, err := n.CloudDeployAgent(ctx, p, n.cloud.id(), client.CloudAgentSpec{Name: "backend", Policy: "backend-dev"}, "plan"); code(err) != "refused" {
 			t.Fatalf("%v deployed: %v", p, err)
 		}
-		if err := n.CloudDeleteAgent(ctx, p, "backend"); code(err) != "refused" {
+		if err := n.CloudDeleteAgent(ctx, p, n.cloud.id(), "backend"); code(err) != "refused" {
 			t.Fatalf("%v deleted: %v", p, err)
 		}
 	}
@@ -234,7 +234,7 @@ func TestCloudBuild(t *testing.T) {
 	}
 
 	spec := client.CloudAgentSpec{Name: "backend", Description: " the shop ", Policy: "backend-dev", Environment: "python-dev", Instructions: "new\n", Connections: []string{"github", " github ", ""}}
-	plan, err := n.CloudPlanAgent(ctx, me, spec)
+	plan, err := n.CloudPlanAgent(ctx, me, n.cloud.id(), spec)
 	if err != nil || !plan.Valid || plan.Action != "update" || plan.Revision != 4 || plan.NextRevision != 5 || len(plan.Diff) != 2 ||
 		plan.Diff[0] != (client.CloudDiff{Path: "spec.instructions", From: "old", To: "new"}) || plan.Diff[1].To != `["github"]` {
 		t.Fatalf("%+v %v", plan, err)
@@ -243,45 +243,45 @@ func TestCloudBuild(t *testing.T) {
 		t.Fatal("a check wrote")
 	}
 	// A definition the cloud refuses: its reasons, not an error of the call.
-	bad, err := n.CloudPlanAgent(ctx, me, client.CloudAgentSpec{Name: "backend", Policy: "prod-admin", Environment: "python-dev"})
+	bad, err := n.CloudPlanAgent(ctx, me, n.cloud.id(), client.CloudAgentSpec{Name: "backend", Policy: "prod-admin", Environment: "python-dev"})
 	if err != nil || bad.Valid || len(bad.Errors) != 1 || !strings.Contains(bad.Errors[0], "prod-admin") {
 		t.Fatalf("%+v %v", bad, err)
 	}
 	for _, name := range []string{"", "Backend", "a/b", "../x", "-a", strings.Repeat("a", 64)} {
-		if _, err := n.CloudPlanAgent(ctx, me, client.CloudAgentSpec{Name: name, Policy: "backend-dev"}); code(err) != "invalid" {
+		if _, err := n.CloudPlanAgent(ctx, me, n.cloud.id(), client.CloudAgentSpec{Name: name, Policy: "backend-dev"}); code(err) != "invalid" {
 			t.Fatalf("name %q: %v", name, err)
 		}
 	}
 	// No deploy without the check it follows.
-	if _, err := n.CloudDeployAgent(ctx, me, spec, ""); code(err) != "invalid" {
+	if _, err := n.CloudDeployAgent(ctx, me, n.cloud.id(), spec, ""); code(err) != "invalid" {
 		t.Fatalf("a deploy without a plan: %v", err)
 	}
-	dep, err := n.CloudDeployAgent(ctx, me, spec, plan.Plan)
+	dep, err := n.CloudDeployAgent(ctx, me, n.cloud.id(), spec, plan.Plan)
 	if err != nil || dep != (client.CloudDeployed{Ref: "backend", Revision: 5, Action: "update"}) {
 		t.Fatalf("%+v %v", dep, err)
 	}
 	// The same deploy again (its answer was lost, the person clicks once more): the same apply,
 	// its revision, and nothing written twice.
-	if again, err := n.CloudDeployAgent(ctx, me, spec, plan.Plan); err != nil || again != dep || f.applies != 1 {
+	if again, err := n.CloudDeployAgent(ctx, me, n.cloud.id(), spec, plan.Plan); err != nil || again != dep || f.applies != 1 {
 		t.Fatalf("the same deploy again: %+v %v, %d applies", again, err, f.applies)
 	}
 	// A deploy the cloud committed and whose answer never came: an error here, and the retry is
 	// that apply, once.
 	lost := client.CloudAgentSpec{Name: "lost", Policy: "backend-dev", Environment: "python-dev", Instructions: "x"}
-	lp, _ := n.CloudPlanAgent(ctx, me, lost)
+	lp, _ := n.CloudPlanAgent(ctx, me, n.cloud.id(), lost)
 	f.mu.Lock()
 	f.loseApply = true
 	f.mu.Unlock()
-	if _, err := n.CloudDeployAgent(ctx, me, lost, lp.Plan); code(err) != "unavailable" {
+	if _, err := n.CloudDeployAgent(ctx, me, n.cloud.id(), lost, lp.Plan); code(err) != "unavailable" {
 		t.Fatalf("an answer lost: %v", err)
 	}
-	if d, err := n.CloudDeployAgent(ctx, me, lost, lp.Plan); err != nil || d != (client.CloudDeployed{Ref: "lost", Revision: 1, Action: "create"}) || f.applies != 2 {
+	if d, err := n.CloudDeployAgent(ctx, me, n.cloud.id(), lost, lp.Plan); err != nil || d != (client.CloudDeployed{Ref: "lost", Revision: 1, Action: "create"}) || f.applies != 2 {
 		t.Fatalf("the retry: %+v %v, %d applies", d, err, f.applies)
 	}
 	delete(f.agents, "lost")
 	f.applies = 1
 	// The catalogue moved on (this very deploy): the same plan writes nothing more.
-	if _, err := n.CloudDeployAgent(ctx, me, client.CloudAgentSpec{Name: "backend", Policy: "backend-dev", Environment: "python-dev", Instructions: "newer"}, plan.Plan); code(err) != "conflict" || hintOf(err) == "" {
+	if _, err := n.CloudDeployAgent(ctx, me, n.cloud.id(), client.CloudAgentSpec{Name: "backend", Policy: "backend-dev", Environment: "python-dev", Instructions: "newer"}, plan.Plan); code(err) != "conflict" || hintOf(err) == "" {
 		t.Fatalf("a stale plan: %v", err)
 	}
 	if f.applies != 1 || f.agents["backend"]["instructions"] != "new" {
@@ -289,22 +289,22 @@ func TestCloudBuild(t *testing.T) {
 	}
 	// An apply the cloud did not finish is not a deploy.
 	f.applyStatus = "failed"
-	p2, _ := n.CloudPlanAgent(ctx, me, client.CloudAgentSpec{Name: "docs", Policy: "backend-dev", Environment: "python-dev"})
+	p2, _ := n.CloudPlanAgent(ctx, me, n.cloud.id(), client.CloudAgentSpec{Name: "docs", Policy: "backend-dev", Environment: "python-dev"})
 	if p2.Action != "create" || p2.NextRevision != 1 {
 		t.Fatalf("%+v", p2)
 	}
-	if _, err := n.CloudDeployAgent(ctx, me, client.CloudAgentSpec{Name: "docs", Policy: "backend-dev", Environment: "python-dev"}, p2.Plan); code(err) != "unavailable" || !strings.Contains(err.Error(), "failed") {
+	if _, err := n.CloudDeployAgent(ctx, me, n.cloud.id(), client.CloudAgentSpec{Name: "docs", Policy: "backend-dev", Environment: "python-dev"}, p2.Plan); code(err) != "unavailable" || !strings.Contains(err.Error(), "failed") {
 		t.Fatalf("a failed apply: %v", err)
 	}
 	f.applyStatus = ""
 
-	if err := n.CloudDeleteAgent(ctx, me, "backend"); err != nil || len(f.deleted) != 1 {
+	if err := n.CloudDeleteAgent(ctx, me, n.cloud.id(), "backend"); err != nil || len(f.deleted) != 1 {
 		t.Fatalf("%v %v", err, f.deleted)
 	}
-	if err := n.CloudDeleteAgent(ctx, me, "backend"); code(err) != "not_found" {
+	if err := n.CloudDeleteAgent(ctx, me, n.cloud.id(), "backend"); code(err) != "not_found" {
 		t.Fatalf("deleted twice: %v", err)
 	}
-	if err := n.CloudDeleteAgent(ctx, me, "../sandboxes/sb_1"); code(err) != "invalid" {
+	if err := n.CloudDeleteAgent(ctx, me, n.cloud.id(), "../sandboxes/sb_1"); code(err) != "invalid" {
 		t.Fatalf("a path for a name: %v", err)
 	}
 }
@@ -332,7 +332,7 @@ func TestCloudBuildEdges(t *testing.T) {
 	if info, err := bare.CloudInfo(ctx, me); err != nil || info.Configured {
 		t.Fatalf("%+v %v", info, err)
 	}
-	if _, err := bare.CloudPlanAgent(ctx, me, client.CloudAgentSpec{Name: "a"}); code(err) != "not_found" {
+	if _, err := bare.CloudPlanAgent(ctx, me, "x", client.CloudAgentSpec{Name: "a"}); code(err) != "not_found" {
 		t.Fatalf("%v", err)
 	}
 }
@@ -361,21 +361,22 @@ func TestCheckCloud(t *testing.T) {
 func TestCloudDraft(t *testing.T) {
 	f := &fakeCatalogue{}
 	n := catalogueNode(t, f, true)
-	if _, err := n.CloudDraft(ctx, me, client.CloudDraftRequest{Agent: "agent:fake", Ask: "a backend developer"}); code(err) != "unsupported" {
+	if _, err := n.CloudDraft(ctx, me, client.CloudDraftRequest{Cloud: n.cloud.id(), Agent: "agent:fake", Ask: "a backend developer"}); code(err) != "unsupported" {
 		t.Fatalf("no read-only mode: %v", err)
 	}
 	t.Setenv("FAKE_MODES", "1")
 	n = catalogueNode(t, f, true)
 	for _, r := range []client.CloudDraftRequest{{Agent: "agent:fake", Ask: " "}, {Agent: "agent:fake", Ask: strings.Repeat("x", cloudDraftAsk+1)},
 		{Agent: "agent:nobody", Ask: "x"}, {Agent: "agent:fake@other", Ask: "x"}, {Agent: "agent:fake", Ask: "x", Cwd: "/nowhere/at/all"}} {
+		r.Cloud = n.cloud.id()
 		if _, err := n.CloudDraft(ctx, me, r); code(err) != "invalid" {
 			t.Fatalf("%+v: %v", r.Agent, err)
 		}
 	}
-	if _, err := n.CloudDraft(ctx, Principal{Kind: "agent", Name: "fake"}, client.CloudDraftRequest{Agent: "agent:fake", Ask: "x"}); code(err) != "refused" {
+	if _, err := n.CloudDraft(ctx, Principal{Kind: "agent", Name: "fake"}, client.CloudDraftRequest{Cloud: n.cloud.id(), Agent: "agent:fake", Ask: "x"}); code(err) != "refused" {
 		t.Fatalf("an agent drafted: %v", err)
 	}
-	d, err := n.CloudDraft(ctx, me, client.CloudDraftRequest{Agent: "agent:fake", Ask: "a backend developer", Cwd: t.TempDir(),
+	d, err := n.CloudDraft(ctx, me, client.CloudDraftRequest{Cloud: n.cloud.id(), Agent: "agent:fake", Ask: "a backend developer", Cwd: t.TempDir(),
 		Current: &client.CloudAgentSpec{Name: "backend", Policy: "backend-dev"}})
 	if err != nil || d.Msg == "" || d.Thread == "" {
 		t.Fatalf("%+v %v", d, err)
@@ -427,5 +428,52 @@ func TestParseCloudDraft(t *testing.T) {
 	}
 	if _, err := parseCloudDraft("```json\n{\"name\": \"a\", \"instructions\": \"" + strings.Repeat("x", cloudInstrMax+1) + "\"}\n```"); err == nil || !strings.Contains(err.Error(), "over") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// What was read from one cloud is written only to it: the node connected to another cloud (or by
+// another key) meanwhile refuses the check, the deploy, the delete and the draft of the first.
+func TestCloudBuildAnotherCloud(t *testing.T) {
+	f := &fakeCatalogue{agents: map[string]map[string]any{"backend": {"revision": 1, "instructions": "a"}}}
+	n := catalogueNode(t, f, false)
+	info, _ := n.CloudInfo(ctx, me)
+	cat, err := n.CloudCatalogue(ctx, me)
+	if err != nil || info.ID == "" || cat.Cloud != info.ID || strings.Contains(info.ID, "sbk") {
+		t.Fatalf("%+v %q %v", info, cat.Cloud, err)
+	}
+	spec := client.CloudAgentSpec{Name: "backend", Policy: "backend-dev", Environment: "python-dev", Instructions: "b"}
+	plan, err := n.CloudPlanAgent(ctx, me, cat.Cloud, spec)
+	if err != nil || !plan.Valid {
+		t.Fatalf("%+v %v", plan, err)
+	}
+	// The same address under another key is another connection: tenant B's.
+	other := *n.cloud
+	other.token = "sbk_other"
+	f.mu.Lock()
+	f.token = "sbk_other"
+	f.mu.Unlock()
+	n.cloud = &other
+	if n.cloud.id() == cat.Cloud {
+		t.Fatal("another key, the same id")
+	}
+	if _, err := n.CloudPlanAgent(ctx, me, cat.Cloud, spec); code(err) != "conflict" {
+		t.Fatalf("a check: %v", err)
+	}
+	if _, err := n.CloudDeployAgent(ctx, me, cat.Cloud, spec, plan.Plan); code(err) != "conflict" {
+		t.Fatalf("a deploy: %v", err)
+	}
+	if err := n.CloudDeleteAgent(ctx, me, cat.Cloud, "backend"); code(err) != "conflict" {
+		t.Fatalf("a delete: %v", err)
+	}
+	if _, err := n.CloudDraft(ctx, me, client.CloudDraftRequest{Cloud: cat.Cloud, Agent: "agent:fake", Ask: "x"}); code(err) != "conflict" {
+		t.Fatalf("a draft: %v", err)
+	}
+	for _, id := range []string{"", "x"} {
+		if err := n.CloudDeleteAgent(ctx, me, id, "backend"); code(err) != "conflict" {
+			t.Fatalf("a delete naming %q: %v", id, err)
+		}
+	}
+	if f.applies != 0 || len(f.deleted) != 0 {
+		t.Fatalf("written to another cloud: %d applies, %v deleted", f.applies, f.deleted)
 	}
 }

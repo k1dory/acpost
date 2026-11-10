@@ -3,6 +3,8 @@ package node
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -52,8 +54,27 @@ func CheckCloud(ctx context.Context, c *config.Cloud) (client.CloudInfo, error) 
 	return api.whoami(ctx)
 }
 
+// id names the connection: the address and the key, as a hash that says neither.
+func (c *cloudAPI) id() string {
+	sum := sha256.Sum256([]byte("acpost cloud\x00" + c.url + "\x00" + c.token))
+	return hex.EncodeToString(sum[:8])
+}
+
+// cloudFor is the node's cloud when it is the one the caller read from (id): what a person saw
+// in one cloud's catalogue is never written to another the node was connected to meanwhile.
+func (n *Node) cloudFor(id string) (*cloudAPI, error) {
+	if n.cloud == nil {
+		return nil, errh("not_found", "connect a cloud in Settings", "no cloud is configured")
+	}
+	if id != n.cloud.id() {
+		return nil, errh("conflict", "open the cloud's settings again: they show the cloud connected now",
+			"the node is connected to another cloud (or by another key) than the one this was read from")
+	}
+	return n.cloud, nil
+}
+
 func (c *cloudAPI) whoami(ctx context.Context) (client.CloudInfo, error) {
-	out := client.CloudInfo{Configured: true, URL: c.url}
+	out := client.CloudInfo{Configured: true, URL: c.url, ID: c.id()}
 	var who struct {
 		Tenant  string     `json:"tenant"`
 		Admin   bool       `json:"admin"`
@@ -120,6 +141,7 @@ func (n *Node) CloudCatalogue(ctx context.Context, p Principal) (client.CloudCat
 	if n.cloud == nil {
 		return out, errh("not_found", "connect a cloud in Settings", "no cloud is configured")
 	}
+	out.Cloud = n.cloud.id()
 	var agents, envs, conns []cloudCatalogItem
 	if err := n.cloud.call(ctx, "GET", "/v1/agents", nil, &agents); err != nil {
 		return out, err
@@ -217,20 +239,21 @@ type cloudPlan struct {
 
 // CloudPlanAgent has the cloud check a definition against the tenant's rights and the catalogue:
 // what a deploy would change, and what it would refuse. Nothing is written.
-func (n *Node) CloudPlanAgent(ctx context.Context, p Principal, a client.CloudAgentSpec) (client.CloudPlan, error) {
+func (n *Node) CloudPlanAgent(ctx context.Context, p Principal, cloud string, a client.CloudAgentSpec) (client.CloudPlan, error) {
 	out := client.CloudPlan{Diff: []client.CloudDiff{}, Errors: []string{}}
 	if err := userOnly(p, "the cloud"); err != nil {
 		return out, err
 	}
-	if n.cloud == nil {
-		return out, errh("not_found", "connect a cloud in Settings", "no cloud is configured")
+	api, err := n.cloudFor(cloud)
+	if err != nil {
+		return out, err
 	}
 	doc, err := cloudDocument(a)
 	if err != nil {
 		return out, err
 	}
 	var pl cloudPlan
-	if err := n.cloud.call(ctx, "POST", "/v1/plan", map[string]any{"documents": []any{doc}}, &pl); err != nil {
+	if err := api.call(ctx, "POST", "/v1/plan", map[string]any{"documents": []any{doc}}, &pl); err != nil {
 		return out, err
 	}
 	out.Plan, out.Valid = pl.Plan, pl.Valid
@@ -268,12 +291,13 @@ func planValue(v any) string {
 // CloudDeployAgent writes a definition into the catalogue as the plan (CloudPlanAgent's) showed
 // it: a catalogue that has moved on since is a conflict, and nothing is written. Deployed again
 // with the same plan (the answer lost), it is the same apply, continued: one revision.
-func (n *Node) CloudDeployAgent(ctx context.Context, p Principal, a client.CloudAgentSpec, plan string) (client.CloudDeployed, error) {
+func (n *Node) CloudDeployAgent(ctx context.Context, p Principal, cloud string, a client.CloudAgentSpec, plan string) (client.CloudDeployed, error) {
 	if err := userOnly(p, "the cloud"); err != nil {
 		return client.CloudDeployed{}, err
 	}
-	if n.cloud == nil {
-		return client.CloudDeployed{}, errh("not_found", "connect a cloud in Settings", "no cloud is configured")
+	api, err := n.cloudFor(cloud)
+	if err != nil {
+		return client.CloudDeployed{}, err
 	}
 	if plan == "" || len(plan) > maxLabel {
 		return client.CloudDeployed{}, errh("invalid", "check the definition first", "a deploy names the check it follows")
@@ -297,7 +321,7 @@ func (n *Node) CloudDeployAgent(ctx context.Context, p Principal, a client.Cloud
 		} `json:"steps"`
 	}
 	// The key is the plan: the cloud keeps one apply per key, and a plan names one bundle on one state.
-	code, err := n.cloud.callStatus(ctx, "POST", "/v1/apply", map[string]any{"documents": []any{doc}, "plan": plan, "key": "acpost-" + plan}, &ap)
+	code, err := api.callStatus(ctx, "POST", "/v1/apply", map[string]any{"documents": []any{doc}, "plan": plan, "key": "acpost-" + plan}, &ap)
 	if code == 409 || code == 422 {
 		return client.CloudDeployed{}, errh("conflict", "check it again: the plan shows what a deploy would do now",
 			"the catalogue changed since the check: %v", err)
@@ -324,17 +348,18 @@ func (n *Node) CloudDeployAgent(ctx context.Context, p Principal, a client.Cloud
 
 // CloudDeleteAgent takes an agent out of the catalogue: no new task starts from it; its sandboxes
 // and its revisions' history stay.
-func (n *Node) CloudDeleteAgent(ctx context.Context, p Principal, name string) error {
+func (n *Node) CloudDeleteAgent(ctx context.Context, p Principal, cloud, name string) error {
 	if err := userOnly(p, "the cloud"); err != nil {
 		return err
 	}
-	if n.cloud == nil {
-		return errh("not_found", "connect a cloud in Settings", "no cloud is configured")
+	api, err := n.cloudFor(cloud)
+	if err != nil {
+		return err
 	}
 	if !cloudAgentName.MatchString(name) {
 		return errf("invalid", "the agent's name")
 	}
-	return n.cloud.call(ctx, "DELETE", "/v1/agents/"+url.PathEscape(name), nil, nil)
+	return api.call(ctx, "DELETE", "/v1/agents/"+url.PathEscape(name), nil, nil)
 }
 
 // CloudDraft has an ACP agent of this node write a definition from a person's words: an ordinary
@@ -344,8 +369,8 @@ func (n *Node) CloudDraft(ctx context.Context, p Principal, r client.CloudDraftR
 	if err := userOnly(p, "the cloud"); err != nil {
 		return client.CloudDraft{}, err
 	}
-	if n.cloud == nil {
-		return client.CloudDraft{}, errh("not_found", "connect a cloud in Settings", "no cloud is configured")
+	if _, err := n.cloudFor(r.Cloud); err != nil {
+		return client.CloudDraft{}, err
 	}
 	ask := strings.TrimSpace(r.Ask)
 	if ask == "" || len(ask) > cloudDraftAsk {

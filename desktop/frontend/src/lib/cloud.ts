@@ -3,7 +3,7 @@
 export type CloudSpec = { name: string; description: string; policy: string; environment: string; repo: string; instructions: string; connections: string[] };
 export type CloudDef = CloudSpec & { ref: string; shared: boolean; revision: number };
 export type CloudItem = { ref: string; name: string; shared: boolean; revision: number; description?: string };
-export type Catalogue = { agents: CloudDef[]; environments: CloudItem[]; connections: CloudItem[]; policies: string[] };
+export type Catalogue = { cloud?: string; agents: CloudDef[]; environments: CloudItem[]; connections: CloudItem[]; policies: string[] };
 export type CloudPlan = { plan: string; valid: boolean; action: string; revision: number; next_revision: number; diff: { path: string; from: string; to: string }[]; errors: string[] };
 
 export const emptySpec = (): CloudSpec => ({ name: "", description: "", policy: "", environment: "", repo: "", instructions: "", connections: [] });
