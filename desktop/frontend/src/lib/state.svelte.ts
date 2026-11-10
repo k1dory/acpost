@@ -45,6 +45,7 @@ const followTries = 6;
 
 export type PreviewEvent = { kind: string; message?: string; source?: string; line?: number; col?: number; stack?: string; url?: string; title?: string; main_frame?: boolean };
 export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview" | "artifacts";
+function savedPanel(): boolean { try { return localStorage.getItem("panel-open") !== "0"; } catch { return true; } }
 const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "preview", "artifacts"];
 /** An artifact to show: a reply's attachment, or a file of this Mac a reply links to. */
 export type ArtifactRef = { msg?: string; name: string; path?: string; base?: string };
@@ -81,7 +82,7 @@ class App {
   openTab(k: PanelTab) {
     if (!this.tabs.includes(k)) { this.tabs = [...this.tabs, k]; this.saveTabs(); }
     this.showTab(k);
-    this.panel = true;
+    this.setPanel(true);
   }
   closeTab(k: PanelTab) {
     const i = this.tabs.indexOf(k);
@@ -96,7 +97,12 @@ class App {
     this.tab = k;
     try { localStorage.setItem("panel-tab", k); } catch {}
   }
-  panel = $state(true);
+  /** The right panel shown (kept between launches: hidden stays hidden). */
+  panel = $state(savedPanel());
+  setPanel(on: boolean) {
+    this.panel = on;
+    try { localStorage.setItem("panel-open", on ? "1" : "0"); } catch {}
+  }
   view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide">("chat");
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
