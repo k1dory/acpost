@@ -99,7 +99,7 @@
       </div>
     {/if}
     {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost icon nodrag" title={t("Fork: the conversation so far, in a new chat")} aria-label={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={headerIcon} /></button>{/if}
-    <button class="btn ghost icon nodrag" title={t("Right panel (⌘\\)")} aria-label={t("Right panel (⌘\\)")} onclick={() => (app.panel = !app.panel)}><Icon name="panel" size={headerIcon} /></button>
+    <button class="btn ghost icon nodrag" title={t("Right panel (⌘\\)")} aria-label={t("Right panel (⌘\\)")} onclick={() => (app.setPanel(!app.panel))}><Icon name="panel" size={headerIcon} /></button>
   </header>
 
   {#if !app.chat && !app.thread}

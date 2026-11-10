@@ -446,6 +446,7 @@ export const ru: Record<string, string> = {
   "The draft's task was not stopped": "Задача черновика не остановлена",
   "What you changed meanwhile is still in the form, not deployed.": "То, что вы изменили за это время, осталось в форме и не развёрнуто",
   "The cloud changed while it was read: refresh": "Облако сменилось во время чтения: обновите",
+  "Hide the panel (⌘\\)": "Скрыть панель (⌘\\)",
 };
 
 // The node's messages (English) that have a known form, in Russian.

@@ -3,6 +3,7 @@
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
+  import { headerIcon } from "../lib/ui";
   import Activity from "./Activity.svelte";
   import Changes from "./Changes.svelte";
   import Terminal from "./Terminal.svelte";
@@ -75,6 +76,8 @@
         </div>
       {/if}
     </div>
+    <span class="sp"></span>
+    <button class="plus nodrag" onclick={() => app.setPanel(false)} title={t("Hide the panel (⌘\\)")} aria-label={t("Hide the panel (⌘\\)")}><Icon name="panel" size={headerIcon} /></button>
   </div>
   <div class="card panel body"><div class="inner">
     {#if hidden}<!-- hidden: nothing but the terminal stays (no fetching for a panel nobody sees) -->
@@ -101,6 +104,7 @@
   .x { width: 18px; height: 18px; margin-right: 4px; border: 0; background: transparent; color: var(--muted); border-radius: 5px; display: grid; place-items: center; opacity: 0; }
   .tab:hover .x, .tab.on .x { opacity: 1; }
   .x:hover { background: var(--hover); color: var(--ink); }
+  .sp { flex: 1; }
   .add { position: relative; flex: none; margin-left: 2px; }
   .plus { width: 26px; height: 26px; border: 0; background: transparent; border-radius: 8px; color: var(--muted); display: grid; place-items: center; }
   .plus:hover, .plus.on { background: var(--hover); color: var(--ink); }

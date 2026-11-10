@@ -97,7 +97,7 @@
     else if (e.key === "-") { e.preventDefault(); app.stepTextSize(-1); }
     else if (e.key === "0") { e.preventDefault(); app.setTextSize(1); }
     else if (e.key === "n") { e.preventDefault(); app.newTask(); }
-    else if (e.key === "\\") { e.preventDefault(); app.panel = !app.panel; }
+    else if (e.key === "\\") { e.preventDefault(); app.setPanel(!app.panel); }
     else if (e.key === "j") { e.preventDefault(); app.openTab("terminal"); }
     else if (e.key === ",") { e.preventDefault(); app.view = "settings"; }
     else if (e.key === "k") { e.preventDefault(); app.palette = !app.palette; }
