@@ -13,6 +13,10 @@ export type Edit = { cloud: string; isNew: boolean; rev: number; spec: CloudSpec
 
 const specOf = (a: CloudSpec): CloudSpec => ({ name: a.name, description: a.description ?? "", policy: a.policy ?? "", environment: a.environment ?? "", repo: a.repo ?? "", instructions: a.instructions ?? "", connections: [...(a.connections ?? [])] });
 
+/** A draft asked for: its request (json: the same request is the same ask), the key it goes
+ * under, its task once known. */
+type Ask = { key: string; json: string; req: any; msg: string; creating: boolean; stopped: boolean };
+
 export class CloudBuilder {
   info = $state<CloudInfo | null>(null);
   cat = $state<Catalogue | null>(null);
@@ -175,46 +179,47 @@ export class CloudBuilder {
     this.busy = ""; this.sure = "";
   }
 
-  /** The drafts' tasks not known to have ended: what a stop cancels, whether an answer is still
-   * waited for or not (a wait that failed leaves its task running, and so does a cancel that failed:
-   * it stays here, and is cancelled again by the next stop). */
-  private live = $state<string[]>([]);
-  /** A draft asked for whose answer never came: there may be a task nobody here knows the id
-   * of. Asked again under the same key it is that task, not another: to wait for, or to stop. */
-  private lost = $state<{ key: string; req: any } | null>(null);
-  get draftLive() { return this.live.length > 0 || !!this.lost; }
-  private ended(msg: string) { this.live = this.live.filter(m => m !== msg); }
+  /** Every draft asked for and not known to have ended, from before its request leaves: its task
+   * once known (msg), else the key it was asked under, by which the node finds it. What a stop
+   * cancels, whether an answer is still waited for or not: a create whose answer was lost, a wait
+   * or a cancel that failed all leave it here, to be stopped by the next stop. */
+  private asks = $state<Ask[]>([]);
+  get draftLive() { return this.asks.length > 0; }
+  private forget(a: Ask) { this.asks = this.asks.filter(x => x.key !== a.key); }
+  /** The node said no: there is no task (anything else may have made one). */
+  private static refusal = (x: unknown) => ["invalid", "refused", "unsupported", "conflict", "not_found"].includes(errInfo(x).code);
 
   /** Has an agent of this Mac write the definition. Its answer fills what the person did not
-   * change while it was written; a draft stopped before its task was known is cancelled once it is. */
+   * change while it was written. Asked again exactly as before after its answer was lost, it is
+   * the same task (the same key); asked otherwise, the earlier one is stopped. */
   async writeDraft() {
     const e = this.ed, cat = this.cat;
     if (!e || !cat || this.drafting || !this.ask.trim() || !this.draftAgent) return;
-    const req = { cloud: e.cloud, agent: this.draftAgent, ask: this.ask.trim(), cwd: this.draftDir };
-    // The same request again after its answer was lost: the same key, so the same task.
-    const was = this.lost;
-    const same = !!was && JSON.stringify(was.req) === JSON.stringify(req);
-    const key = same ? was!.key : newId();
-    if (same) this.lost = null;
-    this.stopDraft(); // one left running by a wait that failed, or asked for and never answered
-    const run = ++this.draftRun;
     const start = cleanSpec(e.spec);
     const has = start.name || start.instructions || start.policy || start.environment || start.description;
+    const req = { cloud: e.cloud, agent: this.draftAgent, ask: this.ask.trim(), cwd: this.draftDir, current: has ? start : null };
+    const json = JSON.stringify(req);
+    let a = this.asks.find(x => !x.msg && !x.creating && x.json === json);
+    this.stopDraft(a); // any other left running
+    if (!a) { this.asks.push({ key: newId(), json, req, msg: "", creating: false, stopped: false }); a = this.asks[this.asks.length - 1]; }
+    a.stopped = false;
+    const ask = a, run = ++this.draftRun;
     this.err = ""; this.draftNote = ""; this.draft = null; this.drafting = true;
-    const mine = () => run === this.draftRun && this.ed === e;
+    const mine = () => run === this.draftRun && this.ed === e && !ask.stopped;
     try {
       let res: any;
-      try { res = await Node.CloudDraft({ ...req, key, current: has ? start : null } as any); } catch (x) {
-        // Refused by the node, there is no task; anything else may have made one.
-        if (!["invalid", "refused", "unsupported", "conflict", "not_found"].includes(errInfo(x).code)) this.lost = { key, req };
+      ask.creating = true;
+      try { res = await Node.CloudDraft({ ...req, key: ask.key } as any); } catch (x) {
+        ask.creating = false;
+        if (CloudBuilder.refusal(x)) this.forget(ask);
+        else if (!mine()) this.stop(ask); // stopped while it was asked for: found by its key, and stopped
         throw x;
       }
-      const msg: string = res.msg;
-      this.live = [...this.live, msg];
-      if (!mine()) { this.cancelDraft(msg); return; }
-      this.draft = { msg, thread: res.thread };
-      while (mine() && !res.spec && !res.error) res = await Node.CloudDraftResult(msg);
-      if (res.spec || res.error) this.ended(msg); // whoever waits for it now
+      ask.creating = false; ask.msg = res.msg;
+      if (!mine()) { this.stop(ask); return; }
+      this.draft = { msg: ask.msg, thread: res.thread };
+      while (mine() && !res.spec && !res.error) res = await Node.CloudDraftResult(ask.msg);
+      if (res.spec || res.error) this.forget(ask); // it ended, whoever waits for it now
       if (!mine()) return;
       if (res.error) this.err = tr(res.error);
       else {
@@ -222,32 +227,29 @@ export class CloudBuilder {
         e.spec = m.spec;
         this.draftNote = m.dropped.length ? t("The draft named what the cloud does not have, left out: {list}", { list: m.dropped.join(", ") }) : t("The draft is in the form. Read it, check it, deploy it.");
       }
-    } catch (x) { if (mine()) this.err = errText(x); }
+    } catch (x) { if (run === this.draftRun && this.ed === e) this.err = errText(x); }
     if (run === this.draftRun) this.drafting = false;
   }
-  /** Stops the draft: its answer is not waited for, and every task that may still run is cancelled. */
-  stopDraft() {
+  /** Stops the drafts (all but `keep`): no answer is waited for, and every task that may run is cancelled. */
+  stopDraft(keep?: Ask) {
     this.draftRun++; this.drafting = false;
-    for (const msg of this.live) this.cancelDraft(msg);
-    const lost = this.lost;
-    if (lost) {
-      // Found by its key (made now, if it never was), then stopped like any other.
-      Node.CloudDraft({ ...lost.req, key: lost.key, current: null } as any).then((r: any) => {
-        if (this.lost === lost) this.lost = null;
-        this.live = [...this.live, r.msg];
-        this.cancelDraft(r.msg);
-      }, (x: unknown) => {
-        if (["invalid", "refused", "unsupported", "conflict", "not_found"].includes(errInfo(x).code)) { if (this.lost === lost) this.lost = null; }
-        else this.err = errText(x, "The draft's task was not stopped");
-      });
-    }
+    for (const a of [...this.asks]) if (a !== keep) this.stop(a);
   }
-  private cancelDraft(msg: string) {
-    Node.Cancel(msg).then(() => this.ended(msg), (x: unknown) => {
-      // No such message, or one that ended already: nothing left to stop.
-      if (["not_found", "conflict"].includes(errInfo(x).code)) this.ended(msg);
+  /** Stops one: cancelled by its task, found first by its key when the task is not known; one
+   * being asked for right now is stopped when that answers (writeDraft, or the search here). */
+  private stop(a: Ask) {
+    a.stopped = true;
+    if (a.creating) return;
+    const failed = (x: unknown) => {
+      if (CloudBuilder.refusal(x)) this.forget(a); // no such task, or one that ended: nothing to stop
       else this.err = errText(x, "The draft's task was not stopped");
-    });
+    };
+    if (a.msg) { Node.Cancel(a.msg).then(() => this.forget(a), failed); return; }
+    a.creating = true;
+    Node.CloudDraft({ ...a.req, key: a.key } as any).then((r: any) => {
+      a.creating = false; a.msg = r.msg;
+      if (a.stopped) this.stop(a);
+    }, (x: unknown) => { a.creating = false; failed(x); });
   }
   async openDraft() {
     const d = this.draft;

@@ -1683,9 +1683,9 @@ type CloudDeployed struct {
 // CloudDraftRequest asks an agent of the node to write (or rewrite) a definition from a person's
 // words; Cwd is a repository to read first.
 type CloudDraftRequest struct {
-	Cloud   string          `json:"cloud"` // the connection whose catalogue the form shows
+	Cloud string `json:"cloud"` // the connection whose catalogue the form shows
 	// Key names the request: asked again with it (the answer lost), it is the same task, not another.
-	Key string `json:"key,omitempty"`
+	Key     string          `json:"key,omitempty"`
 	Agent   string          `json:"agent"`
 	Ask     string          `json:"ask"`
 	Cwd     string          `json:"cwd,omitempty"`

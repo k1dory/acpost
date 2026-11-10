@@ -420,6 +420,70 @@ describe("a draft", () => {
   });
 });
 
+describe("a draft whose request may or may not have been taken", () => {
+  const start = async () => {
+    const cb = await builder();
+    cb.editAgent(cb.cat!.agents[0]);
+    cb.ask = "a backend developer"; cb.draftAgent = "agent:claude";
+    return cb;
+  };
+  it("asked again after the form changed is another draft: the first is stopped, what was typed stays", async () => {
+    const cb = await start();
+    fake.Node.CloudDraft.mockRejectedValueOnce(new Error("connection reset"));
+    await cb.writeDraft();
+    const key = fake.Node.CloudDraft.mock.calls[0][0].key;
+    cb.ed!.spec.instructions = "mine, typed after the first try";
+    // The retry: the first ask found by its key and cancelled, the second under its own.
+    fake.Node.CloudDraft.mockImplementation(async (r: any) => r.key === key
+      ? { msg: "m-old", thread: "t", state: "running" }
+      : { msg: "m-new", thread: "t2", state: "done", spec: { name: "", description: "d2", policy: "", environment: "", repo: "", instructions: "", connections: [] } });
+    await cb.writeDraft();
+    await flush();
+    const keys = fake.Node.CloudDraft.mock.calls.map(c => c[0].key);
+    expect(new Set(keys).size).toBe(2);
+    expect(fake.Node.CloudDraft.mock.calls.find(c => c[0].key !== key)![0].current.instructions).toBe("mine, typed after the first try");
+    expect(fake.Node.Cancel).toHaveBeenCalledWith("m-old");
+    expect(cb.ed!.spec).toMatchObject({ instructions: "mine, typed after the first try", description: "d2" });
+    expect(cb.draftLive).toBe(false);
+  });
+
+  it("stopped while it was asked for, and the answer then lost: found by its key and stopped", async () => {
+    const cb = await start();
+    const made = deferred();
+    fake.Node.CloudDraft.mockReturnValueOnce(made.promise);
+    const writing = cb.writeDraft();
+    cb.close();
+    expect(cb.draftLive).toBe(true);
+    fake.Node.CloudDraft.mockResolvedValue({ msg: "m5", thread: "t5", state: "running" });
+    made.reject(new Error("connection reset"));
+    await writing;
+    await flush();
+    expect(fake.Node.CloudDraft).toHaveBeenCalledTimes(2);
+    expect(fake.Node.CloudDraft.mock.calls[1][0].key).toBe(fake.Node.CloudDraft.mock.calls[0][0].key);
+    expect(fake.Node.Cancel).toHaveBeenCalledWith("m5");
+    expect(cb.draftLive).toBe(false);
+  });
+
+  it("two of them unresolved: a stop goes after both", async () => {
+    const cb = await start();
+    fake.Node.CloudDraft.mockRejectedValue(new Error("connection reset"));
+    await cb.writeDraft(); // A: lost
+    cb.ask = "something else";
+    await cb.writeDraft(); // B: lost, and A's search by its key lost too
+    await flush();
+    const keyA = fake.Node.CloudDraft.mock.calls[0][0].key;
+    const keyB = fake.Node.CloudDraft.mock.calls.find(c => c[0].ask === "something else")![0].key;
+    expect(cb.draftLive).toBe(true);
+    fake.Node.CloudDraft.mockImplementation(async (r: any) => ({ msg: r.key === keyA ? "mA" : "mB", thread: "t", state: "running" }));
+    cb.stopDraft();
+    await flush();
+    expect(fake.Node.Cancel).toHaveBeenCalledWith("mA");
+    expect(fake.Node.Cancel).toHaveBeenCalledWith("mB");
+    expect(keyA).not.toBe(keyB);
+    expect(cb.draftLive).toBe(false);
+  });
+});
+
 describe("a read's error", () => {
   it("goes once the cloud is read, and another's stays", async () => {
     const cb = await builder();
