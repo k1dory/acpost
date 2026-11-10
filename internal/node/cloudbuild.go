@@ -369,6 +369,18 @@ func (n *Node) CloudDraft(ctx context.Context, p Principal, r client.CloudDraftR
 	if err := userOnly(p, "the cloud"); err != nil {
 		return client.CloudDraft{}, err
 	}
+	idem := ""
+	if r.Key != "" {
+		if len(r.Key) > maxLabel-len("cloud-draft:") {
+			return client.CloudDraft{}, errf("invalid", "the draft's key is too long")
+		}
+		idem = "cloud-draft:" + r.Key
+		// Asked before under this key: that task, whatever the cloud or the agent say now (its
+		// answer was lost; the person stops it, or waits for it, by this).
+		if prev, err := n.st.ByIdem(ctx, p.Address(), idem); err == nil && prev.Meta[metaCloudDraft] != "" {
+			return client.CloudDraft{Msg: prev.ID, Thread: prev.Thread, State: string(prev.State)}, nil
+		}
+	}
 	if _, err := n.cloudFor(r.Cloud); err != nil {
 		return client.CloudDraft{}, err
 	}
@@ -397,7 +409,7 @@ func (n *Node) CloudDraft(ctx context.Context, p Principal, r client.CloudDraftR
 		return client.CloudDraft{}, err
 	}
 	m, _, err := n.Send(ctx, p, SendRequest{To: to.String(), Body: cloudDraftPrompt(ask, r.Current, cat, dir != "", remote), Cwd: dir,
-		Mode: mode, ModeStrict: true, Meta: map[string]string{metaCloudDraft: "1"}})
+		Mode: mode, ModeStrict: true, IdemKey: idem, Meta: map[string]string{metaCloudDraft: "1"}})
 	if err != nil {
 		return client.CloudDraft{}, err
 	}

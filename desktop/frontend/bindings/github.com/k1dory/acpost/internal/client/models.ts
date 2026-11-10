@@ -715,6 +715,11 @@ export class CloudDraftRequest {
      * the connection whose catalogue the form shows
      */
     "cloud": string;
+
+    /**
+     * Key names the request: asked again with it (the answer lost), it is the same task, not another.
+     */
+    "key"?: string;
     "agent": string;
     "ask": string;
     "cwd"?: string;
@@ -739,10 +744,10 @@ export class CloudDraftRequest {
      * Creates a new CloudDraftRequest instance from a string or object.
      */
     static createFrom($$source: any = {}): CloudDraftRequest {
-        const $$createField4_0 = $$createType22;
+        const $$createField5_0 = $$createType22;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("current" in $$parsedSource) {
-            $$parsedSource["current"] = $$createField4_0($$parsedSource["current"]);
+            $$parsedSource["current"] = $$createField5_0($$parsedSource["current"]);
         }
         return new CloudDraftRequest($$parsedSource as Partial<CloudDraftRequest>);
     }

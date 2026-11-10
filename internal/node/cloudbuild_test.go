@@ -403,6 +403,32 @@ func TestCloudDraft(t *testing.T) {
 	if f.applies != 0 {
 		t.Fatal("a draft deployed")
 	}
+	// Asked under a key, and again (the first answer lost): one task, found by the key even when
+	// the request can no longer be made anew (another cloud by now).
+	keyed := client.CloudDraftRequest{Cloud: n.cloud.id(), Agent: "agent:fake", Ask: "a reviewer", Key: "k1"}
+	d1, err := n.CloudDraft(ctx, me, keyed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2, err := n.CloudDraft(ctx, me, keyed)
+	if err != nil || d2.Msg != d1.Msg || d2.Thread != d1.Thread {
+		t.Fatalf("asked again: %+v, was %+v (%v)", d2, d1, err)
+	}
+	keyed.Cloud = "another"
+	if d3, err := n.CloudDraft(ctx, me, keyed); err != nil || d3.Msg != d1.Msg {
+		t.Fatalf("found by its key: %+v %v", d3, err)
+	}
+	keyed.Key = "k2"
+	if _, err := n.CloudDraft(ctx, me, keyed); code(err) != "conflict" {
+		t.Fatalf("a new draft for another cloud: %v", err)
+	}
+	keyed.Cloud, keyed.Key = n.cloud.id(), strings.Repeat("k", maxLabel)
+	if _, err := n.CloudDraft(ctx, me, keyed); code(err) != "invalid" {
+		t.Fatalf("a key too long: %v", err)
+	}
+	if d1.Msg == d.Msg {
+		t.Fatal("a keyed draft is an earlier one")
+	}
 	// A message that is no draft is not read as one.
 	other, _, err := n.Send(ctx, me, SendRequest{To: "agent:fake", Body: "echo hi"})
 	if err != nil {

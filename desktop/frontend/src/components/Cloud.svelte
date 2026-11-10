@@ -3,7 +3,7 @@
   import { app } from "../lib/state.svelte";
   import { Node } from "../lib/api";
   import { agentLabel, tilde } from "../lib/names";
-  import { withCurrent } from "../lib/cloud";
+  import { withCurrent, localDrafters } from "../lib/cloud";
   import { cloud as cb } from "../lib/cloudbuild.svelte";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
@@ -28,7 +28,7 @@
   }
   const soon = $derived(!!info?.expires && new Date(info.expires).getTime() - Date.now() < 7 * 86400e3);
 
-  const locals = $derived(app.agents.filter((a: any) => a.driver === "acp" && !a.node));
+  const locals = $derived(localDrafters(app.localAgents()));
   $effect(() => { if (!locals.some((a: any) => a.address === cb.draftAgent)) cb.draftAgent = (locals[0] as any)?.address ?? ""; });
   async function pickDir() {
     const d = await Node.PickDirectory(cb.draftDir || app.home).catch(() => "");

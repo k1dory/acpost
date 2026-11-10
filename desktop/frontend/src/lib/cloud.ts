@@ -60,3 +60,9 @@ export function mergeDraft(form: CloudSpec, draft: CloudSpec, cat: Catalogue, is
   }
   return { spec, dropped };
 }
+
+/** The agents that can write a draft: this node's ACP agents (an agent of this node carries the
+ * node's name too; one reached through the hub is addressed name@node). */
+export function localDrafters<T extends { address: string; driver?: string }>(agents: T[]): T[] {
+  return agents.filter(a => a.driver === "acp" && !a.address.includes("@"));
+}

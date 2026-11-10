@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanSpec, emptySpec, mergeDraft, specKey, specMissing, withCurrent, type Catalogue } from "./cloud";
+import { localDrafters, cleanSpec, emptySpec, mergeDraft, specKey, specMissing, withCurrent, type Catalogue } from "./cloud";
 
 const cat: Catalogue = {
   agents: [], policies: ["backend-dev"],
@@ -49,5 +49,17 @@ describe("a drafted definition", () => {
     const now = { ...form, instructions: "mine, typed meanwhile", connections: [] };
     const r = mergeDraft(now, { ...emptySpec(), description: "d", policy: "backend-dev", instructions: "the agent's", connections: ["github"] }, cat, false, start);
     expect(r.spec).toEqual({ ...now, description: "d" });
+  });
+});
+
+describe("who can write a draft", () => {
+  it("this node's ACP agents, which carry the node's name like any other", () => {
+    const agents = [
+      { address: "agent:claude", driver: "acp", node: "mac" },
+      { address: "agent:codex", driver: "acp", node: "mac" },
+      { address: "agent:sb_1", driver: "sandbox", node: "mac" },
+      { address: "agent:claude@hub", driver: "acp", node: "hub" },
+    ];
+    expect(localDrafters(agents).map(a => a.address)).toEqual(["agent:claude", "agent:codex"]);
   });
 });

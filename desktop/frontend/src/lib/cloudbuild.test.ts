@@ -386,4 +386,50 @@ describe("a draft", () => {
     await flush();
     expect(fake.Node.Cancel).toHaveBeenCalledTimes(2);
   });
+  it("asked for and never answered: asked again it is the same task, and a stop finds it by its key", async () => {
+    const cb = await start();
+    fake.Node.CloudDraft.mockRejectedValueOnce(new Error("connection reset"));
+    await cb.writeDraft();
+    expect(cb.err).toContain("connection reset");
+    expect(cb.draftLive).toBe(true); // there may be a task
+    const key = fake.Node.CloudDraft.mock.calls[0][0].key;
+    expect(key).toMatch(/^[0-9a-f]{32}$/);
+    // The same request again: the same key.
+    fake.Node.CloudDraft.mockRejectedValueOnce(new Error("connection reset"));
+    await cb.writeDraft();
+    expect(fake.Node.CloudDraft.mock.calls[1][0].key).toBe(key);
+    // Stop: the task is found by the key and cancelled.
+    fake.Node.CloudDraft.mockResolvedValue({ msg: "m7", thread: "t7", state: "running" });
+    cb.stopDraft();
+    await flush();
+    expect(fake.Node.CloudDraft.mock.calls[2][0].key).toBe(key);
+    expect(fake.Node.Cancel).toHaveBeenCalledWith("m7");
+    expect(cb.draftLive).toBe(false);
+    // Another request is another key.
+    cb.ask = "something else";
+    fake.Node.CloudDraft.mockResolvedValue({ msg: "m8", thread: "t8", state: "done", error: "no definition" });
+    await cb.writeDraft();
+    expect(fake.Node.CloudDraft.mock.calls[3][0].key).not.toBe(key);
+  });
+
+  it("refused by the node leaves nothing to stop", async () => {
+    const cb = await start();
+    fake.Node.CloudDraft.mockRejectedValue(new Error(JSON.stringify({ code: "unsupported", message: "no read-only mode" })));
+    await cb.writeDraft();
+    expect(cb.draftLive).toBe(false);
+  });
+});
+
+describe("a read's error", () => {
+  it("goes once the cloud is read, and another's stays", async () => {
+    const cb = await builder();
+    fake.Node.CloudBuild.mockRejectedValueOnce(new Error("timeout"));
+    await cb.load();
+    expect(cb.err).toContain("timeout");
+    await cb.load();
+    expect(cb.err).toBe("");
+    cb.err = "the deploy failed";
+    await cb.load();
+    expect(cb.err).toBe("the deploy failed");
+  });
 });
