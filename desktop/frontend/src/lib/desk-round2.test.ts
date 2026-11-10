@@ -536,6 +536,28 @@ describe("a send owns its attachments from the click (review round 4)", () => {
     expect(b).toEqual(a);
   });
 
+  for (const keep of [true, false]) it(`the report sent, attached again, the send failed: names stay unique; ${keep ? "kept, both go" : "the late one removed, the retry is the first request"}`, async () => {
+    const { app, d } = await setupSend();
+    const report = { name: "preview-problems.md", type: "text/markdown", size: 1, data: "cA==" };
+    fake.Node.SendTask.mockReset();
+    const first = deferred();
+    fake.Node.SendTask.mockReturnValueOnce(first.promise).mockResolvedValue(msg("m1", "T"));
+    d.take([report]);
+    const going = app.submit(d);
+    await flush();
+    d.take([{ ...report, data: "cQ==" }]);           // the report again, while the send goes
+    first.reject(new Error("refused"));
+    expect(await going).toBe(false);
+    expect(d.files.map(f => f.name)).toEqual(["preview-problems.md", "preview-problems (2).md"]);
+    if (!keep) d.files = d.files.slice(0, 1);
+    expect(await app.submit(d)).toBe(true);
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    if (keep) {
+      expect(b.files.map((f: any) => [f.name, f.data])).toEqual([["preview-problems.md", "cA=="], ["preview-problems (2).md", "cQ=="]]);
+      expect(b.idem).not.toBe(a.idem);
+    } else expect(b).toEqual(a);
+  });
+
   it("any reads, removals and pastes before and after the click: what goes is the click's files and what the reads of then brought after it, named apart; a retry is the first request", async () => {
     const { pasteName, freeName } = await import("./paste");
     let seed = 11;
@@ -612,6 +634,8 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         d.add(group, limits, () => { if (!clicked) g.stopped = true; }, paste ? (f, t) => pasteName(mark(f), t) : (f, t) => freeName(mark(f).name, t));
       };
       const end = (r: (typeof reads)[number]) => { r.s.done(); r.ended = true; };
+      // The drafts' names are unique after every step, whatever put files there.
+      const unique = () => { for (const x of [main, other]) expect(new Set(x.files.map(f => f.name)).size).toBe(x.files.length); };
       // A file handed over whole (the preview's report): the same report again is another attachment.
       const takeOne = () => { const k = rnd(2); d.take([{ name: "preview-problems.md", type: "text/markdown", size: 1, data: btoa("report" + k) }]); };
       // Each draft starts with a read going: merged, the two run at once.
@@ -626,6 +650,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         else if (k === 1 && reads.length) end(reads[rnd(reads.length)]);
         else if (d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
         await flush();
+        unique();
       }
       if (!merged) { (app as any).moveDraft(other, "thread:T"); d = main; }
       if (!reads.length) addSome();
@@ -655,6 +680,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         else if (!retry && k === 1 && d.files.length) d.files = d.files.filter((_, j) => j !== rnd(d.files.length));
         else if (reads.length) end(reads[rnd(reads.length)]);
         await flush();
+        unique();
       }
       for (const r of reads) end(r);
       for (let i = 0; i < 5; i++) await flush();
@@ -691,11 +717,20 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         expect(ok).toBe(false);
         expect(d.files.slice(0, files.length).map(f => atob(f.data))).toEqual(got);
         for (const f of formAtSend) expect(d.files.some(x => x.rid === f.rid)).toBe(true);
-        d.files = d.files.slice(0, files.length);
+        unique();
+        // Half the time the later files stay and go too (names apart); else, without them, the
+        // retry is the first request.
+        const keepLate = rnd(2) === 0;
+        if (!keepLate) d.files = d.files.slice(0, files.length);
+        const draftNow = d.files.map(f => [f.name, f.data]);
         fake.Node.SendTask.mockReset();
         fake.Node.SendTask.mockResolvedValue(msg("m1", "T"));
         await app.submit(d);
-        expect(fake.Node.SendTask.mock.calls[0][0]).toEqual(firstReq);
+        const again = fake.Node.SendTask.mock.calls[0]?.[0];
+        if (keepLate) {
+          if (again) expect((again.files ?? []).map((f: any) => [f.name, f.data])).toEqual(draftNow);
+          else expect(limits).not.toBeNull(); // not sent only under limits (the draft given back can be over them)
+        } else expect(again).toEqual(firstReq);
         continue;
       }
       if (!retry) {

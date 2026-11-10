@@ -83,8 +83,20 @@ export function sendFiles(d: ComposerDraft, limits: Limits | null): {
   };
 }
 
+/** A list whose names are unique: each file as it was, but one whose name an earlier one has,
+ * which gets its own (freeName: "a (2).txt"). */
+export function uniqueNames(list: Attachment[]): Attachment[] {
+  const taken: string[] = [];
+  return list.map(f => {
+    const name = freeName(f.name, taken);
+    taken.push(name);
+    return name === f.name ? f : { ...f, name };
+  });
+}
+
 /** A send that did not go gives the draft back all it owned (its request's files, by identity,
- * in its order and with its names), before what was attached after the click: nothing it had is
+ * in its order and with its names), before what was attached after the click (one of those with
+ * a name the request has gets another, as anything put in the draft does): nothing it had is
  * lost, and the same files make the same request again. */
 export function giveBack(d: ComposerDraft, owned: Attachment[]) {
   const mine = new Set(owned.map(f => f.rid));
@@ -132,7 +144,13 @@ export class SendOp {
 
 export class ComposerDraft {
   text = $state("");
-  files = $state<Attachment[]>([]);
+  /** The draft's files. Their names are unique whatever puts files here (an add, a paste, a file
+   * handed over, a send given back, drafts merged): each set goes through uniqueNames, the
+   * earlier keeping its name, a later one told apart (identity and order kept). The node takes no
+   * two files of one name in a message. */
+  #files = $state<Attachment[]>([]);
+  get files(): Attachment[] { return this.#files; }
+  set files(v: Attachment[]) { this.#files = uniqueNames(v); }
   busy = $state(false);
   /** What a send of this draft made so far, all of it in one: a draft that moves (into a thread,
    * back into a new task) takes it whole, so no part of it is left behind. */
