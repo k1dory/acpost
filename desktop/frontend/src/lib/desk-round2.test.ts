@@ -515,6 +515,27 @@ describe("a send owns its attachments from the click (review round 4)", () => {
     expect(d.files.length).toBe(2);
   });
 
+  it("15 files, x.txt read, Send, the report attached (the composer full), the send fails: all 16 come back, and without the report the retry is the first request", async () => {
+    const { app, d } = await setupSend();
+    app.limits = { max_body: 1 << 20, max_files: 16, max_files_size: 1 << 20 };
+    fake.Node.SendTask.mockReset();
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(msg("m1", "T"));
+    d.take(Array.from({ length: 15 }, (_, i) => ({ name: `f${i}.txt`, type: "text/plain", size: 1, data: btoa("f" + i) })));
+    const x = slow("x.txt", "x");
+    d.add([x.f], app.limits, () => {});
+    const going = app.submit(d);
+    d.take([{ name: "preview-problems.md", type: "text/markdown", size: 1, data: "cA==" }]); // the 16th: the composer is full
+    x.done();
+    expect(await going).toBe(false);
+    expect(d.files.map(f => f.name)).toEqual([...Array.from({ length: 15 }, (_, i) => `f${i}.txt`), "x.txt", "preview-problems.md"]);
+    expect(app.error).toContain("remove a file");
+    d.files = d.files.filter(f => f.name !== "preview-problems.md");
+    expect(await app.submit(d)).toBe(true);
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(a.files.length).toBe(16);
+    expect(b).toEqual(a);
+  });
+
   it("any reads, removals and pastes before and after the click: what goes is the click's files and what the reads of then brought after it, named apart; a retry is the first request", async () => {
     const { pasteName, freeName } = await import("./paste");
     let seed = 11;
@@ -534,6 +555,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       const other = app.draftOf("thread:X");
       let d = rnd(2) ? other : main, merged = false;
       const retry = run % 2 === 0; // half the runs: the first answer lost, nothing done after the click, sent again
+      const fails = !retry && run % 3 === 0; // some others: the send fails, with things done after the click
       if (retry) fake.Node.SendTask.mockRejectedValueOnce(new Error("lost"));
       // A third of the runs with the node's limits (small: they are met): the composer judges what
       // it is given, a send judges its own files, and goes whole or not at all.
@@ -613,7 +635,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       let formAtSend: { rid: number; data: string }[] = [];
       // The node answers once all is done (the composer as it is then is what the answer cleans).
       let answer = () => {};
-      if (!retry) fake.Node.SendTask.mockImplementation(() => new Promise(r => { answer = () => { formAtSend = d.files.map(f => ({ rid: f.rid, data: f.data })); r(msg("m1", "T")); }; }));
+      if (!retry) fake.Node.SendTask.mockImplementation(() => new Promise((r, rj) => { answer = () => { formAtSend = d.files.map(f => ({ rid: f.rid, data: f.data })); fails ? rj(new Error("refused")) : r(msg("m1", "T")); }; }));
       // Reads under way at the click: the send's first (their files passed the composer's check).
       // (a stopped add() has ended: none of its files is under way)
       const stoppedVs = new Set(groups.filter(g => g.stopped).flatMap(g => g.vs));
@@ -623,7 +645,8 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       const toCome = groups.filter(g => !g.late && !g.stopped).flatMap(g => g.vs).filter(v => !readStarted.has(v) && !delivered.has(v)).map(v => ({ v, size: sizeOf.get(v)! }));
       simBudget = [...d.files.map(f => ({ size: f.size })), ...inFlight];
       clicked = true;
-      const going = app.submit(d);
+      let backAt: number[] = []; // the draft's files as the send returned
+      const going = app.submit(d).then(ok => { backAt = d.files.map(f => f.rid); return ok; });
       // After the click: none of this is the message's.
       for (let step = 0; step < 6; step++) {
         const k = rnd(4);
@@ -650,6 +673,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         expect(ok).toBe(false);
         expect(fake.Node.SendTask).not.toHaveBeenCalled();
         expect(d.text).toBe("these");
+        for (const r of clickRids) expect(backAt.includes(r)).toBe(true); // given back as the send returned, removed since or not
         continue;
       }
       const want = [...atClick, ...pendingAtClick].sort();
@@ -661,6 +685,19 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       expect(got.slice(0, atClick.length)).toEqual(atClick);
       expect(got.slice(atClick.length)).toEqual(deliveryOrder.filter(v => pendingAtClick.includes(v)));
       expect(new Set(files.map((f: any) => f.name)).size).toBe(files.length);
+      if (fails) {
+        // It failed: all it owned is back in the draft, its request's files first, then what was
+        // attached since (nothing lost); without those, the retry is the first request.
+        expect(ok).toBe(false);
+        expect(d.files.slice(0, files.length).map(f => atob(f.data))).toEqual(got);
+        for (const f of formAtSend) expect(d.files.some(x => x.rid === f.rid)).toBe(true);
+        d.files = d.files.slice(0, files.length);
+        fake.Node.SendTask.mockReset();
+        fake.Node.SendTask.mockResolvedValue(msg("m1", "T"));
+        await app.submit(d);
+        expect(fake.Node.SendTask.mock.calls[0][0]).toEqual(firstReq);
+        continue;
+      }
       if (!retry) {
         // What it sent leaves the composer, exactly those: a file attached after the click stays,
         // the same report attached again included.

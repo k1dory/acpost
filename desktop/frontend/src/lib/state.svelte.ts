@@ -2,8 +2,8 @@ import { t, tr } from "./i18n.svelte";
 import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
-import { ComposerDraft, sendFiles, type Attachment } from "./composer.svelte";
-import { afterSent } from "./draft";
+import { ComposerDraft, sendFiles, giveBack, type Attachment } from "./composer.svelte";
+import { afterSent, overLimits } from "./draft";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -572,6 +572,15 @@ class App {
       ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles }, at);
     }
     d.busy = false;
+    if (!ok) {
+      // Not sent: all of it comes back to the draft, files by identity (one only the send had,
+      // read when the composer was full, too). Over the composer's limits with what was attached
+      // since, the draft says so; the person removes something, nothing is dropped.
+      giveBack(d, refused ? owned.all() : sentFiles);
+      if (this.limits && d.files.some((f, i) => overLimits(d.files.slice(0, i), f, this.limits))) {
+        this.error = [this.error, t("The draft is over the node's limits: remove a file to send it")].filter(Boolean).join("\n");
+      }
+    }
     // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
     // put back into the new task's, not lost with the draft no screen shows.
     if (!ok && ![...this.draftMap.values()].includes(d)) {

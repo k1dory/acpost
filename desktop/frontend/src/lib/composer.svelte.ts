@@ -42,6 +42,8 @@ export type FilesRefused = { why: "count" | "size" | "read"; file: string };
  * reads end; done() lets the reads go (the form judges them again). */
 export function sendFiles(d: ComposerDraft, limits: Limits | null): {
   wait: Promise<void>; files: () => { files: Attachment[]; refused?: FilesRefused }; done: () => void;
+  /** All the send owns, refused or not: the click's files and all its reads brought. */
+  all: () => Attachment[];
 } {
   const had = [...d.files], jobs = [...d.reading].map(j => ({ j, from: j.results.length, failed: j.failed.length }));
   // The budget: the click's files, then each file of its reads as it comes up, judged by what is
@@ -77,7 +79,16 @@ export function sendFiles(d: ComposerDraft, limits: Limits | null): {
       return { files: withReads(had, reads) };
     },
     done: () => { for (const { j } of jobs) j.sends.delete(admit); },
+    all: () => withReads(had, jobs.flatMap(({ j, from }) => j.results.slice(from)).sort((a, b) => a.rid - b.rid)),
   };
+}
+
+/** A send that did not go gives the draft back all it owned (its request's files, by identity,
+ * in its order and with its names), before what was attached after the click: nothing it had is
+ * lost, and the same files make the same request again. */
+export function giveBack(d: ComposerDraft, owned: Attachment[]) {
+  const mine = new Set(owned.map(f => f.rid));
+  d.files = [...owned.map(f => ({ ...f })), ...d.files.filter(f => !mine.has(f.rid))];
 }
 
 /** A list of files with the files reads brought after it, as both the composer and a send build
