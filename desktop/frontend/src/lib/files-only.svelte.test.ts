@@ -58,6 +58,8 @@ describe("a message without words", () => {
   it("leaves what is typed while it goes exactly as typed", async () => {
     expect(afterSent("    nextIndentedLine()", "")).toBe("    nextIndentedLine()");
     expect(afterSent("", "")).toBe("");
+    expect(afterSent("\n    code()", "\n")).toBe("\n    code()");
+    expect(afterSent("\n", "\n")).toBe("");
     expect(afterSent("sent more", "sent")).toBe("more");
   });
 });
