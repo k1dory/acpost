@@ -293,6 +293,11 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 		}
 	}
 	sid := p.SessionId
+	if strings.Contains(full, "Write the definition of a cloud coding agent") { // a draft: a note, then its JSON block
+		a.say(ctx, sid, "I chose the only policy there is.\n\n```json\n{\"name\": \"drafted\", \"description\": \"Written by the fake\", \"policy\": \"backend-dev\", "+
+			"\"environment\": \"shared/base\", \"repo\": \"\", \"instructions\": \"You work on the shop.\\nRun make test.\", \"connections\": [\"github\"]}\n```\n")
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+	}
 	if strings.Contains(full, "Write a wiki for the repository") { // a wiki: pages in its format
 		a.mu.Lock()
 		dir := a.cwds[sid]

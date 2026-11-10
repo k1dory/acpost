@@ -1596,3 +1596,156 @@ func (c *Client) Disown(ctx context.Context, id, from, key string) (store.Messag
 	}
 	return store.Message(out.Message), *out.Found, nil
 }
+
+// CloudInfo is the cloud as the node is connected to it: whose key it holds (the tenant, or the
+// platform's admin), and until when. Error is the cloud's refusal or silence (the key and the URL
+// stay configured).
+type CloudInfo struct {
+	Configured bool `json:"configured"`
+	// ID names the connection (the address and the key, never the key itself): what was read
+	// from one cloud is written only to that cloud (a plan, a deploy, a delete carry it).
+	ID        string     `json:"id,omitempty"`
+	URL       string     `json:"url,omitempty"`
+	Tenant    string     `json:"tenant,omitempty"`
+	Admin     bool       `json:"admin,omitempty"`
+	Subject   string     `json:"subject,omitempty"` // key:<id>, an OIDC subject, or a static token's name
+	Expires   *time.Time `json:"expires,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	ErrorCode string     `json:"error_code,omitempty"`
+}
+
+// CloudAgentSpec is an agent of the cloud's catalogue as a person writes it (agent-sandbox's
+// AgentDefinition): the policy it runs under, the environment it runs in, the repository it
+// starts on, what it is told, and the connections it may use.
+type CloudAgentSpec struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Policy       string   `json:"policy"`
+	Environment  string   `json:"environment"`
+	Repo         string   `json:"repo"`
+	Instructions string   `json:"instructions"`
+	Connections  []string `json:"connections"`
+}
+
+// CloudAgentDef is an agent in the catalogue: its definition, its revision, and whether it is the
+// platform's shared one (the tenant reads it, the admin writes it).
+type CloudAgentDef struct {
+	CloudAgentSpec
+	Ref      string `json:"ref"` // as a task names it: name, or shared/name
+	Shared   bool   `json:"shared"`
+	Revision int    `json:"revision"`
+}
+
+// CloudItem is something a definition names: an environment or a connection.
+type CloudItem struct {
+	Ref         string `json:"ref"`
+	Name        string `json:"name"`
+	Shared      bool   `json:"shared"`
+	Revision    int    `json:"revision"`
+	Description string `json:"description,omitempty"`
+}
+
+// CloudCatalogue is what an agent's definition is written from.
+type CloudCatalogue struct {
+	Cloud        string          `json:"cloud"` // the connection it was read from (CloudInfo.ID)
+	Agents       []CloudAgentDef `json:"agents"`
+	Environments []CloudItem     `json:"environments"`
+	Connections  []CloudItem     `json:"connections"`
+	Policies     []string        `json:"policies"`
+}
+
+// CloudDiff is one field a deploy would change.
+type CloudDiff struct {
+	Path string `json:"path"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// CloudPlan is what deploying a definition would do, as the cloud checked it: nothing is written.
+// Plan names the check; a deploy carries it and is refused once the catalogue has moved on.
+type CloudPlan struct {
+	Plan         string      `json:"plan"`
+	Valid        bool        `json:"valid"`
+	Action       string      `json:"action"` // create | update | noop
+	Revision     int         `json:"revision"`
+	NextRevision int         `json:"next_revision"`
+	Diff         []CloudDiff `json:"diff"`
+	Errors       []string    `json:"errors"`
+}
+
+// CloudDeployed is an agent as a deploy left it in the catalogue.
+type CloudDeployed struct {
+	Ref      string `json:"ref"`
+	Revision int    `json:"revision"`
+	Action   string `json:"action"`
+}
+
+// CloudDraftRequest asks an agent of the node to write (or rewrite) a definition from a person's
+// words; Cwd is a repository to read first.
+type CloudDraftRequest struct {
+	Cloud string `json:"cloud"` // the connection whose catalogue the form shows
+	// Key names the request: asked again with it (the answer lost), it is the same task, not another.
+	Key     string          `json:"key,omitempty"`
+	Agent   string          `json:"agent"`
+	Ask     string          `json:"ask"`
+	Cwd     string          `json:"cwd,omitempty"`
+	Current *CloudAgentSpec `json:"current,omitempty"`
+}
+
+// CloudDraft is a draft's task and, once it ended, the definition it wrote.
+type CloudDraft struct {
+	Msg    string          `json:"msg"`
+	Thread string          `json:"thread"`
+	State  string          `json:"state"`
+	Spec   *CloudAgentSpec `json:"spec,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+// CloudInfo says which cloud the node is connected to, and as whom.
+func (c *Client) CloudInfo(ctx context.Context) (CloudInfo, error) {
+	var out CloudInfo
+	_, err := c.do(ctx, "GET", "/v1/cloud", nil, nil, &out, nil)
+	return out, err
+}
+
+// CloudBuild reads what a definition is written from: the catalogue's agents, environments,
+// connections and the policies.
+func (c *Client) CloudBuild(ctx context.Context) (CloudCatalogue, error) {
+	var out CloudCatalogue
+	_, err := c.do(ctx, "GET", "/v1/cloud/catalogue", nil, nil, &out, nil)
+	return out, err
+}
+
+// CloudPlanAgent has the cloud check a definition: what a deploy would change.
+func (c *Client) CloudPlanAgent(ctx context.Context, cloud string, a CloudAgentSpec) (CloudPlan, error) {
+	var out CloudPlan
+	_, err := c.do(ctx, "POST", "/v1/cloud/agents/plan", url.Values{"cloud": {cloud}}, a, &out, nil)
+	return out, err
+}
+
+// CloudDeployAgent writes a definition into the catalogue as the plan showed it.
+func (c *Client) CloudDeployAgent(ctx context.Context, cloud string, a CloudAgentSpec, plan string) (CloudDeployed, error) {
+	var out CloudDeployed
+	_, err := c.do(ctx, "PUT", "/v1/cloud/agents/"+url.PathEscape(a.Name), url.Values{"plan": {plan}, "cloud": {cloud}}, a, &out, nil)
+	return out, err
+}
+
+// CloudDeleteAgent takes an agent out of the catalogue (its sandboxes stay).
+func (c *Client) CloudDeleteAgent(ctx context.Context, cloud, name string) error {
+	_, err := c.do(ctx, "DELETE", "/v1/cloud/agents/"+url.PathEscape(name), url.Values{"cloud": {cloud}}, nil, nil, nil)
+	return err
+}
+
+// CloudDraft starts an agent of the node writing a definition.
+func (c *Client) CloudDraft(ctx context.Context, r CloudDraftRequest) (CloudDraft, error) {
+	var out CloudDraft
+	_, err := c.do(ctx, "POST", "/v1/cloud/drafts", nil, r, &out, nil)
+	return out, err
+}
+
+// CloudDraftResult is a draft now: still written, or the definition it came to.
+func (c *Client) CloudDraftResult(ctx context.Context, msg string) (CloudDraft, error) {
+	var out CloudDraft
+	_, err := c.do(ctx, "GET", "/v1/cloud/drafts/"+url.PathEscape(msg), nil, nil, &out, nil)
+	return out, err
+}

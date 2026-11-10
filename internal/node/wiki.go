@@ -125,20 +125,7 @@ func (n *Node) WriteWiki(ctx context.Context, p Principal, repo, agent, lang str
 	}
 	// Its read-only mode: reading a repository then asks nobody and changes nothing. No such mode,
 	// no wiki (a turn that cannot set it fails before it reads anything).
-	mode := ""
-	if opts, err := n.AgentOptions(ctx, p, to.Name); err == nil {
-		for _, o := range opts.Options {
-			if o.Category != "mode" {
-				continue
-			}
-			for _, v := range o.Values {
-				if readOnly.MatchString(v.Value) || readOnly.MatchString(v.Name) {
-					mode = v.Value
-					break
-				}
-			}
-		}
-	}
+	mode := n.readOnlyMode(ctx, p, to.Name)
 	if mode == "" {
 		return store.Message{}, errh("unsupported", "choose an agent with a plan or read-only mode (Claude Code, Codex)",
 			"%s has no read-only mode: it would ask to run commands while it reads", to)
@@ -240,3 +227,22 @@ func (n *Node) takeWiki(ctx context.Context, w store.Wiki) bool {
 
 // wikiKey is the idempotency key of the task writing a wiki marked pending.
 func wikiKey(pending string) string { return "wiki:" + pending }
+
+// readOnlyMode is the mode of an ACP agent that reads and changes nothing ("" when it has none).
+func (n *Node) readOnlyMode(ctx context.Context, p Principal, agent string) string {
+	opts, err := n.AgentOptions(ctx, p, agent)
+	if err != nil {
+		return ""
+	}
+	for _, o := range opts.Options {
+		if o.Category != "mode" {
+			continue
+		}
+		for _, v := range o.Values {
+			if readOnly.MatchString(v.Value) || readOnly.MatchString(v.Name) {
+				return v.Value
+			}
+		}
+	}
+	return ""
+}

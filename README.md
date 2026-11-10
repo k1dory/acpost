@@ -445,6 +445,18 @@ directory (the thread's next messages stay there); `--model`, `--effort`, `--mod
 the session before the message's turn (`GET /v1/agents/{name}/options` lists what the agent
 offers). The node's user and its agents only.
 
+**Building cloud agents.** An agent of the cloud is a definition in the tenant's catalogue: the
+policy it runs under, its environment, a repository, its instructions, its connections. The app's
+Settings → Cloud connects a cloud (the address and a tenant's key, `sbk_…`: the cloud's admin issues
+the first with `sandboxctl keys create -tenant NAME`, the tenant its own after that; the app asks
+the cloud whose key it is, keeps it in `~/.config/acpost/cloud.env`, mode 0600, names that file as
+`cloud.env_file` and starts its node again) and edits the definitions. Deploying is two steps the
+cloud itself keeps apart: a check (its plan: the fields that would change, or why it refuses) and
+the write of what that check showed, as the agent's next revision. Nothing is built or restarted:
+a new cloud task starts from the latest revision, a sandbox made earlier keeps its own. An ACP
+agent of the Mac can write the definition from a few words, reading a repository first; it runs in
+its read-only mode, and its answer only fills the form.
+
 **Cloud agents** (`driver: sandbox`). A message is the next message of the sandbox's conversation
 (`POST /v1/sandboxes/{id}/messages`, its files as uploads: 8 of at most 16 MiB; links are named in
 the text). What the sandbox's run says on its stream (`…/messages/stream`) becomes the message's
@@ -508,6 +520,7 @@ ends with `event: acpost-error` carrying the same envelope and `status` (event k
 | `GET /v1/chats` | every chat of the node's user, the most recently active first: threads, the ACP agents' sessions (not already a thread's), the cloud's sandboxes; with the folders |
 | `GET/POST /v1/folders` · `PATCH/DELETE /v1/folders/{id}` · `PUT /v1/chats/folder` | the app's folders of chats (`thread:<id>`, `session:<agent>/<id>`, `cloud:<sandbox>`); a chat is in one or none |
 | `GET /v1/cloud/agents` · `POST /v1/cloud/tasks` · `GET /v1/cloud/sandboxes/{id}/history` | the cloud tenant's catalogue; a new cloud task (a sandbox of a catalogue agent; its messages go to `agent:<sandbox id>`); a sandbox's conversation |
+| `GET /v1/cloud` · `GET /v1/cloud/catalogue` · `POST /v1/cloud/agents/plan` · `PUT /v1/cloud/agents/{name}?plan=` · `DELETE /v1/cloud/agents/{name}` · `POST /v1/cloud/drafts` · `GET /v1/cloud/drafts/{id}` | building the cloud's agents: whose key the node holds; what a definition is written from (agents, environments, connections, policies); a check of a definition by the cloud (what a deploy would change, nothing written); the deploy of exactly what the check showed (a catalogue that moved on is 409); the check, the deploy and the delete name the connection they were read from (`cloud=`, the `id` of `GET /v1/cloud`; a draft names it in its body, `cloud`), and a node connected to another cloud since refuses them (409); a draft asked for again under the same `key` is the same task; taking an agent out; a draft of a definition written by an ACP agent of this node in its read-only mode, and what it came to |
 | `PATCH /v1/messages/{id}` | `{"body":"…"}`: a queued message's body, before an agent takes it |
 | `GET /v1/messages/{id}/tree` | the messages under it (sent by its turn, and by theirs) that the caller may see, in the order they came |
 | `GET /v1/file-at?repo=&tree=&path=` | a file as a turn left it (`{"text"}`), from the tree recorded with its changes |

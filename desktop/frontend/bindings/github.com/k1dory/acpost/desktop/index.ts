@@ -9,6 +9,7 @@ export {
 export {
     Artifact,
     CloudCatalog,
+    CloudConnected,
     Connection,
     Task,
     Upload

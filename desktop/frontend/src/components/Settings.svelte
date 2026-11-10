@@ -7,10 +7,11 @@
   import { Node, errText, errInfo } from "../lib/api";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
+  import Cloud from "./Cloud.svelte";
 
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
 
-  let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "general">("git");
+  let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "cloud" | "general">("git");
   type Note = { name: string; body: string; scope?: string; enabled: boolean; isNew?: boolean };
   let notes = $state<Note[] | null>(null);
   let note = $state<Note | null>(null);
@@ -139,7 +140,7 @@
   <header class="drag"><h1>{t("Settings")}</h1></header>
   <div class="cols">
     <nav class="nav">
-      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["knowledge", "Knowledge", "brain"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["general", "General", "sun"]] as [k, l, ic]}
+      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["knowledge", "Knowledge", "brain"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["cloud", "Cloud", "cloud"], ["general", "General", "sun"]] as [k, l, ic]}
         <button class:on={section === k} onclick={() => { section = k as any; err = ""; }}><Icon name={ic} size={14} /> {t(l)}</button>
       {/each}
     </nav>
@@ -359,9 +360,13 @@
           {/each}
           <div class="row">
             <Icon name="cloud" size={14} />
-            <div class="t"><b>{t("Cloud")}</b><span class="muted small">{app.cloudState === "down" ? t("The cloud is not answering") + " — " + app.cloudError : app.cloudState === "ok" ? t("{n} agents in the catalogue", { n: app.cloudAgents.length }) : t("optional — an agent-sandbox tenant as cloud: in ~/.config/acpost/config.yaml")}</span></div>
+            <div class="t"><b>{t("Cloud")}</b><span class="muted small">{app.cloudState === "down" ? t("The cloud is not answering") + " — " + app.cloudError : app.cloudState === "ok" ? t("{n} agents in the catalogue", { n: app.cloudAgents.length }) : t("optional: agents that run in sandboxes of an agent-sandbox cloud")}</span></div>
+            <button class="btn ghost sm" onclick={() => { section = "cloud"; err = ""; }}>{app.cloudState ? t("Build agents") : t("Connect")}</button>
           </div>
         </div></div>
+
+      {:else if section === "cloud"}
+        <Cloud />
 
       {:else}
         <h2>{t("General")}</h2>
