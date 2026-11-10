@@ -2,8 +2,8 @@ import { t, tr } from "./i18n.svelte";
 import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
-import { ComposerDraft, type Attachment } from "./composer.svelte";
-import { afterSent } from "./draft";
+import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
+import { afterSent, overLimits } from "./draft";
 import { Turn, type Ev } from "./turn";
 
 export type Msg = {
@@ -115,7 +115,10 @@ class App {
   cloudAgents = $state<CloudAgent[]>([]);
   home = $state("");
   error = $state("");
-  private unsub = new Map<string, () => void>();
+  /** The messages followed: the listener's off, and the subscription's generation (Follow and
+   * Unfollow carry it; the app lets only a message's newest generation change its stream, so calls
+   * that Wails runs out of order end as asked last). */
+  private unsub = new Map<string, { off: () => void; sub: number }>();
   /** Bumped each time the screen changes chat: an answer to a call made before is not this chat's. */
   private gen = 0;
 
@@ -281,7 +284,7 @@ class App {
     this.broken = {};
     this.artifact = null; // artifacts are the chat's
     this.openedArtifacts = [];
-    for (const [id, stop] of this.unsub) { stop(); Node.Unfollow(id); }
+    for (const [id, { off, sub }] of this.unsub) { off(); Node.Unfollow(id, sub); }
     this.unsub.clear();
     this.msgs = [];
     this.history = [];
@@ -367,7 +370,9 @@ class App {
   private follow(id: string, turn: Turn, tries: number) {
     if (this.unsub.has(id)) return;
     const gen = this.gen;
+    const sub = nextGen();
     const off = on("events:" + id, (b: any) => {
+      if (b.gen && b.gen !== sub) return; // another subscription's
       if (b.events?.length) {
         tries = 0;
         turn.add(b.events as Ev[]);
@@ -375,14 +380,14 @@ class App {
         const cur = this.msgs.find(x => x.id === id);
         if (cur?.state === "queued") this.replace({ ...cur, state: "running" });
       }
-      if (b.final) { this.replace(b.final); this.loadChats(); this.loadAgents(); }
+      if (b.final) { this.replace(b.final, true); this.loadChats(); this.loadAgents(); }
       else if (b.error) this.lost(id, turn, off, b.error, tries, gen);
     });
-    this.unsub.set(id, off);
+    this.unsub.set(id, { off, sub });
     this.broken = without(this.broken, id);
-    Node.Follow(id, turn.last).then(
+    Node.Follow(id, turn.last, sub).then(
       // Another chat opened while it was asked: the stream the node just started is no one's.
-      () => { if (gen !== this.gen && !this.unsub.has(id)) Node.Unfollow(id); },
+      () => { if (this.unsub.get(id)?.sub !== sub) Node.Unfollow(id, sub); },
       e => this.lost(id, turn, off, e, tries, gen),
     );
   }
@@ -395,7 +400,7 @@ class App {
 
   private lost(id: string, turn: Turn, off: () => void, e: unknown, tries: number, gen: number) {
     off();
-    if (this.unsub.get(id) === off) this.unsub.delete(id);
+    if (this.unsub.get(id)?.off === off) this.unsub.delete(id);
     if (gen !== this.gen) return;
     if (lasting.has(errInfo(e).code) || tries + 1 >= followTries) {
       this.broken = { ...this.broken, [id]: errText(e) || t("The stream of this turn stopped") };
@@ -407,11 +412,23 @@ class App {
     }, Math.min(30_000, 1000 * 2 ** tries));
   }
 
-  replace(m: Msg) {
+  /** A message as it is now. Final, its stream is let go: when its own last batch said so
+   * (`streamed`), all of it came; when another answer did (Cancel's), the stream may still hold
+   * its last batch (the app sends them a few times a second), so what it had not given is read. */
+  replace(m: Msg, streamed = false) {
     const i = this.msgs.findIndex(x => x.id === m.id);
     if (i >= 0) this.msgs[i] = { ...this.msgs[i], ...m };
     else if (m.thread === this.thread) this.msgs = [...this.msgs, m];
-    if (final(m.state)) { this.unsub.get(m.id)?.(); this.unsub.delete(m.id); this.runningSince.delete(m.id); }
+    if (final(m.state)) {
+      const f = this.unsub.get(m.id);
+      if (f) {
+        f.off();
+        this.unsub.delete(m.id);
+        const t = this.turns[m.id];
+        if (!streamed && t) this.readEvents(m.id, t);
+      }
+      this.runningSince.delete(m.id);
+    }
   }
 
   /** A setting chosen for an agent ("": its default). */
@@ -460,9 +477,8 @@ class App {
     const there = this.draftMap.get(to);
     if (there && there !== d) {
       there.text = [there.text, d.text].filter(Boolean).join("\n");
-      there.files = [...there.files, ...d.files];
-      if (!there.sending && d.sending) there.sending = d.sending;
-      if (!there.sandbox && d.sandbox) there.sandbox = d.sandbox;
+      mergeFiles(there, d); // a request given back keeps its files first
+      if (!there.op.pending() && d.op.pending()) there.op = d.op; // whole: its key with its sandbox
       d.forward(there);
     } else {
       d.key = to;
@@ -535,18 +551,43 @@ class App {
   /** Sends a draft: what was sent leaves it once the node has it; what was typed meanwhile stays
    * (with the chat a new task becomes). True when sent. */
   async submit(d: ComposerDraft): Promise<boolean> {
-    const sent = d.text, sentFiles = d.files;
+    const sent = d.text;
     const body = sent.trim();
     if (!body || d.busy) return false;
     d.busy = true;
-    const ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles });
+    // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
+    // are part of it: waited for, not left for the next message.
+    const at = this.sendAt(d), lim = at.limits, owned = sendFiles(d, lim);
+    await owned.wait;
+    const { files: sentFiles, refused } = owned.files();
+    owned.done();
+    let ok = false;
+    if (refused) {
+      // Nothing goes in part (by the limits of the click, against the send's own files): the
+      // draft stays as it is, and why is said.
+      this.error = refused.why === "read" ? t("Could not read {name}", { name: refused.file })
+        : refused.why === "count" ? t("A message takes at most {n} files", { n: lim?.max_files ?? 0 })
+        : t("The files are over the node's limit of {n} together", { n: bytes(lim?.max_files_size ?? 0) });
+    } else {
+      ok = await this.send(body, sentFiles.map(({ name, type, data }) => ({ name, type, data })), d, { text: sent, files: sentFiles }, at);
+    }
     d.busy = false;
+    if (!ok) {
+      // Not sent: all of it comes back to the draft, files by identity (one only the send had,
+      // read when the composer was full, too). Over the composer's limits with what was attached
+      // since, the draft says so; the person removes something, nothing is dropped.
+      giveBack(d, refused ? owned.all() : sentFiles);
+      if (this.limits && d.files.some((f, i) => overLimits(d.files.slice(0, i), f, this.limits))) {
+        this.error = [this.error, t("The draft is over the node's limits: remove a file to send it")].filter(Boolean).join("\n");
+      }
+    }
     // Not sent, and a new task was started meanwhile (it has its own draft): what did not go is
     // put back into the new task's, not lost with the draft no screen shows.
     if (!ok && ![...this.draftMap.values()].includes(d)) {
       // The text comes back into the new task's draft: its key and sandbox go with it only if that
       // task goes where this one went.
-      if (d.sending?.dest && d.sending.dest !== this.destNow()) d.forget();
+      const dest = d.op.dest();
+      if (dest && dest !== this.destNow()) d.forget();
       this.moveDraft(d, "new");
     }
     return ok;
@@ -555,18 +596,17 @@ class App {
   /** Sends a message: true once the node has it, false if not (said in error; the draft keeps the
    * text to send again). The chat it was sent from gets it, whichever is open by then. */
   async send(body: string, files: { name: string; type: string; data: string }[], d = this.draftOf(),
-    sent?: { text: string; files: Attachment[] }): Promise<boolean> {
+    sent?: { text: string; files: Attachment[] }, at = this.sendAt(d)): Promise<boolean> {
     // What the message is for, as it was when sent: the screen may change while it goes.
-    const chat = this.chat, thread = this.thread, draft = { ...this.draft }, epoch = d.epoch;
-    const dest = d.key === "new" ? this.destNow() : ""; // where this new task goes, as it was sent
+    const { chat, thread, draft, epoch, dest } = at;
     // The draft is a thread's already (its conversation became one, the answer lost): what is
     // sent from it goes on in that thread, not to a new one.
-    const into = !thread && d.key.startsWith("thread:") ? d.key.slice("thread:".length) : "";
-    let to = this.target;
+    const into = !thread && at.key.startsWith("thread:") ? at.key.slice("thread:".length) : "";
+    let to = at.target;
     try {
       let task: any = { body, files };
-      if (this.limits && new TextEncoder().encode(body).length > this.limits.max_body) {
-        this.error = t("The text is over the node's limit of {n}", { n: bytes(this.limits.max_body) });
+      if (at.limits && new TextEncoder().encode(body).length > at.limits.max_body) {
+        this.error = t("The text is over the node's limit of {n}", { n: bytes(at.limits.max_body) });
         return false;
       }
       if (!chat && !thread) {
@@ -586,7 +626,8 @@ class App {
         task.thread = thread;
       }
       if (!to) { this.error = t("Choose an agent"); return false; }
-      Object.assign(task, { to }, this.settingsFor(to));
+      // The settings chosen when it was sent (a model picked while its file was read is the next one's).
+      Object.assign(task, { to }, at.settings[to] ?? {}); // none taken: a sandbox (no settings of this Mac's)
       // The same message is all of it the same (files' bytes and types, settings): only then the same key.
       let what = JSON.stringify(task);
       const { to: _to, thread: _th, session: _se, cwd: _cwd, ...rest } = task;
@@ -613,7 +654,9 @@ class App {
       // A draft edited into another task keeps all it holds: it is that task, sent text and all.
       if (sent && same) {
         d.text = afterSent(d.text, sent.text);
-        d.files = d.files.filter(f => !sent.files.includes(f));
+        // Exactly the attachments it sent, by identity: the same file attached again meanwhile stays.
+        const gone = new Set(sent.files.map(f => f.rid));
+        d.files = d.files.filter(f => !gone.has(f.rid));
       }
       if (same) this.moveDraft(d, "thread:" + m.thread);
       else d.forget();
@@ -639,12 +682,49 @@ class App {
     } catch (e) { this.error = errText(e); return false; }
   }
 
+  /** What a message is for, taken when it is sent: the chat, thread and draft of then. */
+  private sendAt(d: ComposerDraft) {
+    // The settings chosen then, for each agent it can go to: the new task's agent of this Mac, or
+    // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
+    return {
+      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target,
+      key: d.key, limits: this.limits, // the draft's chat, and the node's limits, as they were
+      dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
+      settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,
+    };
+  }
+
   private async sandboxFor(d: ComposerDraft, draft: Draft, body: string, what: string): Promise<string> {
     if (d.sandbox?.for === what) return d.sandbox.agent;
     const epoch = d.epoch;
-    const sb: any = await Node.CreateCloudTask(draft.cloudAgent, draft.repo, body.split("\n")[0].slice(0, 40));
+    // Its request is frozen at the first try and kept with where it goes: the answer lost, the
+    // retry is that request again, and gets the sandbox made then (a second is a second machine).
+    const r = d.op.sandboxFor(what, () => ({ agent: draft.cloudAgent, repo: draft.repo, name: body.split("\n")[0].slice(0, 40) }));
+    const sb: any = await Node.CreateCloudTask(r.agent, r.repo, r.name, r.idem);
     if (d.epoch === epoch) d.sandbox = { for: what, agent: sb.agent };
     return sb.agent;
+  }
+
+  /** A local chat sent on to the cloud: the cloud chat it goes on in. Each chat's unfinished
+   * handoff is kept here (not in the form, which is made anew), its request frozen with its key at
+   * the first try, until an answer comes. Asked again with the form as it was (restored from it,
+   * pendingHandoff), the frozen request goes whole, and the node gives the sandbox and message of
+   * the first. Only another cloud agent or note, chosen by the person, is another handoff. */
+  private handoffs = new Map<string, HandoffReq & { idem: string }>();
+  pendingHandoff(c: Chat | null): HandoffReq | undefined {
+    return c ? this.handoffs.get(handoffFrom(c.kind === "thread" ? c.thread ?? "" : "", c.agent ?? "", c.session ?? "")) : undefined;
+  }
+  async handoff(req: HandoffReq): Promise<Chat> {
+    const from = handoffFrom(req.thread, req.agent, req.session);
+    let r = this.handoffs.get(from);
+    if (!r || r.cloud_agent !== req.cloud_agent || r.note !== req.note) {
+      r = { ...req, idem: newId() };
+      this.handoffs.set(from, r);
+    }
+    const res: any = await Node.Handoff({ ...r } as any);
+    if (this.handoffs.get(from) === r) this.handoffs.delete(from);
+    await this.loadChats();
+    return this.chats.find(x => x.key === res.chat.key) ?? res.chat;
   }
 
   async answer(msg: string, req: string, option: string) {
@@ -808,12 +888,26 @@ class App {
   }
 }
 
+/** Which chat a handoff is of: its thread, or its session. */
+function handoffFrom(thread: string, agent: string, session: string) {
+  return thread ? "thread:" + thread : `session:${agent}/${session}`;
+}
+
+export type HandoffReq = { thread: string; agent: string; session: string; cwd: string; cloud_agent: string; note: string };
+
 /** A replayed conversation split at its user's messages. */
 const stage: Record<string, number> = { queued: 0, running: 1, done: 2, failed: 2, cancelled: 2, expired: 2 };
 
 /** A thread's messages as loaded, with those the screen already has: one per id, the later of the
  * two (by updated_at, then by state: a finished one is past a running one), in the loaded order
  * and then those the load did not have yet. */
+/** A subscription's generation: rising, also across reloads of the window (from the clock). */
+let lastGen = 0;
+function nextGen(): number {
+  lastGen = Math.max(lastGen + 1, Date.now() * 1000);
+  return lastGen;
+}
+
 export function mergeMsgs(loaded: Msg[], shown: Msg[]): Msg[] {
   const byId = new Map(shown.map(m => [m.id, m]));
   const later = (a: Msg, b: Msg) => {

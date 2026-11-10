@@ -5,6 +5,7 @@
   import { splitDiff } from "../lib/turn";
   import { who, clock } from "../lib/format";
   import { latest } from "../lib/latest";
+  import { changeRoots, mergeChanges, joinFiles } from "../lib/changes";
   import DiffLines from "./DiffLines.svelte";
   import Dropdown from "./Dropdown.svelte";
 
@@ -13,24 +14,41 @@
   let loading = $state(false);
   let pick = $state("");
   let agent = $state("");
-  const root = $derived(app.msgs.find(m => m.depth === 0 && m.to.startsWith("agent:"))?.id ?? app.focus);
+  // The whole chat's: each root of its tree is asked (each message of the person is one: a later
+  // one is not a child of the first; so is a task delegated here, its parent on another node),
+  // and the answers put together.
+  const roots = $derived(changeRoots(app.msgs, app.focus));
 
   // Another chat's changes asked meanwhile: the answer for this one is the one kept.
   const changes = latest();
-  async function load(id: string) {
-    if (!id) return;
+  async function load(ids: string[]) {
+    if (!ids.length) {
+      // No message here (a new task): nothing is this chat's, and an answer still coming is not.
+      changes(async () => null, () => {});
+      data = null; err = ""; loading = false;
+      return;
+    }
     loading = true; err = "";
-    if (await changes(() => Node.Changes(id), d => (data = d), e => { err = errText(e); data = null; })) loading = false;
+    if (await changes(() => Promise.all(ids.map(id => Node.Changes(id) as any)), d => (data = mergeChanges(d)), e => { err = errText(e); data = null; })) loading = false;
   }
   // Once on opening, and again as a turn of the chat changes state (what it changed is then known).
-  $effect(() => { app.msgs.map(m => m.state).join(); load(root); });
+  $effect(() => { app.msgs.map(m => m.state).join(); load(roots); });
+  // Another chat (or a new task): what was shown and chosen is the last one's.
+  const context = $derived(app.thread || app.chat?.key || "");
+  let shownFor = app.thread || app.chat?.key || "";
+  $effect(() => {
+    const c = context;
+    if (c === shownFor) return;
+    shownFor = c;
+    data = null; err = ""; pick = ""; agent = ""; version = -1; at = null;
+  });
 
   const agents = $derived([...new Set((data?.turns ?? []).map((t: any) => t.agent))] as string[]);
   const turns = $derived((data?.turns ?? []).filter((t: any) => !agent || t.agent === agent));
   // One agent: its turns' diffs; all: the repository's diff over the session.
   const files = $derived.by(() => {
-    if (agent) return turns.flatMap((t: any) => splitDiff(t.diff ?? "").map(f => ({ ...f, repo: t.repo })));
-    return (data?.repos ?? []).flatMap((r: any) => splitDiff(r.diff ?? "").map(f => ({ ...f, repo: r.repo })));
+    if (agent) return joinFiles(turns.flatMap((t: any) => splitDiff(t.diff ?? "").map(f => ({ ...f, repo: t.repo }))));
+    return joinFiles((data?.repos ?? []).flatMap((r: any) => splitDiff(r.diff ?? "").map(f => ({ ...f, repo: r.repo }))));
   });
   // A file is its repository and its path (two repositories may have the same path).
   const keyOf = (repo: string, path: string) => repo + "\u0000" + path;
@@ -75,7 +93,7 @@
     <Dropdown bind:value={agent} items={[{ value: "", label: t("All agents") }, ...agents.map(a => ({ value: a, label: who(a).name }))]} />
     <span class="muted num">{plural(stats.size, "file", "files")}</span>
     <span class="sp"></span>
-    <button class="btn sm" onclick={() => load(root)}>{t("Refresh")}</button>
+    <button class="btn sm" onclick={() => load(roots)}>{t("Refresh")}</button>
   </div>
   {#if loading && !data}
     <div class="pad"><div class="sk" style="height:14px;width:70%"></div></div>

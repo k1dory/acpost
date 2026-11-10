@@ -65,6 +65,7 @@ func (n *Node) startNode() error {
 		_, err = c.Status(ctx)
 		cancel()
 		if err == nil {
+			n.forgetEndedNode() // a node answers that is not the app's (or is, still): nothing to start
 			return nil
 		}
 	}
@@ -234,10 +235,12 @@ func (n *Node) CloudHistory(id string) ([]store.Event, error) {
 	return callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) ([]store.Event, error) { return c.CloudHistory(ctx, id) })
 }
 
-// CreateCloudTask makes the sandbox of a new cloud task.
-func (n *Node) CreateCloudTask(agent, repo, name string) (client.Chat, error) {
+// CreateCloudTask makes the sandbox of a new cloud task. idem is the composer's key for this
+// sandbox, made before its first request: a retry after a lost answer gets the sandbox made the
+// first time, not a second one.
+func (n *Node) CreateCloudTask(agent, repo, name, idem string) (client.Chat, error) {
 	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.Chat, error) {
-		return c.CreateCloudTask(ctx, client.CloudTask{Agent: agent, Repo: repo, Name: name})
+		return c.CreateCloudTask(ctx, client.CloudTask{Agent: agent, Repo: repo, Name: name, Idem: idem})
 	})
 }
 
@@ -387,4 +390,36 @@ func (n *Node) StartBacklogItem(id, agent string) (string, error) {
 		return c.StartBacklogItem(ctx, id, agent)
 	})
 	return cmp.Or(m.Thread, m.ID), err
+}
+
+// ownNodeEnded says whether the node the app ran itself has ended (after it got ready: a start
+// that failed keeps startErr). Status then starts one again, through ensureNode; not once the
+// app is quitting.
+func (n *Node) ownNodeEnded() bool {
+	n.mu.Lock()
+	done, closed := n.nodeDone, n.closed
+	n.mu.Unlock()
+	if done == nil || closed {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+// forgetEndedNode lets the app's ended node go (another answers on its address now).
+func (n *Node) forgetEndedNode() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.nodeDone == nil {
+		return
+	}
+	select {
+	case <-n.nodeDone:
+		n.nodeDone, n.stopNode, n.nodeOK = nil, nil, false
+	default:
+	}
 }

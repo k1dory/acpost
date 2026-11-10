@@ -14,9 +14,12 @@ vi.mock("@wailsio/runtime", () => ({ Clipboard: { SetText: vi.fn() }, Browser: {
 
 let svelte: typeof import("svelte");
 let mounted: any[] = [];
+/** An attachment as the app makes one (attachment(): its identity given). */
+let attach: (f: { name: string; type: string; size: number; data: string }) => import("../lib/composer.svelte").Attachment;
 async function setup() {
   svelte = await import("svelte");
   const { app } = await import("../lib/state.svelte");
+  attach = (await import("../lib/composer.svelte")).attachment; // the app's own instance: identities do not collide
   app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
   app.conn = { ok: true };
   app.thread = "T"; app.target = "agent:claude";
@@ -134,7 +137,7 @@ describe("pasting into the composer", () => {
   it("over max_files: the same error as a drop", async () => {
     const app = await setup();
     app.limits = { max_body: 1 << 20, max_files: 1, max_files_size: 1 << 20 };
-    app.draftOf().files = [{ name: "a.txt", type: "text/plain", size: 1, data: "YQ==" }];
+    app.draftOf().files = [attach({ name: "a.txt", type: "text/plain", size: 1, data: "YQ==" })];
     paste([img()]);
     await settle(app);
     expect(app.draftOf().files.length).toBe(1);

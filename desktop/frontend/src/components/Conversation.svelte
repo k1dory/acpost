@@ -11,7 +11,7 @@
   import ContextMeter from "./ContextMeter.svelte";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
-  import { Node, errText } from "../lib/api";
+  import { errText } from "../lib/api";
 
   let box = $state<HTMLDivElement>();
   let stick = true;
@@ -39,17 +39,22 @@
   let note = $state("");
   let handErr = $state("");
   let sending = $state(false);
-  function openHand() { handing = !handing; handErr = ""; toCloud = toCloud || app.cloudAgents[0]?.ref || ""; }
+  // A handoff of this chat still unanswered: the form is as it was (a retry is that handoff).
+  function openHand() {
+    handing = !handing; handErr = "";
+    const was = app.pendingHandoff(app.chat);
+    if (was) { toCloud = was.cloud_agent; note = was.note; }
+    toCloud = toCloud || app.cloudAgents[0]?.ref || "";
+  }
   async function hand() {
     const c = app.chat;
     if (!c || sending) return;
     sending = true; handErr = "";
     try {
-      const res: any = await Node.Handoff({ thread: c.kind === "thread" ? c.thread : "", agent: c.kind === "session" ? c.agent : "",
-        session: c.kind === "session" ? c.session : "", cwd, cloud_agent: toCloud, note } as any);
+      const to = await app.handoff({ thread: c.kind === "thread" ? c.thread ?? "" : "", agent: c.kind === "session" ? c.agent ?? "" : "",
+        session: c.kind === "session" ? c.session ?? "" : "", cwd, cloud_agent: toCloud, note });
       handing = false; note = "";
-      await app.loadChats();
-      app.open(app.chats.find(x => x.key === res.chat.key) ?? res.chat);
+      app.open(to);
     } catch (e) { handErr = errText(e); }
     sending = false;
   }

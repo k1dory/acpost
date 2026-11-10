@@ -33,6 +33,7 @@ type Node struct {
 	c        *client.Client
 	url      string
 	follows  map[string]*follow
+	gens     map[string]*followGens // each followed message's newest and let-go generations
 	terms    map[string]*term
 	stopNode context.CancelFunc // the node the app runs itself, if it does
 	nodeDone chan struct{}      // closed when that node has stopped
@@ -165,7 +166,7 @@ func (n *Node) Status() Connection {
 	n.mu.Lock()
 	failed := n.startErr != ""
 	n.mu.Unlock()
-	if failed {
+	if failed || n.ownNodeEnded() { // the app's own node stopped after it got ready: started again
 		if err := n.ensureNode(); err != nil {
 			return Connection{Error: err.Error()}
 		}
@@ -239,18 +240,26 @@ type EventBatch struct {
 	Events []store.Event  `json:"events,omitempty"`
 	Final  *store.Message `json:"final,omitempty"`
 	Error  string         `json:"error,omitempty"`
+	Gen    int64          `json:"gen,omitempty"` // the subscription it is of (Follow's gen)
 }
 
 // Follow streams a message's events after seq `after` as "events:<id>" until it is final (or
-// Unfollow). Following it again restarts the stream.
-func (n *Node) Follow(id string, after int64) error {
+// Unfollow). Following it again restarts the stream. gen is this subscription's generation (the
+// window's, rising): only the newest generation of a message changes its stream (followGen), so
+// Follows and Unfollows that Wails runs out of order end as the window asked last.
+func (n *Node) Follow(id string, after int64, gen int64) error {
 	c, err := n.client()
 	if err != nil {
 		return withHint(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	me := &follow{cancel: cancel}
+	me := &follow{cancel: cancel, gen: gen}
 	n.mu.Lock()
+	if !n.followGen(id, gen, false) {
+		n.mu.Unlock()
+		cancel()
+		return nil // a newer subscription was asked, or this one was let go already: not started
+	}
 	if old := n.follows[id]; old != nil {
 		old.cancel()
 	}
@@ -318,11 +327,13 @@ func (n *Node) Follow(id string, after int64) error {
 	return nil
 }
 
-// Unfollow stops a message's stream.
-func (n *Node) Unfollow(id string) {
+// Unfollow lets a message's subscription gen go, and every older one (0: whichever there is). Wails
+// runs each call in its own goroutine: an Unfollow sent before a Follow may run after it, and
+// must not stop the stream that Follow started; a Follow of gen that comes after it starts none.
+func (n *Node) Unfollow(id string, gen int64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if f := n.follows[id]; f != nil {
+	if f := n.follows[id]; f != nil && n.followGen(id, gen, true) && (gen == 0 || f.gen <= gen) {
 		f.cancel()
 		delete(n.follows, id)
 	}
@@ -505,17 +516,19 @@ func (n *Node) TermResize(id string, cols, rows int) error {
 	return err
 }
 
-// CloseTerminal ends a terminal.
+// CloseTerminal ends a terminal. Its output stops at once; its entry stays the app's until the
+// node says the shell is closed (or that there is no such terminal): a close that did not reach
+// the node is tried again, and shutdown still closes it. Its shell would go on, no one's.
 func (n *Node) CloseTerminal(id string) error {
 	n.mu.Lock()
 	if t := n.terms[id]; t != nil {
 		t.stop()
-		delete(n.terms, id)
 	}
 	n.mu.Unlock()
-	_, err := call(n, func(ctx context.Context, c *client.Client) (struct{}, error) {
-		return struct{}{}, c.CloseTerminal(ctx, id)
-	})
+	err := n.closeTerm(id)
+	if err != nil {
+		go n.retryClose(id, closeRetry, closeTries)
+	}
 	return err
 }
 
@@ -557,7 +570,10 @@ func (n *Node) emit(name string, data any) {
 }
 
 // follow is a message's stream; its own goroutine removes it, when it is still the one there.
-type follow struct{ cancel context.CancelFunc }
+type follow struct {
+	cancel context.CancelFunc
+	gen    int64
+}
 
 // threadMax bounds what a thread shows: its latest messages.
 const threadMax = 2000
@@ -652,6 +668,7 @@ func (n *Node) emitFollow(id string, me *follow, b EventBatch) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.follows[id] == me {
+		b.Gen = me.gen
 		n.emit("events:"+id, b)
 	}
 }
@@ -698,3 +715,75 @@ func (n *Node) emitTerm(id string, me *term, ev map[string]any) {
 
 // termOpenTimeout bounds an open of a terminal; shutdown waits for opens in flight that long.
 const termOpenTimeout = 30 * time.Second
+
+// closeTerm asks the node to end a terminal; once it is known ended (closed, or the node has no
+// such terminal), the terminal is no longer the app's.
+func (n *Node) closeTerm(id string) error {
+	c, err := n.client()
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = c.CloseTerminal(ctx, id)
+		cancel()
+	}
+	if err != nil && termOutcome(err) != termGone {
+		return withHint(err)
+	}
+	n.mu.Lock()
+	if t := n.terms[id]; t != nil {
+		t.stop()
+		delete(n.terms, id)
+	}
+	n.mu.Unlock()
+	return nil
+}
+
+// closeRetry is the first wait before a failed close of a terminal is tried again (doubling,
+// closeTries times); what is still not closed then is closed with the app.
+var closeRetry, closeTries = time.Second, 8
+
+func (n *Node) retryClose(id string, wait time.Duration, tries int) {
+	for range tries {
+		time.Sleep(wait)
+		wait = min(2*wait, 30*time.Second)
+		n.mu.Lock()
+		_, mine := n.terms[id]
+		quitting := n.closed
+		n.mu.Unlock()
+		if !mine || quitting { // closed meanwhile, or shutdown closes it
+			return
+		}
+		if n.closeTerm(id) == nil {
+			return
+		}
+	}
+}
+
+// followGens is what the window asked last of a message's subscriptions: the newest generation
+// followed, and the newest let go (it and those before it start nothing).
+type followGens struct{ newest, gone int64 }
+
+// followGen says whether a Follow (unfollow false) or an Unfollow of generation gen is the
+// newest word on message id's stream, and records it. Generation 0 (tests, an older window)
+// always is. Called with n.mu held.
+func (n *Node) followGen(id string, gen int64, unfollow bool) bool {
+	if gen == 0 {
+		return true
+	}
+	if n.gens == nil {
+		n.gens = map[string]*followGens{}
+	}
+	g := n.gens[id]
+	if g == nil {
+		g = &followGens{}
+		n.gens[id] = g
+	}
+	if unfollow {
+		g.gone = max(g.gone, gen)
+		return true
+	}
+	if gen <= g.gone || gen < g.newest {
+		return false
+	}
+	g.newest = gen
+	return true
+}

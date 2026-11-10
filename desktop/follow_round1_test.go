@@ -40,18 +40,18 @@ func TestFollowAgainKeepsTheNewStream(t *testing.T) {
 	n, _ := fakeNode(t, mux)
 	for round := 0; round < 5; round++ {
 		base := opened.Load()
-		if err := n.Follow("m1", 0); err != nil {
+		if err := n.Follow("m1", 0, 0); err != nil {
 			t.Fatal(err)
 		}
 		eventually(t, 2*time.Second, "the first stream opens", func() bool { return opened.Load() == base+1 })
-		n.Unfollow("m1")
-		if err := n.Follow("m1", 0); err != nil {
+		n.Unfollow("m1", 0)
+		if err := n.Follow("m1", 0, 0); err != nil {
 			t.Fatal(err)
 		}
 		eventually(t, 2*time.Second, "the second stream opens, the first closes", func() bool {
 			return opened.Load() == base+2 && closed.Load() == base+1
 		})
-		n.Unfollow("m1")
+		n.Unfollow("m1", 0)
 		eventually(t, 2*time.Second, fmt.Sprintf("round %d: Unfollow closes the second stream", round), func() bool { return closed.Load() == base+2 })
 	}
 }
@@ -103,7 +103,7 @@ func TestFollowBatchesInOrder(t *testing.T) {
 		rec.mu.Lock()
 		rec.evs = nil
 		rec.mu.Unlock()
-		if err := n.Follow("m1", 0); err != nil {
+		if err := n.Follow("m1", 0, 0); err != nil {
 			t.Fatal(err)
 		}
 		eventually(t, 20*time.Second, "the final", func() bool {

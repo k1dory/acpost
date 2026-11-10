@@ -10,8 +10,11 @@ vi.mock("./api", async () => {
   return { ...errors, Node, on: (n: string, f: (d: any) => void) => fake.on(n, f), b64: (s: string) => s, unb64: () => new Uint8Array() };
 });
 
+/** An attachment as the app makes one (attachment(): its identity given). */
+let attach: (f: { name: string; type: string; size: number; data: string }) => import("./composer.svelte").Attachment;
 async function load() {
   const { app } = await import("./state.svelte");
+  attach = (await import("./composer.svelte")).attachment; // the app's own instance: identities do not collide
   app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }, { name: "codex", address: "agent:codex", driver: "acp", queued: 0, running: 0 }];
   app.conn = { ok: true };
   return app;
@@ -198,7 +201,7 @@ describe("send, review round 1", () => {
 });
 
 describe("send, review round 2", () => {
-  const file = (name: string) => ({ name, type: "text/plain", size: 1, data: "YQ==" });
+  const file = (name: string) => attach({ name, type: "text/plain", size: 1, data: "YQ==" });
 
   it("a late answer does not edit the new task started meanwhile (R2.1)", async () => {
     const app = await load();
@@ -253,7 +256,7 @@ describe("send, review round 2", () => {
     sent.resolve(msg("m1", "A", "queued"));
     expect(await going).toBe(true);
     expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0);
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     expect(app.draftOf().text).toBe("");
   });
 
@@ -332,9 +335,10 @@ describe("send, review round 3", () => {
     const d = app.draftOf();
     d.text = "task";
     const { r, f } = later();
-    const adding = d.add([f], null, () => {});
     fake.Node.SendTask.mockResolvedValue(msg("m1", "T1"));
-    expect(await app.submit(d)).toBe(true);   // merged into thread:T1's draft
+    const going = app.submit(d);
+    const adding = d.add([f], null, () => {}); // attached after the send: the next message's
+    expect(await going).toBe(true);           // merged into thread:T1's draft
     r.resolve(new Uint8Array([97]).buffer);
     await adding;
     expect(app.draftOf("thread:T1").files.map(x => x.name)).toEqual(["late.txt"]);
@@ -412,10 +416,11 @@ describe("send, review round 4", () => {
     const pa = there.add([a.f], lim, w => fails.push(w));
     const d = app.draftOf();
     d.text = "task";
-    const pb = d.add([b.f], lim, w => fails.push(w));
     fake.Node.SendTask.mockResolvedValue(msg("m1", "T1"));
     there.text = "x";                                              // the thread has a draft: d merges into it
-    await app.submit(d);
+    const going = app.submit(d);
+    const pb = d.add([b.f], lim, w => fails.push(w));              // after the send: the next message's
+    await going;
     a.r.resolve(new Uint8Array([97]).buffer);
     b.r.resolve(new Uint8Array([98]).buffer);
     await Promise.all([pa, pb]);
@@ -457,7 +462,7 @@ describe("send, review round 5", () => {
     fake.Node.CloudHistory.mockResolvedValue([]);
     await app.open(C);
     const d = app.draftOf();
-    d.text = "build it"; d.files = [{ name: "spec.md", type: "text/markdown", size: 1, data: "YQ==" }];
+    d.text = "build it"; d.files = [attach({ name: "spec.md", type: "text/markdown", size: 1, data: "YQ==" })];
     fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout"));
     expect(await app.submit(d)).toBe(false);
     fake.Node.Chats.mockResolvedValue({ items: [T] });
@@ -490,7 +495,7 @@ describe("send, review round 6", () => {
     await flush();
     expect(app.thread).toBe("T1");                     // the new task's screen is its thread now
     expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0);
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     expect(app.draftOf().text).toBe("build it");
     app.draftOf().text = "build it, in Go";            // edited: a new message of the same thread
     fake.Node.SendTask.mockResolvedValueOnce({ ...msg("m2", "T1"), to: "agent:sb_1" });
@@ -519,7 +524,7 @@ describe("send, review round 6", () => {
     expect(await app.submit(app.draftOf())).toBe(true);
     expect(app.thread).toBe("T1");
     expect(app.msgs.map(m => m.id)).toEqual(["m1", "m2"]);
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0);
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     expect(app.runningHere().map(m => m.id)).toEqual(["m1"]); // stopHere() reaches it
   });
 });
@@ -601,7 +606,7 @@ describe("send, review round 8", () => {
     const t = await refreshAndSend(app);
     expect(t.to).toBe("agent:sb_2");
     expect(t.thread).toBeUndefined();
-    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String));
+    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String), expect.any(String));
   });
 
   it("a new task given another repository gets a sandbox of its own (R8)", async () => {
@@ -611,7 +616,7 @@ describe("send, review round 8", () => {
     const t = await refreshAndSend(app);
     expect(t.to).toBe("agent:sb_2");
     expect(t.thread).toBeUndefined();
-    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String));
+    expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String), expect.any(String));
   });
 
   it("a new task still as it was is joined (R8, the R6.1 case)", async () => {
@@ -652,11 +657,11 @@ describe("send, review round 9: a draft edited into another task is not the sent
   type Change = { name: string; apply: (app: any) => void; expect: (t: any) => void };
   const changes: Change[] = [
     { name: "repository", apply: app => { app.draft.repo = "github.com/me/b"; },
-      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String)); } },
+      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref1", "github.com/me/b", expect.any(String), expect.any(String)); } },
     { name: "place", apply: app => { app.draft.where = "mac"; app.draft.agent = "agent:claude"; app.draft.cwd = "/Users/me/b"; },
       expect: t => { expect(t).toMatchObject({ to: "agent:claude", cwd: "/Users/me/b" }); } },
     { name: "catalogue agent", apply: app => { app.draft.cloudAgent = "ref2"; },
-      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String)); } },
+      expect: t => { expect(t.to).toBe("agent:sb_2"); expect(fake.Node.CreateCloudTask).toHaveBeenLastCalledWith("ref2", "github.com/me/a", expect.any(String), expect.any(String)); } },
   ];
   const T1 = { key: "thread:T1", kind: "thread", thread: "T1", agent: "agent:sb_1", title: "", updated: "" };
 
@@ -787,7 +792,7 @@ describe("send, review round 10: a draft edited into another task keeps all it h
       app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
       fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
       const d = app.draftOf();
-      d.text = "Implement a search endpoint"; d.files = [spec];
+      d.text = "Implement a search endpoint"; d.files = [attach(spec)];
       const sent = deferred();
       fake.Node.SendTask.mockReturnValueOnce(sent.promise);
       const going = app.submit(d);
@@ -805,7 +810,7 @@ describe("send, review round 10: a draft edited into another task keeps all it h
     app.draft.where = "cloud"; app.draft.cloudAgent = "ref1"; app.draft.repo = "github.com/me/a";
     fake.Node.CreateCloudTask.mockResolvedValue({ agent: "agent:sb_1" });
     const d = app.draftOf();
-    d.text = "Implement a search endpoint"; d.files = [spec];
+    d.text = "Implement a search endpoint"; d.files = [attach(spec)];
     const sent = deferred();
     fake.Node.SendTask.mockReturnValueOnce(sent.promise);
     const going = app.submit(d);
@@ -835,7 +840,7 @@ describe("send, review round 11: a task replaced by a new one keeps its continua
       fake.Node.SendTask.mockReturnValueOnce(sent.promise);
       const going = app.submit(a);
       a.text = "Task A\nand then this";                       // typed on while A went
-      a.files = [{ name: "more.md", type: "text/markdown", size: 1, data: "YQ==" }];
+      a.files = [attach({ name: "more.md", type: "text/markdown", size: 1, data: "YQ==" })];
       app.newTask();
       apply(app);
       const b = app.draftOf();
@@ -871,12 +876,12 @@ describe("following a running message", () => {
     const app = await load();
     fake.Node.Thread.mockResolvedValue([msg("m1", "T", "running")]);
     await app.open({ key: "thread:T", kind: "thread", thread: "T", title: "", updated: "" });
-    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0);
+    expect(fake.Node.Follow).toHaveBeenCalledWith("m1", 0, expect.any(Number));
     fake.emit("events:m1", { events: evs(1, 3) });
     fake.emit("events:m1", { error: "stream reset" });
     expect(fake.listeners("events:m1")).toBe(0);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(fake.Node.Follow).toHaveBeenLastCalledWith("m1", 3);
+    expect(fake.Node.Follow).toHaveBeenLastCalledWith("m1", 3, expect.any(Number));
     expect(fake.listeners("events:m1")).toBe(1);
     // The same events again (the node sends from after=3 but may repeat): applied once.
     fake.emit("events:m1", { events: evs(3, 2) });

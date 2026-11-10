@@ -4,26 +4,190 @@
 import { overLimits } from "./draft";
 import { b64bytes } from "./base64";
 import type { Limits } from "./state.svelte";
+import { newId } from "./ids";
+import { freeName } from "./paste";
 
-export type Attachment = { name: string; type: string; size: number; data: string };
+/** A file attached. rid: its identity, given once as it enters a composer (attachment()), kept in
+ * every copy (a send's): what a send sent leaves the composer by it, never by name or bytes (the
+ * same file attached again is another attachment). Also the order files were delivered in. */
+export type Attachment = { name: string; type: string; size: number; data: string; readonly rid: number };
+
+let rids = 0;
+/** The one way an attachment is made: with an identity of its own. */
+export function attachment(f: { name: string; type: string; size: number; data: string }): Attachment {
+  return { name: f.name, type: f.type, size: f.size, data: f.data, rid: ++rids };
+}
 /** A file to attach (a File, or what a test gives). */
 export type FileLike = { name: string; type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
+type Namer = (f: { name: string; type: string }, taken: string[]) => string;
 
-export class ComposerDraft {
-  text = $state("");
-  files = $state<Attachment[]>([]);
-  busy = $state(false);
-  /** The cloud sandbox made for this draft when its send failed after it: the next try goes there
+/** One add(): the files it read, in order, as they were read (whatever the form does with them
+ * after). done: settled once all are read (or refused). */
+/** A send's say on one more file of its reads, before it is read (its size known): true if it fits
+ * the send's budget, fixed at the click. */
+type Admit = (f: { name: string; size: number }) => boolean;
+type ReadJob = { results: Attachment[]; failed: string[]; sends: Set<Admit>; reading: { name: string; size: number } | null; done: Promise<void> };
+
+/** Why a send's files cannot go: over the node's limits, or a file its reads could not read. */
+export type FilesRefused = { why: "count" | "size" | "read"; file: string };
+
+/** The files a send takes, owned by it from the click: the form's list then, and what the reads
+ * still going then bring after it (each read delivers to the send too, not only to the form; what
+ * they brought before the click is in that list, or was removed from it). A read's file keeps the
+ * name it was given once, when read (a pasted picture's pasted-…-n is not made again); one that
+ * the send's own list has already is told apart there. The limits are the click's and are judged
+ * against the send's own list: a read the send has is read for it whatever room the form has
+ * after the click (captured), and what does not fit, or could not be read, refuses the whole send
+ * (refused): nothing goes in part. The form after the click is not asked. wait() is when those
+ * reads end; done() lets the reads go (the form judges them again). */
+export function sendFiles(d: ComposerDraft, limits: Limits | null): {
+  wait: Promise<void>; files: () => { files: Attachment[]; refused?: FilesRefused }; done: () => void;
+  /** All the send owns, refused or not: the click's files and all its reads brought. */
+  all: () => Attachment[];
+} {
+  const had = [...d.files], jobs = [...d.reading].map(j => ({ j, from: j.results.length, failed: j.failed.length }));
+  // The budget: the click's files, then each file of its reads as it comes up, judged by what is
+  // known of it before it is read (its size): one that cannot fit refuses the send unread.
+  const budget: { size: number }[] = [];
+  let refused: FilesRefused | undefined;
+  const admit: Admit = f => {
+    if (refused) return false;
+    const over = overLimits(budget, f, limits);
+    if (over) { refused = { why: over, file: f.name }; return false; }
+    budget.push({ size: f.size });
+    return true;
+  };
+  // The click's files first: a list already over the limits (drafts merged, a file handed over)
+  // is refused here, not left to the node.
+  for (const f of had) admit(f);
+  // A file whose read is under way at the click (it passed the form's check before it) is the
+  // send's too: in its budget first.
+  for (const { j } of jobs) { if (j.reading) admit(j.reading); j.sends.add(admit); }
+  return {
+    wait: Promise.all(jobs.map(({ j }) => j.done)).then(() => {}),
+    files: () => {
+      if (refused) return { files: [], refused };
+      const failed = jobs.flatMap(({ j, failed }) => j.failed.slice(failed));
+      if (failed.length) return { files: [], refused: { why: "read", file: failed[0] } };
+      const reads = jobs.flatMap(({ j, from }) => j.results.slice(from)).sort((a, b) => a.rid - b.rid);
+      const fit: Attachment[] = had.map(f => ({ ...f }));
+      for (const r of reads) {
+        const over = overLimits(fit, r, limits);
+        if (over) { return { files: [], refused: { why: over, file: r.name } }; }
+        fit.push(r);
+      }
+      return { files: withReads(had, reads) };
+    },
+    done: () => { for (const { j } of jobs) j.sends.delete(admit); },
+    all: () => withReads(had, jobs.flatMap(({ j, from }) => j.results.slice(from)).sort((a, b) => a.rid - b.rid)),
+  };
+}
+
+/** A list whose names are unique: each file as it was, but one whose name an earlier one has,
+ * which gets its own (freeName: "a (2).txt"). */
+export function uniqueNames(list: Attachment[]): Attachment[] {
+  const taken: string[] = [];
+  return list.map(f => {
+    const name = freeName(f.name, taken);
+    taken.push(name);
+    return name === f.name ? f : { ...f, name };
+  });
+}
+
+/** A send that did not go gives the draft back all it owned (its request's files, by identity,
+ * in its order and with its names), before what was attached after the click (one of those with
+ * a name the request has gets another, as anything put in the draft does): nothing it had is
+ * lost, and the same files make the same request again. */
+export function giveBack(d: ComposerDraft, owned: Attachment[]) {
+  d.frozen = owned.map(f => f.rid);
+  d.files = placeFiles([owned.map(f => ({ ...f })), d.files], d.frozen);
+}
+
+/** Drafts merged (one moved into another): one list, the files of a request given back first
+ * (frozen, wherever they end up: the same files make the same request), then the rest. */
+export function mergeFiles(there: ComposerDraft, from: ComposerDraft) {
+  const frozen = [...there.frozen, ...from.frozen];
+  there.frozen = frozen;
+  there.files = placeFiles([there.files, from.files], frozen);
+}
+
+/** The one ordering rule for files put together: those of a frozen request (rids, in its
+ * order) before any other, each once; then the others in the order given. Names are then made
+ * unique by the draft (its files setter), so the frozen ones keep theirs. */
+function placeFiles(lists: Attachment[][], frozen: number[]): Attachment[] {
+  const all = lists.flat(), at = new Map<number, Attachment>();
+  for (const f of all) if (!at.has(f.rid)) at.set(f.rid, f);
+  const first = frozen.filter(r => at.has(r)).map(r => at.get(r)!);
+  const firstIds = new Set(first.map(f => f.rid));
+  const rest = [...at.values()].filter(f => !firstIds.has(f.rid));
+  return [...first, ...rest];
+}
+
+/** A list of files with the files reads brought after it, as both the composer and a send build
+ * it: in the order they were delivered (rid; reads of two drafts merged run at once, so not in
+ * the order of their add()), each told apart from the names before it. One rule, so the same
+ * files make the same request, and a retry has the first one's key. */
+export function withReads(list: Attachment[], reads: Attachment[]): Attachment[] {
+  const out = list.map(f => ({ ...f }));
+  for (const r of [...reads].sort((a, b) => a.rid - b.rid)) out.push({ ...r, name: freeName(r.name, out.map(x => x.name)) });
+  return out;
+}
+
+/** A cloud sandbox asked for (for: the destination, App.destNow()). */
+export type SandboxReq = { for: string; agent: string; repo: string; name: string; idem: string };
+
+/** What a send of a draft made so far. */
+export class SendOp {
+  /** The cloud sandbox made for the draft when its send failed after it: the next try goes there
    * (for: the destination it was made for, App.destNow()). */
   sandbox: { for: string; agent: string } | null = null;
+  /** The sandbox being made: its whole request, frozen at the first try (catalogue agent,
+   * repository, name, key). A retry after a lost answer sends it as it was: the node finds the
+   * sandbox by its name and key, and a name made again from edited text is another machine. */
+  sandboxReq: SandboxReq | null = null;
   /** The message being sent (all of it but its key) and its idempotency key: the same message
    * tried again has the same key, so the node runs it once even when its first answer was lost.
    * content is the message without where it goes; task, the request as it was made. */
   sending: { what: string; key: string; content: string; task: any; dest: string; moved?: boolean } | null = null;
+
+  /** Something was made or asked that a retry must reuse. */
+  pending(): boolean { return !!(this.sending || this.sandbox || this.sandboxReq); }
+  /** Where what it made goes (a new task's destination), if it says. */
+  dest(): string | undefined { return this.sending?.dest || this.sandbox?.for || this.sandboxReq?.for; }
+
+  /** The sandbox request for destination `dest`: the one frozen for it, or a new one made now. */
+  sandboxFor(dest: string, make: () => Omit<SandboxReq, "for" | "idem">): SandboxReq {
+    if (this.sandboxReq?.for !== dest) this.sandboxReq = { ...make(), for: dest, idem: newId() };
+    return this.sandboxReq;
+  }
+}
+
+export class ComposerDraft {
+  text = $state("");
+  /** The draft's files. Their names are unique whatever puts files here (an add, a paste, a file
+   * handed over, a send given back, drafts merged): each set goes through uniqueNames, the
+   * earlier keeping its name, a later one told apart (identity and order kept). The node takes no
+   * two files of one name in a message. */
+  #files = $state<Attachment[]>([]);
+  get files(): Attachment[] { return this.#files; }
+  set files(v: Attachment[]) { this.#files = uniqueNames(v); }
+  busy = $state(false);
+  /** The files of a request given back after a failed send (rids, its order): wherever they go,
+   * they come first (giveBack, mergeFiles). */
+  frozen: number[] = [];
+  /** What a send of this draft made so far, all of it in one: a draft that moves (into a thread,
+   * back into a new task) takes it whole, so no part of it is left behind. */
+  op = new SendOp();
+  get sandbox() { return this.op.sandbox; }
+  set sandbox(v) { this.op.sandbox = v; }
+  get sending() { return this.op.sending; }
+  set sending(v) { this.op.sending = v; }
   /** Where this draft went (a new task's, a thread's it merged into): what is still being read
    * into it goes there. */
   movedTo: ComposerDraft | null = null;
   adding: Promise<void> = Promise.resolve();
+  /** The reads still going into this draft (a send at the click takes them). */
+  reading = new Set<ReadJob>();
 
   /** The draft that holds this one's text now. */
   live(): ComposerDraft {
@@ -37,6 +201,8 @@ export class ComposerDraft {
     this.movedTo = to;
     const mine = this.adding, theirs = to.adding;
     to.adding = Promise.all([mine, theirs]).then(() => {});
+    for (const j of this.reading) to.reading.add(j);
+    this.reading.clear();
   }
 
   constructor(public key: string) {}
@@ -45,28 +211,52 @@ export class ComposerDraft {
   epoch = 0;
 
   /** What a send made is let go: the next message is a new one (a new task, a sent message). */
-  forget() { this.sandbox = null; this.sending = null; this.epoch++; }
+  forget() { this.op = new SendOp(); this.epoch++; }
+
+  /** Attaches files handed over whole by another part of the app (the preview's problems): each
+   * a new attachment, with its own identity; one of a name already attached replaces that one. */
+  take(list: { name: string; type: string; size: number; data: string }[]) {
+    const names = new Set(list.map(f => f.name));
+    this.files = [...this.files.filter(f => !names.has(f.name)), ...list.map(attachment)];
+  }
 
   /** Attaches files within the node's limits, one at a time: two drops at once cannot both pass a
-   * check made before either was read. A file over the limits is said (fail) and not read. `name`
-   * gives the name it is attached under, from the names attached right then. */
-  add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size") => void,
-    name: (f: FileLike, taken: string[]) => string = f => f.name): Promise<void> {
+   * check made before either was read. A file over the limits is said (fail) and not read; one
+   * that cannot be read is said too, and the next is read. `name` gives the name it is attached
+   * under, from the names attached right then. A send waits for what is being read (adding). */
+  add(list: Iterable<FileLike>, limits: Limits | null, fail: (why: "count" | "size" | "read", file: string) => void,
+    name: Namer = f => f.name): Promise<void> {
     const files = [...list];
     const at = this.live();
+    const job: ReadJob = { results: [], failed: [], sends: new Set(), reading: null, done: Promise.resolve() };
+    at.reading.add(job);
     at.adding = at.adding.then(async () => {
       for (const f of files) {
-        if (overLimits(this.live().files, f, limits)) { fail(overLimits(this.live().files, f, limits) as "count" | "size"); return; }
-        const data = b64bytes(new Uint8Array(await f.arrayBuffer()));
+        // A read a send has is the send's to judge, against its own budget, before it is read: the
+        // form's room after the click does not refuse it. One no send takes (none has it, or it
+        // does not fit the send's) is the form's, as before: over its limits, it is not read.
+        const sends = [...job.sends];
+        const forSend = sends.length > 0 && sends.every(admit => admit(f));
+        if (!forSend) { const over = overLimits(this.live().files, f, limits); if (over) { fail(over, f.name); return; } }
+        let data: string;
+        job.reading = f;
+        try { data = b64bytes(new Uint8Array(await f.arrayBuffer())); } catch { job.reading = null; job.failed.push(f.name); fail("read", f.name); continue; }
+        job.reading = null;
         // Read into whichever draft this one is by now (a new task, the thread it moved into),
         // checked again there: that one may have filled up meanwhile.
         const d = this.live();
         const over = overLimits(d.files, f, limits);
-        if (over) { fail(over); return; }
+        // A send that came while it was read has it too (in its budget from the click).
+        const mine = forSend || job.sends.size > 0;
+        if (over && !mine) { fail(over, f.name); return; }
         // Its name, chosen here: against all attached by now, those added just before it included.
-        d.files = [...d.files, { name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data }];
+        const a = attachment({ name: name(f, d.files.map(x => x.name)), type: f.type || "application/octet-stream", size: f.size, data });
+        job.results.push({ ...a });
+        if (!over) d.files = withReads(d.files, [a]); // (no room in the form: the send has it)
       }
-    }).catch(() => {});
+    }).catch(() => {}) // what failed was said: the queue goes on
+      .finally(() => { for (let x: ComposerDraft | null = this; x; x = x.movedTo) x.reading.delete(job); });
+    job.done = at.adding;
     return at.adding;
   }
 }

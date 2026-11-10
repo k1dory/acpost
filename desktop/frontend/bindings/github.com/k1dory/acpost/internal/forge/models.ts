@@ -28,6 +28,11 @@ export class Check {
      */
     "logs_by_jobs"?: boolean;
 
+    /**
+     * JobsError: its jobs could not be read (all of them, or past the first pages): Jobs is what was.
+     */
+    "jobs_error"?: string;
+
     /** Creates a new Check instance. */
     constructor($$source: Partial<Check> = {}) {
         if (!("id" in $$source)) {
@@ -109,9 +114,19 @@ export class Pull {
      * branch
      */
     "head": string;
+
+    /**
+     * HeadRepo is the repository the head branch is in (owner/name; a fork's, not the base's).
+     */
+    "head_repo"?: string;
     "base": string;
     "url": string;
     "updated": string;
+
+    /**
+     * Existing: opening it found it already open (a repeat of the same open), nothing new made.
+     */
+    "existing"?: boolean;
 
     /** Creates a new Pull instance. */
     constructor($$source: Partial<Pull> = {}) {

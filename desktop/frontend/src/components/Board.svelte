@@ -6,6 +6,7 @@
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
   import { Node, errText } from "../lib/api";
+  import { newBacklogDraft } from "../lib/records";
 
   // The backlog: tasks written down for later; started, one goes to its agent and leaves.
   type Item = { id: string; title: string; body?: string; agent?: string; cwd?: string; created: string };
@@ -19,13 +20,13 @@
   $effect(() => { loadBacklog(); });
   function startAdd(it?: Item) {
     draft = it ? { id: it.id, title: it.title, body: it.body ?? "", agent: it.agent ?? "", cwd: it.cwd ?? "" }
-      : { title: "", body: "", agent: app.localAgents()[0]?.address ?? "", cwd: app.draft.cwd || app.home };
+      : newBacklogDraft(app.localAgents()[0]?.address ?? "", app.draft.cwd || app.home);
     adding = true;
   }
   async function saveItem() {
     if (!draft.title.trim() || busy) return;
     busy = true;
-    try { await Node.PutBacklogItem(draft as any); adding = false; await loadBacklog(); } catch (e) { app.error = errText(e); }
+    try { await Node.PutBacklogItem({ ...draft } as any); /* the form as it was at the click */ adding = false; await loadBacklog(); } catch (e) { app.error = errText(e); }
     busy = false;
   }
   async function pickDir() {

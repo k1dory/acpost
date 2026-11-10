@@ -100,7 +100,9 @@ export function Checks(agent: string, ref: string): $CancellablePromise<forge$0.
 }
 
 /**
- * CloseTerminal ends a terminal.
+ * CloseTerminal ends a terminal. Its output stops at once; its entry stays the app's until the
+ * node says the shell is closed (or that there is no such terminal): a close that did not reach
+ * the node is tried again, and shutdown still closes it. Its shell would go on, no one's.
  */
 export function CloseTerminal(id: string): $CancellablePromise<void> {
     return $Call.ByID(3705491908, id);
@@ -122,10 +124,12 @@ export function CloudHistory(id: string): $CancellablePromise<store$0.Event[]> {
 }
 
 /**
- * CreateCloudTask makes the sandbox of a new cloud task.
+ * CreateCloudTask makes the sandbox of a new cloud task. idem is the composer's key for this
+ * sandbox, made before its first request: a retry after a lost answer gets the sandbox made the
+ * first time, not a second one.
  */
-export function CreateCloudTask(agent: string, repo: string, name: string): $CancellablePromise<client$0.Chat> {
-    return $Call.ByID(1313616452, agent, repo, name).then(($result: any) => {
+export function CreateCloudTask(agent: string, repo: string, name: string, idem: string): $CancellablePromise<client$0.Chat> {
+    return $Call.ByID(1313616452, agent, repo, name, idem).then(($result: any) => {
         return $$createType14($result);
     });
 }
@@ -192,10 +196,12 @@ export function FileAt(repo: string, tree: string, path: string): $CancellablePr
 
 /**
  * Follow streams a message's events after seq `after` as "events:<id>" until it is final (or
- * Unfollow). Following it again restarts the stream.
+ * Unfollow). Following it again restarts the stream. gen is this subscription's generation (the
+ * window's, rising): only the newest generation of a message changes its stream (followGen), so
+ * Follows and Unfollows that Wails runs out of order end as the window asked last.
  */
-export function Follow(id: string, after: number): $CancellablePromise<void> {
-    return $Call.ByID(1045125245, id, after);
+export function Follow(id: string, after: number, gen: number): $CancellablePromise<void> {
+    return $Call.ByID(1045125245, id, after, gen);
 }
 
 /**
@@ -273,6 +279,8 @@ export function IDEReload(url: string): $CancellablePromise<void> {
 
 /**
  * IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.
+ * The pane's calls are taken one at a time (pane): each is queued for the main thread in the
+ * order taken, with what is open checked and set in the same step.
  */
 export function IDEShow(url: string, x: number, y: number, w: number, h: number): $CancellablePromise<void> {
     return $Call.ByID(1674563009, url, x, y, w, h);
@@ -571,10 +579,12 @@ export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
 }
 
 /**
- * Unfollow stops a message's stream.
+ * Unfollow lets a message's subscription gen go, and every older one (0: whichever there is). Wails
+ * runs each call in its own goroutine: an Unfollow sent before a Follow may run after it, and
+ * must not stop the stream that Follow started; a Follow of gen that comes after it starts none.
  */
-export function Unfollow(id: string): $CancellablePromise<void> {
-    return $Call.ByID(553991142, id);
+export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
+    return $Call.ByID(553991142, id, gen);
 }
 
 /**

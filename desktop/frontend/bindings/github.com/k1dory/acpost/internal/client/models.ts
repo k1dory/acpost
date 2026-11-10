@@ -510,6 +510,11 @@ export class HandoffRequest {
     "cloud_agent": string;
     "note"?: string;
 
+    /**
+     * the same for a retry: the sandbox and message of the first are the answer
+     */
+    "idem"?: string;
+
     /** Creates a new HandoffRequest instance. */
     constructor($$source: Partial<HandoffRequest> = {}) {
         if (!("cloud_agent" in $$source)) {

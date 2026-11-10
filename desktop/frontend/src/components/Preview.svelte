@@ -1,3 +1,11 @@
+<script lang="ts" module>
+  import { Node as Native } from "../lib/api";
+  import { surfaceOwners } from "../lib/surface";
+  type Rect = { x: number; y: number; w: number; h: number };
+  // The preview is one native view, whichever Preview shows it: one queue, its latest owner's.
+  const previewOwner = surfaceOwners<Rect | null>(r => (r ? Native.PreviewShow(r.x, r.y, r.w, r.h) : Native.PreviewHide()), null);
+</script>
+
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Browser } from "@wailsio/runtime";
@@ -35,13 +43,15 @@
 
   // Where the box is, in the window's points: the page's coordinates times the text size zoom
   // (when the engine reports them unzoomed).
+  // Its calls go through the view's queue (lib/surface.ts): one at a time, the last asked wins.
+  const view = previewOwner();
   function place() {
-    if (!box || covered) { Node.PreviewHide().catch(() => {}); return; }
+    if (!box || covered) { view.set(null).catch(() => {}); return; }
     const r = box.getBoundingClientRect();
-    if (r.width < 4 || r.height < 4) { Node.PreviewHide().catch(() => {}); return; }
+    if (r.width < 4 || r.height < 4) { view.set(null).catch(() => {}); return; }
     const z = app.textSize, k = screenScale();
     const f = Math.abs(k - z) < 0.01 ? 1 : z;
-    Node.PreviewShow(r.left * f, r.top * f, r.width * f, r.height * f).catch(e => (err = errText(e)));
+    view.set({ x: r.left * f, y: r.top * f, w: r.width * f, h: r.height * f }).catch(e => (err = errText(e)));
   }
   let first = true;
   $effect(() => {
@@ -56,7 +66,7 @@
   });
   // A link to a page of this Mac, clicked in a chat: shown here.
   $effect(() => { const u = app.preview.pending; if (u) { app.preview.pending = ""; go(u); } });
-  onDestroy(() => { Node.PreviewHide().catch(() => {}); });
+  onDestroy(() => { view.close().catch(() => {}); }); // after a Show still out, not before it
 
   // Only a web page leaves for the browser (not whatever address a page made up).
   function openOutside() {
