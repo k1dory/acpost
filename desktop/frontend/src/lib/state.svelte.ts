@@ -2,7 +2,7 @@ import { t, tr } from "./i18n.svelte";
 import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
-import { ComposerDraft, sendFiles, giveBack, type Attachment } from "./composer.svelte";
+import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
 import { afterSent, overLimits } from "./draft";
 import { Turn, type Ev } from "./turn";
 
@@ -477,7 +477,7 @@ class App {
     const there = this.draftMap.get(to);
     if (there && there !== d) {
       there.text = [there.text, d.text].filter(Boolean).join("\n");
-      there.files = [...there.files, ...d.files];
+      mergeFiles(there, d); // a request given back keeps its files first
       if (!there.op.pending() && d.op.pending()) there.op = d.op; // whole: its key with its sandbox
       d.forward(there);
     } else {

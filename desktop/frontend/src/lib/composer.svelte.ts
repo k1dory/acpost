@@ -99,8 +99,28 @@ export function uniqueNames(list: Attachment[]): Attachment[] {
  * a name the request has gets another, as anything put in the draft does): nothing it had is
  * lost, and the same files make the same request again. */
 export function giveBack(d: ComposerDraft, owned: Attachment[]) {
-  const mine = new Set(owned.map(f => f.rid));
-  d.files = [...owned.map(f => ({ ...f })), ...d.files.filter(f => !mine.has(f.rid))];
+  d.frozen = owned.map(f => f.rid);
+  d.files = placeFiles([owned.map(f => ({ ...f })), d.files], d.frozen);
+}
+
+/** Drafts merged (one moved into another): one list, the files of a request given back first
+ * (frozen, wherever they end up: the same files make the same request), then the rest. */
+export function mergeFiles(there: ComposerDraft, from: ComposerDraft) {
+  const frozen = [...there.frozen, ...from.frozen];
+  there.frozen = frozen;
+  there.files = placeFiles([there.files, from.files], frozen);
+}
+
+/** The one ordering rule for files put together: those of a frozen request (rids, in its
+ * order) before any other, each once; then the others in the order given. Names are then made
+ * unique by the draft (its files setter), so the frozen ones keep theirs. */
+function placeFiles(lists: Attachment[][], frozen: number[]): Attachment[] {
+  const all = lists.flat(), at = new Map<number, Attachment>();
+  for (const f of all) if (!at.has(f.rid)) at.set(f.rid, f);
+  const first = frozen.filter(r => at.has(r)).map(r => at.get(r)!);
+  const firstIds = new Set(first.map(f => f.rid));
+  const rest = [...at.values()].filter(f => !firstIds.has(f.rid));
+  return [...first, ...rest];
 }
 
 /** A list of files with the files reads brought after it, as both the composer and a send build
@@ -152,6 +172,9 @@ export class ComposerDraft {
   get files(): Attachment[] { return this.#files; }
   set files(v: Attachment[]) { this.#files = uniqueNames(v); }
   busy = $state(false);
+  /** The files of a request given back after a failed send (rids, its order): wherever they go,
+   * they come first (giveBack, mergeFiles). */
+  frozen: number[] = [];
   /** What a send of this draft made so far, all of it in one: a draft that moves (into a thread,
    * back into a new task) takes it whole, so no part of it is left behind. */
   op = new SendOp();

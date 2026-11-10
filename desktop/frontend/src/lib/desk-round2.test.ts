@@ -558,6 +558,29 @@ describe("a send owns its attachments from the click (review round 4)", () => {
     } else expect(b).toEqual(a);
   });
 
+  it("a new task's report sent, New task with another report, the send fails: put back into the new task, the first report keeps its name, and without the late one the retry is the first request", async () => {
+    const app = await load();
+    app.draft.cwd = "/w";
+    const first = deferred();
+    fake.Node.SendTask.mockReturnValueOnce(first.promise).mockResolvedValue(msg("m1", "T"));
+    const d = app.draftOf();
+    d.text = "fix these";
+    d.take([{ name: "preview-problems.md", type: "text/markdown", size: 1, data: "cA==" }]);
+    const going = app.submit(d);
+    await flush();
+    app.newTask();                            // same agent and folder
+    const n = app.draftOf();
+    n.take([{ name: "preview-problems.md", type: "text/markdown", size: 1, data: "cQ==" }]);
+    first.reject(new Error("lost"));
+    expect(await going).toBe(false);
+    const back = app.draftOf();
+    expect(back.files.map(f => [f.name, f.data])).toEqual([["preview-problems.md", "cA=="], ["preview-problems (2).md", "cQ=="]]);
+    back.files = back.files.filter(f => f.data !== "cQ==");
+    expect(await app.submit(back)).toBe(true);
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(b).toEqual(a);
+  });
+
   it("any reads, removals and pastes before and after the click: what goes is the click's files and what the reads of then brought after it, named apart; a retry is the first request", async () => {
     const { pasteName, freeName } = await import("./paste");
     let seed = 11;
@@ -658,6 +681,16 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       const clickRids = new Set(d.files.map(f => f.rid));
       const clickSizes = d.files.map(f => ({ size: f.size }));
       let formAtSend: { rid: number; data: string }[] = [];
+      // A failing send's give-back and a draft merged into the sent one, in either order: before
+      // the answer (merged while the send goes) or after it (given back, then merged).
+      // Or after it, the sent draft merged into another (as a new task's is, put back).
+      const mergeWhen = (["before", "after", "into"] as const)[rnd(3)];
+      const mergeIn = () => {
+        const x = app.draftOf("thread:Y" + run);
+        x.take([{ name: "preview-problems.md", type: "text/markdown", size: 1, data: btoa("merged") }]);
+        if (mergeWhen === "into") { (app as any).moveDraft(d, x.key); d = x; }
+        else (app as any).moveDraft(x, "thread:T");
+      };
       // The node answers once all is done (the composer as it is then is what the answer cleans).
       let answer = () => {};
       if (!retry) fake.Node.SendTask.mockImplementation(() => new Promise((r, rj) => { answer = () => { formAtSend = d.files.map(f => ({ rid: f.rid, data: f.data })); fails ? rj(new Error("refused")) : r(msg("m1", "T")); }; }));
@@ -684,6 +717,7 @@ describe("a send owns its attachments from the click (review round 4)", () => {
       }
       for (const r of reads) end(r);
       for (let i = 0; i < 5; i++) await flush();
+      if (fails && mergeWhen === "before") { mergeIn(); unique(); }
       answer();
       const ok = await going;
       expect(formOver).toEqual([]);
@@ -718,6 +752,9 @@ describe("a send owns its attachments from the click (review round 4)", () => {
         expect(d.files.slice(0, files.length).map(f => atob(f.data))).toEqual(got);
         for (const f of formAtSend) expect(d.files.some(x => x.rid === f.rid)).toBe(true);
         unique();
+        if (mergeWhen !== "before") { mergeIn(); unique(); expect(new Set(d.files.map(f => f.name)).size).toBe(d.files.length); }
+        // The request's files first still, with its names, whichever came first.
+        expect(d.files.slice(0, files.length).map(f => [f.name, atob(f.data)])).toEqual(files.map((f: any) => [f.name, atob(f.data)]));
         // Half the time the later files stay and go too (names apart); else, without them, the
         // retry is the first request.
         const keepLate = rnd(2) === 0;
