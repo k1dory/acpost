@@ -447,6 +447,32 @@ describe("a draft whose request may or may not have been taken", () => {
     expect(cb.draftLive).toBe(false);
   });
 
+  it("a form with only a repository or a connection is the definition as it is: edited, it is another draft", async () => {
+    const cb = await builder({ ...catalogue(), policies: [], environments: [] } as any);
+    for (const edit of [(s: any) => { s.repo = "https://git.example/o/b"; }, (s: any) => { s.connections = ["github"]; }]) {
+      fake.Node.CloudDraft.mockReset();
+      cb.newAgent();
+      cb.ask = "a reviewer"; cb.draftAgent = "agent:claude";
+      cb.ed!.spec.repo = "https://git.example/o/a";
+      fake.Node.CloudDraft.mockRejectedValueOnce(new Error("connection reset"));
+      await cb.writeDraft();
+      const first = fake.Node.CloudDraft.mock.calls[0][0];
+      expect(first.current).toMatchObject({ repo: "https://git.example/o/a" });
+      edit(cb.ed!.spec);
+      fake.Node.CloudDraft.mockImplementation(async (r: any) => r.key === first.key
+        ? { msg: "m-old", thread: "t", state: "running" }
+        : { msg: "m-new", thread: "t", state: "done", spec: { name: "x", description: "", policy: "", environment: "", repo: "https://git.example/o/agent", instructions: "", connections: [] } });
+      await cb.writeDraft();
+      await flush();
+      const second = fake.Node.CloudDraft.mock.calls.find(c => c[0].key !== first.key)![0];
+      expect(second.current).toMatchObject(JSON.parse(JSON.stringify(cb.ed!.spec.connections.length ? { connections: ["github"] } : {})));
+      // The agent's repo fills only a field not changed since this (second) draft was asked for.
+      expect(cb.ed!.spec.name).toBe("x");
+      cb.close();
+      await flush();
+    }
+  });
+
   it("stopped while it was asked for, and the answer then lost: found by its key and stopped", async () => {
     const cb = await start();
     const made = deferred();

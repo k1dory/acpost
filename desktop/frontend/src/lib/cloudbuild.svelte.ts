@@ -196,7 +196,8 @@ export class CloudBuilder {
     const e = this.ed, cat = this.cat;
     if (!e || !cat || this.drafting || !this.ask.trim() || !this.draftAgent) return;
     const start = cleanSpec(e.spec);
-    const has = start.name || start.instructions || start.policy || start.environment || start.description;
+    // Anything at all in the form is the definition as it is now (a repository alone too).
+    const has = specKey(start) !== specKey(emptySpec());
     const req = { cloud: e.cloud, agent: this.draftAgent, ask: this.ask.trim(), cwd: this.draftDir, current: has ? start : null };
     const json = JSON.stringify(req);
     let a = this.asks.find(x => !x.msg && !x.creating && x.json === json);
