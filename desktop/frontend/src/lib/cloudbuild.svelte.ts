@@ -6,8 +6,9 @@ import { app } from "./state.svelte";
 import { Node, errText, errInfo } from "./api";
 import { cleanSpec, emptySpec, mergeDraft, specKey, specMissing, type Catalogue, type CloudDef, type CloudPlan, type CloudSpec } from "./cloud";
 
-export type CloudInfo = { configured: boolean; url?: string; tenant?: string; admin?: boolean; subject?: string; expires?: string; error?: string; error_code?: string };
-export type Edit = { isNew: boolean; rev: number; spec: CloudSpec; plan: CloudPlan | null; planKey: string };
+export type CloudInfo = { configured: boolean; id?: string; url?: string; tenant?: string; admin?: boolean; subject?: string; expires?: string; error?: string; error_code?: string };
+/** cloud: the connection whose catalogue the editor was opened from; what it writes goes there only. */
+export type Edit = { cloud: string; isNew: boolean; rev: number; spec: CloudSpec; plan: CloudPlan | null; planKey: string };
 
 const specOf = (a: CloudSpec): CloudSpec => ({ name: a.name, description: a.description ?? "", policy: a.policy ?? "", environment: a.environment ?? "", repo: a.repo ?? "", instructions: a.instructions ?? "", connections: [...(a.connections ?? [])] });
 
@@ -40,14 +41,31 @@ export class CloudBuilder {
 
   async load() {
     const gen = ++this.gen;
-    let info: CloudInfo, cat: Catalogue | null = null, err = "";
-    try { info = (await Node.CloudInfo()) as any; } catch (e) { err = errText(e); info = { configured: false }; }
-    if (!err && info.configured && !info.error) try { cat = (await Node.CloudBuild()) as any; } catch (e) { err = errText(e); }
+    let info: CloudInfo = { configured: false }, cat: Catalogue | null = null, err = "", read = false;
+    // The identity and the catalogue of one connection: a node that changed its cloud between
+    // the two reads is read again, not shown as one tenant's name over another's agents.
+    for (let i = 0; i < 3 && !read && !err; i++) {
+      cat = null;
+      try { info = (await Node.CloudInfo()) as any; } catch (e) { err = errText(e); break; }
+      if (!info.configured || info.error) { read = true; break; }
+      try { cat = (await Node.CloudBuild()) as any; } catch (e) { err = errText(e); break; }
+      read = !!info.id && cat?.cloud === info.id;
+    }
     if (gen !== this.gen) return;
-    // An editor is of the cloud its catalogue came from: over another's it closes.
-    if (this.ed && cat?.cloud !== this.cat?.cloud) this.close();
-    this.info = info; this.cat = cat;
-    if (err) this.err = err;
+    if (!read && !err) { err = t("The cloud changed while it was read: refresh"); cat = null; }
+    if (err) {
+      // Not read (the node or the cloud did not answer): what is on the screen stays, the form
+      // too. Its writes name its connection, and the node refuses them if that is another now.
+      this.err = err;
+      if (!this.info) this.info = info;
+      return;
+    }
+    const id = info.configured ? info.id ?? "" : "";
+    // A confirmed change of the connection: an editor of the one before closes.
+    if (this.ed && this.ed.cloud !== id) this.close();
+    this.info = info;
+    // A cloud that is connected and not answering keeps the catalogue read from it before.
+    this.cat = cat ?? (info.configured && this.cat?.cloud === id ? this.cat : null);
   }
 
   /** Connects a cloud. Whatever was open was another cloud's (or this one's under another key):
@@ -81,15 +99,17 @@ export class CloudBuilder {
   close() { this.stopDraft(); this.ed = null; this.sure = ""; this.draft = null; this.draftNote = ""; }
 
   newAgent(from?: CloudDef) {
-    if (this.busy) return;
+    const cloud = this.cat?.cloud;
+    if (this.busy || !cloud) return;
     const spec = from ? specOf(from) : emptySpec();
     if (!from && this.cat?.policies.length === 1) spec.policy = this.cat.policies[0];
     if (!from && this.cat?.environments.length === 1) spec.environment = this.cat.environments[0].ref;
-    this.open({ isNew: true, rev: 0, spec, plan: null, planKey: "" });
+    this.open({ cloud, isNew: true, rev: 0, spec, plan: null, planKey: "" });
   }
   editAgent(a: CloudDef) {
-    if (this.busy) return;
-    this.open({ isNew: false, rev: a.revision, spec: specOf(a), plan: null, planKey: "" });
+    const cloud = this.cat?.cloud;
+    if (this.busy || !cloud) return;
+    this.open({ cloud, isNew: false, rev: a.revision, spec: specOf(a), plan: null, planKey: "" });
   }
   toggleConn(ref: string) {
     if (!this.ed) return;
@@ -99,18 +119,17 @@ export class CloudBuilder {
 
   async check() {
     const e = this.ed;
-    const cloud = this.cat?.cloud;
-    if (!e || !cloud || this.busy) return;
-    const k = specKey(e.spec);
+    if (!e || this.busy) return;
+    const cloud = e.cloud, k = specKey(e.spec);
     this.err = ""; this.busy = "check";
     try { const p = (await Node.CloudPlanAgent(cloud, cleanSpec(e.spec) as any)) as any; e.plan = p; e.planKey = k; } catch (x) { if (this.ed === e) this.err = errText(x); }
     this.busy = "";
   }
 
   async deploy() {
-    const e = this.ed, cloud = this.cat?.cloud;
-    if (!e?.plan || !cloud || !this.checked || this.busy) return;
-    const sent = specKey(e.spec);
+    const e = this.ed;
+    if (!e?.plan || !this.checked || this.busy) return;
+    const cloud = e.cloud, sent = specKey(e.spec), name = cleanSpec(e.spec).name;
     this.err = ""; this.busy = "deploy";
     try {
       const r: any = await Node.CloudDeployAgent(cloud, cleanSpec(e.spec) as any, e.plan.plan);
@@ -120,7 +139,10 @@ export class CloudBuilder {
         else {
           // Changed (or being drafted) while it was deployed: that is not in the catalogue, and
           // stays in the form, of an agent that is there now, to be checked and deployed again.
-          e.plan = null; e.isNew = false; e.rev = r.revision;
+          e.plan = null;
+          // Still that agent only under the name it was deployed by: renamed meanwhile, the form
+          // is a new agent's (and never the editor, with its delete, of another one of that name).
+          if (cleanSpec(e.spec).name === name) { e.isNew = false; e.rev = r.revision; }
           this.note += " " + t("What you changed meanwhile is still in the form, not deployed.");
         }
       }
@@ -135,9 +157,8 @@ export class CloudBuilder {
   /** Deletes the agent in the editor: the second click of two. */
   async remove() {
     const e = this.ed;
-    const cloud = this.cat?.cloud;
-    if (!e || !cloud || e.isNew || this.busy) return;
-    const name = e.spec.name;
+    if (!e || e.isNew || this.busy) return;
+    const cloud = e.cloud, name = e.spec.name;
     if (this.sure !== name) { this.sure = name; return; }
     this.err = ""; this.busy = "delete";
     try {
@@ -149,16 +170,18 @@ export class CloudBuilder {
     this.busy = ""; this.sure = "";
   }
 
-  /** The draft's task while it is not known to have ended: what a stop cancels, whether its
-   * answer is still waited for or not (a wait that failed leaves the task running). */
-  private live = $state("");
-  get draftLive() { return !!this.live; }
+  /** The drafts' tasks not known to have ended: what a stop cancels, whether an answer is still
+   * waited for or not (a wait that failed leaves its task running, and so does a cancel that failed:
+   * it stays here, and is cancelled again by the next stop). */
+  private live = $state<string[]>([]);
+  get draftLive() { return this.live.length > 0; }
+  private ended(msg: string) { this.live = this.live.filter(m => m !== msg); }
 
   /** Has an agent of this Mac write the definition. Its answer fills what the person did not
    * change while it was written; a draft stopped before its task was known is cancelled once it is. */
   async writeDraft() {
     const e = this.ed, cat = this.cat;
-    if (!e || !cat?.cloud || this.drafting || !this.ask.trim() || !this.draftAgent) return;
+    if (!e || !cat || this.drafting || !this.ask.trim() || !this.draftAgent) return;
     this.stopDraft(); // one left running by a wait that failed
     const run = ++this.draftRun;
     const start = cleanSpec(e.spec);
@@ -166,13 +189,14 @@ export class CloudBuilder {
     this.err = ""; this.draftNote = ""; this.draft = null; this.drafting = true;
     const mine = () => run === this.draftRun && this.ed === e;
     try {
-      let res: any = await Node.CloudDraft({ cloud: cat.cloud, agent: this.draftAgent, ask: this.ask.trim(), cwd: this.draftDir, current: has ? start : null } as any);
-      if (!mine()) { this.cancelDraft(res.msg); return; }
-      this.draft = { msg: res.msg, thread: res.thread };
-      this.live = res.msg;
-      while (mine() && !res.spec && !res.error) res = await Node.CloudDraftResult(res.msg);
+      let res: any = await Node.CloudDraft({ cloud: e.cloud, agent: this.draftAgent, ask: this.ask.trim(), cwd: this.draftDir, current: has ? start : null } as any);
+      const msg: string = res.msg;
+      this.live = [...this.live, msg];
+      if (!mine()) { this.cancelDraft(msg); return; }
+      this.draft = { msg, thread: res.thread };
+      while (mine() && !res.spec && !res.error) res = await Node.CloudDraftResult(msg);
+      if (res.spec || res.error) this.ended(msg); // whoever waits for it now
       if (!mine()) return;
-      this.live = ""; // it ended
       if (res.error) this.err = tr(res.error);
       else {
         const m = mergeDraft(e.spec, res.spec, cat, e.isNew, start);
@@ -182,15 +206,17 @@ export class CloudBuilder {
     } catch (x) { if (mine()) this.err = errText(x); }
     if (run === this.draftRun) this.drafting = false;
   }
-  /** Stops the draft: its answer is not waited for, and its task, if it may still run, is cancelled. */
+  /** Stops the draft: its answer is not waited for, and every task that may still run is cancelled. */
   stopDraft() {
     this.draftRun++; this.drafting = false;
-    const msg = this.live;
-    this.live = "";
-    if (msg) this.cancelDraft(msg);
+    for (const msg of this.live) this.cancelDraft(msg);
   }
   private cancelDraft(msg: string) {
-    Node.Cancel(msg).catch((x: unknown) => { this.err = errText(x, "The draft's task was not stopped"); });
+    Node.Cancel(msg).then(() => this.ended(msg), (x: unknown) => {
+      // No such message, or one that ended already: nothing left to stop.
+      if (["not_found", "conflict"].includes(errInfo(x).code)) this.ended(msg);
+      else this.err = errText(x, "The draft's task was not stopped");
+    });
   }
   async openDraft() {
     const d = this.draft;
