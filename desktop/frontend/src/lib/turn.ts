@@ -239,6 +239,41 @@ export function lineDiff(oldText = "", newText = ""): { op: " " | "+" | "-"; tex
   return out;
 }
 
+/** A path as git quotes it in a diff's header (C style: \\, \", \t, \n and bytes in octal, the
+ * name's UTF-8), read back. */
+export function gitUnquote(s: string): string {
+  const bytes: number[] = [];
+  const enc = new TextEncoder();
+  const simple: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "\\") { // a whole character (two units of one outside the basic plane)
+      const ch = String.fromCodePoint(s.codePointAt(i)!);
+      bytes.push(...enc.encode(ch));
+      i += ch.length - 1;
+      continue;
+    }
+    const oct = /^[0-3][0-7]{2}/.exec(s.slice(i + 1));
+    if (oct) { bytes.push(parseInt(oct[0], 8)); i += 3; continue; }
+    const c = s[i + 1];
+    if (c !== undefined && c in simple) { bytes.push(simple[c]); i++; continue; }
+    bytes.push(92);
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+/** The file a diff's header is of (its new name): what follows "diff --git ", two names, each
+ * as it is or as git quotes it (not ASCII, a quotation mark: "b/…"), one quoted or both. Not
+ * quoted, the name may have " b/" in it: the same name twice is read by its halves; a rename's
+ * second name starts at the last " b/". */
+export function headerPath(rest: string): string {
+  const quoted = /(?:^| )"b\/((?:[^"\\]|\\.)*)"$/.exec(rest);
+  if (quoted) return gitUnquote(quoted[1]);
+  const n = (rest.length - 5) / 2;
+  if (Number.isInteger(n) && n > 0 && rest.startsWith("a/") && rest.slice(2 + n, 2 + n + 3) === " b/" && rest.slice(2, 2 + n) === rest.slice(2 + n + 3)) return rest.slice(2, 2 + n);
+  const i = rest.lastIndexOf(" b/");
+  return i >= 0 ? rest.slice(i + 3) : rest;
+}
+
 /** A git unified diff split into files. */
 export function splitDiff(diff: string): { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] {
   const files: { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] = [];
@@ -246,15 +281,21 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
   let a = 0, b = 0;
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      const m = / b\/(.*)$/.exec(line);
-      cur = { path: m ? m[1] : line.slice(11), lines: [] };
+      cur = { path: headerPath(line.slice(11)), lines: [] };
       files.push(cur);
+      continue;
+    }
+    // A rename says its new name outright (the header's two names may not be told apart).
+    if (cur && line.startsWith("rename to ")) {
+      const to = line.slice(10), q = /^"((?:[^"\\]|\\.)*)"$/.exec(to);
+      cur.path = q ? gitUnquote(q[1]) : to;
       continue;
     }
     if (!cur || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("new file") || line.startsWith("deleted file") || line.startsWith("similarity") || line.startsWith("rename ")) continue;
     const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
     if (h) { a = +h[1]; b = +h[2]; cur.lines.push({ op: "@", text: line }); continue; }
-    const op = line[0] ?? " ";
+    if (line === "") continue; // the end of the text (a line of a diff has its mark at least)
+    const op = line[0];
     if (op === "+") cur.lines.push({ op, text: line.slice(1), b: b++ });
     else if (op === "-") cur.lines.push({ op, text: line.slice(1), a: a++ });
     else if (op === "\\") continue;

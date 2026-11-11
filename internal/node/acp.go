@@ -993,6 +993,7 @@ func (s *acpSlot) handle(m store.Message) {
 	if c := taskCwd(m); c != "" {
 		dir = c
 	}
+	started := time.Now().UTC()
 	before := snapshot(ctx, dir)
 	turn = p.cl.begin(sid, m.ID, int(n.cfg.Limits.MaxReply), n.cfg.Limits.MaxFiles, int(n.cfg.Limits.MaxFilesSize))
 	turn.mu.Lock()
@@ -1007,7 +1008,8 @@ func (s *acpSlot) handle(m store.Message) {
 	timedOut := pastDeadline()
 	turnCancel()
 	p.cl.end(sid)
-	n.recordChanges(m, a.addr+"@"+n.Name(), before, dir) // after the turn's deadline was read
+	edits, moreEdits := turn.edits()
+	n.recordChanges(m, a.addr+"@"+n.Name(), before, dir, started, edits, moreEdits) // after the turn's deadline was read
 	reply := turn.reply(a.cfg.Reply)
 
 	if err != nil || timedOut {
@@ -1088,9 +1090,15 @@ type acpTurn struct {
 	dropped            int
 	usage              *acp.SessionUsageUpdate // the agent's last word on the session's context and cost
 	tools              map[string]*toolTrack   // the turn's tool calls as their updates made them
-	ctx                context.Context         // the turn's: ended by its timeout or its message's cancel
-	lease              string                  // the attempt's: its events are taken under it ("" outside a message's turn)
-	history            bool                    // a session's history replayed (session/load): its user's messages too
+	edited             map[string][]fileEdit   // what its completed calls edited, as the agent reported it, by call
+	editedOrder        []string                // the calls, in the order they completed
+	editedBytes        int
+	pendingBytes       int // the texts of edits whose call has not ended (one budget with editedBytes)
+	editedCount        int
+	editedMore         bool            // edits not kept (too many)
+	ctx                context.Context // the turn's: ended by its timeout or its message's cancel
+	lease              string          // the attempt's: its events are taken under it ("" outside a message's turn)
+	history            bool            // a session's history replayed (session/load): its user's messages too
 }
 
 func (t *acpTurn) file(b replyBlock) {
