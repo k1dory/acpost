@@ -11,8 +11,10 @@ export const revealFresh = 20_000;
 export const revealMax = 3;
 
 /** The edits to show for these events of message msg: those of calls that completed now, not
- * shown before (seen keeps "message:call"). The last edit of each file: it is what the file has. */
-export function editsToReveal(msg: string, evs: Ev[], seen: Set<string>, now: number): Reveal[] {
+ * shown before (seen keeps "message:call"), and after since — when its events began to be followed
+ * (what a turn did before its chat was opened is replayed first: that is not shown). The last edit
+ * of each file: it is what the file has. */
+export function editsToReveal(msg: string, evs: Ev[], seen: Set<string>, now: number, since = 0): Reveal[] {
   const out: Reveal[] = [];
   for (const e of evs) {
     if (e.kind !== "tool_call" && e.kind !== "tool_call_update") continue;
@@ -23,7 +25,7 @@ export function editsToReveal(msg: string, evs: Ev[], seen: Set<string>, now: nu
     if (seen.has(key)) continue;
     seen.add(key);
     const at = Date.parse(e.time);
-    if (!(now - at < revealFresh)) continue; // old, or no time: not now
+    if (!(now - at < revealFresh) || at < since) continue; // old, before the chat was opened, or no time: not now
     const last = new Map<string, Edit>();
     for (const ed of d.edits as Edit[]) if (typeof ed?.path === "string" && ed.path) last.set(ed.path, ed);
     for (const ed of [...last.values()].slice(0, revealMax)) out.push(revealOf(ed));

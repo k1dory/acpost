@@ -114,6 +114,7 @@ class App {
     try { localStorage.setItem("ide-follow", on ? "1" : "0"); } catch {}
   }
   private revealed = new Set<string>(); // the calls whose edits were shown ("message:call")
+  private followedAt = new Map<string, number>(); // when each message's events began to be followed
   /** The folder the IDE has open: the chat's, a new task's, or home. */
   ideFolder(): string { return this.chatCwd() || this.draft.cwd || this.home; }
   /** Shows an edit in the IDE (its diff when the edit's text is whole, else the file). */
@@ -395,12 +396,15 @@ class App {
     if (this.unsub.has(id)) return;
     const gen = this.gen;
     const sub = nextGen();
+    const since = this.followedAt.get(id) ?? Date.now(); // a stream asked again keeps its first time
+    this.followedAt.set(id, since);
+    if (this.followedAt.size > 500) this.followedAt.delete(this.followedAt.keys().next().value!);
     const off = on("events:" + id, (b: any) => {
       if (b.gen && b.gen !== sub) return; // another subscription's
       if (b.events?.length) {
         tries = 0;
         // The IDE beside the chat follows the agent: what a call just edited is shown there.
-        const shown = editsToReveal(id, b.events as Ev[], this.revealed, Date.now());
+        const shown = editsToReveal(id, b.events as Ev[], this.revealed, Date.now(), since);
         if (this.revealed.size > 2000) this.revealed.clear();
         if (this.view === "ide" && this.ideFollow && gen === this.gen) {
           const to = this.msgs.find(x => x.id === id)?.to ?? "";

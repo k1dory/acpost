@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -113,17 +114,34 @@ exports.commands = { executeCommand: async (c, left, right, title) => {
 } };`), 0o600)
 	os.WriteFile(filepath.Join(ext, "t.cjs"), []byte(`const assert = require("node:assert/strict");
 const vscode = require("vscode"), ext = require("./extension.js");
-const subs = [], ctx = { extensionPath: __dirname, subscriptions: subs, workspaceState: { get: () => true, update: async () => {} } };
+const state = new Map([["acpost.tidied", true]]);
+const ctx = () => ({ extensionPath: __dirname, subscriptions: [], workspaceState: { get: k => state.get(k), update: async (k, v) => { state.set(k, v); } } });
+const until = async n => { for (let i = 0; i < 100 && vscode.shown.length < n; i++) await new Promise(r => setTimeout(r, 50)); };
 (async () => {
-  await ext.activate(ctx);
+  // A request written before the window was up is shown when it comes up.
+  const first = ctx();
+  await ext.activate(first);
+  await until(1);
+  assert.deepEqual(vscode.shown, [{ diff: process.env.WORK + "/a.txt", before: "one\ntwo\nthree\n", title: "a.txt (early)" }]);
   console.log("ready");
-  for (let i = 0; i < 100 && vscode.shown.length < 1; i++) await new Promise(r => setTimeout(r, 50));
+  await until(2);
   await new Promise(r => setTimeout(r, 300)); // the other folder's request would have come by now
-  assert.deepEqual(vscode.shown, [{ diff: process.env.WORK + "/a.txt", before: "one\ntwo\nthree\n", title: "a.txt (Claude)" }]);
-  for (const s of subs) s.dispose();
+  assert.deepEqual(vscode.shown[1], { diff: process.env.WORK + "/a.txt", before: "one\ntwo\nthree\n", title: "a.txt (Claude)" });
+  assert.equal(vscode.shown.length, 2);
+  for (const s of first.subscriptions) s.dispose();
+  // The window opened again (the page reloaded): what it showed is not shown a second time.
+  const again = ctx();
+  await ext.activate(again);
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(vscode.shown.length, 2);
+  for (const s of again.subscriptions) s.dispose();
   console.log("ok");
 })().catch((e) => { console.error(e); process.exit(1); });
 `), 0o600)
+	dir := filepath.Join(root, "commands")
+	if err := ideReveal(dir, ideRequest{Folder: work, Path: "a.txt", Old: "two", New: "TWO", Title: "early"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(node, "t.cjs")
 	cmd.Dir = ext
 	cmd.Env = append(os.Environ(), "WORK="+work)
@@ -138,7 +156,6 @@ const subs = [], ctx = { extensionPath: __dirname, subscriptions: subs, workspac
 		cmd.Wait()
 		t.Fatalf("the extension did not start: %q %v %s", line, err, stderr.String())
 	}
-	dir := filepath.Join(root, "commands")
 	if err := ideReveal(dir, ideRequest{Folder: "/elsewhere", Path: filepath.Join(work, "a.txt"), Old: "two", New: "TWO"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -148,5 +165,44 @@ const subs = [], ctx = { extensionPath: __dirname, subscriptions: subs, workspac
 	rest, _ := io.ReadAll(stdout)
 	if err := cmd.Wait(); err != nil || !strings.Contains(string(rest), "ok") {
 		t.Fatalf("%v: %s%s", err, rest, stderr.String())
+	}
+}
+
+// A full queue (nothing reads it) lets go of its oldest requests, not the ones just written: two
+// written one after the other are both there for the window to read.
+func TestIDERevealKeepsTheNewest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "commands")
+	now := time.Now()
+	for i := range ideRevealMax + 20 {
+		if err := ideReveal(dir, ideRequest{Folder: "/w", Path: fmt.Sprintf("f%03d", i)}, now.Add(time.Duration(i)*time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(dir, ".req-being-written"), []byte("{"), 0o600)
+	last := ideRevealMax + 20
+	for _, name := range []string{"A", "B"} {
+		if err := ideReveal(dir, ideRequest{Folder: "/w", Path: name}, now.Add(time.Duration(last)*time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		last++
+	}
+	entries, _ := os.ReadDir(dir)
+	paths := map[string]bool{}
+	requests := 0
+	for _, e := range entries {
+		if !ideRequestName.MatchString(e.Name()) {
+			continue
+		}
+		requests++
+		b, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+		var r ideRequest
+		json.Unmarshal(b, &r)
+		paths[r.Path] = true
+	}
+	if !paths["A"] || !paths["B"] || paths["f000"] || requests > ideRevealMax {
+		t.Errorf("%d requests kept; A %v, B %v, the oldest %v", requests, paths["A"], paths["B"], paths["f000"])
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".req-being-written")); err != nil {
+		t.Error("a request being written was removed")
 	}
 }

@@ -18,6 +18,8 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"sort"
 	"strconv"
 	"sync"
 	"syscall"
@@ -238,6 +240,19 @@ const (
 	ideRevealMax  = 200             // requests kept at most (the extension takes each as it comes)
 )
 
+// ideRequestName is a request's file name: its time (Unix milliseconds) and a random part
+// (reveal.js isCommand).
+var ideRequestName = regexp.MustCompile(`^([0-9]+)-[0-9a-f]+\.json$`)
+
+func ideRequestTime(name string) int64 {
+	m := ideRequestName.FindStringSubmatch(name)
+	if m == nil {
+		return 0
+	}
+	t, _ := strconv.ParseInt(m[1], 10, 64)
+	return t
+}
+
 // ideRequest is a request to show a file: as it is, or with an edit as a diff (the text before
 // the edit and after it, as the agent reported them; Created: the edit made the file).
 type ideRequest struct {
@@ -271,16 +286,23 @@ func ideReveal(dir string, r ideRequest, now time.Time) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	// Old requests go, and when too many are left (nothing reads them: the IDE is closed) the rest.
+	// Old requests go, and of too many (nothing reads them: the IDE is closed) the oldest: the
+	// newest are the ones a window is about to read. A file being written (not a request yet) is
+	// left to its writer unless it is old.
 	if entries, err := os.ReadDir(dir); err == nil {
-		left := 0
+		var kept []string // requests, oldest first (their names start with their time)
 		for _, e := range entries {
 			info, err := e.Info()
-			if err != nil || now.Sub(info.ModTime()) > ideRevealKeep || left >= ideRevealMax {
+			if err != nil || now.Sub(info.ModTime()) > ideRevealKeep {
 				os.Remove(filepath.Join(dir, e.Name()))
-				continue
+			} else if ideRequestName.MatchString(e.Name()) {
+				kept = append(kept, e.Name())
 			}
-			left++
+		}
+		sort.Slice(kept, func(i, j int) bool { return ideRequestTime(kept[i]) < ideRequestTime(kept[j]) })
+		for len(kept) >= ideRevealMax {
+			os.Remove(filepath.Join(dir, kept[0]))
+			kept = kept[1:]
 		}
 	}
 	b, err := json.Marshal(r)

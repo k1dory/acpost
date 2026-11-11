@@ -26,6 +26,13 @@ describe("what the IDE is asked to show of a turn's events", () => {
     // The old one is not shown later either.
     expect(editsToReveal("m", [ev(6, "tool_call_update", { id: "old", status: "completed", edits: [edit("/w/a")] })], seen, now)).toEqual([]);
   });
+  it("a chat opened on a running turn: what completed before it was opened is not shown, what completes after is", () => {
+    const seen = new Set<string>();
+    const opened = now - 500;
+    // Replayed first: a call that completed a second ago, before the chat was opened.
+    expect(editsToReveal("m", [ev(1, "tool_call", { id: "before", status: "completed", edits: [edit("/w/a")] }, 1000)], seen, now, opened)).toEqual([]);
+    expect(editsToReveal("m", [ev(2, "tool_call", { id: "after", status: "completed", edits: [edit("/w/b")] }, 100)], seen, now, opened)).toEqual([{ path: "/w/b", old: "a", new: "b" }]);
+  });
   it("a file's last edit, three files a call at most; a cut edit without its text", () => {
     const seen = new Set<string>();
     const got = editsToReveal("m", [ev(1, "tool_call", { id: "c", status: "completed", edits: [edit("/1", "a", "b"), edit("/1", "b", "c"), edit("/2"), edit("/3"), edit("/4")] })], seen, now);

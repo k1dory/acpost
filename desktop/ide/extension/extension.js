@@ -26,16 +26,19 @@ function watch(ctx) {
     onDidChange: changed.event,
     provideTextDocumentContent: uri => before.get(uri.toString()) ?? "",
   }));
-  const seen = new Set();
+  // The requests this folder's window showed, kept with the folder: a window opened again (the
+  // page reloaded) does not show them a second time.
+  const seen = new Set(ctx.workspaceState.get("acpost.shown") ?? []);
   const take = name => {
     if (!reveal.isCommand(name) || seen.has(name)) return;
     seen.add(name);
-    if (seen.size > 500) seen.clear();
+    if (seen.size > 300) seen.delete(seen.values().next().value);
     let cmd;
     try { cmd = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")); } catch { return; }
     const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
     const plan = reveal.plan(cmd, folders, file => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } }, Date.now());
     if (!plan) return;
+    ctx.workspaceState.update("acpost.shown", [...seen].slice(-100));
     show(plan).catch(() => {});
   };
   async function show(plan) {
@@ -53,4 +56,7 @@ function watch(ctx) {
   }
   const w = fs.watch(dir, (_, name) => { if (name) setTimeout(() => take(String(name)), 20); });
   ctx.subscriptions.push({ dispose: () => w.close() });
+  // Requests written while the window was starting (an edit made meanwhile): the watcher first,
+  // then what is there already, through the same door (each once, the old ones not at all).
+  try { for (const name of fs.readdirSync(dir).sort()) take(name); } catch {}
 }
