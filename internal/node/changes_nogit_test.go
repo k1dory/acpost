@@ -212,3 +212,78 @@ func TestReportedWholeIsBounded(t *testing.T) {
 		t.Errorf("the whole: %d bytes, cut %v, %d files", len(w.Diff), w.Cut, len(w.Files))
 	}
 }
+
+// Review round 2.
+
+// Past the turn's count of edits nothing more is held: not the edits, not their calls.
+func TestReportedEditsAreBoundedByCalls(t *testing.T) {
+	turn := &acpTurn{}
+	one := []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: "/w/f", NewText: "x\n"}}}
+	for i := range editsMax + 500 {
+		turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: acp.ToolCallId(fmt.Sprintf("c%d", i)), Status: acp.ToolCallStatusCompleted, Content: one})
+	}
+	edits, more := turn.edits()
+	if len(edits) != editsMax || !more || len(turn.edited) != editsMax || len(turn.editedOrder) != editsMax {
+		t.Errorf("%d edits, more %v, %d calls held, %d in order", len(edits), more, len(turn.edited), len(turn.editedOrder))
+	}
+	// A call already held may still say otherwise.
+	turn.trackUpdate(&acp.SessionToolCallUpdate{ToolCallId: "c0", Content: []acp.ToolCallContent{}})
+	if edits, _ := turn.edits(); len(edits) != editsMax-1 || len(turn.editedOrder) != editsMax-1 {
+		t.Errorf("%d edits after one call took its edit back", len(edits))
+	}
+}
+
+// A call that says in the end it edited nothing (content sent, empty) edited nothing: before its
+// status or after it. Text alone leaves its edits (claude-agent-acp ends an edit so).
+func TestReportedEmptyContentTakesEditsBack(t *testing.T) {
+	diff := []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: "/w/f", NewText: "x\n"}}}
+	done := acp.ToolCallStatusCompleted
+	turn := &acpTurn{}
+	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "a", Content: diff})
+	turn.trackUpdate(&acp.SessionToolCallUpdate{ToolCallId: "a", Status: &done, Content: []acp.ToolCallContent{}})
+	if edits, _ := turn.edits(); len(edits) != 0 {
+		t.Errorf("a tentative diff, then none: %+v", edits)
+	}
+	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "b", Status: done, Content: diff})
+	turn.trackUpdate(&acp.SessionToolCallUpdate{ToolCallId: "b", Content: []acp.ToolCallContent{}})
+	if edits, _ := turn.edits(); len(edits) != 0 {
+		t.Errorf("completed with a diff, then none: %+v", edits)
+	}
+	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "c", Content: diff})
+	turn.trackUpdate(&acp.SessionToolCallUpdate{ToolCallId: "c", Status: &done, Content: []acp.ToolCallContent{acp.ToolContent(acp.TextBlock("edited"))}})
+	if edits, _ := turn.edits(); len(edits) != 1 {
+		t.Errorf("a diff, then its result's text: %+v", edits)
+	}
+}
+
+// A link in the repository to a file outside it is that file: the snapshots have the link alone,
+// so the edit is told from the call.
+func TestReportedFollowsALinkOutOfTheRepository(t *testing.T) {
+	repo, _ := filepath.EvalSymlinks(testRepo(t))
+	out, _ := filepath.EvalSymlinks(t.TempDir())
+	os.WriteFile(filepath.Join(out, "far.txt"), []byte("1\n"), 0o644)
+	if err := os.Symlink(filepath.Join(out, "far.txt"), filepath.Join(repo, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	files, _, _ := reportedChanges(repo, repo, []fileEdit{{path: filepath.Join(repo, "link.txt"), old: "0\n", new: "1\n"}, {path: filepath.Join(repo, "a.txt"), old: "one\n", new: "1\n"}})
+	if len(files) != 1 || files[0].Path != "link.txt" {
+		t.Errorf("files: %+v", files)
+	}
+}
+
+// An edit inside a masked value of several lines: said where, its lines not shown, counted.
+func TestReportedRotationOfASecretOverLines(t *testing.T) {
+	old := "{\n  \"api_key\": [\n    \"aaaaaaaaaaaa\",\n    \"bbbbbbbbbbbb\"\n  ],\n  \"n\": 1\n}\n"
+	new := strings.Replace(old, "bbbbbbbbbbbb", "cccccccccccc", 1)
+	if redact(old) != redact(new) || len(endedLines(redact(old))) == len(endedLines(old)) {
+		t.Skip("masking no longer folds this value: another example is needed")
+	}
+	hunk, added, removed := unifiedHunk(old, new)
+	if added != 1 || removed != 1 || strings.Contains(hunk, "bbbb") || strings.Contains(hunk, "cccc") || hunk != "@@ -4,1 +4,1 @@\n-"+maskedLine+"\n+"+maskedLine+"\n" {
+		t.Errorf("+%d -%d\n%s", added, removed, hunk)
+	}
+	files, diff, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/c.json", old: old, new: new}})
+	if len(files) != 1 || files[0].Added != 1 || files[0].Removed != 1 || !strings.Contains(diff, maskedLine) {
+		t.Errorf("files %+v\n%s", files, diff)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -299,6 +300,12 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 	at := map[string]int{}
 	var diff strings.Builder
 	cut := false
+	realRepo := repo
+	if repo != "" {
+		if r, err := filepath.EvalSymlinks(repo); err == nil {
+			realRepo = r
+		}
+	}
 	for _, e := range edits {
 		if e.path == "" {
 			continue
@@ -308,7 +315,10 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 			abs = filepath.Join(dir, abs)
 		}
 		abs = filepath.Clean(abs)
-		if repo != "" && (inside(repo, abs) || inside(repo, realPath(abs))) {
+		// Where the file is, its links followed: a link in the repository to a file outside it is
+		// that file (the snapshots have the link, unchanged), one outside to a file in it the
+		// repository's.
+		if repo != "" && inside(realRepo, realPath(abs)) {
 			continue
 		}
 		if !e.cut && e.old == e.new && !e.created {
@@ -378,6 +388,9 @@ func realPath(file string) string {
 // ended (a diff says so: "\ No newline at end of file").
 const noEOL = "\x00"
 
+// maskedLine stands for a changed line of a masked value that spans lines.
+const maskedLine = "(a line of a masked value)"
+
 // endedLines is a text's lines; a last line without a line end carries noEOL.
 func endedLines(s string) []string {
 	if s == "" {
@@ -401,8 +414,14 @@ func endedLines(s string) []string {
 func unifiedHunk(old, new string) (hunk string, added, removed int) {
 	a, b := endedLines(old), endedLines(new)
 	sa, sb := endedLines(redact(old)), endedLines(redact(new))
+	hidden := false
 	if len(sa) != len(a) || len(sb) != len(b) {
-		a, b = sa, sb
+		// Masking moved lines. The masked texts are compared; when they are the same (the edit is
+		// inside a masked value of several lines), where the texts themselves differ is said, its
+		// lines not shown.
+		if hidden = slices.Equal(sa, sb); !hidden {
+			a, b = sa, sb
+		}
 	}
 	p := 0
 	for p < len(a) && p < len(b) && a[p] == b[p] {
@@ -414,6 +433,16 @@ func unifiedHunk(old, new string) (hunk string, added, removed int) {
 	}
 	if p == len(a) && p == len(b) {
 		return "", 0, 0
+	}
+	if hidden {
+		na, nb := len(a)-s-p, len(b)-s-p
+		at := func(n int) string {
+			if n == 0 {
+				return strconv.Itoa(p) + ",0"
+			}
+			return strconv.Itoa(p+1) + "," + strconv.Itoa(n)
+		}
+		return "@@ -" + at(na) + " +" + at(nb) + " @@\n" + strings.Repeat("-"+maskedLine+"\n", na) + strings.Repeat("+"+maskedLine+"\n", nb), nb, na
 	}
 	const around = 3
 	from := max(p-around, 0)

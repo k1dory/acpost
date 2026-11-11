@@ -142,7 +142,8 @@
             </div>
             {#if at}
               {#if at.err}<div class="empty">{at.err}</div>{:else}<pre class="whole selectable">{at.text}</pre>{/if}
-            {:else}<DiffLines lines={v.lines} />{/if}
+            {:else if v.lines.length}<DiffLines lines={v.lines} />
+            {:else}<div class="empty">{t("No diff is kept for this file (binary, or an edit too long): see the file itself.")}</div>{/if}
           {:else if shown.lines.length}<DiffLines lines={shown.lines} />
           {:else}<div class="empty">{t("No diff is kept for this file (binary, or an edit too long): see the file itself.")}</div>{/if}
         {/if}

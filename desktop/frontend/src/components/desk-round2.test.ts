@@ -127,6 +127,10 @@ describe("Changes outside git: what the agent's edits reported", () => {
     expect(listed()).toEqual(["big.bin"]);
     expect(document.body.textContent).toContain("No diff is kept for this file");
     expect(document.body.textContent).not.toContain("No changes in this session yet.");
+    // Its version says the same (review round 2).
+    ([...document.querySelectorAll("button.vb")].find(b => b.textContent?.trim().startsWith("v1")) as HTMLButtonElement).click();
+    await settle();
+    expect(document.querySelector(".view")!.textContent).toContain("No diff is kept for this file");
   });
 });
 

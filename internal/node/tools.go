@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -86,19 +87,32 @@ const (
 // of what it said before (an agent may send the diff after the status: the last word counts). A
 // failed or cancelled call edited nothing. Called with t.mu held.
 func (t *acpTurn) take(tr *toolTrack) {
-	if tr.Status != string(acp.ToolCallStatusCompleted) || tr.full == nil {
-		return
-	}
 	if t.edited == nil {
 		t.edited = map[string][]fileEdit{}
 	}
 	was, had := t.edited[tr.ID]
+	// A call whose edits are held completed (it may be tracked no longer: its status is not asked).
+	if tr.full == nil || (!had && tr.Status != string(acp.ToolCallStatusCompleted)) {
+		return
+	}
+	full := tr.full
+	tr.full = nil // taken: the same content is not taken twice
+	if !had && (len(full) == 0 || t.editedCount >= editsMax) {
+		// Nothing to keep, or no room: the turn holds no more of calls than it holds edits.
+		t.editedMore = t.editedMore || len(full) > 0
+		return
+	}
 	for _, e := range was {
 		t.editedBytes -= len(e.old) + len(e.new)
 	}
 	t.editedCount -= len(was)
-	kept := make([]fileEdit, 0, len(tr.full))
-	for _, e := range tr.full {
+	if len(full) == 0 { // the call says now it edited nothing
+		delete(t.edited, tr.ID)
+		t.editedOrder = slices.DeleteFunc(t.editedOrder, func(id string) bool { return id == tr.ID })
+		return
+	}
+	kept := make([]fileEdit, 0, len(full))
+	for _, e := range full {
 		if t.editedCount+len(kept) >= editsMax {
 			t.editedMore = true
 			break
@@ -115,7 +129,6 @@ func (t *acpTurn) take(tr *toolTrack) {
 	if !had {
 		t.editedOrder = append(t.editedOrder, tr.ID)
 	}
-	tr.full = nil // taken: the same content is not taken twice
 }
 
 // edits is what the turn's completed tool calls edited, in the order the calls completed; more
@@ -286,8 +299,12 @@ func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp
 	if len(edits) > 0 || (content != nil && len(content) == 0) {
 		tr.Edits = edits
 	}
+	// What the turn changed takes the call's edits as last said: an update with edits, or one
+	// that says there are none (content sent, empty). Text alone leaves them, as above.
 	if len(full) > 0 {
 		tr.full, tr.fullMore = full, fullMore
+	} else if content != nil && len(content) == 0 {
+		tr.full, tr.fullMore = []fileEdit{}, false
 	}
 	if output != nil { // sent, even empty: the raw output as it is now
 		s, code := outputOf(output)
