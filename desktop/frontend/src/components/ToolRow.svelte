@@ -2,10 +2,13 @@
   import { t } from "../lib/i18n.svelte";
   import { intent, toolName, toolState, editTotals, lineDiff, type Tool } from "../lib/turn";
   import { dur } from "../lib/format";
+  import { app } from "../lib/state.svelte";
+  import { revealOf, localFiles } from "../lib/ide";
   import Icon from "./Icon.svelte";
   import DiffLines from "./DiffLines.svelte";
 
-  let { tool, msgState }: { tool: Tool; msgState: string } = $props();
+  // agent: whose call it is (its files are shown in the IDE only when they are this Mac's).
+  let { tool, msgState, agent = "" }: { tool: Tool; msgState: string; agent?: string } = $props();
   let open = $state(false);
   const st = $derived(toolState(tool, msgState));
   const e = $derived(editTotals(tool));
@@ -36,7 +39,10 @@
       {#if cmd}<pre class="cmd selectable"><span class="muted">$</span> {cmd}</pre>{/if}
       {#each tool.edits ?? [] as ed}
         <div class="edit">
-          <div class="path mono">{ed.path} <span class="plus">+{ed.added}</span> <span class="minus">−{ed.removed}</span>{#if ed.cut}<span class="muted"> {t("· cut")}</span>{/if}</div>
+          <div class="path mono">
+            <!-- Beside the IDE: the file opens there, with this edit as a diff. -->
+            {#if app.view === "ide" && localFiles(agent)}<button class="open mono" title={t("Show in the IDE")} onclick={() => app.revealInIDE(revealOf(ed), agent, true)}>{ed.path}</button>{:else}{ed.path}{/if}
+            <span class="plus">+{ed.added}</span> <span class="minus">−{ed.removed}</span>{#if ed.cut}<span class="muted"> {t("· cut")}</span>{/if}</div>
           <DiffLines lines={lineDiff(ed.old, ed.new)} max={200} />
         </div>
       {/each}
@@ -47,6 +53,8 @@
 </div>
 
 <style>
+  .open { border: 0; background: transparent; padding: 0; color: inherit; font-size: inherit; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; cursor: pointer; }
+  .open:hover { text-decoration-color: currentColor; }
   .tool { border-radius: var(--r-row); border: 1px solid var(--line-soft); background: var(--card); overflow: hidden; }
   .tool.failed { background: var(--crit-bg); border-color: color-mix(in srgb, var(--crit) 25%, transparent); }
   .head { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; background: transparent; padding: 6px 12px; text-align: left; min-height: 34px; font-size: 12.5px; }

@@ -686,6 +686,13 @@ func (s *ideServer) tryOwn(data string) (owned, done bool) {
 	return true, true
 }
 
+// owns says whether this app holds the IDE folder's lock (its IDE was started here).
+func (s *ideServer) owns() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.owner != nil
+}
+
 // disown lets the lock go (the app quitting; its server has ended).
 func (s *ideServer) disown() {
 	s.mu.Lock()

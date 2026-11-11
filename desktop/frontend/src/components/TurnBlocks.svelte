@@ -22,7 +22,7 @@
     <Thought text={b.text} ms={b.end - b.start} live={!done && i === view.blocks.length - 1} {agent} />
   {:else if b.t === "tool"}
     {@const t = view.tools.get(b.id)}
-    {#if t}<ToolRow tool={t} {msgState} />{/if}
+    {#if t}<ToolRow tool={t} {msgState} {agent} />{/if}
   {:else if b.t === "request"}
     {@const r = view.requests.get(b.id)}
     {#if r}<Approval req={r} msg={msg} />{/if}

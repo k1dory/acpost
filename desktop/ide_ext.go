@@ -6,18 +6,24 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"sort"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -224,4 +230,128 @@ func (t *tailBuffer) Bytes() []byte {
 func shortHash(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:8])
+}
+
+// What the app asks its VS Code to show: a request is a file in the app's own folder (commands,
+// beside the server's), read by the extension in the window that has the folder open. Nothing
+// listens anywhere: the folder is the user's alone.
+
+const (
+	ideRevealText = 1 << 20         // an edit's text sent at most (more: the file alone, no diff)
+	ideRevealKeep = 2 * time.Minute // requests older than this are removed
+	ideRevealMax  = 200             // requests kept at most (the extension takes each as it comes)
+)
+
+var ideRevealSeq atomic.Uint32
+
+// ideRequestName is a request's file name: its time (Unix milliseconds) and a random part
+// (reveal.js isCommand).
+var ideRequestName = regexp.MustCompile(`^([0-9]+)-[0-9a-f]+\.json$`)
+
+func ideRequestTime(name string) int64 {
+	m := ideRequestName.FindStringSubmatch(name)
+	if m == nil {
+		return 0
+	}
+	t, _ := strconv.ParseInt(m[1], 10, 64)
+	return t
+}
+
+// ideRequest is a request to show a file: as it is, or with an edit as a diff (the text before
+// the edit and after it, as the agent reported them; Created: the edit made the file).
+type ideRequest struct {
+	Folder  string `json:"folder"`
+	Path    string `json:"path"`
+	At      int64  `json:"at"` // Unix milliseconds: an old request is not shown
+	Old     string `json:"old,omitempty"`
+	New     string `json:"new,omitempty"`
+	Created bool   `json:"created,omitempty"`
+	Title   string `json:"title,omitempty"`
+}
+
+// IDEReveal shows file in the IDE that has folder open: its edit (old to new) as a diff when given,
+// else the file. file is absolute, or from folder.
+func (n *Node) IDEReveal(folder, file, old, new string, created bool, title string) error {
+	data, err := ideDataDir()
+	if err != nil {
+		return err
+	}
+	// Only the app whose IDE it is asks it: a second acpost beside the first has no IDE of its own
+	// (IDEStart says so), and does not show its agents' edits in the first's.
+	return ide.reveal(filepath.Join(data, "commands"), ideRequest{Folder: folder, Path: file, Old: old, New: new, Created: created, Title: title}, time.Now())
+}
+
+// reveal writes a request when this app owns the IDE.
+func (s *ideServer) reveal(dir string, r ideRequest, now time.Time) error {
+	// On another node (ACPOST_NODE) the agents' files are that machine's: a path of theirs here
+	// is another file, if any. Their agents are named as this node's are, so the app says it.
+	if os.Getenv("ACPOST_NODE") != "" {
+		return errors.New("the app is on another node (ACPOST_NODE): its agents' files are not this Mac's")
+	}
+	if !s.owns() {
+		return errors.New("the IDE is another acpost's")
+	}
+	return ideReveal(dir, r, now)
+}
+
+func ideReveal(dir string, r ideRequest, now time.Time) error {
+	if !filepath.IsAbs(r.Folder) || r.Path == "" || len(r.Path) > 4096 || len(r.Title) > 200 {
+		return errors.New("a folder and a file to show")
+	}
+	if len(r.Old)+len(r.New) > ideRevealText {
+		r.Old, r.New, r.Created = "", "", false
+	}
+	r.At = now.UnixMilli()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// Old requests go, and of too many (nothing reads them: the IDE is closed) the oldest: the
+	// newest are the ones a window is about to read. A file being written (not a request yet) is
+	// left to its writer unless it is old.
+	if entries, err := os.ReadDir(dir); err == nil {
+		var kept []string // requests, oldest first (their names start with their time)
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil || now.Sub(info.ModTime()) > ideRevealKeep {
+				os.Remove(filepath.Join(dir, e.Name()))
+			} else if ideRequestName.MatchString(e.Name()) {
+				kept = append(kept, e.Name())
+			}
+		}
+		sort.Slice(kept, func(i, j int) bool {
+			if a, b := ideRequestTime(kept[i]), ideRequestTime(kept[j]); a != b {
+				return a < b
+			}
+			return kept[i] < kept[j]
+		})
+		for len(kept) >= ideRevealMax {
+			os.Remove(filepath.Join(dir, kept[0]))
+			kept = kept[1:]
+		}
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	// Written apart and renamed in: the extension reads a whole request or none.
+	f, err := os.CreateTemp(dir, ".req-*")
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(b)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	var rnd [4]byte
+	_, _ = rand.Read(rnd[:])
+	// Its time, then its turn among this app's requests (two of one millisecond are read in the
+	// order written), then a random part.
+	name := fmt.Sprintf("%d-%08x%s.json", r.At, ideRevealSeq.Add(1), hex.EncodeToString(rnd[:]))
+	if werr == nil {
+		werr = os.Rename(f.Name(), filepath.Join(dir, name))
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+	}
+	return werr
 }

@@ -36,4 +36,29 @@ describe("chat header icons", () => {
     expect(headerIcon).toBeGreaterThanOrEqual(16);
     svelte.unmount(c);
   });
+
+  it("beside the IDE (no sidebar there): a new task and another chat are had from the header", async () => {
+    fake = fakeNode();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    const svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.conn = { ok: true };
+    app.chat = { key: "session:claude/s1", kind: "session", agent: "agent:claude", session: "s1", cwd: "/x", title: "t", updated: "" };
+    const Conversation = (await import("./Conversation.svelte")).default;
+    const c = svelte.mount(Conversation, { target: document.body });
+    const labels = () => [...document.querySelectorAll("header button")].map(b => b.getAttribute("aria-label"));
+    app.view = "chat"; svelte.flushSync();
+    expect(labels()).not.toContain("New task");
+    app.view = "ide"; svelte.flushSync();
+    expect(labels()).toContain("New task");
+    (document.querySelector('header button[aria-label="Another chat (⌘K)"]') as HTMLButtonElement).click();
+    expect(app.palette).toBe(true);
+    app.palette = false;
+    (document.querySelector('header button[aria-label="New task"]') as HTMLButtonElement).click();
+    svelte.flushSync();
+    expect(app.chat).toBe(null);
+    expect(app.view).toBe("ide"); // the new task is written beside the IDE
+    app.view = "chat";
+    svelte.unmount(c);
+  });
 });
