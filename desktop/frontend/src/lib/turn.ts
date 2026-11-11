@@ -246,7 +246,12 @@ export function gitUnquote(s: string): string {
   const enc = new TextEncoder();
   const simple: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
   for (let i = 0; i < s.length; i++) {
-    if (s[i] !== "\\") { bytes.push(...enc.encode(s[i])); continue; }
+    if (s[i] !== "\\") { // a whole character (two units of one outside the basic plane)
+      const ch = String.fromCodePoint(s.codePointAt(i)!);
+      bytes.push(...enc.encode(ch));
+      i += ch.length - 1;
+      continue;
+    }
     const oct = /^[0-3][0-7]{2}/.exec(s.slice(i + 1));
     if (oct) { bytes.push(parseInt(oct[0], 8)); i += 3; continue; }
     const c = s[i + 1];
@@ -278,6 +283,12 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
     if (line.startsWith("diff --git ")) {
       cur = { path: headerPath(line.slice(11)), lines: [] };
       files.push(cur);
+      continue;
+    }
+    // A rename says its new name outright (the header's two names may not be told apart).
+    if (cur && line.startsWith("rename to ")) {
+      const to = line.slice(10), q = /^"((?:[^"\\]|\\.)*)"$/.exec(to);
+      cur.path = q ? gitUnquote(q[1]) : to;
       continue;
     }
     if (!cur || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("new file") || line.startsWith("deleted file") || line.startsWith("similarity") || line.startsWith("rename ")) continue;

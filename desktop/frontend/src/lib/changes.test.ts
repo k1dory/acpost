@@ -64,4 +64,9 @@ describe("review round 5: what several answers say of one file", () => {
     expect(files[0].path).toBe("ф.txt");
     expect(files[0].lines.filter(l => l.op === "+" || l.op === "-")).toHaveLength(2);
   });
+  it("a rename's new name is the one it says; a quoted name with an emoji is read whole (review round 6)", () => {
+    const files = splitDiff("diff --git a/old.txt b/dir b/file.txt\nsimilarity index 90%\nrename from old.txt\nrename to dir b/file.txt\n@@ -1 +1 @@\n-a\n+b\n");
+    expect(files[0].path).toBe("dir b/file.txt");
+    expect(headerPath('"a/😀\\"x.txt" "b/😀\\"x.txt"')).toBe('😀"x.txt');
+  });
 });
