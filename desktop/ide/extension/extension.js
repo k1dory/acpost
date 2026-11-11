@@ -36,13 +36,21 @@ function watch(ctx) {
     let cmd;
     try { cmd = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")); } catch { return; }
     const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
-    const plan = reveal.plan(cmd, folders, file => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } }, Date.now());
-    if (!plan) return;
+    const file = reveal.fileOf(cmd, folders, Date.now());
+    if (file === null) return;
     const fresh = reveal.stillFresh([...seen], Date.now());
     if (fresh.length < seen.size) { seen.clear(); for (const n of fresh) seen.add(n); }
     ctx.workspaceState.update("acpost.shown", fresh);
-    show(plan).catch(() => {});
+    // One after another, in the order taken: of two edits of a file the later is shown last.
+    queue = queue.then(async () => {
+      // The text the editor has (the diff's right side is that document, unsaved changes and
+      // all): the edit is taken back in it, not in the file on disk.
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      const plan = reveal.plan(cmd, folders, () => doc.getText(), Date.now());
+      if (plan) await show(plan);
+    }).catch(() => {});
   };
+  let queue = Promise.resolve();
   async function show(plan) {
     const file = vscode.Uri.file(plan.file);
     const quiet = { preview: true, preserveFocus: true };

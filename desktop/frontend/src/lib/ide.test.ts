@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { editsToReveal, revealOf } from "./ide";
+import { editsToReveal, revealOf, localFiles } from "./ide";
 
 const now = Date.parse("2026-11-11T12:00:00Z");
 const ev = (seq: number, kind: string, d: any, ago = 1000) => ({ seq, kind, time: new Date(now - ago).toISOString(), data: JSON.stringify(d) });
@@ -39,5 +39,9 @@ describe("what the IDE is asked to show of a turn's events", () => {
     expect(got.map(r => r.path)).toEqual(["/1", "/2", "/3"]);
     expect(got[0]).toEqual({ path: "/1", old: "b", new: "c" });
     expect(revealOf({ path: "/big", added: 9, removed: 0, old: "x", new: "y", cut: true })).toEqual({ path: "/big", old: "", new: "" });
+  });
+  it("only an agent of this node has this Mac's files", () => {
+    expect(localFiles("agent:claude")).toBe(true);
+    for (const a of ["agent:sb_1", "agent:claude@peer", "user:me", ""]) expect(localFiles(a)).toBe(false);
   });
 });

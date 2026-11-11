@@ -19,11 +19,19 @@ exports.stillFresh = (names, now) => names.filter(n => {
 // The text before is the file as it is now with the edit taken back: what the agent wrote, found
 // in it, replaced by what was there. A file changed since so that the new text is not in it is
 // shown as it is, without a diff.
-exports.plan = (cmd, folders, read, now) => {
+// fileOf: the file a request is about, when it is one for this window and fresh; else null.
+exports.fileOf = (cmd, folders, now) => {
   if (!cmd || typeof cmd.path !== "string" || !cmd.path || typeof cmd.folder !== "string") return null;
   if (typeof cmd.at !== "number" || now - cmd.at > fresh || cmd.at - now > fresh) return null;
   if (!folders.includes(cmd.folder)) return null;
-  const file = cmd.path.startsWith("/") ? cmd.path : cmd.folder.replace(/\/+$/, "") + "/" + cmd.path;
+  return cmd.path.startsWith("/") ? cmd.path : cmd.folder.replace(/\/+$/, "") + "/" + cmd.path;
+};
+
+// read gives the file's text as the editor has it (what the diff's right side shows: with the
+// user's unsaved changes, when it is open and changed), or null.
+exports.plan = (cmd, folders, read, now) => {
+  const file = exports.fileOf(cmd, folders, now);
+  if (file === null) return null;
   const text = read(file);
   if (text === null) return null; // gone since (or not a text file to read)
   const title = typeof cmd.title === "string" && cmd.title ? cmd.title : "edit";

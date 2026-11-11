@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -240,6 +242,8 @@ const (
 	ideRevealMax  = 200             // requests kept at most (the extension takes each as it comes)
 )
 
+var ideRevealSeq atomic.Uint32
+
 // ideRequestName is a request's file name: its time (Unix milliseconds) and a random part
 // (reveal.js isCommand).
 var ideRequestName = regexp.MustCompile(`^([0-9]+)-[0-9a-f]+\.json$`)
@@ -309,7 +313,12 @@ func ideReveal(dir string, r ideRequest, now time.Time) error {
 				kept = append(kept, e.Name())
 			}
 		}
-		sort.Slice(kept, func(i, j int) bool { return ideRequestTime(kept[i]) < ideRequestTime(kept[j]) })
+		sort.Slice(kept, func(i, j int) bool {
+			if a, b := ideRequestTime(kept[i]), ideRequestTime(kept[j]); a != b {
+				return a < b
+			}
+			return kept[i] < kept[j]
+		})
 		for len(kept) >= ideRevealMax {
 			os.Remove(filepath.Join(dir, kept[0]))
 			kept = kept[1:]
@@ -330,7 +339,9 @@ func ideReveal(dir string, r ideRequest, now time.Time) error {
 	}
 	var rnd [4]byte
 	_, _ = rand.Read(rnd[:])
-	name := strconv.FormatInt(r.At, 10) + "-" + hex.EncodeToString(rnd[:]) + ".json"
+	// Its time, then its turn among this app's requests (two of one millisecond are read in the
+	// order written), then a random part.
+	name := fmt.Sprintf("%d-%08x%s.json", r.At, ideRevealSeq.Add(1), hex.EncodeToString(rnd[:]))
 	if werr == nil {
 		werr = os.Rename(f.Name(), filepath.Join(dir, name))
 	}

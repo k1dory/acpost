@@ -38,3 +38,9 @@ export function editsToReveal(msg: string, evs: Ev[], seen: Set<string>, now: nu
 export function revealOf(ed: Edit): Reveal {
   return ed.cut ? { path: ed.path, old: "", new: "" } : { path: ed.path, old: ed.old ?? "", new: ed.new ?? "" };
 }
+
+/** Whether an agent's files are this Mac's: an agent of this node (not one of another node, not a
+ * cloud sandbox, whose paths are of another machine). Only its edits are shown in the IDE. */
+export function localFiles(agent: string): boolean {
+  return agent.startsWith("agent:") && !agent.includes("@") && !agent.startsWith("agent:sb_");
+}

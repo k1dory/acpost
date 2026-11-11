@@ -3,11 +3,12 @@
   import { intent, toolName, toolState, editTotals, lineDiff, type Tool } from "../lib/turn";
   import { dur } from "../lib/format";
   import { app } from "../lib/state.svelte";
-  import { revealOf } from "../lib/ide";
+  import { revealOf, localFiles } from "../lib/ide";
   import Icon from "./Icon.svelte";
   import DiffLines from "./DiffLines.svelte";
 
-  let { tool, msgState }: { tool: Tool; msgState: string } = $props();
+  // agent: whose call it is (its files are shown in the IDE only when they are this Mac's).
+  let { tool, msgState, agent = "" }: { tool: Tool; msgState: string; agent?: string } = $props();
   let open = $state(false);
   const st = $derived(toolState(tool, msgState));
   const e = $derived(editTotals(tool));
@@ -40,7 +41,7 @@
         <div class="edit">
           <div class="path mono">
             <!-- Beside the IDE: the file opens there, with this edit as a diff. -->
-            {#if app.view === "ide"}<button class="open mono" title={t("Show in the IDE")} onclick={() => app.revealInIDE(revealOf(ed))}>{ed.path}</button>{:else}{ed.path}{/if}
+            {#if app.view === "ide" && localFiles(agent)}<button class="open mono" title={t("Show in the IDE")} onclick={() => app.revealInIDE(revealOf(ed), agent)}>{ed.path}</button>{:else}{ed.path}{/if}
             <span class="plus">+{ed.added}</span> <span class="minus">−{ed.removed}</span>{#if ed.cut}<span class="muted"> {t("· cut")}</span>{/if}</div>
           <DiffLines lines={lineDiff(ed.old, ed.new)} max={200} />
         </div>

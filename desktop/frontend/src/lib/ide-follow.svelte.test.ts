@@ -45,6 +45,15 @@ describe("the IDE follows the agent", () => {
     fake.emit("events:m1", { events: [done(3, "c3", "/w/c.txt", Date.now())] });
     expect(fake.Node.IDEReveal.mock.calls.map(c => c[1])).toEqual(["/w/a.txt", "/w/c.txt"]);
 
+    // An agent elsewhere (a cloud sandbox, another node): its paths are not this Mac's.
+    for (const [mid, to] of [["m2", "agent:sb_123"], ["m3", "agent:claude@other"]]) {
+      a.msgs = [msg, { ...msg, id: mid, to }];
+      a.follow(mid, new Turn(), 0);
+      await new Promise(r => setTimeout(r, 5));
+      fake.emit("events:" + mid, { events: [done(1, "r1", "/w/a.txt", Date.now())] });
+    }
+    expect(fake.Node.IDEReveal).toHaveBeenCalledTimes(2);
+
     // The follow turned off, or another view: nothing is asked of the IDE.
     app.setIdeFollow(false);
     fake.emit("events:m1", { events: [done(4, "c4", "/w/d.txt", Date.now())] });

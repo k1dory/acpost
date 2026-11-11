@@ -106,7 +106,9 @@ func TestIDEExtensionShowsARequest(t *testing.T) {
 exports.shown = []; exports.providers = {};
 exports.EventEmitter = class { constructor() { this.event = () => {}; } fire() {} dispose() {} };
 exports.Uri = { file: p => ({ path: p, toString: () => "file://" + p }), from: o => ({ ...o, toString: () => o.scheme + ":" + o.path }) };
+// The editor's document: the file with a line the user has not saved yet.
 exports.workspace = { workspaceFolders: [{ uri: { fsPath: process.env.WORK } }],
+  openTextDocument: async u => ({ getText: () => "unsaved\n" + require("fs").readFileSync(u.path, "utf8") }),
   registerTextDocumentContentProvider: (s, p) => { exports.providers[s] = p; return { dispose() {} }; } };
 exports.window = { showTextDocument: async u => { exports.shown.push({ open: u.path }); } };
 exports.commands = { executeCommand: async (c, left, right, title) => {
@@ -118,29 +120,34 @@ const state = new Map([["acpost.tidied", true]]);
 const ctx = () => ({ extensionPath: __dirname, subscriptions: [], workspaceState: { get: k => state.get(k), update: async (k, v) => { state.set(k, v); } } });
 const until = async n => { for (let i = 0; i < 100 && vscode.shown.length < n; i++) await new Promise(r => setTimeout(r, 50)); };
 (async () => {
-  // A request written before the window was up is shown when it comes up.
+  // Requests written before the window was up are shown when it comes up, in the order written
+  // (two of one millisecond too); the left side is the editor's text with the edit taken back.
+  const before = "unsaved\none\ntwo\nthree\n";
   const first = ctx();
   await ext.activate(first);
-  await until(1);
-  assert.deepEqual(vscode.shown, [{ diff: process.env.WORK + "/a.txt", before: "one\ntwo\nthree\n", title: "a.txt (early)" }]);
-  console.log("ready");
   await until(2);
+  assert.deepEqual(vscode.shown, ["early1", "early2"].map(n => ({ diff: process.env.WORK + "/a.txt", before, title: "a.txt (" + n + ")" })));
+  console.log("ready");
+  await until(3);
   await new Promise(r => setTimeout(r, 300)); // the other folder's request would have come by now
-  assert.deepEqual(vscode.shown[1], { diff: process.env.WORK + "/a.txt", before: "one\ntwo\nthree\n", title: "a.txt (Claude)" });
-  assert.equal(vscode.shown.length, 2);
+  assert.deepEqual(vscode.shown[2], { diff: process.env.WORK + "/a.txt", before, title: "a.txt (Claude)" });
+  assert.equal(vscode.shown.length, 3);
   for (const s of first.subscriptions) s.dispose();
   // The window opened again (the page reloaded): what it showed is not shown a second time.
   const again = ctx();
   await ext.activate(again);
   await new Promise(r => setTimeout(r, 300));
-  assert.equal(vscode.shown.length, 2);
+  assert.equal(vscode.shown.length, 3);
   for (const s of again.subscriptions) s.dispose();
   console.log("ok");
 })().catch((e) => { console.error(e); process.exit(1); });
 `), 0o600)
 	dir := filepath.Join(root, "commands")
-	if err := ideReveal(dir, ideRequest{Folder: work, Path: "a.txt", Old: "two", New: "TWO", Title: "early"}, time.Now()); err != nil {
-		t.Fatal(err)
+	at := time.Now()
+	for _, title := range []string{"early1", "early2"} { // the same millisecond
+		if err := ideReveal(dir, ideRequest{Folder: work, Path: "a.txt", Old: "two", New: "TWO", Title: title}, at); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cmd := exec.Command(node, "t.cjs")
 	cmd.Dir = ext

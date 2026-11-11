@@ -5,7 +5,7 @@ import { newId } from "./ids";
 import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
 import { afterSent, overLimits } from "./draft";
 import { Turn, type Ev } from "./turn";
-import { editsToReveal, type Reveal } from "./ide";
+import { editsToReveal, localFiles, type Reveal } from "./ide";
 import { who } from "./format";
 
 export type Msg = {
@@ -407,8 +407,8 @@ class App {
         // The IDE beside the chat follows the agent: what a call just edited is shown there.
         const shown = editsToReveal(id, b.events as Ev[], this.revealed, Date.now(), since);
         if (this.revealed.size > 2000) this.revealed.clear();
-        if (this.view === "ide" && this.ideFollow && gen === this.gen) {
-          const to = this.msgs.find(x => x.id === id)?.to ?? "";
+        const to = this.msgs.find(x => x.id === id)?.to ?? "";
+        if (this.view === "ide" && this.ideFollow && gen === this.gen && localFiles(to)) {
           for (const r of shown) this.revealInIDE(r, to);
         }
         turn.add(b.events as Ev[]);
