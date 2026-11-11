@@ -245,3 +245,26 @@ func TestIDERevealIsTheOwners(t *testing.T) {
 		t.Errorf("%d requests of the owner's", len(entries))
 	}
 }
+
+// The app on another node (ACPOST_NODE): its agents are named as this node's are, but their
+// files are that machine's, and nothing of them is shown in this Mac's IDE.
+func TestIDERevealNotForAnotherNode(t *testing.T) {
+	data := t.TempDir()
+	dir := filepath.Join(data, "commands")
+	s := &ideServer{}
+	if owned, _ := s.tryOwn(data); !owned {
+		t.Fatal("the IDE was not taken")
+	}
+	defer s.disown()
+	t.Setenv("ACPOST_NODE", "https://node.example:8443")
+	if err := s.reveal(dir, ideRequest{Folder: "/w", Path: "a.txt"}, time.Now()); err == nil {
+		t.Error("an edit on another node was asked of this Mac's IDE")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("%d requests written", len(entries))
+	}
+	t.Setenv("ACPOST_NODE", "")
+	if err := s.reveal(dir, ideRequest{Folder: "/w", Path: "a.txt"}, time.Now()); err != nil {
+		t.Error(err)
+	}
+}

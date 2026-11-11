@@ -283,6 +283,11 @@ func (n *Node) IDEReveal(folder, file, old, new string, created bool, title stri
 
 // reveal writes a request when this app owns the IDE.
 func (s *ideServer) reveal(dir string, r ideRequest, now time.Time) error {
+	// On another node (ACPOST_NODE) the agents' files are that machine's: a path of theirs here
+	// is another file, if any. Their agents are named as this node's are, so the app says it.
+	if os.Getenv("ACPOST_NODE") != "" {
+		return errors.New("the app is on another node (ACPOST_NODE): its agents' files are not this Mac's")
+	}
 	if !s.owns() {
 		return errors.New("the IDE is another acpost's")
 	}

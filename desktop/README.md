@@ -40,7 +40,9 @@ was; "Follow the agent" in the IDE's bar turns it off), and a file's path in a t
 the same way. The app asks by writing a request (`IDEReveal`: the folder, the file, the edit's text
 before and after) as a file in `vscode/commands`, a folder of the user's alone; the extension
 (`extension.js`, `reveal.js`) watches it in the window that has that folder open. Nothing listens
-on a port. The diff's left side is the file as it is with the edit taken back (the new text, found
+on a port. Only an agent of this Mac's node has its edits shown (not a cloud sandbox's or another
+node's, nor any agent's when the app is on another node through `ACPOST_NODE`: their paths are
+another machine's). The diff's left side is the file as it is with the edit taken back (the new text, found
 once, replaced by the old): an edit whose text the event cut, or that is no longer in the file, opens
 the file without a diff. The chat's header there has "New task" and "Another chat" (the palette),
 the sidebar being hidden.
