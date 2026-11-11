@@ -165,12 +165,54 @@ agents:
 		t.Errorf("chats: %s (the thread's first session %s, the fork %s)", got, first, fork)
 	}
 	withFiles := "[acpost] Attached files:\n- a.png (image/png, 3 bytes): in this prompt\n- b.txt (text/plain, 9 bytes): /tmp/x/b.txt (a copy until this turn ends)\n\n" + title
-	if !n.leftBehind(ctx, withFiles) || !n.leftBehind(ctx, title) {
+	at := m.FinishedAt
+	if !n.leftBehind(ctx, withFiles, at) || !n.leftBehind(ctx, title, at.Add(2*time.Second)) {
 		t.Error("a title of this node's prompt is not known")
 	}
+	// Written since the message ended: someone's conversation (a fork made before forks were marked).
+	if n.leftBehind(ctx, title, at.Add(time.Minute)) || n.leftBehind(ctx, title, time.Time{}) {
+		t.Error("a session written after its message ended was taken for a left one")
+	}
 	for _, other := range []string{"[acpost] Attached files:\n- a.png\n\nmy own text " + title, "see " + title, "[acpost] Message msg_01AAAAAAAAAAAAAAAAAAAAAAAA from user:else."} {
-		if n.leftBehind(ctx, other) {
+		if n.leftBehind(ctx, other, at) {
 			t.Errorf("taken for this node's: %q", other)
 		}
+	}
+}
+
+// Review round 3. A session with this node's title that the user named, or that was written after
+// the message ended (a fork made before forks were marked, or outside acpost), is listed.
+func TestUnmarkedForksStayListed(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, os.Args[0], state))
+	m := ask(t, n, SendRequest{Body: "echo hi"})
+	title := []byte("title:[acpost] Message " + m.ID + " from user:tester.")
+	write := func(name string, at time.Time) {
+		os.WriteFile(filepath.Join(state, name), title, 0o600)
+		os.Chtimes(filepath.Join(state, name), at, at)
+	}
+	write("left", m.FinishedAt)                   // the turn's own, abandoned
+	write("named", m.FinishedAt)                  // the same, but the user gave it a name
+	write("later", m.FinishedAt.Add(time.Minute)) // a fork, written since
+	if err := n.st.SetChatTitle(ctx, "session:fake/named", "Fork: mine"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, it := range c.Items {
+		keys = append(keys, it.Key)
+	}
+	got := strings.Join(keys, " ")
+	if strings.Contains(got, "session:fake/left") || !strings.Contains(got, "session:fake/named") || !strings.Contains(got, "session:fake/later") {
+		t.Errorf("chats: %s", got)
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ownBody } from "./turn";
+import { ownBody, attachedName } from "./turn";
 
 const head = "[acpost] Message msg_01M730WCJE0K5VZRGDS3PM0JCZ from user:lev.\nYour final answer in this turn is sent back to the sender as the reply. To ask another agent, run `acpost send --to agent:<name> --body \"…\" --wait`. To attach files to your reply, run `acpost attach FILE…`.\n\n";
 const note = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks and Mermaid. When a flow, an architecture, a sequence of calls or a state machine is clearer as a picture, draw it in a ```mermaid block (flowchart TD/LR or sequenceDiagram; every label in double quotes, A[\"api (HTTP)\"] -->|\"calls\"| B[\"store\"]; no HTML; about 15 nodes at most). Do not draw what a sentence says as well.\n\n";
@@ -29,5 +29,15 @@ describe("a prompt acpost sent, read back from a session, shows what the person 
     expect(ownBody(head + like)).toBe(like);
     const likeKnow = "[acpost] What the user keeps as knowledge is my question.\n\n[acpost] The task:\n\nx";
     expect(ownBody(head + likeKnow)).toBe(likeKnow);
+  });
+  it("names a file whatever brackets its name or its type has (review round 3)", () => {
+    expect(attachedName("- a.png (image/png, 3 bytes): in this prompt")).toBe("a.png");
+    expect(attachedName('- shot (1).png (image/png; name="shot (1).png", 3 bytes): in this prompt')).toBe("shot (1).png");
+    expect(attachedName("- shot (1): fixed.png (image/png, 9 bytes): /tmp/x/shot (1): fixed.png (a copy until this turn ends)")).toBe("shot (1): fixed.png");
+    expect(attachedName("- spec (application/pdf): a link, https://example.com/a (b).pdf")).toBe("spec");
+    // A line not read: whole, not dropped.
+    expect(attachedName("- odd line without a type")).toBe("odd line without a type");
+    const only = '[acpost] Attached files:\n- shot (1).png (image/png; name="shot (1).png", 3 bytes): in this prompt\n\n' + head;
+    expect(ownBody(only)).toBe("📎 shot (1).png");
   });
 });

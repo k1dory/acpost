@@ -272,6 +272,18 @@ const knowledgeEnd = "\n\n[acpost] The task:\n\n";
 const attachedFiles = /^\[acpost\] Attached files:\n(?:- [^\n]*\n)+\n/;
 const messageHead = /^\[acpost\] Message msg_[0-9A-Za-z]+ from [^\n]*\.\n/;
 
+// A line of the attached-files list (acpSlot.prompt): "- NAME (TYPE[, N bytes]): WHERE". The name may
+// have brackets and colons of its own, and so may the type's parameters: the type is found by its
+// shape (type/subtype), at the last place the line still reads as the node writes it.
+const attachedLine = /^- (.*) \(([\w.+!#$&^-]+\/[\w.+!#$&^-]+(?:;.*?)?)(?:, \d+ bytes)?\): (?:in this prompt|a link, .*|.* \(a copy until this turn ends\))$/;
+
+/** The name of a file in a line of the attached-files list; a line not read is given whole (without
+ * its dash): the file is not lost from what is shown. */
+export function attachedName(line: string): string {
+  const m = attachedLine.exec(line);
+  return m ? m[1] : line.replace(/^- /, "");
+}
+
 /** What the person wrote in a prompt acpost sent: the prompt without what the node put before it
  * (the files it lists, whose message it is and how to answer, the note on where the answer is
  * read, the person's knowledge). A session read back (History) has its prompts whole. Only the
@@ -289,7 +301,7 @@ export function ownBody(text: string): string {
   }
   // The files that went with it are named (a message of a screenshot alone has no other text):
   // their content is not replayed.
-  const names = files ? files[0].split("\n").map(l => /^- (.*) \([^()]*\): /.exec(l)?.[1]).filter(Boolean) : [];
+  const names = files ? files[0].split("\n").filter(l => l.startsWith("- ")).map(attachedName) : [];
   if (names.length) rest = (rest.trim() ? rest.replace(/\s+$/, "") + "\n\n" : "") + names.map(n => "📎 " + n).join("\n");
   return rest;
 }

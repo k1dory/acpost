@@ -150,17 +150,43 @@ const (
 // acpost started so.
 var ownPrompt = regexp.MustCompile(`^(?:\[acpost\] Attached files:\n(?:- [^\n]*\n)+\n)?\[acpost\] Message (msg_[0-9A-Za-z]+) from `)
 
-// leftBehind says whether a session with this title is one a message of this node started: its
-// thread is its chat (it runs this session, or went on in another after the turn was cancelled or
-// tried again), and the session is not shown beside it. For sessions made before the node marked
-// its own (madeSession).
-func (n *Node) leftBehind(ctx context.Context, title string) bool {
+// leftGrace is how long after its message ended a session may have been last written and still be
+// the one that message's turn left (the agent writes the end of a cancelled turn a moment later).
+const leftGrace = 10 * time.Second
+
+// leftBehind says whether a session with this title, last written at updated, is one a message of
+// this node started and left: named after the node's prompt for a message the store has, and not
+// written since that message ended (its turn was cancelled or tried again, and the thread went on
+// in another session). The thread is its chat, and the session is not shown beside it.
+//
+// For sessions made before the node marked its own (madeSession). A session written after the
+// message ended is someone's conversation (a fork of the thread's session starts with the same
+// prompt, and so has the same title): it stays.
+func (n *Node) leftBehind(ctx context.Context, title string, updated time.Time) bool {
 	m := ownPrompt.FindStringSubmatch(title)
-	if m == nil {
+	if m == nil || updated.IsZero() {
 		return false
 	}
-	_, err := n.st.Get(ctx, m[1])
-	return err == nil
+	msg, err := n.st.Get(ctx, m[1])
+	return err == nil && !msg.FinishedAt.IsZero() && !updated.After(msg.FinishedAt.Add(leftGrace))
+}
+
+// chatsKept is the chats the user named or put in a folder (by their keys): theirs to see.
+func (n *Node) chatsKept(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	if titles, err := n.st.ChatTitles(ctx); err == nil {
+		for k := range titles {
+			out[k] = true
+		}
+	}
+	if folders, err := n.st.Folders(ctx); err == nil {
+		for _, f := range folders {
+			for _, c := range f.Chats {
+				out[c] = true
+			}
+		}
+	}
+	return out
 }
 
 // chatCacheFresh: how long the sessions and sandboxes listed elsewhere are shown without asking
@@ -268,6 +294,7 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 				fail(errors.New(explainStart(err).Message))
 				return
 			}
+			kept := n.chatsKept(lctx)
 			made, err := n.st.SessionsMarked(lctx, a.addr, madeSession)
 			if err != nil {
 				fail(err)
@@ -292,9 +319,11 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 					// A session this node made for a turn is its thread's (the thread lists the one
 					// it runs; one a cancelled or repeated turn left is no chat): not shown here, and
 					// not one of the sessions the agent's limit counts. One made before the node
-					// marked them is known by its title, unless it is a fork (which starts with the
-					// same prompt and is a chat of its own).
-					if made[si.ID] || (!forks[si.ID] && n.leftBehind(lctx, si.Title)) {
+					// marked them is known by its title and by not having been written since its
+					// message ended; never a fork, nor a session the user named or put in a folder.
+					updated, _ := time.Parse(time.RFC3339Nano, si.UpdatedAt)
+					key := "session:" + name + "/" + si.ID
+					if made[si.ID] || (!forks[si.ID] && !kept[key] && n.leftBehind(lctx, si.Title, updated)) {
 						continue
 					}
 					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
