@@ -1082,6 +1082,7 @@ type acpTurn struct {
 	edited             map[string][]fileEdit   // what its completed calls edited, as the agent reported it, by call
 	editedOrder        []string                // the calls, in the order they completed
 	editedBytes        int
+	pendingBytes       int // the texts of edits whose call has not ended (one budget with editedBytes)
 	editedCount        int
 	editedMore         bool            // edits not kept (too many)
 	ctx                context.Context // the turn's: ended by its timeout or its message's cancel

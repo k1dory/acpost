@@ -345,17 +345,22 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 		}
 		files[i].Added += added
 		files[i].Removed += removed
-		if hunk == "" { // too long to keep, or a new empty file
-			cut = cut || e.cut
+		if e.cut { // too long to keep: listed, without its diff
+			cut = true
 			continue
 		}
+		// As git writes them: a file made empty has its header alone.
 		section := "diff --git a/" + p + " b/" + p + "\n"
-		if e.created {
-			section += "new file mode 100644\n--- /dev/null\n"
-		} else {
-			section += "--- a/" + p + "\n"
+		switch {
+		case e.created && hunk == "":
+			section += "new file mode 100644\n"
+		case e.created:
+			section += "new file mode 100644\n--- /dev/null\n+++ b/" + p + "\n" + hunk
+		case hunk == "":
+			continue // an edit of a masked value alone, its lines folded: counted, nothing to show
+		default:
+			section += "--- a/" + p + "\n+++ b/" + p + "\n" + hunk
 		}
-		section += "+++ b/" + p + "\n" + hunk
 		if diff.Len()+len(section) > changesDiffMax {
 			cut = true // whole sections only: a cut does not leave half a masked secret
 			continue

@@ -97,6 +97,7 @@ func (t *acpTurn) take(tr *toolTrack) {
 	}
 	full := tr.full
 	tr.full = nil // taken: the same content is not taken twice
+	t.pendingBytes -= editBytes(full)
 	if !had && (len(full) == 0 || t.editedCount >= editsMax) {
 		// Nothing to keep, or no room: the turn holds no more of calls than it holds edits.
 		t.editedMore = t.editedMore || len(full) > 0
@@ -117,7 +118,7 @@ func (t *acpTurn) take(tr *toolTrack) {
 			t.editedMore = true
 			break
 		}
-		if t.editedBytes+len(e.old)+len(e.new) > editsKeepMax {
+		if t.editedBytes+t.pendingBytes+len(e.old)+len(e.new) > editsKeepMax {
 			e.old, e.new, e.cut = "", "", true
 		}
 		t.editedBytes += len(e.old) + len(e.new)
@@ -129,6 +130,32 @@ func (t *acpTurn) take(tr *toolTrack) {
 	if !had {
 		t.editedOrder = append(t.editedOrder, tr.ID)
 	}
+}
+
+func editBytes(edits []fileEdit) int {
+	n := 0
+	for _, e := range edits {
+		n += len(e.old) + len(e.new)
+	}
+	return n
+}
+
+// hold counts the texts a call's edits wait with (was: before its last update) in the turn's
+// budget, which is one for the edits taken and those waiting for their call to end: past it they
+// wait without their text. A failed call edited nothing: its edits go. A call the turn does not
+// track (kept false) waits with nothing. Called with t.mu held.
+func (t *acpTurn) hold(tr *toolTrack, was int, kept bool) {
+	if tr.Status == string(acp.ToolCallStatusFailed) || !kept {
+		tr.full = nil
+	}
+	now := editBytes(tr.full)
+	if t.editedBytes+t.pendingBytes-was+now > editsKeepMax {
+		for i := range tr.full {
+			tr.full[i].old, tr.full[i].new, tr.full[i].cut = "", "", true
+		}
+		now = 0
+	}
+	t.pendingBytes += now - was
 }
 
 // edits is what the turn's completed tool calls edited, in the order the calls completed; more
@@ -159,15 +186,23 @@ func (t *acpTurn) trackCall(u *acp.SessionUpdateToolCall) toolEvent {
 	if len(t.tools) >= maxTracked {
 		for id, old := range t.tools { // room for it: a call that ended goes
 			if old.ended {
+				t.pendingBytes -= editBytes(old.full)
 				delete(t.tools, id)
 				break
 			}
 		}
 	}
-	if len(t.tools) < maxTracked {
+	kept := len(t.tools) < maxTracked
+	if prev := t.tools[tr.ID]; prev != nil { // the same call started again: the new one stands
+		t.pendingBytes -= editBytes(prev.full)
+		kept = true
+	}
+	if kept {
 		t.tools[tr.ID] = tr
 	}
+	t.pendingBytes += editBytes(tr.full) // counted first: take moves it to what the turn holds
 	t.take(tr)
+	t.hold(tr, editBytes(tr.full), kept)
 	return tr.event()
 }
 
@@ -177,9 +212,11 @@ func (t *acpTurn) trackUpdate(u *acp.SessionToolCallUpdate) (toolEvent, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	tr := t.tools[string(u.ToolCallId)]
+	kept := tr != nil
 	if tr == nil { // a call not seen (or past maxTracked): what this update says
 		tr = &toolTrack{toolEvent: toolEvent{ID: string(u.ToolCallId)}}
 	}
+	was := editBytes(tr.full)
 	if u.Title != nil && *u.Title != "" {
 		tr.Title = *u.Title
 	}
@@ -197,7 +234,10 @@ func (t *acpTurn) trackUpdate(u *acp.SessionToolCallUpdate) (toolEvent, bool) {
 	// Its end, and after it what changes its output still (a late result).
 	worth := (ends && !tr.ended) || newInput || len(tr.Edits) != edits || (tr.ended && tr.output() != before)
 	tr.ended = tr.ended || ends
+	// What the call waits with is counted first (take moves it to what the turn holds).
+	t.pendingBytes += editBytes(tr.full) - was
 	t.take(tr)
+	t.hold(tr, editBytes(tr.full), kept)
 	return tr.event(), worth
 }
 

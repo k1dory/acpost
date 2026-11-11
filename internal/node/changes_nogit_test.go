@@ -287,3 +287,49 @@ func TestReportedRotationOfASecretOverLines(t *testing.T) {
 		t.Errorf("files %+v\n%s", files, diff)
 	}
 }
+
+// Review round 3.
+
+// One budget for the texts of a turn's edits: those taken and those whose call has not ended; a
+// failed call's go.
+func TestReportedPendingEditsShareTheBudget(t *testing.T) {
+	turn := &acpTurn{}
+	big := strings.Repeat("y", editKeepMax-10)
+	held := func() int {
+		n := 0
+		for _, tr := range turn.tools {
+			n += editBytes(tr.full)
+		}
+		for _, es := range turn.edited {
+			n += editBytes(es)
+		}
+		return n
+	}
+	for i := range 40 { // 40 × 512 KiB waiting, none ended
+		turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: acp.ToolCallId(fmt.Sprintf("p%d", i)), Content: []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: "/w/f", NewText: big}}}})
+	}
+	if got := held(); got > editsKeepMax || got != turn.pendingBytes+turn.editedBytes {
+		t.Fatalf("%d bytes held waiting (counted %d + %d), the budget is %d", got, turn.pendingBytes, turn.editedBytes, editsKeepMax)
+	}
+	failed, done := acp.ToolCallStatusFailed, acp.ToolCallStatusCompleted
+	turn.trackUpdate(&acp.SessionToolCallUpdate{ToolCallId: "p0", Status: &failed})
+	if turn.tools["p0"].full != nil {
+		t.Error("a failed call keeps its edits' texts")
+	}
+	turn.trackUpdate(&acp.SessionToolCallUpdate{ToolCallId: "p1", Status: &done})
+	edits, _ := turn.edits()
+	if len(edits) != 1 || edits[0].cut || len(edits[0].new) != len(big) {
+		t.Errorf("the completed call's edit: %d, cut %v", len(edits), len(edits) > 0 && edits[0].cut)
+	}
+	if got := held(); got > editsKeepMax || got != turn.pendingBytes+turn.editedBytes || turn.pendingBytes < 0 {
+		t.Errorf("%d bytes held (counted %d waiting + %d taken)", got, turn.pendingBytes, turn.editedBytes)
+	}
+}
+
+// A file made empty is in the diff by its header, as git writes one.
+func TestReportedEmptyNewFile(t *testing.T) {
+	files, diff, cut := reportedChanges("/w", "", []fileEdit{{path: "/w/pkg/__init__.py", created: true}})
+	if len(files) != 1 || files[0].Status != "A" || cut || diff != "diff --git a/pkg/__init__.py b/pkg/__init__.py\nnew file mode 100644\n" {
+		t.Errorf("files %+v, cut %v\n%s", files, cut, diff)
+	}
+}

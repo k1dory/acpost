@@ -70,6 +70,12 @@
     return files.find((f: any) => keyOf(f.repo, f.path) === k) ?? (s ? { repo: s.repo, path: s.path, lines: [] as any[] } : files[0]);
   });
 
+  // Why a file has no lines to show: made empty, or its diff not kept.
+  const noDiff = $derived.by(() => {
+    const s = shown ? stats.get(keyOf(shown.repo, shown.path)) : undefined;
+    return s && s.status === "A" && !s.added && !s.removed ? t("A new file, empty.") : t("No diff is kept for this file (binary, or an edit too long): see the file itself.");
+  });
+
   // A file's versions: the turns that changed it, in order — each with its own diff of the file
   // and, on request, the whole file as that turn left it.
   let version = $state<number>(-1); // -1: the whole diff
@@ -143,9 +149,9 @@
             {#if at}
               {#if at.err}<div class="empty">{at.err}</div>{:else}<pre class="whole selectable">{at.text}</pre>{/if}
             {:else if v.lines.length}<DiffLines lines={v.lines} />
-            {:else}<div class="empty">{t("No diff is kept for this file (binary, or an edit too long): see the file itself.")}</div>{/if}
+            {:else}<div class="empty">{noDiff}</div>{/if}
           {:else if shown.lines.length}<DiffLines lines={shown.lines} />
-          {:else}<div class="empty">{t("No diff is kept for this file (binary, or an edit too long): see the file itself.")}</div>{/if}
+          {:else}<div class="empty">{noDiff}</div>{/if}
         {/if}
       </div>
     </div>

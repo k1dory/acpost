@@ -125,6 +125,7 @@ export const ru: Record<string, string> = {
   "Failed": "Ошибка",
   "Done": "Готово",
   "No changes in this session yet.": "В этой сессии пока нет изменений.",
+  "A new file, empty.": "Новый файл, пустой.",
   "No diff is kept for this file (binary, or an edit too long): see the file itself.": "Дифф этого файла не сохранён (двоичный файл или слишком длинная правка): смотрите сам файл.",
   "Changed files": "Изменённые файлы",
   "All agents": "Все агенты",

@@ -239,6 +239,23 @@ export function lineDiff(oldText = "", newText = ""): { op: " " | "+" | "-"; tex
   return out;
 }
 
+/** A path as git quotes it in a diff's header (C style: \\, \", \t, \n and bytes in octal, the
+ * name's UTF-8), read back. */
+export function gitUnquote(s: string): string {
+  const bytes: number[] = [];
+  const enc = new TextEncoder();
+  const simple: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "\\") { bytes.push(...enc.encode(s[i])); continue; }
+    const oct = /^[0-3][0-7]{2}/.exec(s.slice(i + 1));
+    if (oct) { bytes.push(parseInt(oct[0], 8)); i += 3; continue; }
+    const c = s[i + 1];
+    if (c !== undefined && c in simple) { bytes.push(simple[c]); i++; continue; }
+    bytes.push(92);
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
 /** A git unified diff split into files. */
 export function splitDiff(diff: string): { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] {
   const files: { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] = [];
@@ -246,15 +263,18 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
   let a = 0, b = 0;
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      const m = / b\/(.*)$/.exec(line);
-      cur = { path: m ? m[1] : line.slice(11), lines: [] };
+      // A name git quotes (not ASCII, a quotation mark: "a/…" "b/…") is read as it is written.
+      const q = /^diff --git "a\/(?:[^"\\]|\\.)*" "b\/((?:[^"\\]|\\.)*)"$/.exec(line);
+      const m = q ? null : / b\/(.*)$/.exec(line);
+      cur = { path: q ? gitUnquote(q[1]) : m ? m[1] : line.slice(11), lines: [] };
       files.push(cur);
       continue;
     }
     if (!cur || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("new file") || line.startsWith("deleted file") || line.startsWith("similarity") || line.startsWith("rename ")) continue;
     const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
     if (h) { a = +h[1]; b = +h[2]; cur.lines.push({ op: "@", text: line }); continue; }
-    const op = line[0] ?? " ";
+    if (line === "") continue; // the end of the text (a line of a diff has its mark at least)
+    const op = line[0];
     if (op === "+") cur.lines.push({ op, text: line.slice(1), b: b++ });
     else if (op === "-") cur.lines.push({ op, text: line.slice(1), a: a++ });
     else if (op === "\\") continue;

@@ -134,6 +134,39 @@ describe("Changes outside git: what the agent's edits reported", () => {
   });
 });
 
+describe("Changes: names git quotes, and files made empty (review round 3)", () => {
+  it("a name git writes quoted (not ASCII, a quotation mark) has its diff shown", async () => {
+    const app = await setup();
+    const names = ["ф.txt", 'q"x.txt'];
+    const quoted = ['"a/\\321\\204.txt" "b/\\321\\204.txt"', '"a/q\\"x.txt" "b/q\\"x.txt"'];
+    const files = names.map(path => ({ path, status: "M", added: 1, removed: 0 }));
+    const diff = quoted.map((h, i) => `diff --git ${h}\n@@ -1 +1 @@\n+line of ${i}\n`).join("");
+    fake.Node.Changes.mockResolvedValue({ turns: [{ msg: "m1", agent: "agent:claude", start: "", at: "", repo: "/r", before: "a", after: "b", files, diff }], repos: [{ repo: "/r", before: "a", after: "b", files, diff }] });
+    app.thread = "T"; app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(listed()).toEqual(names);
+    expect(document.querySelector(".view")!.textContent).toContain("line of 0");
+    (document.querySelectorAll("button.f")[1] as HTMLButtonElement).click();
+    await settle();
+    expect(document.querySelector(".view")!.textContent).toContain("line of 1");
+    expect(document.body.textContent).not.toContain("No diff is kept");
+  });
+  it("a file made empty says so, not that its diff was lost", async () => {
+    const app = await setup();
+    const files = [{ path: "pkg/__init__.py", status: "A", added: 0, removed: 0 }];
+    const diff = "diff --git a/pkg/__init__.py b/pkg/__init__.py\nnew file mode 100644\n";
+    fake.Node.Changes.mockResolvedValue({ turns: [{ msg: "m1", agent: "agent:claude", start: "", at: "", repo: "/d", before: "", after: "", files, diff }], repos: [{ repo: "/d", before: "", after: "", files, diff }] });
+    app.thread = "T"; app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(document.body.textContent).toContain("A new file, empty.");
+    expect(document.body.textContent).not.toContain("No diff is kept");
+  });
+});
+
 describe("Changes is the open chat's, all of it (findings 6, 7)", () => {
   it("asks every message of the person in the chat, not only the first, and shows them together", async () => {
     const app = await setup();
