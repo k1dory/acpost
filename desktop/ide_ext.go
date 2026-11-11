@@ -272,7 +272,17 @@ func (n *Node) IDEReveal(folder, file, old, new string, created bool, title stri
 	if err != nil {
 		return err
 	}
-	return ideReveal(filepath.Join(data, "commands"), ideRequest{Folder: folder, Path: file, Old: old, New: new, Created: created, Title: title}, time.Now())
+	// Only the app whose IDE it is asks it: a second acpost beside the first has no IDE of its own
+	// (IDEStart says so), and does not show its agents' edits in the first's.
+	return ide.reveal(filepath.Join(data, "commands"), ideRequest{Folder: folder, Path: file, Old: old, New: new, Created: created, Title: title}, time.Now())
+}
+
+// reveal writes a request when this app owns the IDE.
+func (s *ideServer) reveal(dir string, r ideRequest, now time.Time) error {
+	if !s.owns() {
+		return errors.New("the IDE is another acpost's")
+	}
+	return ideReveal(dir, r, now)
 }
 
 func ideReveal(dir string, r ideRequest, now time.Time) error {

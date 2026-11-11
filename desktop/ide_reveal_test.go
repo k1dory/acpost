@@ -206,3 +206,31 @@ func TestIDERevealKeepsTheNewest(t *testing.T) {
 		t.Error("a request being written was removed")
 	}
 }
+
+// Only the app that owns the IDE asks it to show anything: a second acpost beside it writes no
+// request into the folder they share.
+func TestIDERevealIsTheOwners(t *testing.T) {
+	data := t.TempDir()
+	dir := filepath.Join(data, "commands")
+	first, second := &ideServer{}, &ideServer{}
+	if owned, _ := first.tryOwn(data); !owned {
+		t.Fatal("the first app did not take the IDE")
+	}
+	defer first.disown()
+	if owned, _ := second.tryOwn(data); owned {
+		t.Fatal("the second app took the IDE too")
+	}
+	r := ideRequest{Folder: "/w", Path: "a.txt"}
+	if err := second.reveal(dir, r, time.Now()); err == nil {
+		t.Error("the second app asked the first's IDE")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("%d requests written by an app that does not own the IDE", len(entries))
+	}
+	if err := first.reveal(dir, r, time.Now()); err != nil {
+		t.Error(err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("%d requests of the owner's", len(entries))
+	}
+}

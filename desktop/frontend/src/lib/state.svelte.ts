@@ -311,6 +311,7 @@ class App {
     this.openedArtifacts = [];
     for (const [id, { off, sub }] of this.unsub) { off(); Node.Unfollow(id, sub); }
     this.unsub.clear();
+    this.followedAt.clear(); // another chat (or this one opened again): what it did meanwhile is not shown in the IDE
     this.msgs = [];
     this.history = [];
     this.turns = {};

@@ -28,17 +28,19 @@ function watch(ctx) {
   }));
   // The requests this folder's window showed, kept with the folder: a window opened again (the
   // page reloaded) does not show them a second time.
-  const seen = new Set(ctx.workspaceState.get("acpost.shown") ?? []);
+  // Every one that may still be read again is kept: those not older than a request is shown at all.
+  const seen = new Set(reveal.stillFresh(ctx.workspaceState.get("acpost.shown") ?? [], Date.now()));
   const take = name => {
     if (!reveal.isCommand(name) || seen.has(name)) return;
     seen.add(name);
-    if (seen.size > 300) seen.delete(seen.values().next().value);
     let cmd;
     try { cmd = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")); } catch { return; }
     const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
     const plan = reveal.plan(cmd, folders, file => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } }, Date.now());
     if (!plan) return;
-    ctx.workspaceState.update("acpost.shown", [...seen].slice(-100));
+    const fresh = reveal.stillFresh([...seen], Date.now());
+    if (fresh.length < seen.size) { seen.clear(); for (const n of fresh) seen.add(n); }
+    ctx.workspaceState.update("acpost.shown", fresh);
     show(plan).catch(() => {});
   };
   async function show(plan) {

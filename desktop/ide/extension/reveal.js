@@ -6,6 +6,13 @@ exports.isCommand = name => /^[0-9]+-[0-9a-f]+\.json$/.test(name);
 
 const fresh = 30_000; // a request older than this is not shown (a window opened since)
 
+// stillFresh: of these requests' names, those that may still be shown (by the time in their
+// names): the ones a window must remember having shown. The rest are too old to be shown again.
+exports.stillFresh = (names, now) => names.filter(n => {
+  const m = /^([0-9]+)-/.exec(String(n));
+  return m && Math.abs(now - Number(m[1])) <= fresh;
+});
+
 // plan: the file to show and the text it had before the edit (null: the file alone, no diff), or
 // null when the request is not for this window (another folder), too old, or not one.
 //

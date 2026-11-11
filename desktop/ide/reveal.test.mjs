@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-const { plan, isCommand } = createRequire(import.meta.url)("./extension/reveal.js");
+const { plan, isCommand, stillFresh } = createRequire(import.meta.url)("./extension/reveal.js");
 
 const now = 1_000_000;
 const files = { "/w/a.txt": "one\nTWO\nthree\n", "/w/twice.txt": "x\nx\n", "/else/b.txt": "b\n" };
@@ -28,4 +28,8 @@ test("not this window's, old, or not a request: nothing", () => {
 test("a request's name", () => {
   assert.ok(isCommand("1794313922226-0af3.json"));
   for (const n of ["x.json", "1-0a.json.tmp", ".1-0a.json", "../1-0a.json"]) assert.ok(!isCommand(n));
+});
+test("the names a window remembers: every request still fresh, none older", () => {
+  const names = Array.from({ length: 250 }, (_, i) => `${now - i}-0a.json`);
+  assert.equal(stillFresh([...names, `${now - 31_000}-0b.json`, "junk"], now).length, 250);
 });
