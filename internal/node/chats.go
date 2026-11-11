@@ -109,7 +109,7 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	shown := map[string]int{} // sessions shown per agent
 	for _, c := range ext {
 		if c.Kind == "session" {
-			if shown[c.Agent] >= chatSessionsPerAgent || ours[strings.TrimPrefix(c.Agent, "agent:")+"/"+c.Session] || n.leftBehind(ctx, c.Title) {
+			if shown[c.Agent] >= chatSessionsPerAgent || ours[strings.TrimPrefix(c.Agent, "agent:")+"/"+c.Session] {
 				continue
 			}
 			shown[c.Agent]++
@@ -269,6 +269,9 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 					break
 				}
 				for _, si := range list {
+					if n.leftBehind(lctx, si.Title) {
+						continue // not shown, and not one of the sessions the agent's limit counts
+					}
 					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
 						Title: si.Title, Cwd: si.Cwd}
 					if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {

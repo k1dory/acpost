@@ -1,11 +1,16 @@
 package node
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/k1dory/acpost/internal/config"
+	"github.com/k1dory/acpost/internal/store"
 )
 
 // Listing an agent's sessions for the chats starts one process, however many pages the agent
@@ -58,5 +63,61 @@ agents:
 	got := strings.Join(keys, " ")
 	if strings.Contains(got, "session:fake/left") || !strings.Contains(got, "session:fake/theirs") || !strings.Contains(got, "thread:"+m.Thread) || len(keys) != 2 {
 		t.Errorf("chats: %s", got)
+	}
+}
+
+// Sessions left behind are not among those an agent's limit counts: a session started elsewhere,
+// older than a limit's worth of them, is still listed.
+func TestSessionsLeftBehindDoNotUseTheLimit(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q, FAKE_PAGE: "100"}
+`, os.Args[0], state))
+	m := ask(t, n, SendRequest{Body: "echo hi"})
+	for i := range chatSessionsPerAgent {
+		os.WriteFile(filepath.Join(state, fmt.Sprintf("left-%03d", i)), []byte("title:[acpost] Message "+m.ID+" from user:tester."), 0o600)
+	}
+	old := filepath.Join(state, "elsewhere")
+	os.WriteFile(old, []byte("title:a session of the editor"), 0o600)
+	long := time.Now().Add(-time.Hour)
+	os.Chtimes(old, long, long)
+	c, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range c.Items {
+		found = found || it.Key == "session:fake/elsewhere"
+		if strings.HasPrefix(it.Key, "session:fake/left-") {
+			t.Fatalf("listed %s", it.Key)
+		}
+	}
+	if !found {
+		t.Errorf("the older session is not listed: %d chats", len(c.Items))
+	}
+}
+
+// What the app takes off a prompt read back (ownBody in the desktop's turn.ts) is what the node
+// puts there, to the letter: a change here is made there too.
+func TestOwnPromptTextIsTheDesktops(t *testing.T) {
+	ts, err := os.ReadFile("../../desktop/frontend/src/lib/turn.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &acpSlot{a: &acpAgent{cfg: &config.Agent{}}}
+	head := s.prompt(store.Message{ID: "msg_X", From: "user:u"}, nil)
+	_, tail, _ := strings.Cut(head, ".\n")
+	for name, text := range map[string]string{"the header's lines": tail, "the reader's note": readerNote} {
+		var b strings.Builder
+		e := json.NewEncoder(&b)
+		e.SetEscapeHTML(false)
+		e.Encode(text)
+		if !strings.Contains(string(ts), strings.TrimSpace(b.String())) {
+			t.Errorf("turn.ts does not have %s as the node writes it: %s", name, b.String())
+		}
 	}
 }

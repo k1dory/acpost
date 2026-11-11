@@ -263,15 +263,28 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
   return files;
 }
 
+// What the node puts before a message's text in a prompt (internal/node: acpSlot.prompt, readerNote,
+// knowledgeFor), to the letter: a test of the node's holds these to its own.
+const promptLines = "Your final answer in this turn is sent back to the sender as the reply. To ask another agent, run `acpost send --to agent:<name> --body \"…\" --wait`. To attach files to your reply, run `acpost attach FILE…`.\n\n";
+const readerNote = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks and Mermaid. When a flow, an architecture, a sequence of calls or a state machine is clearer as a picture, draw it in a ```mermaid block (flowchart TD/LR or sequenceDiagram; every label in double quotes, A[\"api (HTTP)\"] -->|\"calls\"| B[\"store\"]; no HTML; about 15 nodes at most). Do not draw what a sentence says as well.\n\n";
+const knowledgeHead = "[acpost] What the user keeps as knowledge for this work (follow it unless the task says otherwise):\n\n";
+const knowledgeEnd = "\n\n[acpost] The task:\n\n";
+const attachedFiles = /^\[acpost\] Attached files:\n(?:- [^\n]*\n)+\n/;
+const messageHead = /^\[acpost\] Message msg_[0-9A-Za-z]+ from [^\n]*\.\n/;
+
 /** What the person wrote in a prompt acpost sent: the prompt without what the node put before it
  * (the files it lists, whose message it is and how to answer, the note on where the answer is
- * read, the person's knowledge). A session read back (History) has its prompts whole; any other
- * text is as it is. */
+ * read, the person's knowledge). A session read back (History) has its prompts whole. Only the
+ * node's own lines, whole and where it puts them, are taken off: any other text is as it is. */
 export function ownBody(text: string): string {
-  const head = /(?:^|\n)\[acpost\] Message msg_\w+ from [^\n]*\nYour final answer in this turn is sent back to the sender as the reply\.[^\n]*\n\n/.exec(text);
-  if (!head) return text;
-  let rest = text.slice(head.index + head[0].length);
-  rest = rest.replace(/^\[acpost\] The user reads your answers in the acpost app[^\n]*\n\n/, "");
-  rest = rest.replace(/^\[acpost\] What the user keeps as knowledge[\s\S]*?\n\[acpost\] The task:\n\n/, "");
+  let rest = text.replace(attachedFiles, "");
+  const head = messageHead.exec(rest);
+  if (!head || !rest.startsWith(promptLines, head[0].length)) return text;
+  rest = rest.slice(head[0].length + promptLines.length);
+  if (rest.startsWith(readerNote)) rest = rest.slice(readerNote.length);
+  if (rest.startsWith(knowledgeHead)) {
+    const end = rest.indexOf(knowledgeEnd, knowledgeHead.length - 2);
+    if (end >= 0) rest = rest.slice(end + knowledgeEnd.length);
+  }
   return rest;
 }
