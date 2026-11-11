@@ -265,8 +265,12 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
     if (line.startsWith("diff --git ")) {
       // A name git quotes (not ASCII, a quotation mark: "a/…" "b/…") is read as it is written.
       const q = /^diff --git "a\/(?:[^"\\]|\\.)*" "b\/((?:[^"\\]|\\.)*)"$/.exec(line);
-      const m = q ? null : / b\/(.*)$/.exec(line);
-      cur = { path: q ? gitUnquote(q[1]) : m ? m[1] : line.slice(11), lines: [] };
+      // Not quoted: "a/NAME b/NAME", the name twice (it may have " b/" in it); a rename has two
+      // names, the second after the last " b/" that leaves an "a/" name before it.
+      const rest = line.slice(11), n = (rest.length - 5) / 2;
+      const same = !q && Number.isInteger(n) && n > 0 && rest.startsWith("a/") && rest.slice(2, 2 + n) === rest.slice(2 + n + 3) && rest.slice(2 + n, 2 + n + 3) === " b/";
+      const m = q || same ? null : / b\/(.*)$/.exec(line);
+      cur = { path: q ? gitUnquote(q[1]) : same ? rest.slice(2, 2 + n) : m ? m[1] : rest, lines: [] };
       files.push(cur);
       continue;
     }

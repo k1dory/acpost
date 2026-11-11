@@ -167,6 +167,46 @@ describe("Changes: names git quotes, and files made empty (review round 3)", () 
   });
 });
 
+describe("Changes: why a file has no lines, by its own record (review round 4)", () => {
+  const turn = (at: string, files: any[], diff: string) => ({ msg: "m1", agent: "agent:claude", start: "", at, repo: "/r", before: "a", after: "b", files, diff });
+  it("a new binary file is not called empty", async () => {
+    const app = await setup();
+    const files = [{ path: "logo.png", status: "A", added: -1, removed: -1 }];
+    fake.Node.Changes.mockResolvedValue({ turns: [turn("2026-11-11T10:00:00Z", files, "")], repos: [{ repo: "/r", before: "a", after: "b", files, diff: "" }] });
+    app.thread = "T"; app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(document.body.textContent).toContain("No diff is kept for this file");
+    expect(document.body.textContent).not.toContain("A new file, empty.");
+  });
+  it("a version made empty says so, though the file was written later", async () => {
+    const app = await setup();
+    const head = "diff --git a/x.py b/x.py\n";
+    const t1 = turn("2026-11-11T10:00:00Z", [{ path: "x.py", status: "A", added: 0, removed: 0 }], head + "new file mode 100644\n");
+    const t2 = turn("2026-11-11T10:01:00Z", [{ path: "x.py", status: "M", added: 1, removed: 0 }], head + "@@ -0,0 +1,1 @@\n+later\n");
+    fake.Node.Changes.mockResolvedValue({ turns: [t1, t2], repos: [{ repo: "/r", before: "a", after: "b", files: [{ path: "x.py", status: "A", added: 1, removed: 0 }], diff: head + "new file mode 100644\n@@ -0,0 +1,1 @@\n+later\n" }] });
+    app.thread = "T"; app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    ([...document.querySelectorAll("button.vb")].find(b => b.textContent?.trim().startsWith("v1")) as HTMLButtonElement).click();
+    await settle();
+    expect(document.querySelector(".view")!.textContent).toContain("A new file, empty.");
+  });
+  it("a name with ' b/' in it has its diff shown", async () => {
+    const app = await setup();
+    const files = [{ path: "dir b/file.txt", status: "M", added: 1, removed: 0 }];
+    const diff = "diff --git a/dir b/file.txt b/dir b/file.txt\n@@ -1 +1 @@\n+inside\n";
+    fake.Node.Changes.mockResolvedValue({ turns: [turn("", files, diff)], repos: [{ repo: "/r", before: "a", after: "b", files, diff }] });
+    app.thread = "T"; app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(document.querySelector(".view")!.textContent).toContain("inside");
+  });
+});
+
 describe("Changes is the open chat's, all of it (findings 6, 7)", () => {
   it("asks every message of the person in the chat, not only the first, and shows them together", async () => {
     const app = await setup();

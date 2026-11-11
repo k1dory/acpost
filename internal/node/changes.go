@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -321,7 +322,7 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 		if repo != "" && inside(realRepo, realPath(abs)) {
 			continue
 		}
-		if !e.cut && e.old == e.new && !e.created {
+		if !e.cut && e.old == e.new && !e.created && !e.deleted {
 			continue // nothing changed
 		}
 		p := abs
@@ -335,13 +336,18 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 		}
 		i, ok := at[p]
 		if !ok {
-			st := "M"
-			if e.created {
-				st = "A"
-			}
 			i = len(files)
 			at[p] = i
-			files = append(files, store.ChangedFile{Path: p, Status: st})
+			files = append(files, store.ChangedFile{Path: p, Status: "M"})
+		}
+		// What became of the file over the turn: made (and edited since), removed, or changed.
+		switch {
+		case e.deleted:
+			files[i].Status = "D"
+		case e.created:
+			files[i].Status = "A"
+		case files[i].Status == "D":
+			files[i].Status = "M" // removed, then written again
 		}
 		files[i].Added += added
 		files[i].Removed += removed
@@ -350,16 +356,21 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 			continue
 		}
 		// As git writes them: a file made empty has its header alone.
-		section := "diff --git a/" + p + " b/" + p + "\n"
+		qa, qb := gitQuote("a/"+p), gitQuote("b/"+p)
+		section := "diff --git " + qa + " " + qb + "\n"
 		switch {
+		case e.deleted && hunk == "":
+			section += "deleted file mode 100644\n"
+		case e.deleted:
+			section += "deleted file mode 100644\n--- " + qa + "\n+++ /dev/null\n" + hunk
 		case e.created && hunk == "":
 			section += "new file mode 100644\n"
 		case e.created:
-			section += "new file mode 100644\n--- /dev/null\n+++ b/" + p + "\n" + hunk
+			section += "new file mode 100644\n--- /dev/null\n+++ " + qb + "\n" + hunk
 		case hunk == "":
 			continue // an edit of a masked value alone, its lines folded: counted, nothing to show
 		default:
-			section += "--- a/" + p + "\n+++ b/" + p + "\n" + hunk
+			section += "--- " + qa + "\n+++ " + qb + "\n" + hunk
 		}
 		if diff.Len()+len(section) > changesDiffMax {
 			cut = true // whole sections only: a cut does not leave half a masked secret
@@ -368,6 +379,41 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 		diff.WriteString(section)
 	}
 	return files, diff.String(), cut
+}
+
+// gitQuote is a path as git writes it in a diff's header: as it is, or, when it has a control
+// character, a quotation mark or a backslash, in quotation marks with those escaped (C style,
+// octal for the rest), so a line break in a name does not break the header.
+func gitQuote(p string) string {
+	plain := true
+	for i := 0; i < len(p); i++ {
+		if c := p[i]; c < 0x20 || c == 0x7f || c == '"' || c == '\\' {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return p
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == '\n':
+			b.WriteString(`\n`)
+		case c == '\t':
+			b.WriteString(`\t`)
+		case c < 0x20 || c == 0x7f:
+			b.WriteString("\\" + fmt.Sprintf("%03o", c))
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // inside says whether file is dir or in it.

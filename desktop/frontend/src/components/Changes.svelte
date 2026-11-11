@@ -53,11 +53,12 @@
   // A file is its repository and its path (two repositories may have the same path).
   const keyOf = (repo: string, path: string) => repo + "\u0000" + path;
   const stats = $derived.by(() => {
-    const m = new Map<string, { path: string; repo: string; added: number; removed: number; status: string }>();
+    const m = new Map<string, { path: string; repo: string; added: number; removed: number; status: string; binary: boolean }>();
     for (const r of agent ? turns : data?.repos ?? []) for (const f of (r.files ?? []) as any[]) {
       const k = keyOf(r.repo, f.path);
-      const s = m.get(k) ?? { path: f.path, repo: r.repo, added: 0, removed: 0, status: f.status };
+      const s = m.get(k) ?? { path: f.path, repo: r.repo, added: 0, removed: 0, status: f.status, binary: false };
       s.added += Math.max(0, f.added); s.removed += Math.max(0, f.removed); s.status = f.status;
+      s.binary ||= f.added < 0 || f.removed < 0; // git counts no lines of a binary file
       m.set(k, s);
     }
     return m;
@@ -70,11 +71,13 @@
     return files.find((f: any) => keyOf(f.repo, f.path) === k) ?? (s ? { repo: s.repo, path: s.path, lines: [] as any[] } : files[0]);
   });
 
-  // Why a file has no lines to show: made empty, or its diff not kept.
-  const noDiff = $derived.by(() => {
-    const s = shown ? stats.get(keyOf(shown.repo, shown.path)) : undefined;
-    return s && s.status === "A" && !s.added && !s.removed ? t("A new file, empty.") : t("No diff is kept for this file (binary, or an edit too long): see the file itself.");
-  });
+  // Why a file has no lines to show: made (or removed) empty, or its diff not kept. By the file's
+  // own record: the session's whole, or one turn's version.
+  const why = (f?: { status: string; added: number; removed: number; binary?: boolean }) =>
+    f && !f.binary && f.added === 0 && f.removed === 0 && (f.status === "A" || f.status === "D")
+      ? t(f.status === "A" ? "A new file, empty." : "An empty file, removed.")
+      : t("No diff is kept for this file (binary, or an edit too long): see the file itself.");
+  const noDiff = $derived(why(shown ? stats.get(keyOf(shown.repo, shown.path)) : undefined));
 
   // A file's versions: the turns that changed it, in order — each with its own diff of the file
   // and, on request, the whole file as that turn left it.
@@ -149,7 +152,7 @@
             {#if at}
               {#if at.err}<div class="empty">{at.err}</div>{:else}<pre class="whole selectable">{at.text}</pre>{/if}
             {:else if v.lines.length}<DiffLines lines={v.lines} />
-            {:else}<div class="empty">{noDiff}</div>{/if}
+            {:else}<div class="empty">{why(v.file)}</div>{/if}
           {:else if shown.lines.length}<DiffLines lines={shown.lines} />
           {:else}<div class="empty">{noDiff}</div>{/if}
         {/if}

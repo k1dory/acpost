@@ -333,3 +333,46 @@ func TestReportedEmptyNewFile(t *testing.T) {
 		t.Errorf("files %+v, cut %v\n%s", files, cut, diff)
 	}
 }
+
+// Review round 4.
+
+// A file the agent says it removed (codex-acp: _meta.kind) is a removal, with text or without.
+func TestReportedDeletions(t *testing.T) {
+	turn := &acpTurn{}
+	del := map[string]any{"kind": "delete"}
+	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "d", Status: acp.ToolCallStatusCompleted, Content: []acp.ToolCallContent{
+		{Diff: &acp.ToolCallContentDiff{Path: "/w/gone.txt", OldText: acp.Ptr("a\nb\n"), NewText: "", Meta: del}},
+		{Diff: &acp.ToolCallContentDiff{Path: "/w/empty.txt", OldText: acp.Ptr(""), NewText: "", Meta: del}},
+		{Diff: &acp.ToolCallContentDiff{Path: "/w/new.txt", OldText: acp.Ptr(""), NewText: "x\n", Meta: map[string]any{"kind": "add"}}},
+	}})
+	edits, _ := turn.edits()
+	files, diff, _ := reportedChanges("/w", "", edits)
+	if len(files) != 3 || files[0].Status != "D" || files[0].Removed != 2 || files[1].Status != "D" || files[2].Status != "A" {
+		t.Fatalf("files: %+v", files)
+	}
+	for _, want := range []string{
+		"diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n",
+		"diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\ndiff --git",
+		"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n",
+	} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("the diff lacks\n%s\nin\n%s", want, diff)
+		}
+	}
+}
+
+// A name with a line break, a tab or a quotation mark is quoted in the headers as git quotes it:
+// each header stays one line.
+func TestReportedQuotesNames(t *testing.T) {
+	_, diff, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/a\tb\n\"c\".txt", old: "1\n", new: "2\n"}, {path: "/w/dir b/file.txt", old: "1\n", new: "2\n"}})
+	q := `"a/a\tb\n\"c\".txt" "b/a\tb\n\"c\".txt"`
+	if !strings.Contains(diff, "diff --git "+q+"\n--- "+`"a/a\tb\n\"c\".txt"`+"\n+++ "+`"b/a\tb\n\"c\".txt"`+"\n@@ ") {
+		t.Errorf("a quoted name:\n%s", diff)
+	}
+	if !strings.Contains(diff, "diff --git a/dir b/file.txt b/dir b/file.txt\n") {
+		t.Errorf("a name with a space:\n%s", diff)
+	}
+	if gitQuote("a/плохо.txt") != "a/плохо.txt" || gitQuote("a/\x01") != `"a/\001"` {
+		t.Error("quoting")
+	}
+}

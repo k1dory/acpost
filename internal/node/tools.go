@@ -71,7 +71,8 @@ type toolTrack struct {
 type fileEdit struct {
 	path           string
 	old, new       string
-	created        bool // the agent gave no text before: a new file
+	created        bool // the agent gave no text before, or says it added the file: a new file
+	deleted        bool // the agent says it removed the file (codex-acp: _meta.kind "delete")
 	added, removed int
 	cut            bool
 }
@@ -320,7 +321,9 @@ func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp
 				fullMore = true
 				continue
 			}
-			fe := fileEdit{path: c.Diff.Path, new: c.Diff.NewText, created: c.Diff.OldText == nil, added: added, removed: removed}
+			kind, _ := c.Diff.Meta["kind"].(string) // codex-acp: add, delete, update
+			fe := fileEdit{path: c.Diff.Path, new: c.Diff.NewText, created: kind == "add" || (kind == "" && c.Diff.OldText == nil), deleted: kind == "delete",
+				added: added, removed: removed}
 			if c.Diff.OldText != nil {
 				fe.old = *c.Diff.OldText
 			}
