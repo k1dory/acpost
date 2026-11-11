@@ -64,7 +64,7 @@
 <svelte:window onclick={e => { if (handing && !(e.target as HTMLElement).closest(".hand, .menu")) handing = false; }} />
 
 <section class="conv">
-  <header class="drag">
+  <header class="drag" class:beside={app.view === "ide"}>
     <div class="t">
       <!-- A new task has its heading in the middle ("What should we work on?"): none up here. -->
       {#if app.chat || app.thread}<div class="title">{title}</div>{/if}
@@ -103,8 +103,11 @@
         {/if}
       </div>
     {/if}
+    <!-- Beside the IDE there is no right panel to open, and the column is too narrow for more. -->
+    {#if app.view !== "ide"}
     {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost icon nodrag" title={t("Fork: the conversation so far, in a new chat")} aria-label={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={headerIcon} /></button>{/if}
     <button class="btn ghost icon nodrag" title={t("Right panel (⌘\\)")} aria-label={t("Right panel (⌘\\)")} onclick={() => (app.setPanel(!app.panel))}><Icon name="panel" size={headerIcon} /></button>
+    {/if}
   </header>
 
   {#if !app.chat && !app.thread}
@@ -142,6 +145,11 @@
   .hand { position: relative; }
   .hand .on { background: var(--hover); }
   .pop { position: absolute; right: 0; top: 34px; z-index: 40; width: 340px; padding: 14px; display: grid; gap: 10px; }
+  /* Beside the IDE the column is narrow, and what leaves it is under the IDE's own view: the form
+     is laid against the header, within the column. */
+  header.beside { position: relative; }
+  header.beside .hand { position: static; }
+  header.beside .pop { right: 12px; top: 46px; width: min(340px, calc(100% - 24px)); }
   .ph { font-weight: 600; font-size: 13px; }
   .pop .small { font-size: 12px; line-height: 1.45; }
   .pop textarea { height: auto; resize: vertical; font-size: 12.5px; }
