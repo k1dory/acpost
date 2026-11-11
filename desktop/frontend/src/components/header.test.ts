@@ -47,10 +47,20 @@ describe("chat header icons", () => {
     const Conversation = (await import("./Conversation.svelte")).default;
     const c = svelte.mount(Conversation, { target: document.body });
     const labels = () => [...document.querySelectorAll("header button")].map(b => b.getAttribute("aria-label"));
+    const fork = "Fork: the conversation so far, in a new chat", panel = "Right panel (⌘\\)";
     app.view = "chat"; svelte.flushSync();
     expect(labels()).not.toContain("New task");
+    expect(labels()).toEqual(expect.arrayContaining([fork, panel]));
     app.view = "ide"; svelte.flushSync();
     expect(labels()).toContain("New task");
+    // Beside the IDE the right panel is hidden (its button would do nothing), and the fork goes too.
+    expect(labels()).not.toContain(fork);
+    expect(labels()).not.toContain(panel);
+    expect(document.querySelector("header")!.classList.contains("beside")).toBe(true); // the hand-off form is laid within the column
+    app.view = "chat"; svelte.flushSync();
+    expect(labels()).toEqual(expect.arrayContaining([fork, panel]));
+    expect(document.querySelector("header")!.classList.contains("beside")).toBe(false);
+    app.view = "ide"; svelte.flushSync();
     (document.querySelector('header button[aria-label="Another chat (⌘K)"]') as HTMLButtonElement).click();
     expect(app.palette).toBe(true);
     app.palette = false;
