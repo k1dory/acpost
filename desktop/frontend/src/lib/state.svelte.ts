@@ -118,13 +118,15 @@ class App {
   /** The folder the IDE has open: the chat's, a new task's, or home. */
   ideFolder(): string { return this.chatCwd() || this.draft.cwd || this.home; }
   /** Shows an edit in the IDE (its diff when the edit's text is whole, else the file). */
-  revealInIDE(r: Reveal, agent = "") {
+  revealInIDE(r: Reveal, agent = "", asked = false) {
     const folder = this.ideFolder();
     if (!folder) return;
     // One after another, in the order asked (each call to the app runs on its own: a slow one
     // would be written after the next, and an older edit shown over a newer).
     const title = agent ? who(agent).name : "";
-    this.revealing = this.revealing.then(() => Node.IDEReveal(folder, r.path, r.old, r.new, false, title)).catch(() => {});
+    // asked: the person clicked the file, and is told when it cannot be shown; following the agent
+    // is quiet about it.
+    this.revealing = this.revealing.then(() => Node.IDEReveal(folder, r.path, r.old, r.new, false, title)).catch(e => { if (asked) this.error = errText(e); });
   }
   private revealing: Promise<unknown> = Promise.resolve();
   playbooks = $state<{ name: string; body: string }[]>([]);

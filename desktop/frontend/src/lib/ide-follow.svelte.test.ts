@@ -81,4 +81,19 @@ describe("the IDE follows the agent", () => {
     expect(order).toEqual(["/w/a", "/w/a"]);
     expect(fake.Node.IDEReveal.mock.calls.map(c => c[3])).toEqual(["2", "3"]);
   });
+  it("a file the person asked for that cannot be shown: said; the next is still asked", async () => {
+    const { app } = await import("./state.svelte");
+    app.home = "/w";
+    fake.Node.IDEReveal.mockRejectedValueOnce(new Error("the app is on another node"));
+    app.revealInIDE({ path: "/w/a", old: "", new: "" }, "agent:claude", true);
+    await flush(); await flush();
+    expect(app.error).toContain("another node");
+    app.error = "";
+    fake.Node.IDEReveal.mockRejectedValueOnce(new Error("quiet"));
+    app.revealInIDE({ path: "/w/b", old: "", new: "" }); // following the agent: not said
+    app.revealInIDE({ path: "/w/c", old: "", new: "" }, "", true);
+    await flush(); await flush();
+    expect(app.error).toBe("");
+    expect(fake.Node.IDEReveal.mock.calls.map(c => c[1])).toEqual(["/w/a", "/w/b", "/w/c"]);
+  });
 });

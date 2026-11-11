@@ -41,7 +41,7 @@
         <div class="edit">
           <div class="path mono">
             <!-- Beside the IDE: the file opens there, with this edit as a diff. -->
-            {#if app.view === "ide" && localFiles(agent)}<button class="open mono" title={t("Show in the IDE")} onclick={() => app.revealInIDE(revealOf(ed), agent)}>{ed.path}</button>{:else}{ed.path}{/if}
+            {#if app.view === "ide" && localFiles(agent)}<button class="open mono" title={t("Show in the IDE")} onclick={() => app.revealInIDE(revealOf(ed), agent, true)}>{ed.path}</button>{:else}{ed.path}{/if}
             <span class="plus">+{ed.added}</span> <span class="minus">−{ed.removed}</span>{#if ed.cut}<span class="muted"> {t("· cut")}</span>{/if}</div>
           <DiffLines lines={lineDiff(ed.old, ed.new)} max={200} />
         </div>
