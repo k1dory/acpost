@@ -67,7 +67,7 @@ func (e *env) stop() {
 }
 
 func newEnv(t *testing.T, yaml string) *env {
-	dir, err := os.MkdirTemp("/tmp", "acp")
+	dir, err := os.MkdirTemp(shortTmp, "acp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func appendCfg(t *testing.T, e *env, line string) {
 
 // An agent reading stderr learns what failed and what to do; with --json it gets fields.
 func TestErrorsExplainThemselves(t *testing.T) {
-	state, err := os.MkdirTemp("/tmp", "acpst")
+	state, err := os.MkdirTemp(shortTmp, "acpst")
 	if err != nil {
 		t.Fatal(err)
 	}

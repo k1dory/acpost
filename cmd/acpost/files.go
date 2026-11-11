@@ -154,7 +154,7 @@ func readLinks(targets []string) ([]store.File, error) {
 				if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
 					return nil, bad(fmt.Errorf("%s names a file on %s, not on this machine", t, u.Host), "--link takes a file of this machine or an http(s) URL")
 				}
-				t = u.Path
+				t = plat.URIPath(u.Path)
 			}
 			abs, err := filepath.Abs(t)
 			if err != nil {
@@ -167,7 +167,7 @@ func readLinks(targets []string) ([]store.File, error) {
 			if !st.Mode().IsRegular() {
 				return nil, bad(fmt.Errorf("%s is not a file", t), "link the files of a directory one by one")
 			}
-			f.URI, f.Name, f.Size = (&url.URL{Scheme: "file", Path: abs}).String(), filepath.Base(abs), int(st.Size())
+			f.URI, f.Name, f.Size = plat.FileURI(abs), filepath.Base(abs), int(st.Size())
 		}
 		out = append(out, f)
 	}

@@ -45,8 +45,7 @@ type cachedToken struct {
 // DefaultStore is the store of this process: the keychain on macOS unless ACPOST_SECRETS_FILE=1,
 // the file in ~/.config/acpost otherwise. The node and acpost forge login use the same one.
 func DefaultStore() *Store {
-	home, _ := os.UserHomeDir()
-	return &Store{Dir: filepath.Join(home, ".config", "acpost"), File: os.Getenv("ACPOST_SECRETS_FILE") == "1"}
+	return &Store{Dir: plat.ConfigDir(), File: os.Getenv("ACPOST_SECRETS_FILE") == "1"}
 }
 
 func (s *Store) tokens() *keychain.Store {

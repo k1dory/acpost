@@ -5,8 +5,12 @@ package plat
 
 import (
 	"errors"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync/atomic"
 )
 
@@ -69,4 +73,51 @@ func MkdirPrivate(dir string) error {
 		return err
 	}
 	return MakePrivate(dir)
+}
+
+// FileURI is the file:// link to an absolute path of this machine: file:///C:/dir/name for
+// C:\dir\name.
+func FileURI(abs string) string {
+	p := filepath.ToSlash(abs)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return (&url.URL{Scheme: "file", Path: p}).String()
+}
+
+// URIPath is the path of this machine a file:// link's path names: the reverse of FileURI.
+func URIPath(p string) string { return uriPath(p, runtime.GOOS == "windows") }
+
+func uriPath(p string, drives bool) string {
+	if drives {
+		if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+			p = p[1:] // /C:/dir/name
+		}
+		return strings.ReplaceAll(p, "/", `\`)
+	}
+	return p
+}
+
+// ConfigDir is where this user's configuration and file-kept secrets are when nothing says
+// otherwise: ~/.config/acpost, on Windows %AppData%\acpost.
+func ConfigDir() string {
+	if runtime.GOOS == "windows" {
+		if d, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(d, "acpost")
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "acpost")
+}
+
+// StateDir is where a node keeps its socket and store when nothing says otherwise:
+// ~/.local/state/acpost, on Windows %LocalAppData%\acpost (this machine's, not roamed).
+func StateDir() string {
+	if runtime.GOOS == "windows" {
+		if d, err := os.UserCacheDir(); err == nil {
+			return filepath.Join(d, "acpost")
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "acpost")
 }

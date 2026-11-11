@@ -16,3 +16,7 @@ func interrupt(p *os.Process) { _ = p.Signal(syscall.SIGINT) }
 // stopsCleanly says whether a process asked to stop ends with its own exit code (and writes what
 // it has to say on the way).
 const stopsCleanly = true
+
+// shortTmp is where sockets are made: a Unix socket's path is short, and macOS's own temporary
+// directory is not.
+const shortTmp = "/tmp"

@@ -15,3 +15,6 @@ func interrupt(p *os.Process) { _ = p.Kill() }
 
 // stopsCleanly says whether a process asked to stop ends with its own exit code.
 const stopsCleanly = false
+
+// shortTmp is where sockets are made: the system's temporary directory.
+const shortTmp = ""

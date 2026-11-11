@@ -21,6 +21,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -92,7 +93,7 @@ func validLink(f *store.File) error {
 	}
 	switch u.Scheme {
 	case "file":
-		if u.Host != "" && u.Host != "localhost" || !filepath.IsAbs(u.Path) {
+		if u.Host != "" && u.Host != "localhost" || !filepath.IsAbs(plat.URIPath(u.Path)) {
 			return bad("a file link names an absolute path on this machine")
 		}
 	case "http", "https":
@@ -409,7 +410,7 @@ func (s *acpSlot) promptBlocks(ctx context.Context, m store.Message, caps acp.Pr
 	return blocks, tf, cleanup, nil
 }
 
-func fileURI(path string) string { return (&url.URL{Scheme: "file", Path: path}).String() }
+func fileURI(path string) string { return plat.FileURI(path) }
 
 // blockLen is the length of a block as JSON, with the comma that separates it.
 func blockLen(b acp.ContentBlock) int {

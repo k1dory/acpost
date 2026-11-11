@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 // Config is a node's configuration.
@@ -194,8 +196,7 @@ func StateDir() string {
 	if d := os.Getenv("XDG_STATE_HOME"); d != "" {
 		return filepath.Join(d, "acpost")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "acpost")
+	return plat.StateDir()
 }
 
 // DefaultPath is the configuration file read when none is named.
@@ -211,8 +212,7 @@ func implicitPath() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "acpost", "config.yaml")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "acpost", "config.yaml")
+	return filepath.Join(plat.ConfigDir(), "config.yaml")
 }
 
 // Load reads a configuration file. The implicit default file (ACPOST_CONFIG unset) that does not
@@ -269,7 +269,7 @@ var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
 func expand(p string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") {
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~"+string(filepath.Separator)) {
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, strings.TrimPrefix(p, "~"))
 	}

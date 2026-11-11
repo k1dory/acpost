@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,11 @@ var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 // shortDir is a directory short enough for a Unix socket path (104 bytes on macOS).
 func shortDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "acps")
+	root := "/tmp"
+	if runtime.GOOS == "windows" {
+		root = "" // the system's temporary directory
+	}
+	dir, err := os.MkdirTemp(root, "acps")
 	if err != nil {
 		t.Fatal(err)
 	}

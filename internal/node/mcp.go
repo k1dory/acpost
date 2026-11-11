@@ -5,13 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/k1dory/acpost/internal/keychain"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -29,8 +28,7 @@ type mcpSecrets struct {
 
 func (n *Node) mcpKeychain() *keychain.Store {
 	n.mcpSec.once.Do(func() {
-		home, _ := os.UserHomeDir()
-		n.mcpSec.kc = keychain.Default("acpost-mcp", filepath.Join(home, ".config", "acpost"))
+		n.mcpSec.kc = keychain.Default("acpost-mcp", plat.ConfigDir())
 	})
 	return n.mcpSec.kc
 }

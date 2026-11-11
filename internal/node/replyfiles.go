@@ -21,6 +21,7 @@ import (
 	"mime"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -158,7 +159,7 @@ func (tf *turnFiles) lookup(uri string) (store.File, bool) {
 		return f, true
 	}
 	if u, err := url.Parse(uri); err == nil && u.Scheme == "file" {
-		f, ok := tf.byURI[u.Path]
+		f, ok := tf.byURI[plat.URIPath(u.Path)]
 		return f, ok
 	}
 	return store.File{}, false
@@ -167,12 +168,12 @@ func (tf *turnFiles) lookup(uri string) (store.File, bool) {
 // onDisk says whether uri is a file:// path whose file holds exactly data now.
 func onDisk(uri string, data []byte) bool {
 	u, err := url.Parse(uri)
-	if err != nil || u.Scheme != "file" || !strings.HasPrefix(u.Path, "/") {
+	if err != nil || u.Scheme != "file" || !filepath.IsAbs(plat.URIPath(u.Path)) {
 		return false
 	}
 	// One open, non-blocking, checked on its descriptor, read no further than the content: a path
 	// swapped for a FIFO or a device is not waited on or read without end.
-	fd, err := plat.OpenRead(u.Path)
+	fd, err := plat.OpenRead(plat.URIPath(u.Path))
 	if err != nil {
 		return false
 	}
