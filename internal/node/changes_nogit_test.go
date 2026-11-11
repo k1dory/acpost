@@ -376,3 +376,22 @@ func TestReportedQuotesNames(t *testing.T) {
 		t.Error("quoting")
 	}
 }
+
+// Review round 5. What became of a file over several turns (or edits): its last word, a new file
+// staying new while it is only changed.
+func TestStatusOverTurns(t *testing.T) {
+	f := func(st string) []store.ChangedFile { return []store.ChangedFile{{Path: "x", Status: st, Added: 1}} }
+	for _, c := range []struct{ steps, want string }{{"MD", "D"}, {"DA", "A"}, {"AM", "A"}, {"AD", "D"}, {"DM", "M"}, {"MM", "M"}} {
+		var files []store.ChangedFile
+		for _, st := range c.steps {
+			files = joinChanged(files, f(string(st)))
+		}
+		if len(files) != 1 || files[0].Status != c.want || files[0].Added != len(c.steps) {
+			t.Errorf("%s: %+v, want %s", c.steps, files, c.want)
+		}
+	}
+	files, _, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/x", old: "a\n", new: "b\n"}, {path: "/w/x", old: "b\n", deleted: true}})
+	if len(files) != 1 || files[0].Status != "D" {
+		t.Errorf("changed, then removed in one turn: %+v", files)
+	}
+}

@@ -5,7 +5,7 @@
   import { splitDiff } from "../lib/turn";
   import { who, clock } from "../lib/format";
   import { latest } from "../lib/latest";
-  import { changeRoots, mergeChanges, joinFiles } from "../lib/changes";
+  import { changeRoots, mergeChanges, joinFiles, laterStatus } from "../lib/changes";
   import DiffLines from "./DiffLines.svelte";
   import Dropdown from "./Dropdown.svelte";
 
@@ -57,7 +57,7 @@
     for (const r of agent ? turns : data?.repos ?? []) for (const f of (r.files ?? []) as any[]) {
       const k = keyOf(r.repo, f.path);
       const s = m.get(k) ?? { path: f.path, repo: r.repo, added: 0, removed: 0, status: f.status, binary: false };
-      s.added += Math.max(0, f.added); s.removed += Math.max(0, f.removed); s.status = f.status;
+      s.added += Math.max(0, f.added); s.removed += Math.max(0, f.removed); s.status = m.has(k) ? laterStatus(s.status, f.status) : f.status;
       s.binary ||= f.added < 0 || f.removed < 0; // git counts no lines of a binary file
       m.set(k, s);
     }

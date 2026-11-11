@@ -40,7 +40,10 @@ function joinRepo(rs: RepoDiff[]): RepoDiff {
   const files = new Map<string, File>();
   for (const r of rs) for (const f of r.files ?? []) {
     const s = files.get(f.path) ?? { path: f.path, status: f.status, added: 0, removed: 0 };
-    s.added += Math.max(0, f.added); s.removed += Math.max(0, f.removed); s.status = f.status;
+    // A binary file (git counts no lines of it: -1) stays one, whatever else is added to it.
+    const binary = s.added < 0 || f.added < 0 || f.removed < 0;
+    s.added = binary ? -1 : s.added + f.added; s.removed = binary ? -1 : s.removed + f.removed;
+    s.status = files.has(f.path) ? laterStatus(s.status, f.status) : f.status;
     files.set(f.path, s);
   }
   const last = rs[rs.length - 1];
@@ -62,4 +65,10 @@ export function joinFiles<T extends { repo: string; path: string; lines: any[] }
     else { const c = { ...f, lines: [...f.lines] }; at.set(k, c); out.push(c); }
   }
   return out;
+}
+
+/** What became of a file that was `was` and then `next`: removed, made (again), or changed; a file
+ * made and then changed is still a new one (the node's laterStatus). */
+export function laterStatus(was: string, next: string): string {
+  return next === "D" || next === "A" ? next : was === "A" ? "A" : "M";
 }

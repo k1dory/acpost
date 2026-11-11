@@ -256,6 +256,19 @@ export function gitUnquote(s: string): string {
   return new TextDecoder().decode(new Uint8Array(bytes));
 }
 
+/** The file a diff's header is of (its new name): what follows "diff --git ", two names, each
+ * as it is or as git quotes it (not ASCII, a quotation mark: "b/…"), one quoted or both. Not
+ * quoted, the name may have " b/" in it: the same name twice is read by its halves; a rename's
+ * second name starts at the last " b/". */
+export function headerPath(rest: string): string {
+  const quoted = /(?:^| )"b\/((?:[^"\\]|\\.)*)"$/.exec(rest);
+  if (quoted) return gitUnquote(quoted[1]);
+  const n = (rest.length - 5) / 2;
+  if (Number.isInteger(n) && n > 0 && rest.startsWith("a/") && rest.slice(2 + n, 2 + n + 3) === " b/" && rest.slice(2, 2 + n) === rest.slice(2 + n + 3)) return rest.slice(2, 2 + n);
+  const i = rest.lastIndexOf(" b/");
+  return i >= 0 ? rest.slice(i + 3) : rest;
+}
+
 /** A git unified diff split into files. */
 export function splitDiff(diff: string): { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] {
   const files: { path: string; lines: { op: string; text: string; a?: number; b?: number }[] }[] = [];
@@ -263,14 +276,7 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
   let a = 0, b = 0;
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      // A name git quotes (not ASCII, a quotation mark: "a/…" "b/…") is read as it is written.
-      const q = /^diff --git "a\/(?:[^"\\]|\\.)*" "b\/((?:[^"\\]|\\.)*)"$/.exec(line);
-      // Not quoted: "a/NAME b/NAME", the name twice (it may have " b/" in it); a rename has two
-      // names, the second after the last " b/" that leaves an "a/" name before it.
-      const rest = line.slice(11), n = (rest.length - 5) / 2;
-      const same = !q && Number.isInteger(n) && n > 0 && rest.startsWith("a/") && rest.slice(2, 2 + n) === rest.slice(2 + n + 3) && rest.slice(2 + n, 2 + n + 3) === " b/";
-      const m = q || same ? null : / b\/(.*)$/.exec(line);
-      cur = { path: q ? gitUnquote(q[1]) : same ? rest.slice(2, 2 + n) : m ? m[1] : rest, lines: [] };
+      cur = { path: headerPath(line.slice(11)), lines: [] };
       files.push(cur);
       continue;
     }

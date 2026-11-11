@@ -341,13 +341,14 @@ func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, s
 			files = append(files, store.ChangedFile{Path: p, Status: "M"})
 		}
 		// What became of the file over the turn: made (and edited since), removed, or changed.
-		switch {
-		case e.deleted:
-			files[i].Status = "D"
-		case e.created:
-			files[i].Status = "A"
-		case files[i].Status == "D":
-			files[i].Status = "M" // removed, then written again
+		if ok || e.deleted || e.created {
+			next := "M"
+			if e.deleted {
+				next = "D"
+			} else if e.created {
+				next = "A"
+			}
+			files[i].Status = laterStatus(files[i].Status, next)
 		}
 		files[i].Added += added
 		files[i].Removed += removed
@@ -616,6 +617,19 @@ func (n *Node) Changes(ctx context.Context, p Principal, id string, tree, withDi
 	return turns, whole, nil
 }
 
+// laterStatus is what became of a file that was was and then next: removed, made (again), or
+// changed; a file made and then changed is still a new one.
+func laterStatus(was, next string) string {
+	switch {
+	case next == "D" || next == "A":
+		return next
+	case was == "A":
+		return "A"
+	default:
+		return "M"
+	}
+}
+
 // joinChanged adds more to files: a file in both once, its lines summed.
 func joinChanged(files, more []store.ChangedFile) []store.ChangedFile {
 	at := map[string]int{}
@@ -626,6 +640,7 @@ func joinChanged(files, more []store.ChangedFile) []store.ChangedFile {
 		if i, ok := at[f.Path]; ok {
 			files[i].Added += f.Added
 			files[i].Removed += f.Removed
+			files[i].Status = laterStatus(files[i].Status, f.Status)
 			continue
 		}
 		at[f.Path] = len(files)
