@@ -141,7 +141,7 @@ agents:
 	ask(t, n, SendRequest{Body: "echo two", Thread: root.ID})
 	entries, _ := os.ReadDir(state)
 	if len(entries) != 2 {
-		t.Skipf("%d sessions: the two messages share one here", len(entries))
+		t.Fatalf("%d sessions: the two messages were to run one each", len(entries))
 	}
 	c, err := n.Chats(ctx, me)
 	if err != nil {
@@ -238,7 +238,7 @@ agents:
 	}
 	n.Wait(ctx, me, m.ID, 20*time.Second)
 	if sid, _ := n.st.Session(ctx, "agent:fake", "thread:"+m.Thread); sid != "" {
-		t.Skip("the session was kept under its key before the cancel: not this case")
+		t.Fatal("the session was kept under its key before the cancel: the slow setup did not hold the turn")
 	}
 	// The turn's process is gone or idle by now; a session started elsewhere is there to be listed.
 	time.Sleep(300 * time.Millisecond)
@@ -331,5 +331,33 @@ agents:
 		if !shown["session:fake/"+id] {
 			t.Errorf("%s is not among the chats", id)
 		}
+	}
+}
+
+// A session in use keeps its mark of having been made here past retention (the mark is renewed
+// with each use, as the key is), so when its key moves on it is still known for a left one.
+func TestMadeMarkIsKeptWhileTheSessionIsUsed(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, os.Args[0], state))
+	m := ask(t, n, SendRequest{Body: "echo one"})
+	sid, _ := n.st.Session(ctx, "agent:fake", "thread:"+m.Thread)
+	time.Sleep(30 * time.Millisecond)
+	between := time.Now()
+	time.Sleep(30 * time.Millisecond)
+	ask(t, n, SendRequest{Body: "echo two", Thread: m.Thread}) // used again
+	if _, err := n.st.GC(ctx, between); err != nil {           // what was unused since goes
+		t.Fatal(err)
+	}
+	if got, _ := n.st.Session(ctx, "agent:fake", madeSession+sid); got != sid {
+		t.Fatalf("the mark of %s went though the session was used: %q", sid, got)
+	}
+	if now, _ := n.st.Session(ctx, "agent:fake", "thread:"+m.Thread); now != sid {
+		t.Fatalf("the thread's session is %q, was %q", now, sid)
 	}
 }

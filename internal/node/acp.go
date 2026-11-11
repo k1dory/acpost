@@ -509,6 +509,7 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 			if a.ownerOf(string(sid)) == s.idx && (stored == "" || stored == string(sid)) {
 				// Retention measures from the last use.
 				_ = n.st.PutSession(ctx, a.addr, key, string(sid))
+				a.keepMade(ctx, string(sid))
 				return sid, nil
 			}
 			delete(p.sessions, key)
@@ -621,8 +622,17 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 		if err := n.st.PutSession(ctx, a.addr, key, string(sid)); err != nil {
 			n.log.Warn("store session", "agent", a.name, "err", err)
 		}
+		a.keepMade(ctx, string(sid))
 	}
 	return sid, nil
+}
+
+// keepMade keeps a session's mark of having been made here as long as the session is used (the
+// mark goes with what is unused past retention): a session not so marked gets none.
+func (a *acpAgent) keepMade(ctx context.Context, sid string) {
+	if v, err := a.n.st.Session(ctx, a.addr, madeSession+sid); err == nil && v != "" {
+		_ = a.n.st.PutSession(ctx, a.addr, madeSession+sid, sid)
+	}
 }
 
 // openFreed opens a session that exists (openSession); when the agent says another of its
