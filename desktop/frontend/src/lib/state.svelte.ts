@@ -4,7 +4,7 @@ import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
 import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
 import { afterSent, overLimits } from "./draft";
-import { Turn, type Ev } from "./turn";
+import { Turn, ownBody, type Ev } from "./turn";
 
 export type Msg = {
   id: string; from: string; to: string; thread: string; parent?: string; depth: number; state: string;
@@ -949,6 +949,8 @@ function segments(evs: Ev[]): Segment[] {
     if (!cur) { cur = { user: "", turn: new Turn() }; out.push(cur); }
     cur.turn.add([{ ...e, seq: cur.turn.last + 1 }]);
   }
+  // A prompt acpost sent itself: what the person wrote, not what the node put before it.
+  for (const s of out) s.user = ownBody(s.user);
   return out;
 }
 

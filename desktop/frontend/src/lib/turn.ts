@@ -262,3 +262,16 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
   }
   return files;
 }
+
+/** What the person wrote in a prompt acpost sent: the prompt without what the node put before it
+ * (the files it lists, whose message it is and how to answer, the note on where the answer is
+ * read, the person's knowledge). A session read back (History) has its prompts whole; any other
+ * text is as it is. */
+export function ownBody(text: string): string {
+  const head = /(?:^|\n)\[acpost\] Message msg_\w+ from [^\n]*\nYour final answer in this turn is sent back to the sender as the reply\.[^\n]*\n\n/.exec(text);
+  if (!head) return text;
+  let rest = text.slice(head.index + head[0].length);
+  rest = rest.replace(/^\[acpost\] The user reads your answers in the acpost app[^\n]*\n\n/, "");
+  rest = rest.replace(/^\[acpost\] What the user keeps as knowledge[\s\S]*?\n\[acpost\] The task:\n\n/, "");
+  return rest;
+}

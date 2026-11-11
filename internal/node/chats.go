@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"errors"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -107,7 +109,7 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	shown := map[string]int{} // sessions shown per agent
 	for _, c := range ext {
 		if c.Kind == "session" {
-			if shown[c.Agent] >= chatSessionsPerAgent || ours[strings.TrimPrefix(c.Agent, "agent:")+"/"+c.Session] {
+			if shown[c.Agent] >= chatSessionsPerAgent || ours[strings.TrimPrefix(c.Agent, "agent:")+"/"+c.Session] || n.leftBehind(ctx, c.Title) {
 				continue
 			}
 			shown[c.Agent]++
@@ -133,6 +135,22 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 		out.Items = []client.Chat{}
 	}
 	return out, nil
+}
+
+// ownPrompt is how a prompt of this node starts (acpSlot.prompt): an agent that names a session
+// after its first message (codex-acp) names one acpost started so.
+var ownPrompt = regexp.MustCompile(`^\[acpost\] Message (msg_[0-9A-Za-z]+) from `)
+
+// leftBehind says whether a session with this title is one a message of this node started and its
+// thread no longer runs (the turn was cancelled or tried again, and the thread went on in another
+// session): the thread is its chat, and the session is not shown beside it.
+func (n *Node) leftBehind(ctx context.Context, title string) bool {
+	m := ownPrompt.FindStringSubmatch(title)
+	if m == nil {
+		return false
+	}
+	_, err := n.st.Get(ctx, m[1])
+	return err == nil
 }
 
 // chatCacheFresh: how long the sessions and sandboxes listed elsewhere are shown without asking
@@ -223,8 +241,25 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 			defer cancel()
 			var got []client.Chat
 			cursor, others := "", 0
+			// One process for every page: a spare one (no slot's is up) is started once a
+			// listing, not once a page.
+			fail := func(err error) {
+				mu.Lock()
+				partial = append(partial, "agent:"+name+": "+err.Error())
+				mu.Unlock()
+			}
+			if err := canUseSessions(p, name, a.cfg); err != nil {
+				fail(err)
+				return
+			}
+			proc, done, err := a.listProc(lctx)
+			defer done()
+			if err != nil {
+				fail(errors.New(explainStart(err).Message))
+				return
+			}
 			for others < chatSessionsPerAgent {
-				list, next, err := n.Sessions(lctx, p, name, "", cursor)
+				list, next, err := sessionsOf(lctx, proc, name, "", cursor)
 				if err != nil {
 					if CodeOf(err) != "unsupported" {
 						mu.Lock()

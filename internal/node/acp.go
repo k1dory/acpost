@@ -1345,6 +1345,11 @@ func (n *Node) Sessions(ctx context.Context, p Principal, agent, cwd, cursor str
 		f := explainStart(err)
 		return nil, "", errh(f.Code, HintFor(f.Code), "%s", f.Message)
 	}
+	return sessionsOf(ctx, proc, agent, cwd, cursor)
+}
+
+// sessionsOf is a page of the sessions an agent's process lists, newest first.
+func sessionsOf(ctx context.Context, proc *acpProc, agent, cwd, cursor string) ([]client.SessionInfo, string, error) {
 	if proc.init.AgentCapabilities.SessionCapabilities.List == nil {
 		return nil, "", errh("unsupported", HintFor("unsupported"), "agent:%s does not list its sessions (ACP session/list)", agent)
 	}
