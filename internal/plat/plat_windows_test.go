@@ -220,13 +220,65 @@ func TestCmdFileGetsItsArgumentsWhole(t *testing.T) {
 // quote would be the interpreter's to read: an & there another command): refused, not run.
 func TestCmdFileRefusesAQuotedArgument(t *testing.T) {
 	mark := filepath.Join(t.TempDir(), "ran")
-	cmd := exec.CommandContext(context.Background(), cmdWrapper(t), `say "a&echo x>`+mark+`"`)
+	cmd := exec.CommandContext(context.Background(), cmdWrapper(t), "plain", `{"token":"s3cret-sentinel"} "a&echo x>`+mark+`"`)
 	cmd.Env = append(os.Environ(), "PLAT_HELPER=args")
-	if out, err := Output(cmd); err == nil || !strings.Contains(err.Error(), "quote") {
+	out, err := Output(cmd)
+	if err == nil || !strings.Contains(err.Error(), "quote") || !strings.Contains(err.Error(), "argument 2") {
 		t.Fatalf("%q %v", out, err)
+	}
+	// The error is told to the message's sender: it names the argument's place, not its text.
+	if strings.Contains(err.Error(), "s3cret-sentinel") {
+		t.Fatalf("the error shows the argument: %v", err)
 	}
 	if _, err := os.Stat(mark); err == nil {
 		t.Fatal("what followed the quote was run")
+	}
+}
+
+// Where a command's path leads for a process in a directory, the Windows way.
+func TestLocalPath(t *testing.T) {
+	for _, c := range []struct{ p, dir, want string }{
+		{`C:\tools\agent`, `D:\work`, `C:\tools\agent`},
+		{`\tools\agent`, `D:\work`, `D:\tools\agent`},
+		{`/tools/agent.cmd`, `D:\work\sub`, `D:/tools/agent.cmd`},
+		{`.\agent`, `D:\work`, `D:\work\agent`},
+		{`bin\agent`, `D:\work`, `D:\work\bin\agent`},
+		{`agent`, `D:\work`, `agent`},
+		{`C:agent`, `D:\work`, `C:agent`},
+		{`.\agent`, ``, `.\agent`},
+	} {
+		if got := localPath(c.p, c.dir); got != c.want {
+			t.Errorf("localPath(%q, %q) = %q, want %q", c.p, c.dir, got, c.want)
+		}
+	}
+}
+
+// A path that starts at a root is of the working directory's drive: the .cmd file there is run,
+// with and without its extension.
+func TestCmdFileByARootedPath(t *testing.T) {
+	wrapper := cmdWrapper(t)
+	rooted := strings.TrimPrefix(wrapper, filepath.VolumeName(wrapper)) // \Users\...\agent.cmd
+	for _, name := range []string{rooted, strings.TrimSuffix(rooted, ".cmd")} {
+		cmd := exec.CommandContext(context.Background(), name, "two words")
+		cmd.Dir = filepath.Dir(wrapper)
+		if got := argsThrough(t, cmd); !slices.Equal(got, []string{"two words"}) {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}
+
+// What a group starts has no window of its own.
+func TestStartedWithoutAWindow(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "PLAT_HELPER=mark", "PLAT_MARK="+filepath.Join(t.TempDir(), "ran"))
+	g, err := Start(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	_ = cmd.Wait()
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW == 0 {
+		t.Fatal("started with a console window of its own")
 	}
 }
 

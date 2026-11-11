@@ -55,13 +55,16 @@ func start(cmd *exec.Cmd, lasting bool, publish func(*Group)) (*Group, error) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED | windows.CREATE_NEW_PROCESS_GROUP
+	// No window of its own: a node with no console (one started in the background) would otherwise
+	// have the system open one for each agent and each git, there to be closed by a hand.
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED | windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW
 	// A program installed by npm is a .cmd file: run by the command interpreter, with a command
 	// line that keeps its arguments whole.
 	if file := batchFile(cmd); file != "" && cmd.SysProcAttr.CmdLine == "" && cmd.Err == nil {
-		for _, a := range cmd.Args[1:] {
+		for i, a := range cmd.Args[1:] {
 			if strings.ContainsAny(a, "\"\r\n") {
-				return nil, fmt.Errorf("start %s: an argument with a quote or a line end (%q) does not reach a .cmd file whole: name the program it runs instead (node and its script)", file, a)
+				// Named by its place, not shown: an argument may be a secret, and this error is told on.
+				return nil, fmt.Errorf("start %s: its argument %d has a quote or a line end, and does not reach a .cmd file whole: name the program it runs instead (node and its script)", file, i+1)
 			}
 		}
 		comspec := os.Getenv("ComSpec")
@@ -545,10 +548,7 @@ func quoteArg(s string) string {
 // given, or with the extension the system would add (C:\tools\agent for agent.cmd; a relative
 // one is of cmd.Dir).
 func batchFile(cmd *exec.Cmd) string {
-	p := cmd.Path
-	if !filepath.IsAbs(p) && cmd.Dir != "" && strings.ContainsAny(p, `\/`) {
-		p = filepath.Join(cmd.Dir, p)
-	}
+	p := localPath(cmd.Path, cmd.Dir)
 	if lp, err := exec.LookPath(p); err == nil {
 		p = lp
 	}
@@ -559,6 +559,21 @@ func batchFile(cmd *exec.Cmd) string {
 		p = abs
 	}
 	return p
+}
+
+// localPath is where a command's path leads for a process in dir: as it is when it is whole
+// (or a bare name, looked for on PATH), on dir's drive when it starts at a root (\tools\agent),
+// under dir when it is relative (.\agent, bin\agent).
+func localPath(p, dir string) string {
+	switch {
+	case filepath.IsAbs(p) || dir == "" || !strings.ContainsAny(p, `\/`):
+		return p
+	case filepath.VolumeName(p) != "": // C:agent: of that drive's own directory, not dir's
+		return p
+	case p[0] == '\\' || p[0] == '/':
+		return filepath.VolumeName(dir) + p
+	}
+	return filepath.Join(dir, p)
 }
 
 // isBatch says whether path is a file the command interpreter runs.
