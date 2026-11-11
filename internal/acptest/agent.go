@@ -105,6 +105,12 @@ func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (ac
 			return acp.InitializeResponse{}, ctx.Err()
 		}
 	}
+	if log := os.Getenv("FAKE_STARTS"); log != "" { // each process that starts, a line
+		if f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			fmt.Fprintln(f, os.Getpid())
+			f.Close()
+		}
+	}
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{LoadSession: os.Getenv("FAKE_NO_LOAD") == "", // FAKE_NO_LOAD: an adapter that cannot reopen a session
@@ -578,10 +584,29 @@ func (a *fakeAgent) ListSessions(ctx context.Context, p acp.ListSessionsRequest)
 		if err != nil {
 			continue
 		}
+		title := "session " + e.Name()
+		if b, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil {
+			if t, ok := strings.CutPrefix(string(b), "title:"); ok { // a session named by what it holds
+				title = t
+			}
+		}
 		out.Sessions = append(out.Sessions, acp.SessionInfo{SessionId: acp.SessionId(e.Name()), Cwd: "/fake",
-			Title: acp.Ptr("session " + e.Name()), UpdatedAt: acp.Ptr(info.ModTime().UTC().Format(time.RFC3339Nano))})
+			Title: acp.Ptr(title), UpdatedAt: acp.Ptr(info.ModTime().UTC().Format(time.RFC3339Nano))})
 	}
 	sort.Slice(out.Sessions, func(i, j int) bool { return *out.Sessions[i].UpdatedAt > *out.Sessions[j].UpdatedAt })
+	// FAKE_PAGE: so many a page, the cursor where the next starts.
+	if size, _ := strconv.Atoi(os.Getenv("FAKE_PAGE")); size > 0 {
+		from := 0
+		if p.Cursor != nil {
+			from, _ = strconv.Atoi(*p.Cursor)
+		}
+		from = min(from, len(out.Sessions))
+		to := min(from+size, len(out.Sessions))
+		if to < len(out.Sessions) {
+			out.NextCursor = acp.Ptr(strconv.Itoa(to))
+		}
+		out.Sessions = out.Sessions[from:to]
+	}
 	return out, nil
 }
 

@@ -303,3 +303,46 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
   }
   return files;
 }
+
+// What the node puts before a message's text in a prompt (internal/node: acpSlot.prompt, readerNote,
+// knowledgeFor), to the letter: a test of the node's holds these to its own.
+const promptLines = "Your final answer in this turn is sent back to the sender as the reply. To ask another agent, run `acpost send --to agent:<name> --body \"…\" --wait`. To attach files to your reply, run `acpost attach FILE…`.\n\n";
+const readerNote = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks and Mermaid. When a flow, an architecture, a sequence of calls or a state machine is clearer as a picture, draw it in a ```mermaid block (flowchart TD/LR or sequenceDiagram; every label in double quotes, A[\"api (HTTP)\"] -->|\"calls\"| B[\"store\"]; no HTML; about 15 nodes at most). Do not draw what a sentence says as well.\n\n";
+const knowledgeHead = "[acpost] What the user keeps as knowledge for this work (follow it unless the task says otherwise):\n\n";
+const knowledgeEnd = "\n\n[acpost] The task:\n\n";
+const attachedFiles = /^\[acpost\] Attached files:\n(?:- [^\n]*\n)+\n/;
+const messageHead = /^\[acpost\] Message msg_[0-9A-Za-z]+ from [^\n]*\.\n/;
+
+// A line of the attached-files list (acpSlot.prompt): "- NAME (TYPE[, N bytes]): WHERE". The name may
+// have brackets and colons of its own, and so may the type's parameters: the type is found by its
+// shape (type/subtype), at the first place it has one (a name has no slash).
+const attachedLine = /^- ([^/]*?) \(([\w.+!#$&^-]+\/[\w.+!#$&^-]+(?:;.*?)?)(?:, \d+ bytes)?\): (?:in this prompt|a link, .*|.* \(a copy until this turn ends\))$/;
+
+/** The name of a file in a line of the attached-files list; a line not read is given whole (without
+ * its dash): the file is not lost from what is shown. */
+export function attachedName(line: string): string {
+  const m = attachedLine.exec(line);
+  return m ? m[1] : line.replace(/^- /, "");
+}
+
+/** What the person wrote in a prompt acpost sent: the prompt without what the node put before it
+ * (the files it lists, whose message it is and how to answer, the note on where the answer is
+ * read, the person's knowledge). A session read back (History) has its prompts whole. Only the
+ * node's own lines, whole and where it puts them, are taken off: any other text is as it is. */
+export function ownBody(text: string): string {
+  const files = attachedFiles.exec(text);
+  let rest = files ? text.slice(files[0].length) : text;
+  const head = messageHead.exec(rest);
+  if (!head || !rest.startsWith(promptLines, head[0].length)) return text;
+  rest = rest.slice(head[0].length + promptLines.length);
+  if (rest.startsWith(readerNote)) rest = rest.slice(readerNote.length);
+  if (rest.startsWith(knowledgeHead)) {
+    const end = rest.indexOf(knowledgeEnd, knowledgeHead.length - 2);
+    if (end >= 0) rest = rest.slice(end + knowledgeEnd.length);
+  }
+  // The files that went with it are named (a message of a screenshot alone has no other text):
+  // their content is not replayed.
+  const names = files ? files[0].split("\n").filter(l => l.startsWith("- ")).map(attachedName) : [];
+  if (names.length) rest = (rest.trim() ? rest.replace(/\s+$/, "") + "\n\n" : "") + names.map(n => "📎 " + n).join("\n");
+  return rest;
+}

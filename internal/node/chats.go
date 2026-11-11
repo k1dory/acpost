@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -135,6 +136,11 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	return out, nil
 }
 
+// madeSession marks, in the store's session keys (a namespace of its own, like the sandbox
+// cursors'), a session the node made for a turn of a thread or a task. It goes with the sessions
+// unused past retention.
+const madeSession = "made:"
+
 // chatCacheFresh: how long the sessions and sandboxes listed elsewhere are shown without asking
 // again; past it they are still shown while a refresh runs apart.
 const chatCacheFresh = 30 * time.Second
@@ -223,8 +229,41 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 			defer cancel()
 			var got []client.Chat
 			cursor, others := "", 0
+			// One process for every page: a spare one (no slot's is up) is started once a
+			// listing, not once a page.
+			fail := func(err error) {
+				mu.Lock()
+				partial = append(partial, "agent:"+name+": "+err.Error())
+				mu.Unlock()
+			}
+			if err := canUseSessions(p, name, a.cfg); err != nil {
+				fail(err)
+				return
+			}
+			proc, done, err := a.listProc(lctx)
+			defer done()
+			if err != nil {
+				fail(errors.New(explainStart(err).Message))
+				return
+			}
+			made, err := n.st.SessionsMarked(lctx, a.addr, madeSession)
+			if err != nil {
+				fail(err)
+				return
+			}
+			inUse := map[string]bool{}
+			for _, prefix := range []string{"thread:", "task:", "from:"} { // sessionKey's keys
+				ids, err := n.st.SessionsMarked(lctx, a.addr, prefix)
+				if err != nil {
+					fail(err)
+					return
+				}
+				for id := range ids {
+					inUse[id] = true
+				}
+			}
 			for others < chatSessionsPerAgent {
-				list, next, err := n.Sessions(lctx, p, name, "", cursor)
+				list, next, err := sessionsOf(lctx, proc, name, "", cursor)
 				if err != nil {
 					if CodeOf(err) != "unsupported" {
 						mu.Lock()
@@ -234,6 +273,14 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 					break
 				}
 				for _, si := range list {
+					// A session this node made for a thread or a task, that no key runs any more
+					// (its turn was cancelled or tried again, and the thread went on in another),
+					// is no chat: not shown, and not one of the sessions the agent's limit counts.
+					// One a key still runs stays: the threads list theirs, and one no thread
+					// claims is a chat here. Anything the node did not make stays too.
+					if made[si.ID] && !inUse[si.ID] {
+						continue
+					}
 					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
 						Title: si.Title, Cwd: si.Cwd}
 					if t, err := time.Parse(time.RFC3339Nano, si.UpdatedAt); err == nil {

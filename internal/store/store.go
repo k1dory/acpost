@@ -1271,6 +1271,31 @@ func (s *Store) PutSession(ctx context.Context, agent, key, sessionID string) er
 	return err
 }
 
+// SessionsMarked is the session ids an agent has under keys of this prefix (a mark the node keeps
+// of a session: who made it, that it is a fork), as a set.
+func (s *Store) SessionsMarked(ctx context.Context, agent, prefix string) (map[string]bool, error) {
+	if prefix == "" || prefix[len(prefix)-1] == 0xff {
+		return nil, errors.New("a prefix to look under")
+	}
+	// Up to the prefix's successor (its last byte the next one): every key that starts with it,
+	// whatever character follows.
+	next := prefix[:len(prefix)-1] + string([]byte{prefix[len(prefix)-1] + 1})
+	rows, err := s.r.QueryContext(ctx, "SELECT session_id FROM sessions WHERE agent = ? AND key >= ? AND key < ?", agent, prefix, next)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 const gcBatch = 500
 
 // GC deletes final messages that finished before before (with their bodies and events) and

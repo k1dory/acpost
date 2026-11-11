@@ -509,6 +509,7 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 			if a.ownerOf(string(sid)) == s.idx && (stored == "" || stored == string(sid)) {
 				// Retention measures from the last use.
 				_ = n.st.PutSession(ctx, a.addr, key, string(sid))
+				a.keepMade(ctx, string(sid))
 				return sid, nil
 			}
 			delete(p.sessions, key)
@@ -568,6 +569,16 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 			return "", fmt.Errorf("session/new: %w", procErr(p, err))
 		}
 		sid, st = r.SessionId, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
+		// Marked as made here, whatever becomes of the turn (cancelled, tried again in another
+		// session): the chats list it under its thread, never as a session started elsewhere.
+		// A session for one message (session: message, no key) is not marked: no thread lists
+		// it, and its entry among the chats is where it is forked from.
+		// (A session for one message, no key, is no thread's: it is not marked, and stays a chat.)
+		if key != "" {
+			if err := n.st.PutSession(n.ctx, a.addr, madeSession+string(sid), string(sid)); err != nil {
+				n.log.Warn("mark session", "agent", a.name, "err", err)
+			}
+		}
 		p.costBase[sid] = 0 // a new session: its cost starts here
 		p.fresh[sid] = true
 		// The session is the turn's before it is configured and published (the store, the agent's
@@ -611,8 +622,17 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 		if err := n.st.PutSession(ctx, a.addr, key, string(sid)); err != nil {
 			n.log.Warn("store session", "agent", a.name, "err", err)
 		}
+		a.keepMade(ctx, string(sid))
 	}
 	return sid, nil
+}
+
+// keepMade keeps a session's mark of having been made here as long as the session is used (the
+// mark goes with what is unused past retention): a session not so marked gets none.
+func (a *acpAgent) keepMade(ctx context.Context, sid string) {
+	if v, err := a.n.st.Session(ctx, a.addr, madeSession+sid); err == nil && v != "" {
+		_ = a.n.st.PutSession(ctx, a.addr, madeSession+sid, sid)
+	}
 }
 
 // openFreed opens a session that exists (openSession); when the agent says another of its
@@ -1353,6 +1373,11 @@ func (n *Node) Sessions(ctx context.Context, p Principal, agent, cwd, cursor str
 		f := explainStart(err)
 		return nil, "", errh(f.Code, HintFor(f.Code), "%s", f.Message)
 	}
+	return sessionsOf(ctx, proc, agent, cwd, cursor)
+}
+
+// sessionsOf is a page of the sessions an agent's process lists, newest first.
+func sessionsOf(ctx context.Context, proc *acpProc, agent, cwd, cursor string) ([]client.SessionInfo, string, error) {
 	if proc.init.AgentCapabilities.SessionCapabilities.List == nil {
 		return nil, "", errh("unsupported", HintFor("unsupported"), "agent:%s does not list its sessions (ACP session/list)", agent)
 	}
