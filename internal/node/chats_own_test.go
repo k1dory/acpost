@@ -410,13 +410,36 @@ agents:
 	if sid, _ := n.st.Session(ctx, "agent:fake", "thread:"+m.Thread); sid != "" {
 		t.Skip("the session was kept under its key before the cancel: not this case")
 	}
+	// The turn's process is gone or idle by now; a session started elsewhere is there to be listed.
+	time.Sleep(300 * time.Millisecond)
+	os.WriteFile(filepath.Join(state, "elsewhere"), []byte("title:a session of the editor"), 0o600)
 	c, err := n.Chats(ctx, me)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(c.Partial) != 0 {
+		t.Fatalf("chats: %v, %v", c.Partial, err)
 	}
+	elsewhere := false
 	for _, it := range c.Items {
-		if it.Kind == "session" {
+		if it.Key == "session:fake/elsewhere" {
+			elsewhere = true
+		} else if it.Kind == "session" {
 			t.Errorf("the cancelled turn's session is a chat of its own: %s", it.Key)
 		}
+	}
+	if !elsewhere {
+		t.Error("the sessions were not listed at all")
+	}
+}
+
+// Keys are found under their prefix whatever follows it (a task named with an emoji).
+func TestSessionsMarkedTakesAnyKey(t *testing.T) {
+	n := newNode(t, "agents:\n  bot: {driver: inbox}\n")
+	for key, sid := range map[string]string{"task:base": "s1", "task:🔧 fix": "s2", "task:\U0010ffff": "s3", "taskx:": "no", "tas": "no2"} {
+		if err := n.st.PutSession(ctx, "agent:a", key, sid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := n.st.SessionsMarked(ctx, "agent:a", "task:")
+	if err != nil || len(got) != 3 || !got["s1"] || !got["s2"] || !got["s3"] {
+		t.Errorf("under task: %v, %v", got, err)
 	}
 }
