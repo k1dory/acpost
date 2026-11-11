@@ -205,6 +205,8 @@ func TestIDEExtensionTidiesAfterSuccess(t *testing.T) {
 	js, _ := ideExtFS.ReadFile("ide/extension/extension.js")
 	os.MkdirAll(filepath.Join(dir, "node_modules", "vscode"), 0o700)
 	os.WriteFile(filepath.Join(dir, "extension.js"), js, 0o600)
+	rev, _ := ideExtFS.ReadFile("ide/extension/reveal.js")
+	os.WriteFile(filepath.Join(dir, "reveal.js"), rev, 0o600)
 	os.WriteFile(filepath.Join(dir, "node_modules", "vscode", "index.js"), []byte(`let fails = 1; exports.calls = 0;
 exports.commands = { executeCommand: async () => { exports.calls++; if (fails-- > 0) throw new Error("not yet"); } };`), 0o600)
 	os.WriteFile(filepath.Join(dir, "t.cjs"), []byte(`const assert = require("node:assert/strict");

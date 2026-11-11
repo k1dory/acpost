@@ -78,6 +78,11 @@
       {/if}
     </div>
     <span class="sp"></span>
+    <!-- Beside the IDE the sidebar is hidden: another chat and a new task are had from here. -->
+    {#if app.view === "ide"}
+      <button class="btn ghost icon nodrag" title={t("New task")} aria-label={t("New task")} onclick={() => app.newTask()}><Icon name="plus" size={headerIcon} /></button>
+      <button class="btn ghost icon nodrag" title={t("Another chat (⌘K)")} aria-label={t("Another chat (⌘K)")} onclick={() => (app.palette = true)}><Icon name="chat" size={headerIcon} /></button>
+    {/if}
     {#if waiting.length}<span class="chip ask nodrag">{t("{n} to approve", { n: waiting.length })}</span>{/if}
     {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
     {#if canHand}

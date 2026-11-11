@@ -26,7 +26,7 @@
   let pending = "";        // an address not loaded yet (the pane was covered, or not placed)
   let gen = 0;             // the folder asked for last: an older answer is dropped
   let alive = true;
-  const folder = $derived(app.chatCwd() || app.draft.cwd || app.home);
+  const folder = $derived(app.ideFolder());
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
   // What covers the box: menus drawn in HTML (the pane would be over them). A toast does not: the
   // pane is made shorter to leave it its place, VS Code keeps its focus.
@@ -103,6 +103,9 @@
     <span class="sp"></span>
     <!-- Agents waiting for an answer (the sidebar, which shows them, is hidden here). -->
     {#if app.asking.length}<button class="btn ghost sm nodrag ask" onclick={() => (app.view = "board")}>{t("{n} waiting for an answer", { n: app.asking.length })}</button>{/if}
+    <!-- A file the agent just edited opens here as a diff, or does not. -->
+    <button class="btn ghost sm nodrag follow" class:on={app.ideFollow} aria-pressed={app.ideFollow} onclick={() => app.setIdeFollow(!app.ideFollow)}
+      title={t("Show each file an agent edits here, as a diff, when it is edited")}><Icon name="eye" size={13} /> {t("Follow the agent")}</button>
     <button class="btn ghost icon nodrag" onclick={reload} disabled={starting} title={starting ? t("Starting VS Code… the first time it takes a minute or two.") : t("Reload")}><Icon name="refresh" size={headerIcon} /></button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
@@ -117,6 +120,8 @@
   .path { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .sp { flex: 1; }
   .ask { color: var(--warn); font-weight: 600; }
+  .follow { color: var(--muted); }
+  .follow.on { color: var(--ink); background: var(--hover); }
   .box { flex: 1; min-height: 0; display: grid; place-items: center; }
   .hint { font-size: 12.5px; color: var(--muted); display: grid; gap: 14px; justify-items: center; text-align: center; }
   .err { margin: 8px; padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }

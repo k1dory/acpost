@@ -5,6 +5,8 @@ import { newId } from "./ids";
 import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
 import { afterSent, overLimits } from "./draft";
 import { Turn, type Ev } from "./turn";
+import { editsToReveal, type Reveal } from "./ide";
+import { who } from "./format";
 
 export type Msg = {
   id: string; from: string; to: string; thread: string; parent?: string; depth: number; state: string;
@@ -45,6 +47,7 @@ const followTries = 6;
 
 export type PreviewEvent = { kind: string; message?: string; source?: string; line?: number; col?: number; stack?: string; url?: string; title?: string; main_frame?: boolean };
 export type PanelTab = "activity" | "changes" | "terminal" | "prs" | "preview" | "artifacts";
+function savedFollow(): boolean { try { return localStorage.getItem("ide-follow") !== "0"; } catch { return true; } }
 function savedPanel(): boolean { try { return localStorage.getItem("panel-open") !== "0"; } catch { return true; } }
 const panelTabs: PanelTab[] = ["activity", "changes", "terminal", "prs", "preview", "artifacts"];
 /** An artifact to show: a reply's attachment, or a file of this Mac a reply links to. */
@@ -104,6 +107,21 @@ class App {
     try { localStorage.setItem("panel-open", on ? "1" : "0"); } catch {}
   }
   view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide">("chat");
+  /** In the IDE: a file the agent just edited is shown there, as a diff (kept between launches). */
+  ideFollow = $state(savedFollow());
+  setIdeFollow(on: boolean) {
+    this.ideFollow = on;
+    try { localStorage.setItem("ide-follow", on ? "1" : "0"); } catch {}
+  }
+  private revealed = new Set<string>(); // the calls whose edits were shown ("message:call")
+  /** The folder the IDE has open: the chat's, a new task's, or home. */
+  ideFolder(): string { return this.chatCwd() || this.draft.cwd || this.home; }
+  /** Shows an edit in the IDE (its diff when the edit's text is whole, else the file). */
+  revealInIDE(r: Reveal, agent = "") {
+    const folder = this.ideFolder();
+    if (!folder) return;
+    Node.IDEReveal(folder, r.path, r.old, r.new, false, agent ? who(agent).name : "").catch(() => {});
+  }
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
   palette = $state(false); // ⌘K
@@ -381,6 +399,13 @@ class App {
       if (b.gen && b.gen !== sub) return; // another subscription's
       if (b.events?.length) {
         tries = 0;
+        // The IDE beside the chat follows the agent: what a call just edited is shown there.
+        const shown = editsToReveal(id, b.events as Ev[], this.revealed, Date.now());
+        if (this.revealed.size > 2000) this.revealed.clear();
+        if (this.view === "ide" && this.ideFollow && gen === this.gen) {
+          const to = this.msgs.find(x => x.id === id)?.to ?? "";
+          for (const r of shown) this.revealInIDE(r, to);
+        }
         turn.add(b.events as Ev[]);
         this.rev++;
         const cur = this.msgs.find(x => x.id === id);

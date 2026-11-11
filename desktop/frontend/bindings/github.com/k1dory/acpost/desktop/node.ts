@@ -352,6 +352,14 @@ export function IDEReload(url: string): $CancellablePromise<void> {
 }
 
 /**
+ * IDEReveal shows file in the IDE that has folder open: its edit (old to new) as a diff when given,
+ * else the file. file is absolute, or from folder.
+ */
+export function IDEReveal(folder: string, file: string, old: string, $new: string, created: boolean, title: string): $CancellablePromise<void> {
+    return $Call.ByID(2077999373, folder, file, old, $new, created, title);
+}
+
+/**
  * IDEShow lays the IDE over the box at x, y, w × h (window points) and opens url in it when given.
  * The pane's calls are taken one at a time (pane): each is queued for the main thread in the
  * order taken, with what is open checked and set in the same step.
