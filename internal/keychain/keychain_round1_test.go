@@ -3,6 +3,7 @@ package keychain
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,9 @@ import (
 // fakeSecurity puts a security(1) in PATH that exits with code (printing out first).
 func fakeSecurity(t *testing.T, out string, code int) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS keychain's command, stood in for by a shell script")
+	}
 	dir := t.TempDir()
 	script := "#!/bin/sh\nprintf '%s' '" + out + "'\nexit " + itoa(code) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "security"), []byte(script), 0o755); err != nil {

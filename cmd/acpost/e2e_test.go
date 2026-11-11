@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k1dory/acpost/internal/acptest"
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/store"
 )
@@ -82,7 +83,7 @@ func newEnv(t *testing.T, yaml string) *env {
 	if err := os.WriteFile(e.config, []byte(full), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	e.vars = []string{"ACPOST_CONFIG=" + e.config, "PATH=" + binDir + ":" + os.Getenv("PATH"), "HOME=" + dir}
+	e.vars = append([]string{"ACPOST_CONFIG=" + e.config, "PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH")}, acptest.HomeEnv(dir)...)
 	return e
 }
 
@@ -854,7 +855,7 @@ func TestTerminalOverAPI(t *testing.T) {
 	if err != nil || tm.Cwd != dir {
 		t.Fatalf("%+v %v", tm, err)
 	}
-	if err := c.TermInput(context.Background(), tm.ID, []byte("pwd; echo via-\"\"http; exit\n")); err != nil {
+	if err := c.TermInput(context.Background(), tm.ID, []byte(termLine)); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

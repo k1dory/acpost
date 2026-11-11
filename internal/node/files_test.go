@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/config"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -327,7 +328,7 @@ agents:
 	img := got["image-1.png"]
 	check("image-1.png", !img.Link() && img.Size == len(png1) && img.Type == "image/png")
 	check("spec.pdf", got["spec.pdf"].URI == "https://example.com/download?id=42") // the name it gave, not the URI's
-	check("made.md", got["made.md"].URI == "file://"+disk && got["made.md"].Size == 7)
+	check("made.md", got["made.md"].URI == plat.FileURI(disk) && got["made.md"].Size == 7)
 	check("new.txt", !got["new.txt"].Link() && got["new.txt"].Size == 5)
 	// The file it was given, handed back: the stored file again, the same content, not a new one.
 	back := got["notes.md"]

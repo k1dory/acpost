@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,7 +18,7 @@ func TestNamedConfigMustExist(t *testing.T) {
 	e := newEnv(t, inbox)
 	xdg, state := filepath.Join(e.dir, "xdg"), filepath.Join(e.dir, "st")
 	implicit := filepath.Join(xdg, "acpost", "config.yaml")
-	base := []string{"PATH=" + binDir + ":" + os.Getenv("PATH"), "HOME=" + e.dir, "XDG_CONFIG_HOME=" + xdg, "XDG_STATE_HOME=" + state}
+	base := []string{"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + e.dir, "USERPROFILE=" + e.dir, "XDG_CONFIG_HOME=" + xdg, "XDG_STATE_HOME=" + state}
 	pidFile := filepath.Join(state, "acpost", "acpost.pid")
 	t.Cleanup(func() { // the node started on defaults, if any: only one of ours (its binary, serve)
 		b, err := os.ReadFile(pidFile)
@@ -30,8 +29,7 @@ func TestNamedConfigMustExist(t *testing.T) {
 		if err != nil || pid <= 1 {
 			return
 		}
-		out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-		if err != nil || !strings.Contains(string(out), filepath.Join(binDir, "acpost")+" serve") {
+		if cl := commandLine(pid); !strings.Contains(cl, filepath.Join(binDir, "acpost")) || !strings.Contains(cl, " serve") {
 			return
 		}
 		askToStop(pid)
@@ -47,7 +45,7 @@ func TestNamedConfigMustExist(t *testing.T) {
 		{"ACPOST_CONFIG the default's path", []string{"ACPOST_CONFIG=" + implicit}, []string{"status"}},
 	} {
 		e.vars = append(append([]string{}, base...), c.vars...)
-		if r := e.run("", c.args...); r.code != exitUsage || !strings.Contains(r.err, "no such file") {
+		if r := e.run("", c.args...); r.code != exitUsage || !strings.Contains(r.err, noSuchFile) {
 			t.Errorf("%s: exit %d: %s", c.name, r.code, r.err)
 		}
 		if _, err := os.Stat(pidFile); err == nil {

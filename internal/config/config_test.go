@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 func TestDefaults(t *testing.T) {
@@ -13,11 +15,11 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home, _ := os.UserHomeDir()
-	if c.Store != "sqlite://"+filepath.Join(home, ".local/state/acpost/store.db") {
+	state := plat.StateDir()
+	if c.Store != "sqlite://"+filepath.Join(state, "store.db") {
 		t.Fatalf("store %q", c.Store)
 	}
-	if len(c.Node.Listen) != 1 || !strings.HasPrefix(c.Node.Listen[0], "unix://"+home) {
+	if len(c.Node.Listen) != 1 || !strings.HasPrefix(c.Node.Listen[0], "unix://"+state) {
 		t.Fatalf("listen %v", c.Node.Listen)
 	}
 	if c.Retention.D() != 168*time.Hour || c.Limits.MaxBody != 1<<20 || c.Limits.MaxDepth != 4 ||

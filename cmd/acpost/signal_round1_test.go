@@ -16,6 +16,9 @@ import (
 
 // Ctrl-C ends a wait through its context: exit 130, said, promptly; not a kill mid-way.
 func TestInterruptEndsAWait(t *testing.T) {
+	if !canInterrupt {
+		t.Skip("no Ctrl-C to one process on this system")
+	}
 	e := newEnv(t, inbox)
 	e.serve()
 	id := strings.TrimSpace(e.ok("", "send", "--to", "agent:bot", "--body", "x"))
@@ -45,6 +48,9 @@ func TestInterruptEndsAWait(t *testing.T) {
 // ready says so, and returns the exit code and stderr.
 func startInterrupted(t *testing.T, e *env, stdin *os.File, ready func() bool, args ...string) (int, string) {
 	t.Helper()
+	if !canInterrupt {
+		t.Skip("no Ctrl-C to one process on this system")
+	}
 	cmd := exec.Command(filepath.Join(binDir, "acpost"), args...)
 	cmd.Env = append(cleanEnv(), e.vars...)
 	var errb bytes.Buffer

@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/k1dory/acpost/internal/acptest"
 	"github.com/k1dory/acpost/internal/store"
 )
 
 // A server whose secrets cannot be read (a locked keychain; here a broken file) is left out of the
 // session: the agent never gets it with an empty token in place of the one kept.
 func TestMCPUnreadSecretsLeaveTheServerOut(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	acptest.SetHome(t.Setenv, t.TempDir())
 	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	n := acpNode(t, "")
 	if err := n.PutMCPServer(ctx, me, store.MCPServer{Name: "wiki", Kind: "stdio", Command: "wiki-mcp", Env: []string{"TOKEN"}, Enabled: true},

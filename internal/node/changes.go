@@ -94,7 +94,8 @@ func snapshot(ctx context.Context, dir string) *gitSnap {
 	if len(lines) != 2 {
 		return nil
 	}
-	repo, index := lines[0], lines[1]
+	// Git writes paths with "/" on every system.
+	repo, index := filepath.FromSlash(lines[0]), filepath.FromSlash(lines[1])
 	if fi, err := os.Stat(index); err == nil && fi.Size() > snapshotIndex {
 		return nil
 	}
@@ -250,7 +251,7 @@ func repoRoot(ctx context.Context, dir string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimRight(string(b), "\n")
+	return filepath.FromSlash(strings.TrimRight(string(b), "\n"))
 }
 
 // recordGit keeps what differs in the turn's repository between its snapshots.

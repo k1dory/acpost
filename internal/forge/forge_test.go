@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -245,7 +246,8 @@ func TestStoreConcurrentLogins(t *testing.T) {
 			t.Fatalf("token %d lost", i)
 		}
 	}
-	if st, _ := os.Stat(filepath.Join(dir, "forge-tokens.json")); st.Mode().Perm() != 0o600 {
+	// A file's mode says who reads it on Unix; on Windows its directory's access list does.
+	if st, _ := os.Stat(filepath.Join(dir, "forge-tokens.json")); runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", st.Mode())
 	}
 }

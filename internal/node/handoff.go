@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -101,7 +102,7 @@ func (n *Node) Handoff(ctx context.Context, p Principal, r HandoffRequest) (Hand
 	if err := n.checkFiles(req.Files, nil, "the handoff"); err != nil {
 		return out, err
 	}
-	task := client.CloudTask{Agent: r.CloudAgent, Repo: rs.remote, Name: path.Base(dir)}
+	task := client.CloudTask{Agent: r.CloudAgent, Repo: rs.remote, Name: filepath.Base(dir)}
 	if r.Idem != "" {
 		task.Idem, req.IdemKey = "handoff:"+r.Idem, "handoff:"+r.Idem
 	}
@@ -183,6 +184,7 @@ func readRepo(ctx context.Context, dir string) (repoState, error) {
 		return strings.TrimSpace(string(b)), err
 	}
 	top, err := word(dir, "rev-parse", "--show-toplevel")
+	top = filepath.FromSlash(top) // git writes it with "/" on every system
 	if err != nil || top == "" {
 		return rs, errf("invalid", "%s is not in a git repository: the cloud starts from a repository's remote", dir)
 	}

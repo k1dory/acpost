@@ -3,6 +3,7 @@ package plat
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"sync"
@@ -270,5 +271,5 @@ func currentUser() (*windows.SID, error) {
 
 // Denied says whether err is the system refusing this process a file or a socket.
 func Denied(err error) bool {
-	return errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.WSAEACCES)
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, windows.WSAEACCES)
 }

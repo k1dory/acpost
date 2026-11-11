@@ -119,8 +119,7 @@ func (e *env) stopAutostarted() {
 	if err != nil || pid <= 1 {
 		return
 	}
-	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil || !strings.Contains(string(out), e.config) {
+	if !strings.Contains(commandLine(pid), e.config) {
 		return
 	}
 	askToStop(pid)

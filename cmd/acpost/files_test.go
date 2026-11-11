@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -131,6 +133,9 @@ func TestAttachAcrossHub(t *testing.T) {
 
 // A node that fails to start says why, not only where its log is.
 func TestAutostartFailureSaysWhy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a mode does not open a directory to others on Windows")
+	}
 	e := newEnv(t, inbox)
 	os.MkdirAll(filepath.Join(e.dir, "s"), 0o755)
 	os.Chmod(filepath.Join(e.dir, "s"), 0o755)
@@ -214,7 +219,7 @@ func TestForceKeepsModeAndUnreachableNodeReadsNothing(t *testing.T) {
 	if _, err := saveFiles([]store.File{{Name: "p.txt", Data: []byte("new")}}, dir, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(filepath.Join(dir, "p.txt")); st.Mode().Perm() != 0o600 {
+	if st, _ := os.Stat(filepath.Join(dir, "p.txt")); runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %o after --force", st.Mode().Perm())
 	}
 	e := newEnv(t, inbox)
@@ -273,7 +278,7 @@ func TestLinksNotCopied(t *testing.T) {
 	os.WriteFile(local, []byte("pretend this is large"), 0o600)
 	id := strings.TrimSpace(e.ok("", "send", "--to", "bot", "--body", "see", "--link", local, "--link", "https://example.com/doc.pdf"))
 	got := e.ok("", "recv", "--as", "bot")
-	if !strings.Contains(got, "→ file://"+local) {
+	if !strings.Contains(got, "→ "+plat.FileURI(local)) {
 		t.Fatalf("recv %q", got)
 	}
 	if !strings.Contains(got, "→ https://example.com/doc.pdf") {
@@ -294,10 +299,10 @@ func TestLinksNotCopied(t *testing.T) {
 		t.Fatalf("link to a missing file: %d %s", r.code, r.err)
 	}
 	// file:// URIs are taken; one naming another host is not this machine's file.
-	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", "file://"+local); r.code != 0 {
+	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", plat.FileURI(local)); r.code != 0 {
 		t.Fatalf("file:// URI: %d %s", r.code, r.err)
 	}
-	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", "file://other-host"+local); r.code != 2 || !strings.Contains(r.err, "not on this machine") {
+	if r := e.run("", "send", "--to", "bot", "--body", "x", "--link", "file://other-host/"+strings.TrimPrefix(filepath.ToSlash(local), "/")); r.code != 2 || !strings.Contains(r.err, "not on this machine") {
 		t.Fatalf("file://other-host: %d %s", r.code, r.err)
 	}
 }
@@ -316,7 +321,7 @@ func TestLocalLinksStayOnTheirNode(t *testing.T) {
 	local := filepath.Join(b.dir, "notes.txt")
 	os.WriteFile(local, []byte("only on b"), 0o600)
 	for _, to := range []string{"agent:reviewer", "agent:hubbot"} {
-		for _, link := range []string{local, "FILE://" + local} {
+		for _, link := range []string{local, "FILE" + strings.TrimPrefix(plat.FileURI(local), "file")} {
 			if r := b.run("", "send", "--to", to, "--body", "x", "--link", link); r.code != 2 || !strings.Contains(r.err, "--attach FILE instead of --link") {
 				t.Fatalf("a local link %s sent to %s: %d %s", link, to, r.code, r.err)
 			}
