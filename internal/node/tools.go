@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -61,6 +62,112 @@ type toolTrack struct {
 	term     strings.Builder // its terminal's output so far (the tail kept)
 	hadInput bool
 	ended    bool
+	full     []fileEdit // its edits whole, as last sent and not yet taken for what the turn changed (changes.go)
+	fullMore bool       // more edits than kept
+}
+
+// fileEdit is an edit as the agent reported it: the file and its text before and after, whole
+// (cut: too long to keep; the lines are still counted).
+type fileEdit struct {
+	path           string
+	old, new       string
+	created        bool // the agent gave no text before, or says it added the file: a new file
+	deleted        bool // the agent says it removed the file (codex-acp: _meta.kind "delete")
+	added, removed int
+	cut            bool
+}
+
+const (
+	editKeepMax  = 512 << 10 // the text of one call's edits kept whole
+	editsKeepMax = 4 << 20   // and of a turn's
+	callEditsMax = 500       // the edits of one call kept (more: said as cut)
+	editsMax     = 2000      // and of a turn
+)
+
+// take makes a completed call's edits the turn's: what the call says it edited now, in the place
+// of what it said before (an agent may send the diff after the status: the last word counts). A
+// failed or cancelled call edited nothing. Called with t.mu held.
+func (t *acpTurn) take(tr *toolTrack) {
+	if t.edited == nil {
+		t.edited = map[string][]fileEdit{}
+	}
+	was, had := t.edited[tr.ID]
+	// A call whose edits are held completed (it may be tracked no longer: its status is not asked).
+	if tr.full == nil || (!had && tr.Status != string(acp.ToolCallStatusCompleted)) {
+		return
+	}
+	full := tr.full
+	tr.full = nil // taken: the same content is not taken twice
+	t.pendingBytes -= editBytes(full)
+	if !had && (len(full) == 0 || t.editedCount >= editsMax) {
+		// Nothing to keep, or no room: the turn holds no more of calls than it holds edits.
+		t.editedMore = t.editedMore || len(full) > 0
+		return
+	}
+	for _, e := range was {
+		t.editedBytes -= len(e.old) + len(e.new)
+	}
+	t.editedCount -= len(was)
+	if len(full) == 0 { // the call says now it edited nothing
+		delete(t.edited, tr.ID)
+		t.editedOrder = slices.DeleteFunc(t.editedOrder, func(id string) bool { return id == tr.ID })
+		return
+	}
+	kept := make([]fileEdit, 0, len(full))
+	for _, e := range full {
+		if t.editedCount+len(kept) >= editsMax {
+			t.editedMore = true
+			break
+		}
+		if t.editedBytes+t.pendingBytes+len(e.old)+len(e.new) > editsKeepMax {
+			e.old, e.new, e.cut = "", "", true
+		}
+		t.editedBytes += len(e.old) + len(e.new)
+		kept = append(kept, e)
+	}
+	t.editedCount += len(kept)
+	t.editedMore = t.editedMore || tr.fullMore
+	t.edited[tr.ID] = kept
+	if !had {
+		t.editedOrder = append(t.editedOrder, tr.ID)
+	}
+}
+
+func editBytes(edits []fileEdit) int {
+	n := 0
+	for _, e := range edits {
+		n += len(e.old) + len(e.new)
+	}
+	return n
+}
+
+// hold counts the texts a call's edits wait with (was: before its last update) in the turn's
+// budget, which is one for the edits taken and those waiting for their call to end: past it they
+// wait without their text. A failed call edited nothing: its edits go. A call the turn does not
+// track (kept false) waits with nothing. Called with t.mu held.
+func (t *acpTurn) hold(tr *toolTrack, was int, kept bool) {
+	if tr.Status == string(acp.ToolCallStatusFailed) || !kept {
+		tr.full = nil
+	}
+	now := editBytes(tr.full)
+	if t.editedBytes+t.pendingBytes-was+now > editsKeepMax {
+		for i := range tr.full {
+			tr.full[i].old, tr.full[i].new, tr.full[i].cut = "", "", true
+		}
+		now = 0
+	}
+	t.pendingBytes += now - was
+}
+
+// edits is what the turn's completed tool calls edited, in the order the calls completed; more
+// says some were not kept (past the turn's or a call's count).
+func (t *acpTurn) edits() (out []fileEdit, more bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, id := range t.editedOrder {
+		out = append(out, t.edited[id]...)
+	}
+	return out, t.editedMore
 }
 
 // maxTracked bounds the calls of a turn tracked at once (a call is let go when it ends).
@@ -80,14 +187,23 @@ func (t *acpTurn) trackCall(u *acp.SessionUpdateToolCall) toolEvent {
 	if len(t.tools) >= maxTracked {
 		for id, old := range t.tools { // room for it: a call that ended goes
 			if old.ended {
+				t.pendingBytes -= editBytes(old.full)
 				delete(t.tools, id)
 				break
 			}
 		}
 	}
-	if len(t.tools) < maxTracked {
+	kept := len(t.tools) < maxTracked
+	if prev := t.tools[tr.ID]; prev != nil { // the same call started again: the new one stands
+		t.pendingBytes -= editBytes(prev.full)
+		kept = true
+	}
+	if kept {
 		t.tools[tr.ID] = tr
 	}
+	t.pendingBytes += editBytes(tr.full) // counted first: take moves it to what the turn holds
+	t.take(tr)
+	t.hold(tr, editBytes(tr.full), kept)
 	return tr.event()
 }
 
@@ -97,9 +213,11 @@ func (t *acpTurn) trackUpdate(u *acp.SessionToolCallUpdate) (toolEvent, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	tr := t.tools[string(u.ToolCallId)]
+	kept := tr != nil
 	if tr == nil { // a call not seen (or past maxTracked): what this update says
 		tr = &toolTrack{toolEvent: toolEvent{ID: string(u.ToolCallId)}}
 	}
+	was := editBytes(tr.full)
 	if u.Title != nil && *u.Title != "" {
 		tr.Title = *u.Title
 	}
@@ -117,6 +235,10 @@ func (t *acpTurn) trackUpdate(u *acp.SessionToolCallUpdate) (toolEvent, bool) {
 	// Its end, and after it what changes its output still (a late result).
 	worth := (ends && !tr.ended) || newInput || len(tr.Edits) != edits || (tr.ended && tr.output() != before)
 	tr.ended = tr.ended || ends
+	// What the call waits with is counted first (take moves it to what the turn holds).
+	t.pendingBytes += editBytes(tr.full) - was
+	t.take(tr)
+	t.hold(tr, editBytes(tr.full), kept)
 	return tr.event(), worth
 }
 
@@ -170,17 +292,48 @@ func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp
 	// text, its diff sent before (ACP would have them replaced; the edit was made all the same).
 	var text strings.Builder
 	var edits []toolEdit
-	room := toolDiffMax
+	var full []fileEdit
+	fullMore := false
+	room, keep := toolDiffMax, editKeepMax
 	for _, c := range content {
 		switch {
 		case c.Content != nil && c.Content.Content.Text != nil:
 			if t := c.Content.Content.Text.Text; t != tr.Description {
 				text.WriteString(t)
 			}
-		case c.Diff != nil && len(edits) < toolEditsMax:
-			ed, used := editOf(c.Diff, room)
-			room -= used
-			edits = append(edits, ed)
+		case c.Diff != nil:
+			// The event shows the first of them, cut to its room; what the turn changed takes them
+			// all, within its own bounds.
+			added, removed := 0, 0
+			if len(edits) < toolEditsMax {
+				ed, used := editOf(c.Diff, room)
+				room -= used
+				edits = append(edits, ed)
+				added, removed = ed.Added, ed.Removed
+			} else {
+				old := ""
+				if c.Diff.OldText != nil {
+					old = *c.Diff.OldText
+				}
+				removed, added = lineChange(old, c.Diff.NewText)
+			}
+			if len(full) >= callEditsMax {
+				fullMore = true
+				continue
+			}
+			kind, _ := c.Diff.Meta["kind"].(string) // codex-acp: add, delete, update
+			fe := fileEdit{path: c.Diff.Path, new: c.Diff.NewText, created: kind == "add" || (kind == "" && c.Diff.OldText == nil), deleted: kind == "delete",
+				added: added, removed: removed}
+			if c.Diff.OldText != nil {
+				fe.old = *c.Diff.OldText
+			}
+			if len(fe.old)+len(fe.new) > keep {
+				fe.old, fe.new, fe.cut = "", "", true
+			} else {
+				fe.old, fe.new = strings.Clone(fe.old), strings.Clone(fe.new)
+			}
+			keep -= len(fe.old) + len(fe.new)
+			full = append(full, fe)
 		}
 	}
 	if content != nil { // sent, even empty: the text as it is now
@@ -188,6 +341,13 @@ func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp
 	}
 	if len(edits) > 0 || (content != nil && len(content) == 0) {
 		tr.Edits = edits
+	}
+	// What the turn changed takes the call's edits as last said: an update with edits, or one
+	// that says there are none (content sent, empty). Text alone leaves them, as above.
+	if len(full) > 0 {
+		tr.full, tr.fullMore = full, fullMore
+	} else if content != nil && len(content) == 0 {
+		tr.full, tr.fullMore = []fileEdit{}, false
 	}
 	if output != nil { // sent, even empty: the raw output as it is now
 		s, code := outputOf(output)

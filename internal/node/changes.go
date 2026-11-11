@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -213,12 +215,43 @@ func addNumstat(files []store.ChangedFile, b []byte) {
 	}
 }
 
-// recordChanges keeps what a turn of m changed between the snapshots, and says so in an event.
-func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir string) {
-	if before == nil {
+// recordChanges keeps what a turn of m changed, and says so in an event: in its git repository,
+// what differs between the snapshots; outside one (the agent's directory is not a repository, or
+// the file is elsewhere), the edits its tool calls reported (more: some were not kept).
+func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir string, started time.Time, edits []fileEdit, more bool) {
+	ctx := n.ctx
+	repo := ""
+	if before != nil {
+		repo = before.repo
+		n.recordGit(ctx, m, agent, before, dir)
+	} else if len(edits) > 0 {
+		// No snapshot is not no repository (one too big to snapshot, git failing): what is in a
+		// repository is told by its snapshots or not at all (its ignored files are not shown).
+		repo = repoRoot(ctx, dir)
+	}
+	files, diff, cut := reportedChanges(dir, repo, edits)
+	if len(files) == 0 {
 		return
 	}
-	ctx := n.ctx
+	c := store.TurnChanges{Msg: m.ID, Agent: agent, Start: started, At: time.Now().UTC(), Repo: dir, Files: files, Diff: diff, Cut: cut || more}
+	if err := n.st.AddChanges(ctx, c); err != nil {
+		n.log.Debug("changes", "id", m.ID, "err", err)
+		return
+	}
+	n.tellChanges(ctx, m.ID, agent, dir, "", "", "", files)
+}
+
+// repoRoot is the git repository dir is in ("" for none).
+func repoRoot(ctx context.Context, dir string) string {
+	b, _, err := gitDefused(ctx, dir, nil, nil, 16384, "rev-parse", "--path-format=absolute", "--show-toplevel")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(b), "\n")
+}
+
+// recordGit keeps what differs in the turn's repository between its snapshots.
+func (n *Node) recordGit(ctx context.Context, m store.Message, agent string, before *gitSnap, dir string) {
 	after := snapshot(ctx, dir)
 	if after == nil || after.repo != before.repo || after.tree == before.tree {
 		return
@@ -234,6 +267,11 @@ func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir
 		n.log.Debug("changes", "id", m.ID, "err", err)
 		return
 	}
+	n.tellChanges(ctx, m.ID, agent, before.repo, after.branch, before.tree, after.tree, files)
+}
+
+// tellChanges says what a turn changed in an event (the files; the diff stays on the node).
+func (n *Node) tellChanges(ctx context.Context, id, agent, repo, branch, before, after string, files []store.ChangedFile) {
 	ev := struct {
 		Agent  string              `json:"agent"`
 		Repo   string              `json:"repo"`
@@ -242,7 +280,7 @@ func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir
 		After  string              `json:"after"`
 		Files  []store.ChangedFile `json:"files"`
 		More   int                 `json:"more,omitempty"`
-	}{Agent: agent, Repo: filepath.Base(before.repo), Branch: after.branch, Before: before.tree, After: after.tree, Files: files}
+	}{Agent: agent, Repo: filepath.Base(repo), Branch: branch, Before: before, After: after, Files: files}
 	if len(ev.Files) > changesFiles {
 		ev.Files, ev.More = ev.Files[:changesFiles], len(files)-changesFiles
 	}
@@ -250,7 +288,246 @@ func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir
 		ev.More += len(ev.Files) / 2
 		ev.Files = ev.Files[:len(ev.Files)-len(ev.Files)/2]
 	}
-	_ = n.addEvent(ctx, m.ID, "changes", eventJSON(ev), false)
+	_ = n.addEvent(ctx, id, "changes", eventJSON(ev), false)
+}
+
+// reportedChanges is the edits a turn's tool calls reported as changes: the files (their paths
+// from dir, or whole when elsewhere) and a diff of each edit, secrets masked. Files inside repo
+// (where their links lead) are left out: its snapshots tell those, whoever changed them. A turn
+// without a repository has only these, so what a command changed (not an edit of the agent's) is
+// not among them. cut: some edits have no diff here (too long to keep).
+func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, string, bool) {
+	var files []store.ChangedFile
+	at := map[string]int{}
+	var diff strings.Builder
+	cut := false
+	realRepo := repo
+	if repo != "" {
+		if r, err := filepath.EvalSymlinks(repo); err == nil {
+			realRepo = r
+		}
+	}
+	for _, e := range edits {
+		if e.path == "" {
+			continue
+		}
+		abs := e.path
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(dir, abs)
+		}
+		abs = filepath.Clean(abs)
+		// Where the file is, its links followed: a link in the repository to a file outside it is
+		// that file (the snapshots have the link, unchanged), one outside to a file in it the
+		// repository's.
+		if repo != "" && inside(realRepo, realPath(abs)) {
+			continue
+		}
+		if !e.cut && e.old == e.new && !e.created && !e.deleted {
+			continue // nothing changed
+		}
+		p := abs
+		if rel, err := filepath.Rel(dir, abs); err == nil && inside(dir, abs) {
+			p = rel
+		}
+		p = filepath.ToSlash(p)
+		hunk, added, removed := "", e.added, e.removed
+		if !e.cut {
+			hunk, added, removed = unifiedHunk(e.old, e.new)
+		}
+		i, ok := at[p]
+		if !ok {
+			i = len(files)
+			at[p] = i
+			files = append(files, store.ChangedFile{Path: p, Status: "M"})
+		}
+		// What became of the file over the turn: made (and edited since), removed, or changed.
+		if ok || e.deleted || e.created {
+			next := "M"
+			if e.deleted {
+				next = "D"
+			} else if e.created {
+				next = "A"
+			}
+			files[i].Status = laterStatus(files[i].Status, next)
+		}
+		files[i].Added += added
+		files[i].Removed += removed
+		if e.cut { // too long to keep: listed, without its diff
+			cut = true
+			continue
+		}
+		// As git writes them: a file made empty has its header alone.
+		qa, qb := gitQuote("a/"+p), gitQuote("b/"+p)
+		section := "diff --git " + qa + " " + qb + "\n"
+		switch {
+		case e.deleted && hunk == "":
+			section += "deleted file mode 100644\n"
+		case e.deleted:
+			section += "deleted file mode 100644\n--- " + qa + "\n+++ /dev/null\n" + hunk
+		case e.created && hunk == "":
+			section += "new file mode 100644\n"
+		case e.created:
+			section += "new file mode 100644\n--- /dev/null\n+++ " + qb + "\n" + hunk
+		case hunk == "":
+			continue // an edit of a masked value alone, its lines folded: counted, nothing to show
+		default:
+			section += "--- " + qa + "\n+++ " + qb + "\n" + hunk
+		}
+		if diff.Len()+len(section) > changesDiffMax {
+			cut = true // whole sections only: a cut does not leave half a masked secret
+			continue
+		}
+		diff.WriteString(section)
+	}
+	return files, diff.String(), cut
+}
+
+// gitQuote is a path as git writes it in a diff's header: as it is, or, when it has a control
+// character, a quotation mark or a backslash, in quotation marks with those escaped (C style,
+// octal for the rest), so a line break in a name does not break the header.
+func gitQuote(p string) string {
+	plain := true
+	for i := 0; i < len(p); i++ {
+		if c := p[i]; c < 0x20 || c == 0x7f || c == '"' || c == '\\' {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return p
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == '\n':
+			b.WriteString(`\n`)
+		case c == '\t':
+			b.WriteString(`\t`)
+		case c < 0x20 || c == 0x7f:
+			b.WriteString("\\" + fmt.Sprintf("%03o", c))
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// inside says whether file is dir or in it.
+func inside(dir, file string) bool {
+	rel, err := filepath.Rel(dir, file)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// realPath is file where its links lead: the file's own when it is there, else its directory's
+// (a file since removed, or not yet made).
+func realPath(file string) string {
+	if p, err := filepath.EvalSymlinks(file); err == nil {
+		return p
+	}
+	d, err := filepath.EvalSymlinks(filepath.Dir(file))
+	if err != nil {
+		return file
+	}
+	return filepath.Join(d, filepath.Base(file))
+}
+
+// noEOL marks, in a text's lines, a last line that has no line end: it differs from the same line
+// ended (a diff says so: "\ No newline at end of file").
+const noEOL = "\x00"
+
+// maskedLine stands for a changed line of a masked value that spans lines.
+const maskedLine = "(a line of a masked value)"
+
+// endedLines is a text's lines; a last line without a line end carries noEOL.
+func endedLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	l := strings.Split(s, "\n")
+	if l[len(l)-1] == "" {
+		return l[:len(l)-1]
+	}
+	l[len(l)-1] += noEOL
+	return l
+}
+
+// unifiedHunk is one hunk of a unified diff from old to new, secrets masked, and the lines it
+// adds and removes: the stretch between the lines they start and end with alike, with three lines
+// around it ("" when the texts are the same).
+//
+// What changed is found in the texts as they are, and shown masked: an edit of a secret alone is
+// an edit (its lines shown, both masked). When masking moves lines (a value over several lines),
+// the masked texts are compared instead, and such an edit of a secret alone has no hunk.
+func unifiedHunk(old, new string) (hunk string, added, removed int) {
+	a, b := endedLines(old), endedLines(new)
+	sa, sb := endedLines(redact(old)), endedLines(redact(new))
+	hidden := false
+	if len(sa) != len(a) || len(sb) != len(b) {
+		// Masking moved lines. The masked texts are compared; when they are the same (the edit is
+		// inside a masked value of several lines), where the texts themselves differ is said, its
+		// lines not shown.
+		if hidden = slices.Equal(sa, sb); !hidden {
+			a, b = sa, sb
+		}
+	}
+	p := 0
+	for p < len(a) && p < len(b) && a[p] == b[p] {
+		p++
+	}
+	s := 0
+	for s < len(a)-p && s < len(b)-p && a[len(a)-1-s] == b[len(b)-1-s] {
+		s++
+	}
+	if p == len(a) && p == len(b) {
+		return "", 0, 0
+	}
+	if hidden {
+		na, nb := len(a)-s-p, len(b)-s-p
+		at := func(n int) string {
+			if n == 0 {
+				return strconv.Itoa(p) + ",0"
+			}
+			return strconv.Itoa(p+1) + "," + strconv.Itoa(n)
+		}
+		return "@@ -" + at(na) + " +" + at(nb) + " @@\n" + strings.Repeat("-"+maskedLine+"\n", na) + strings.Repeat("+"+maskedLine+"\n", nb), nb, na
+	}
+	const around = 3
+	from := max(p-around, 0)
+	tail := min(s, around)
+	na, nb := len(a)-s+tail-from, len(b)-s+tail-from
+	start := func(n int) int {
+		if n == 0 {
+			return from
+		}
+		return from + 1
+	}
+	var w strings.Builder
+	w.WriteString("@@ -" + strconv.Itoa(start(na)) + "," + strconv.Itoa(na) + " +" + strconv.Itoa(start(nb)) + "," + strconv.Itoa(nb) + " @@\n")
+	line := func(op, l string) {
+		if t, ok := strings.CutSuffix(l, noEOL); ok {
+			w.WriteString(op + t + "\n\\ No newline at end of file\n")
+			return
+		}
+		w.WriteString(op + l + "\n")
+	}
+	for _, l := range sa[from:p] {
+		line(" ", l)
+	}
+	for _, l := range sa[p : len(a)-s] {
+		line("-", l)
+	}
+	for _, l := range sb[p : len(b)-s] {
+		line("+", l)
+	}
+	for _, l := range sa[len(a)-s : len(a)-s+tail] {
+		line(" ", l)
+	}
+	return w.String(), len(b) - s - p, len(a) - s - p
 }
 
 // Changes is what the turns of a message changed, and with tree those of the messages its agent
@@ -289,7 +566,31 @@ func (n *Node) Changes(ctx context.Context, p Principal, id string, tree, withDi
 		// ends before its lead's).
 		first, last := map[string]*gitSnap{}, map[string]*gitSnap{}
 		var repos []string
+		reported := map[string]*store.RepoDiff{}
+		reportedDiff := map[string]*strings.Builder{}
+		var reportedIn []string
 		for _, t := range turns {
+			if t.Before == "" { // edits the agent reported, outside a repository: no trees to diff
+				r := reported[t.Repo]
+				if r == nil {
+					r = &store.RepoDiff{Repo: t.Repo}
+					reported[t.Repo] = r
+					reportedIn = append(reportedIn, t.Repo)
+				}
+				r.Files, r.Cut = joinChanged(r.Files, t.Files), r.Cut || t.Cut
+				w := reportedDiff[t.Repo]
+				if w == nil {
+					w = &strings.Builder{}
+					reportedDiff[t.Repo] = w
+				}
+				// Whole files while they fit: the bound holds as the turns are put together.
+				if part := t.Diff; w.Len()+len(part) <= changesDiffMax {
+					w.WriteString(part)
+				} else if r.Cut = true; w.Len() < changesDiffMax {
+					w.WriteString(wholeFiles(part, changesDiffMax-w.Len()))
+				}
+				continue
+			}
 			if f := first[t.Repo]; f == nil {
 				repos = append(repos, t.Repo)
 				first[t.Repo] = &gitSnap{repo: t.Repo, tree: t.Before, at: t.Start}
@@ -307,8 +608,45 @@ func (n *Node) Changes(ctx context.Context, p Principal, id string, tree, withDi
 			}
 			whole = append(whole, store.RepoDiff{Repo: r, Branch: last[r].branch, Before: first[r].tree, After: last[r].tree, Files: files, Diff: diff, Cut: cut})
 		}
+		for _, r := range reportedIn {
+			d := reported[r]
+			d.Diff = reportedDiff[r].String()
+			whole = append(whole, *d)
+		}
 	}
 	return turns, whole, nil
+}
+
+// laterStatus is what became of a file that was was and then next: removed, made (again), or
+// changed; a file made and then changed is still a new one.
+func laterStatus(was, next string) string {
+	switch {
+	case next == "D" || next == "A":
+		return next
+	case was == "A":
+		return "A"
+	default:
+		return "M"
+	}
+}
+
+// joinChanged adds more to files: a file in both once, its lines summed.
+func joinChanged(files, more []store.ChangedFile) []store.ChangedFile {
+	at := map[string]int{}
+	for i, f := range files {
+		at[f.Path] = i
+	}
+	for _, f := range more {
+		if i, ok := at[f.Path]; ok {
+			files[i].Added += f.Added
+			files[i].Removed += f.Removed
+			files[i].Status = laterStatus(files[i].Status, f.Status)
+			continue
+		}
+		at[f.Path] = len(files)
+		files = append(files, f)
+	}
+	return files
 }
 
 // gitSafeEnv is the environment git runs in: no prompt, no pager, no external diff, no network

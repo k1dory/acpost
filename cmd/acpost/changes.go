@@ -16,7 +16,7 @@ func changesCmd(g *globals) *cobra.Command {
 	var tree, stat bool
 	cmd := &cobra.Command{
 		Use:   "changes ID",
-		Short: "What a message's turns changed in their git repository (--tree: and its subagents')",
+		Short: "What a message's turns changed: in their git repository, and the edits reported outside one (--tree: and its subagents')",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -33,7 +33,7 @@ func changesCmd(g *globals) *cobra.Command {
 				return nil
 			}
 			if len(ch.Turns) == 0 {
-				fmt.Fprintln(os.Stderr, "· no changes recorded: the agent changed nothing, or works outside a git repository")
+				fmt.Fprintln(os.Stderr, "· no changes recorded: the agent changed nothing (outside a git repository only the edits its tools report are seen, not what a command changed)")
 				return nil
 			}
 			if stat {
@@ -48,15 +48,11 @@ func changesCmd(g *globals) *cobra.Command {
 			}
 			// The whole of each repository when it can be had (git keeps the snapshots a while),
 			// else its turns one by one.
-			whole := map[string]bool{}
 			for _, r := range ch.Repos {
-				whole[r.Repo] = true
 				printDiff(r.Repo, r.Branch, r.Diff, r.Cut)
 			}
-			for _, t := range ch.Turns {
-				if !whole[t.Repo] {
-					printDiff(t.Repo+" ("+t.Agent+")", t.Branch, t.Diff, t.Cut)
-				}
+			for _, t := range turnsApart(ch.Turns, ch.Repos) {
+				printDiff(t.Repo+" ("+t.Agent+")", t.Branch, t.Diff, t.Cut)
 			}
 			return nil
 		},
@@ -64,6 +60,26 @@ func changesCmd(g *globals) *cobra.Command {
 	cmd.Flags().BoolVar(&tree, "tree", false, "with the messages its agent sent while working on it (subagents)")
 	cmd.Flags().BoolVar(&stat, "stat", false, "files and lines only")
 	return cmd
+}
+
+// turnsApart is the turns whose changes no whole has: a directory's reported edits (no tree) and
+// its repository's snapshots are apart, and one had whole does not stand for the other.
+func turnsApart(turns []store.TurnChanges, repos []store.RepoDiff) []store.TurnChanges {
+	type part struct {
+		repo     string
+		reported bool
+	}
+	whole := map[part]bool{}
+	for _, r := range repos {
+		whole[part{r.Repo, r.Before == ""}] = true
+	}
+	var out []store.TurnChanges
+	for _, t := range turns {
+		if !whole[part{t.Repo, t.Before == ""}] {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func lineStat(f store.ChangedFile) string {
@@ -84,6 +100,6 @@ func printDiff(repo, branch, diff string, cut bool) {
 		fmt.Println()
 	}
 	if cut {
-		fmt.Fprintln(os.Stderr, "· the diff was longer than kept (1 MiB)")
+		fmt.Fprintln(os.Stderr, "· the diff was longer than kept (1 MiB), or an edit too long to keep whole")
 	}
 }
