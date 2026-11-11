@@ -166,9 +166,10 @@ func TestTrustedOwner(t *testing.T) {
 	}
 }
 
-// A .cmd file gets its arguments as they were given: ones with spaces, quotes, and what the
-// command interpreter would otherwise take for its own (& | < > ^), from a path with a space.
-func TestCmdFileGetsItsArgumentsWhole(t *testing.T) {
+// cmdWrapper is a .cmd file that runs this test binary with the arguments it got, in a
+// directory with a space in its name.
+func cmdWrapper(t *testing.T) string {
+	t.Helper()
 	dir := filepath.Join(t.TempDir(), "with space")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -177,8 +178,12 @@ func TestCmdFileGetsItsArgumentsWhole(t *testing.T) {
 	if err := os.WriteFile(wrapper, []byte("@echo off\r\n\""+os.Args[0]+"\" %*\r\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"plain", "two words", "a&b|c<d>e", `say "hi"`, `C:\dir with space\`, "", "x^y"}
-	cmd := exec.CommandContext(context.Background(), wrapper, args...)
+	return wrapper
+}
+
+// argsThrough runs cmd (the wrapper, however named) and returns the arguments the program got.
+func argsThrough(t *testing.T, cmd *exec.Cmd) []string {
+	t.Helper()
 	cmd.Env = append(os.Environ(), "PLAT_HELPER=args")
 	out, err := Output(cmd)
 	if err != nil {
@@ -188,8 +193,40 @@ func TestCmdFileGetsItsArgumentsWhole(t *testing.T) {
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("%q: %v", out, err)
 	}
-	if !slices.Equal(got, args) {
-		t.Fatalf("got  %q\nwant %q", got, args)
+	return got
+}
+
+// A .cmd file gets its arguments as they were given: ones with spaces, and what the command
+// interpreter would otherwise take for its own (& | < > ^), from a path with a space; named with
+// its extension, without it, and by a path relative to the command's directory.
+func TestCmdFileGetsItsArgumentsWhole(t *testing.T) {
+	wrapper := cmdWrapper(t)
+	args := []string{"plain", "two words", "a&b|c<d>e", `C:\dir with space\`, "", "x^y", "https://h/p?a=1&b=2"}
+	bare := strings.TrimSuffix(wrapper, ".cmd")
+	rel := exec.CommandContext(context.Background(), `.\agent`, args...)
+	rel.Dir = filepath.Dir(wrapper)
+	for name, cmd := range map[string]*exec.Cmd{
+		"with its extension": exec.CommandContext(context.Background(), wrapper, args...),
+		"without it":         exec.CommandContext(context.Background(), bare, args...),
+		"relative":           rel,
+	} {
+		if got := argsThrough(t, cmd); !slices.Equal(got, args) {
+			t.Errorf("%s:\ngot  %q\nwant %q", name, got, args)
+		}
+	}
+}
+
+// An argument with a quote of its own cannot be given to a .cmd file whole (what follows the
+// quote would be the interpreter's to read: an & there another command): refused, not run.
+func TestCmdFileRefusesAQuotedArgument(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "ran")
+	cmd := exec.CommandContext(context.Background(), cmdWrapper(t), `say "a&echo x>`+mark+`"`)
+	cmd.Env = append(os.Environ(), "PLAT_HELPER=args")
+	if out, err := Output(cmd); err == nil || !strings.Contains(err.Error(), "quote") {
+		t.Fatalf("%q %v", out, err)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("what followed the quote was run")
 	}
 }
 

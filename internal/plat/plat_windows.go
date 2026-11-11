@@ -58,12 +58,17 @@ func start(cmd *exec.Cmd, lasting bool, publish func(*Group)) (*Group, error) {
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED | windows.CREATE_NEW_PROCESS_GROUP
 	// A program installed by npm is a .cmd file: run by the command interpreter, with a command
 	// line that keeps its arguments whole.
-	if isBatch(cmd.Path) && cmd.SysProcAttr.CmdLine == "" && cmd.Err == nil {
+	if file := batchFile(cmd); file != "" && cmd.SysProcAttr.CmdLine == "" && cmd.Err == nil {
+		for _, a := range cmd.Args[1:] {
+			if strings.ContainsAny(a, "\"\r\n") {
+				return nil, fmt.Errorf("start %s: an argument with a quote or a line end (%q) does not reach a .cmd file whole: name the program it runs instead (node and its script)", file, a)
+			}
+		}
 		comspec := os.Getenv("ComSpec")
 		if comspec == "" {
 			comspec = filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
 		}
-		cmd.SysProcAttr.CmdLine = batchLine(comspec, cmd.Path, cmd.Args[1:])
+		cmd.SysProcAttr.CmdLine = batchLine(comspec, file, cmd.Args[1:])
 		cmd.Path = comspec
 	}
 	job, err := windows.CreateJobObject(nil, nil)
@@ -438,24 +443,71 @@ func ReadFile(path string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-// Rename puts a file written whole in place of another. Whoever has the old one open for a
-// moment without letting it be replaced (a reader of another program, a scanner) is waited for,
-// two seconds at most.
+// Rename puts a file written whole in place of another, also while that one is being read: the
+// rename is asked for as Unix does it (the old file goes on for those who have it open), which
+// NTFS gives from Windows 10 1709. Where it is not given, the plain rename; and whoever keeps
+// the old file from being replaced for a moment (a scanner) is waited for, two seconds at most.
 func Rename(from, to string) error {
 	var err error
 	for end := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		err = os.Rename(from, to)
+		err = renameOver(from, to)
+		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) || errors.Is(err, windows.ERROR_INVALID_FUNCTION) {
+			err = os.Rename(from, to)
+		}
 		if err == nil || !(errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED)) || time.Now().After(end) {
 			return err
 		}
 	}
 }
 
+// fileRenameInfo is FILE_RENAME_INFO, before its name.
+type fileRenameInfo struct {
+	Flags          uint32
+	RootDirectory  windows.Handle
+	FileNameLength uint32
+	FileName       [1]uint16
+}
+
+// renameOver renames from to to, replacing it, with POSIX semantics.
+func renameOver(from, to string) error {
+	fail := func(err error) error { return &os.LinkError{Op: "rename", Old: from, New: to, Err: err} }
+	to, err := filepath.Abs(to)
+	if err != nil {
+		return fail(err)
+	}
+	name, err := windows.UTF16FromString(to)
+	if err != nil {
+		return fail(err)
+	}
+	p, err := windows.UTF16PtrFromString(from)
+	if err != nil {
+		return fail(err)
+	}
+	h, err := windows.CreateFile(p, windows.DELETE|windows.SYNCHRONIZE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return fail(err)
+	}
+	defer windows.CloseHandle(h)
+	chars := len(name) - 1 // without the ending zero
+	var head fileRenameInfo
+	buf := make([]byte, int(unsafe.Offsetof(head.FileName))+2*len(name))
+	info := (*fileRenameInfo)(unsafe.Pointer(&buf[0]))
+	info.Flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	info.FileNameLength = uint32(2 * chars)
+	copy(unsafe.Slice(&info.FileName[0], len(name)), name)
+	if err := windows.SetFileInformationByHandle(h, windows.FileRenameInfoEx, &buf[0], uint32(len(buf))); err != nil {
+		return fail(err)
+	}
+	return nil
+}
+
 // batchLine is the command line that runs a .cmd or .bat file with its arguments as they are:
 // the command interpreter named, with /s so that the outer quotes alone are taken off and each
 // argument's own quoting stays. Every argument is quoted: & | < > ^ and spaces are then its
-// text. What the interpreter does all the same, as in any batch call: %NAME% is replaced, and an
-// argument with an odd number of quotes in it turns the quoting of those after it inside out.
+// text. An argument with a quote of its own is not taken (start refuses it): the interpreter
+// knows no escaped quote, and what follows one would be its to read. %NAME% it still replaces,
+// as in any batch call.
 func batchLine(comspec, file string, args []string) string {
 	line := quoteArg(file)
 	for _, a := range args {
@@ -487,6 +539,26 @@ func quoteArg(s string) string {
 		b = append(b, '\\')
 	}
 	return string(append(b, '"'))
+}
+
+// batchFile is the .cmd or .bat file cmd would run ("" when it runs a program): its path as
+// given, or with the extension the system would add (C:\tools\agent for agent.cmd; a relative
+// one is of cmd.Dir).
+func batchFile(cmd *exec.Cmd) string {
+	p := cmd.Path
+	if !filepath.IsAbs(p) && cmd.Dir != "" && strings.ContainsAny(p, `\/`) {
+		p = filepath.Join(cmd.Dir, p)
+	}
+	if lp, err := exec.LookPath(p); err == nil {
+		p = lp
+	}
+	if !isBatch(p) {
+		return ""
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	return p
 }
 
 // isBatch says whether path is a file the command interpreter runs.
