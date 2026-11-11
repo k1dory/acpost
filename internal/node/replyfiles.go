@@ -20,14 +20,13 @@ import (
 	"io"
 	"mime"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
-	"syscall"
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -159,7 +158,7 @@ func (tf *turnFiles) lookup(uri string) (store.File, bool) {
 		return f, true
 	}
 	if u, err := url.Parse(uri); err == nil && u.Scheme == "file" {
-		f, ok := tf.byURI[u.Path]
+		f, ok := tf.byURI[plat.URIPath(u.Path)]
 		return f, ok
 	}
 	return store.File{}, false
@@ -168,12 +167,18 @@ func (tf *turnFiles) lookup(uri string) (store.File, bool) {
 // onDisk says whether uri is a file:// path whose file holds exactly data now.
 func onDisk(uri string, data []byte) bool {
 	u, err := url.Parse(uri)
-	if err != nil || u.Scheme != "file" || !strings.HasPrefix(u.Path, "/") {
+	if err != nil || u.Scheme != "file" || u.Host != "" && u.Host != "localhost" {
+		return false
+	}
+	// A file of this machine's disks only: not another machine's share or a device, which an
+	// agent's reply would otherwise have the node open.
+	local, ok := plat.LocalFile(u.Path)
+	if !ok {
 		return false
 	}
 	// One open, non-blocking, checked on its descriptor, read no further than the content: a path
 	// swapped for a FIFO or a device is not waited on or read without end.
-	fd, err := os.OpenFile(u.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	fd, err := plat.OpenRead(local)
 	if err != nil {
 		return false
 	}

@@ -1,0 +1,300 @@
+package plat
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
+)
+
+// openToAll gives everyone the directory, as one made under a shared folder is.
+func openToAll(dir string) error {
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;WD)")
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// The repair the error names closes the directory: explicit grants to others are removed too.
+func TestPrivateDirRepairCloses(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "d")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := openToAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	var open *OpenDirError
+	if err := PrivateDir(dir); !errors.As(err, &open) {
+		t.Fatalf("open to everyone: %v", err)
+	}
+	cmd := exec.Command("cmd.exe")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `cmd.exe /c ` + open.Fix} // as a person pastes it
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v\n%s", open.Fix, err, out)
+	}
+	if err := PrivateDir(dir); err != nil {
+		t.Fatalf("after %s: %v", open.Fix, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o600); err != nil {
+		t.Fatalf("the repaired directory is closed to its own user: %v", err)
+	}
+}
+
+// A kill that comes the moment the group is known, before the command is in it, is not missed:
+// the command never runs.
+func TestKillWhileStartingRunsNothing(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "ran")
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "PLAT_HELPER=mark", "PLAT_MARK="+mark)
+	g, err := start(cmd, false, func(g *Group) { _ = g.Kill() })
+	if err == nil {
+		_ = cmd.Wait()
+		g.Close()
+		t.Fatal("a command killed while starting was started")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("a command killed while starting ran")
+	}
+}
+
+// A group started to last ends with the process that started it, however that one ends: a node
+// killed leaves no agent, and nothing an agent started.
+func TestGroupEndsWithItsStarter(t *testing.T) {
+	owner := exec.Command(os.Args[0])
+	owner.Env = append(os.Environ(), "PLAT_HELPER=owner")
+	out, err := owner.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(out).ReadString('\n')
+	pid, perr := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || perr != nil {
+		_ = owner.Process.Kill()
+		t.Fatalf("%q %v", line, err)
+	}
+	t.Cleanup(func() {
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill()
+		}
+	})
+	if !Alive(pid) {
+		t.Fatal("the group's leader is not seen running")
+	}
+	_ = owner.Process.Kill()
+	_ = owner.Wait()
+	if !gone(pid) {
+		t.Fatal("the group outlived the process that started it")
+	}
+}
+
+// A program installed by npm is a .cmd file: it starts, from a path with a space, and what it
+// starts is in the group.
+func TestStartsACmdFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "with space")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(dir, "agent.cmd")
+	if err := os.WriteFile(wrapper, []byte("@echo off\r\n\""+os.Args[0]+"\" %*\r\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(wrapper)
+	g, child := family(t, cmd, Start)
+	if err := g.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if !gone(child) {
+		t.Fatal("what the .cmd file's program started outlived the group's kill")
+	}
+}
+
+// Whose a path is: this user's, the system's and the administrators' are trusted; anyone else's
+// (they change its access list at will) and one not read are not.
+func TestTrustedOwner(t *testing.T) {
+	me, err := currentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := func(k windows.WELL_KNOWN_SID_TYPE) *windows.SID {
+		s, err := windows.CreateWellKnownSid(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for _, s := range []*windows.SID{me, sid(windows.WinLocalSystemSid), sid(windows.WinBuiltinAdministratorsSid)} {
+		if !trustedOwner(s, me) {
+			t.Errorf("%s not trusted", s)
+		}
+	}
+	for _, s := range []*windows.SID{nil, sid(windows.WinWorldSid), sid(windows.WinBuiltinUsersSid), sid(windows.WinBuiltinGuestsSid)} {
+		if trustedOwner(s, me) {
+			t.Errorf("%v trusted", s)
+		}
+	}
+	// What this user makes is this user's (or, for an administrator, the administrators').
+	dir := t.TempDir()
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner, _, err := sd.Owner(); err != nil || !trustedOwner(owner, me) {
+		t.Fatalf("a directory just made: owner %v %v", owner, err)
+	}
+}
+
+// cmdWrapper is a .cmd file that runs this test binary with the arguments it got, in a
+// directory with a space in its name.
+func cmdWrapper(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "with space")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(dir, "agent.cmd")
+	if err := os.WriteFile(wrapper, []byte("@echo off\r\n\""+os.Args[0]+"\" %*\r\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return wrapper
+}
+
+// argsThrough runs cmd (the wrapper, however named) and returns the arguments the program got.
+func argsThrough(t *testing.T, cmd *exec.Cmd) []string {
+	t.Helper()
+	cmd.Env = append(os.Environ(), "PLAT_HELPER=args")
+	out, err := Output(cmd)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var got []string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("%q: %v", out, err)
+	}
+	return got
+}
+
+// A .cmd file gets its arguments as they were given: ones with spaces, and what the command
+// interpreter would otherwise take for its own (& | < > ^), from a path with a space; named with
+// its extension, without it, and by a path relative to the command's directory.
+func TestCmdFileGetsItsArgumentsWhole(t *testing.T) {
+	wrapper := cmdWrapper(t)
+	args := []string{"plain", "two words", "a&b|c<d>e", `C:\dir with space\`, "", "x^y", "https://h/p?a=1&b=2"}
+	bare := strings.TrimSuffix(wrapper, ".cmd")
+	rel := exec.CommandContext(context.Background(), `.\agent`, args...)
+	rel.Dir = filepath.Dir(wrapper)
+	for name, cmd := range map[string]*exec.Cmd{
+		"with its extension": exec.CommandContext(context.Background(), wrapper, args...),
+		"without it":         exec.CommandContext(context.Background(), bare, args...),
+		"relative":           rel,
+	} {
+		if got := argsThrough(t, cmd); !slices.Equal(got, args) {
+			t.Errorf("%s:\ngot  %q\nwant %q", name, got, args)
+		}
+	}
+}
+
+// An argument with a quote of its own cannot be given to a .cmd file whole (what follows the
+// quote would be the interpreter's to read: an & there another command): refused, not run.
+func TestCmdFileRefusesAQuotedArgument(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "ran")
+	cmd := exec.CommandContext(context.Background(), cmdWrapper(t), "plain", `{"token":"s3cret-sentinel"} "a&echo x>`+mark+`"`)
+	cmd.Env = append(os.Environ(), "PLAT_HELPER=args")
+	out, err := Output(cmd)
+	if err == nil || !strings.Contains(err.Error(), "quote") || !strings.Contains(err.Error(), "argument 2") {
+		t.Fatalf("%q %v", out, err)
+	}
+	// The error is told to the message's sender: it names the argument's place, not its text.
+	if strings.Contains(err.Error(), "s3cret-sentinel") {
+		t.Fatalf("the error shows the argument: %v", err)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("what followed the quote was run")
+	}
+}
+
+// Where a command's path leads for a process in a directory, the Windows way.
+func TestLocalPath(t *testing.T) {
+	for _, c := range []struct{ p, dir, want string }{
+		{`C:\tools\agent`, `D:\work`, `C:\tools\agent`},
+		{`\tools\agent`, `D:\work`, `D:\tools\agent`},
+		{`/tools/agent.cmd`, `D:\work\sub`, `D:/tools/agent.cmd`},
+		{`.\agent`, `D:\work`, `D:\work\agent`},
+		{`bin\agent`, `D:\work`, `D:\work\bin\agent`},
+		{`agent`, `D:\work`, `agent`},
+		{`C:agent`, `D:\work`, `C:agent`},
+		{`.\agent`, ``, `.\agent`},
+	} {
+		if got := localPath(c.p, c.dir); got != c.want {
+			t.Errorf("localPath(%q, %q) = %q, want %q", c.p, c.dir, got, c.want)
+		}
+	}
+}
+
+// A path that starts at a root is of the working directory's drive: the .cmd file there is run,
+// with and without its extension.
+func TestCmdFileByARootedPath(t *testing.T) {
+	wrapper := cmdWrapper(t)
+	rooted := strings.TrimPrefix(wrapper, filepath.VolumeName(wrapper)) // \Users\...\agent.cmd
+	for _, name := range []string{rooted, strings.TrimSuffix(rooted, ".cmd")} {
+		cmd := exec.CommandContext(context.Background(), name, "two words")
+		cmd.Dir = filepath.Dir(wrapper)
+		if got := argsThrough(t, cmd); !slices.Equal(got, []string{"two words"}) {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}
+
+// What a group starts has no window of its own.
+func TestStartedWithoutAWindow(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "PLAT_HELPER=mark", "PLAT_MARK="+filepath.Join(t.TempDir(), "ran"))
+	g, err := Start(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	_ = cmd.Wait()
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW == 0 {
+		t.Fatal("started with a console window of its own")
+	}
+}
+
+func TestQuoteArg(t *testing.T) {
+	for in, want := range map[string]string{
+		``:        `""`,
+		`a`:       `"a"`,
+		`a b`:     `"a b"`,
+		`a"b`:     `"a\"b"`,
+		`a\b`:     `"a\b"`,
+		`a\`:      `"a\\"`,
+		`a\"b`:    `"a\\\"b"`,
+		`C:\x y\`: `"C:\x y\\"`,
+	} {
+		if got := quoteArg(in); got != want {
+			t.Errorf("quoteArg(%q) = %s, want %s", in, got, want)
+		}
+	}
+}

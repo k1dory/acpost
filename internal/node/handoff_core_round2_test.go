@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -11,8 +12,8 @@ import (
 
 // A new file git cannot read is named as left out, not dropped from a patch sent as complete.
 func TestHandoffNamesUnreadableNewFile(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads a file of mode 000")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("a file of mode 000 is read all the same (root; Windows has no such mode)")
 	}
 	dir := handoffRepo(t)
 	locked := filepath.Join(dir, "locked.go")

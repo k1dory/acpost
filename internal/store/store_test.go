@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 func openTest(t testing.TB, opt Options) *Store {
@@ -369,6 +372,12 @@ func TestFilesArePrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	if err := plat.PrivateDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return // no modes there: the files are under the directory's access list
+	}
 	st, _ := os.Stat(dir)
 	if st.Mode().Perm() != 0o700 {
 		t.Fatalf("dir mode %v", st.Mode().Perm())

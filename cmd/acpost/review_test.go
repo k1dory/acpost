@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -27,7 +26,7 @@ func TestAutostartWithRelativeConfig(t *testing.T) {
 			}
 			pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
 			if err == nil && pid > 0 {
-				_ = syscall.Kill(pid, syscall.SIGTERM)
+				askToStop(pid)
 			}
 		}
 	})

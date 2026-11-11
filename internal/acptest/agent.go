@@ -33,6 +33,7 @@ package acptest
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,10 +42,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 type fakeAgent struct {
@@ -225,7 +227,7 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 			lock := dir + "/" + string(p.SessionId) + ".lock"
 			if b, err := os.ReadFile(lock); err == nil {
 				pid, _ := strconv.Atoi(string(b))
-				if pid != os.Getpid() && pid > 0 && syscall.Kill(pid, 0) == nil {
+				if pid != os.Getpid() && pid > 0 && plat.Alive(pid) {
 					return acp.LoadSessionResponse{}, &acp.RequestError{Code: -32600, Message: "Invalid request: This Codex session is in use by another Codex client", Data: map[string]any{"reason": "thread_active_writer"}}
 				}
 			}
@@ -456,11 +458,11 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 		send(acp.ResourceLinkBlock("spec.pdf", "https://example.com/download?id=42"))
 		if disk := os.Getenv("FAKE_DISK"); disk != "" {
 			data, _ := os.ReadFile(disk)
-			send(acp.ResourceBlock(acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{Uri: "file://" + disk, Text: string(data)}}))
+			send(acp.ResourceBlock(acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{Uri: plat.FileURI(disk), Text: string(data)}}))
 		}
 		send(acp.ResourceBlock(acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{Uri: "file:///nowhere/new.txt", Text: "fresh"}}))
 		if link := os.Getenv("FAKE_LINK"); link != "" {
-			send(acp.ResourceLinkBlock("linked.txt", "file://"+link))
+			send(acp.ResourceLinkBlock("linked.txt", plat.FileURI(link)))
 		}
 		for _, c := range p.Prompt {
 			if c.Resource != nil && c.Resource.Resource.TextResourceContents != nil {
@@ -490,7 +492,7 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			case c.Image != nil:
 				fmt.Fprintf(&b, "image %s %d\n", c.Image.MimeType, len(c.Image.Data))
 			case c.ResourceLink != nil:
-				data, err := os.ReadFile(strings.TrimPrefix(c.ResourceLink.Uri, "file://"))
+				data, err := os.ReadFile(linkPath(c.ResourceLink.Uri))
 				fmt.Fprintf(&b, "link %s %q %v\n", c.ResourceLink.Name, data, err)
 			}
 		}
@@ -646,4 +648,13 @@ func (a *fakeAgent) SetSessionConfigOption(ctx context.Context, p acp.SetSession
 	a.settings[v.SessionId][string(v.ConfigId)] = string(v.Value)
 	a.mu.Unlock()
 	return acp.SetSessionConfigOptionResponse{ConfigOptions: a.options(v.SessionId)}, nil
+}
+
+// linkPath is the path a file:// link names on this machine (the link itself when it is not one).
+func linkPath(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme != "file" {
+		return uri
+	}
+	return plat.URIPath(u.Path)
 }

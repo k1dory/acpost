@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,9 @@ import (
 // The stop comes while a request waits on git: the git call is cut, and the answer is the API's
 // unavailable (ask again), not a not_found for a repository or a file that is there.
 func TestRunStopDuringGitIsUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the git that hangs is a shell script")
+	}
 	real, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("no git")

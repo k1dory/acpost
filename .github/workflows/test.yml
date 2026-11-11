@@ -33,6 +33,18 @@ jobs:
       # One package (cmd/acpost, internal/store) may take several minutes under -race: Go's default
       # 10 minutes per package is too close.
       - run: go test -race -count=1 -timeout 25m ./...
+  # The node and the CLI on Windows (the desktop app is macOS's): they build, vet, and pass their
+  # tests there.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -count=1 -timeout 25m ./internal/... ./cmd/...
   # The desktop app's interface: types, its unit tests (bindings mocked), and that it builds.
   frontend:
     runs-on: ubuntu-latest

@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/k1dory/acpost/internal/config"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -128,7 +128,7 @@ agents:
 		t.Fatalf("blocks:\n%s", w.Reply)
 	}
 	w = ask(t, n, SendRequest{Body: "prompt", Files: []store.File{file("notes.md", "# notes")}})
-	if !strings.Contains(w.Reply, "- notes.md (text/markdown; charset=utf-8, 7 bytes): /") || !strings.Contains(w.Reply, "acpost attach FILE") {
+	if !strings.Contains(w.Reply, "- notes.md (text/markdown; charset=utf-8, 7 bytes): "+filepath.VolumeName(os.TempDir())+string(filepath.Separator)) || !strings.Contains(w.Reply, "acpost attach FILE") {
 		t.Fatalf("prompt:\n%s", w.Reply)
 	}
 }
@@ -328,7 +328,7 @@ agents:
 	img := got["image-1.png"]
 	check("image-1.png", !img.Link() && img.Size == len(png1) && img.Type == "image/png")
 	check("spec.pdf", got["spec.pdf"].URI == "https://example.com/download?id=42") // the name it gave, not the URI's
-	check("made.md", got["made.md"].URI == "file://"+disk && got["made.md"].Size == 7)
+	check("made.md", got["made.md"].URI == plat.FileURI(disk) && got["made.md"].Size == 7)
 	check("new.txt", !got["new.txt"].Link() && got["new.txt"].Size == 5)
 	// The file it was given, handed back: the stored file again, the same content, not a new one.
 	back := got["notes.md"]
@@ -380,7 +380,7 @@ func TestACPReplyFilesPartlyKept(t *testing.T) {
 
 func TestOnDiskRefusesFIFOAtOnce(t *testing.T) {
 	fifo := filepath.Join(t.TempDir(), "p")
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+	if err := mkfifo(fifo); err != nil {
 		t.Skip(err)
 	}
 	done := make(chan bool, 1)

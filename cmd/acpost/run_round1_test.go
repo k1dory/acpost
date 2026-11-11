@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/k1dory/acpost/internal/store"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 // childBound is how long a command of a test may run: one that hangs fails its test, named,
@@ -37,7 +38,7 @@ func (e *env) runFor(d time.Duration, stdin string, args ...string) result {
 	select {
 	case err = <-done:
 	case <-time.After(d):
-		cmd.Process.Signal(syscall.SIGKILL)
+		cmd.Process.Kill()
 		<-done
 		e.t.Fatalf("acpost %v: still running after %s (killed)\nstderr: %s", args, d, errb.String())
 	}
@@ -118,12 +119,11 @@ func (e *env) stopAutostarted() {
 	if err != nil || pid <= 1 {
 		return
 	}
-	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil || !strings.Contains(string(out), e.config) {
+	if !strings.Contains(commandLine(pid), e.config) {
 		return
 	}
-	syscall.Kill(pid, syscall.SIGTERM)
-	until(10*time.Second, func() bool { return syscall.Kill(pid, 0) != nil })
+	askToStop(pid)
+	until(10*time.Second, func() bool { return !plat.Alive(pid) })
 }
 
 // childProblems are the race reports in the logs under dir.

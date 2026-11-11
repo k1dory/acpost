@@ -99,6 +99,26 @@ separate:
 npm i -g @agentclientprotocol/codex-acp @agentclientprotocol/claude-agent-acp
 ```
 
+### Windows
+
+The node and the command line build and run on Windows 10 (1809 and later: Unix sockets are
+there from 1803, the pseudo-console of terminals from 1809) and Windows 11; the desktop app is
+macOS's. What differs:
+
+- The configuration is `%AppData%\acpost\config.yaml`, the state (socket, store, log)
+  `%LocalAppData%\acpost`. `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are read as elsewhere.
+- Who may reach the socket and the store is their directory's access list, not a mode: the node
+  makes the directory for its user, the system and the administrators alone, and refuses one it
+  finds open to others (the error names the `icacls` command that closes it).
+- An agent and whatever it starts are one job object: stopping the agent ends them all, and so
+  does the node's own end, however it comes. There is no `SIGTERM`: a node in a console stops on
+  Ctrl-C; one started in the background by the command line is ended from the Task Manager
+  (`taskkill /F /PID` with the number in `acpost.pid`), which the store survives as it does a
+  crash.
+- A terminal's shell is PowerShell, on a pseudo-console.
+- Secrets (forge tokens, MCP servers' secrets) are kept in files under `%AppData%\acpost`, as on
+  Linux; a `file://` link is `file:///C:/dir/name`.
+
 ## Quick start
 
 `~/.config/acpost/config.yaml`:
@@ -662,6 +682,7 @@ task in one. Without it the app shows no cloud at all.
 | `--join` and hub routing | v0.1 |
 | Postgres store for a hub | planned |
 | ACP transport for remote ACP clients | after the RFD |
+| Node and CLI on Windows | preview |
 | Desktop app, macOS | preview |
 
 ## License

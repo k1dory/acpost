@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +87,7 @@ func TestChangesInGitAreNotToldTwice(t *testing.T) {
 	}
 	b := ask(t, n, SendRequest{Body: `write ` + filepath.Join(out, "far.txt") + ` x\n`, Thread: a.Thread})
 	turns, whole, _ = n.Changes(ctx, me, b.ID, false, true)
-	if len(turns) != 1 || turns[0].Before != "" || turns[0].Files[0].Path != filepath.Join(out, "far.txt") || len(whole) != 1 {
+	if len(turns) != 1 || turns[0].Before != "" || turns[0].Files[0].Path != filepath.ToSlash(filepath.Join(out, "far.txt")) || len(whole) != 1 {
 		t.Fatalf("outside the repository: %+v, %+v", turns, whole)
 	}
 }
@@ -115,7 +116,7 @@ func TestUnifiedHunk(t *testing.T) {
 
 // An edit of a secret alone is an edit: the file is listed, its lines shown masked (finding 5).
 func TestReportedSecretRotationIsAChange(t *testing.T) {
-	files, diff, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/.env", old: "A=1\nAPI_TOKEN=oldvalue123\n", new: "A=1\nAPI_TOKEN=newvalue456\n"}})
+	files, diff, _ := reportedChanges(w(""), "", []fileEdit{{path: w("/.env"), old: "A=1\nAPI_TOKEN=oldvalue123\n", new: "A=1\nAPI_TOKEN=newvalue456\n"}})
 	if len(files) != 1 || files[0].Path != ".env" || files[0].Added != 1 || files[0].Removed != 1 {
 		t.Fatalf("files: %+v", files)
 	}
@@ -169,16 +170,16 @@ func TestReportedTakesAllEditsOfACall(t *testing.T) {
 	turn := &acpTurn{}
 	var content []acp.ToolCallContent
 	for i := range 40 {
-		content = append(content, acp.ToolCallContent{Diff: &acp.ToolCallContentDiff{Path: fmt.Sprintf("/w/f%02d", i), NewText: "x\n"}})
+		content = append(content, acp.ToolCallContent{Diff: &acp.ToolCallContentDiff{Path: w(fmt.Sprintf("/f%02d", i)), NewText: "x\n"}})
 	}
 	big := strings.Repeat("y\n", editKeepMax/2+1)
-	content = append(content, acp.ToolCallContent{Diff: &acp.ToolCallContentDiff{Path: "/w/big", OldText: acp.Ptr("old\n"), NewText: big}})
+	content = append(content, acp.ToolCallContent{Diff: &acp.ToolCallContentDiff{Path: w("/big"), OldText: acp.Ptr("old\n"), NewText: big}})
 	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "c1", Status: acp.ToolCallStatusCompleted, Content: content})
 	edits, more := turn.edits()
 	if len(edits) != 41 || more {
 		t.Fatalf("%d edits, more %v", len(edits), more)
 	}
-	files, diff, cut := reportedChanges("/w", "", edits)
+	files, diff, cut := reportedChanges(w(""), "", edits)
 	if len(files) != 41 || !cut || strings.Contains(diff, "b/big") || files[40].Path != "big" || files[40].Added == 0 {
 		t.Errorf("%d files, cut %v, the last %+v", len(files), cut, files[len(files)-1])
 	}
@@ -218,7 +219,7 @@ func TestReportedWholeIsBounded(t *testing.T) {
 // Past the turn's count of edits nothing more is held: not the edits, not their calls.
 func TestReportedEditsAreBoundedByCalls(t *testing.T) {
 	turn := &acpTurn{}
-	one := []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: "/w/f", NewText: "x\n"}}}
+	one := []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: w("/f"), NewText: "x\n"}}}
 	for i := range editsMax + 500 {
 		turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: acp.ToolCallId(fmt.Sprintf("c%d", i)), Status: acp.ToolCallStatusCompleted, Content: one})
 	}
@@ -236,7 +237,7 @@ func TestReportedEditsAreBoundedByCalls(t *testing.T) {
 // A call that says in the end it edited nothing (content sent, empty) edited nothing: before its
 // status or after it. Text alone leaves its edits (claude-agent-acp ends an edit so).
 func TestReportedEmptyContentTakesEditsBack(t *testing.T) {
-	diff := []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: "/w/f", NewText: "x\n"}}}
+	diff := []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: w("/f"), NewText: "x\n"}}}
 	done := acp.ToolCallStatusCompleted
 	turn := &acpTurn{}
 	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "a", Content: diff})
@@ -282,7 +283,7 @@ func TestReportedRotationOfASecretOverLines(t *testing.T) {
 	if added != 1 || removed != 1 || strings.Contains(hunk, "bbbb") || strings.Contains(hunk, "cccc") || hunk != "@@ -4,1 +4,1 @@\n-"+maskedLine+"\n+"+maskedLine+"\n" {
 		t.Errorf("+%d -%d\n%s", added, removed, hunk)
 	}
-	files, diff, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/c.json", old: old, new: new}})
+	files, diff, _ := reportedChanges(w(""), "", []fileEdit{{path: w("/c.json"), old: old, new: new}})
 	if len(files) != 1 || files[0].Added != 1 || files[0].Removed != 1 || !strings.Contains(diff, maskedLine) {
 		t.Errorf("files %+v\n%s", files, diff)
 	}
@@ -306,7 +307,7 @@ func TestReportedPendingEditsShareTheBudget(t *testing.T) {
 		return n
 	}
 	for i := range 40 { // 40 × 512 KiB waiting, none ended
-		turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: acp.ToolCallId(fmt.Sprintf("p%d", i)), Content: []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: "/w/f", NewText: big}}}})
+		turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: acp.ToolCallId(fmt.Sprintf("p%d", i)), Content: []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: w("/f"), NewText: big}}}})
 	}
 	if got := held(); got > editsKeepMax || got != turn.pendingBytes+turn.editedBytes {
 		t.Fatalf("%d bytes held waiting (counted %d + %d), the budget is %d", got, turn.pendingBytes, turn.editedBytes, editsKeepMax)
@@ -328,7 +329,7 @@ func TestReportedPendingEditsShareTheBudget(t *testing.T) {
 
 // A file made empty is in the diff by its header, as git writes one.
 func TestReportedEmptyNewFile(t *testing.T) {
-	files, diff, cut := reportedChanges("/w", "", []fileEdit{{path: "/w/pkg/__init__.py", created: true}})
+	files, diff, cut := reportedChanges(w(""), "", []fileEdit{{path: w("/pkg/__init__.py"), created: true}})
 	if len(files) != 1 || files[0].Status != "A" || cut || diff != "diff --git a/pkg/__init__.py b/pkg/__init__.py\nnew file mode 100644\n" {
 		t.Errorf("files %+v, cut %v\n%s", files, cut, diff)
 	}
@@ -341,12 +342,12 @@ func TestReportedDeletions(t *testing.T) {
 	turn := &acpTurn{}
 	del := map[string]any{"kind": "delete"}
 	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "d", Status: acp.ToolCallStatusCompleted, Content: []acp.ToolCallContent{
-		{Diff: &acp.ToolCallContentDiff{Path: "/w/gone.txt", OldText: acp.Ptr("a\nb\n"), NewText: "", Meta: del}},
-		{Diff: &acp.ToolCallContentDiff{Path: "/w/empty.txt", OldText: acp.Ptr(""), NewText: "", Meta: del}},
-		{Diff: &acp.ToolCallContentDiff{Path: "/w/new.txt", OldText: acp.Ptr(""), NewText: "x\n", Meta: map[string]any{"kind": "add"}}},
+		{Diff: &acp.ToolCallContentDiff{Path: w("/gone.txt"), OldText: acp.Ptr("a\nb\n"), NewText: "", Meta: del}},
+		{Diff: &acp.ToolCallContentDiff{Path: w("/empty.txt"), OldText: acp.Ptr(""), NewText: "", Meta: del}},
+		{Diff: &acp.ToolCallContentDiff{Path: w("/new.txt"), OldText: acp.Ptr(""), NewText: "x\n", Meta: map[string]any{"kind": "add"}}},
 	}})
 	edits, _ := turn.edits()
-	files, diff, _ := reportedChanges("/w", "", edits)
+	files, diff, _ := reportedChanges(w(""), "", edits)
 	if len(files) != 3 || files[0].Status != "D" || files[0].Removed != 2 || files[1].Status != "D" || files[2].Status != "A" {
 		t.Fatalf("files: %+v", files)
 	}
@@ -364,7 +365,7 @@ func TestReportedDeletions(t *testing.T) {
 // A name with a line break, a tab or a quotation mark is quoted in the headers as git quotes it:
 // each header stays one line.
 func TestReportedQuotesNames(t *testing.T) {
-	_, diff, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/a\tb\n\"c\".txt", old: "1\n", new: "2\n"}, {path: "/w/dir b/file.txt", old: "1\n", new: "2\n"}})
+	_, diff, _ := reportedChanges(w(""), "", []fileEdit{{path: w("/a\tb\n\"c\".txt"), old: "1\n", new: "2\n"}, {path: w("/dir b/file.txt"), old: "1\n", new: "2\n"}})
 	q := `"a/a\tb\n\"c\".txt" "b/a\tb\n\"c\".txt"`
 	if !strings.Contains(diff, "diff --git "+q+"\n--- "+`"a/a\tb\n\"c\".txt"`+"\n+++ "+`"b/a\tb\n\"c\".txt"`+"\n@@ ") {
 		t.Errorf("a quoted name:\n%s", diff)
@@ -390,8 +391,16 @@ func TestStatusOverTurns(t *testing.T) {
 			t.Errorf("%s: %+v, want %s", c.steps, files, c.want)
 		}
 	}
-	files, _, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/x", old: "a\n", new: "b\n"}, {path: "/w/x", old: "b\n", deleted: true}})
+	files, _, _ := reportedChanges(w(""), "", []fileEdit{{path: w("/x"), old: "a\n", new: "b\n"}, {path: w("/x"), old: "b\n", deleted: true}})
 	if len(files) != 1 || files[0].Status != "D" {
 		t.Errorf("changed, then removed in one turn: %+v", files)
 	}
+}
+
+// w is an absolute path of this system under a directory w: /w/name, on Windows C:\w\name.
+func w(name string) string {
+	if runtime.GOOS == "windows" {
+		return `C:\w` + filepath.FromSlash(name)
+	}
+	return "/w" + name
 }

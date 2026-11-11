@@ -50,7 +50,7 @@ func noKeychain(t *testing.T, e *env) string {
 	os.WriteFile(filepath.Join(d, "security"), []byte("#!/bin/sh\necho \"$1\" >> '"+d+"/calls'\nexit 0\n"), 0o755)
 	for i, v := range e.vars {
 		if strings.HasPrefix(v, "PATH=") {
-			e.vars[i] = "PATH=" + d + ":" + strings.TrimPrefix(v, "PATH=")
+			e.vars[i] = "PATH=" + d + string(os.PathListSeparator) + strings.TrimPrefix(v, "PATH=")
 		}
 	}
 	return filepath.Join(d, "calls")
@@ -80,9 +80,9 @@ func TestForgeLoginThroughTheNode(t *testing.T) {
 		t.Fatalf("the error quotes the token: %s", r.err)
 	}
 
-	if runtime.GOOS == "darwin" {
-		// The node's TLS takes the system's roots only on macOS (SSL_CERT_FILE is not read):
-		// the accepted half runs on Linux.
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		// The node's TLS takes the system's roots only on macOS and Windows (SSL_CERT_FILE is not
+		// read): the accepted half runs on Linux.
 		return
 	}
 	e.ok("good\n", "forge", "login", host)

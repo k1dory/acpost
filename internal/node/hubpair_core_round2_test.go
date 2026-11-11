@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k1dory/acpost/internal/acptest"
 	"github.com/k1dory/acpost/internal/api"
 	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/node"
@@ -50,7 +51,7 @@ func hubPair(t *testing.T) (hub, edge *node.Node, edgeStore *store.Store) {
 func hubPairWith(t *testing.T, wrap func(http.Handler) http.Handler) (hub, edge *node.Node, edgeStore *store.Store) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	acptest.SetHome(t.Setenv, home)
 	t.Setenv("XDG_CONFIG_HOME", home+"/.config")
 	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	const secret = "edge-secret"

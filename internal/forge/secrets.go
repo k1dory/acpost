@@ -10,10 +10,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/k1dory/acpost/internal/keychain"
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 // Tokens are kept by internal/keychain: the macOS keychain (service "acpost-forge", account the
@@ -45,8 +45,7 @@ type cachedToken struct {
 // DefaultStore is the store of this process: the keychain on macOS unless ACPOST_SECRETS_FILE=1,
 // the file in ~/.config/acpost otherwise. The node and acpost forge login use the same one.
 func DefaultStore() *Store {
-	home, _ := os.UserHomeDir()
-	return &Store{Dir: filepath.Join(home, ".config", "acpost"), File: os.Getenv("ACPOST_SECRETS_FILE") == "1"}
+	return &Store{Dir: plat.ConfigDir(), File: os.Getenv("ACPOST_SECRETS_FILE") == "1"}
 }
 
 func (s *Store) tokens() *keychain.Store {
@@ -59,7 +58,7 @@ func (s *Store) tokens() *keychain.Store {
 func (s *Store) kindsFile() string { return filepath.Join(s.Dir, "forges.json") }
 
 func readJSON(path string, v any) error {
-	b, err := os.ReadFile(path)
+	b, err := plat.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -69,17 +68,14 @@ func readJSON(path string, v any) error {
 	return json.Unmarshal(b, v)
 }
 
-func writeJSON(path string, v any, mode os.FileMode) error {
+// writeJSON writes v to path, a file of this user alone, whole or not at all.
+func writeJSON(path string, v any) error {
 	b, _ := json.MarshalIndent(v, "", "  ")
-	f, err := os.CreateTemp(filepath.Dir(path), ".forge-*") // its own: writers do not share one
+	f, err := plat.CreatePrivateTemp(filepath.Dir(path), ".forge-") // its own: writers do not share one
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if err := f.Chmod(mode); err != nil {
-		f.Close()
-		return err
-	}
 	if _, err := f.Write(b); err != nil {
 		f.Close()
 		return err
@@ -87,14 +83,14 @@ func writeJSON(path string, v any, mode os.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return plat.Rename(f.Name(), path)
 }
 
 // locked runs fn holding the store's lock, across processes (an acpost login and a node).
 func (s *Store) locked(fn func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := plat.MkdirPrivate(s.Dir); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(filepath.Join(s.Dir, ".forge.lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -102,10 +98,10 @@ func (s *Store) locked(fn func() error) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := plat.Lock(f, true); err != nil {
 		return err
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer plat.Unlock(f)
 	return fn()
 }
 
@@ -134,7 +130,7 @@ func (s *Store) Login(host, kind, token string) error {
 		if kind != "" || kinds[host] == "" {
 			kinds[host] = kind
 		}
-		if err := writeJSON(s.kindsFile(), kinds, 0o600); err != nil {
+		if err := writeJSON(s.kindsFile(), kinds); err != nil {
 			return err
 		}
 		return s.tokens().Set(host, token)
@@ -171,7 +167,7 @@ func (s *Store) Logout(host string) error {
 			return nil
 		}
 		delete(kinds, host)
-		return writeJSON(s.kindsFile(), kinds, 0o600)
+		return writeJSON(s.kindsFile(), kinds)
 	})
 }
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k1dory/acpost/internal/acptest"
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/store"
 )
@@ -32,6 +34,9 @@ func TestMain(m *testing.M) {
 	}
 	binDir = dir
 	for pkg, name := range map[string]string{".": "acpost", "../../internal/acptest/fakeagent": "fakeagent"} {
+		if runtime.GOOS == "windows" {
+			name += ".exe" // started by its name without it, as any program there
+		}
 		out, err := exec.Command("go", buildArgs(filepath.Join(dir, name), pkg)...).CombinedOutput()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "build %s: %v\n%s", pkg, err, out)
@@ -63,7 +68,7 @@ func (e *env) stop() {
 }
 
 func newEnv(t *testing.T, yaml string) *env {
-	dir, err := os.MkdirTemp("/tmp", "acp")
+	dir, err := os.MkdirTemp(shortTmp, "acp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +83,7 @@ func newEnv(t *testing.T, yaml string) *env {
 	if err := os.WriteFile(e.config, []byte(full), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	e.vars = []string{"ACPOST_CONFIG=" + e.config, "PATH=" + binDir + ":" + os.Getenv("PATH"), "HOME=" + dir}
+	e.vars = append([]string{"ACPOST_CONFIG=" + e.config, "PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH")}, acptest.HomeEnv(dir)...)
 	return e
 }
 
@@ -124,10 +129,10 @@ func (e *env) serve(extra ...string) {
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
-			cmd.Process.Signal(syscall.SIGTERM)
+			askToStop(cmd.Process.Pid)
 			done := make(chan struct{})
 			go func() {
-				if err := cmd.Wait(); err != nil {
+				if err := cmd.Wait(); err != nil && stopsCleanly {
 					e.t.Errorf("the node exited badly: %v (serve.log says why)", err)
 				}
 				close(done)
@@ -331,7 +336,7 @@ func TestAutostart(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(pidb)))
-	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGTERM) })
+	t.Cleanup(func() { askToStop(pid) })
 	if out := e.ok("", "status", "--json"); !strings.Contains(out, `"ok":true`) {
 		t.Fatal(out)
 	}
@@ -369,7 +374,7 @@ tokens:
 	cmd := exec.Command(filepath.Join(binDir, "acpost"), "serve")
 	cmd.Env = append(cleanEnv(), e.vars...)
 	cmd.Start()
-	t.Cleanup(func() { cmd.Process.Signal(syscall.SIGTERM); cmd.Wait() })
+	t.Cleanup(func() { askToStop(cmd.Process.Pid); cmd.Wait() })
 	deadline := time.Now().Add(10 * time.Second)
 	for e.run("", "--node", url, "--token", "secret", "status").code != 0 {
 		if time.Now().After(deadline) {
@@ -480,8 +485,8 @@ tokens:
 	hubCmd.Stdout, hubCmd.Stderr = hubLog, hubLog
 	hubCmd.Start()
 	t.Cleanup(func() {
-		hubCmd.Process.Signal(syscall.SIGTERM)
-		if err := hubCmd.Wait(); err != nil {
+		askToStop(hubCmd.Process.Pid)
+		if err := hubCmd.Wait(); err != nil && stopsCleanly {
 			t.Errorf("the hub exited badly: %v", err)
 		}
 		if t.Failed() {
@@ -538,7 +543,7 @@ func appendCfg(t *testing.T, e *env, line string) {
 
 // An agent reading stderr learns what failed and what to do; with --json it gets fields.
 func TestErrorsExplainThemselves(t *testing.T) {
-	state, err := os.MkdirTemp("/tmp", "acpst")
+	state, err := os.MkdirTemp(shortTmp, "acpst")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +855,7 @@ func TestTerminalOverAPI(t *testing.T) {
 	if err != nil || tm.Cwd != dir {
 		t.Fatalf("%+v %v", tm, err)
 	}
-	if err := c.TermInput(context.Background(), tm.ID, []byte("pwd; echo via-\"\"http; exit\n")); err != nil {
+	if err := c.TermInput(context.Background(), tm.ID, []byte(termLine)); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

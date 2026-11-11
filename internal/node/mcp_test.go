@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/k1dory/acpost/internal/acptest"
 	"github.com/k1dory/acpost/internal/store"
 )
 
 // The MCP servers of Settings reach every session an agent opens, their secrets from the keychain
 // (a file in tests); a server for other agents, or turned off, does not.
 func TestMCPServers(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	acptest.SetHome(t.Setenv, t.TempDir())
 	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	n := acpNode(t, "")
 	err := n.PutMCPServer(ctx, me, store.MCPServer{Name: "wiki", Kind: "stdio", Command: "wiki-mcp", Env: []string{"TOKEN"}, Enabled: true},
@@ -57,7 +58,7 @@ func TestMCPServers(t *testing.T) {
 // A server kept before secrets had versions keeps its values: they are read under the old names
 // and carried into the first version.
 func TestMCPLegacySecrets(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	acptest.SetHome(t.Setenv, t.TempDir())
 	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	n := acpNode(t, "")
 	// As an older node left it: no version, the value under server/env/NAME.
@@ -78,7 +79,7 @@ func TestMCPLegacySecrets(t *testing.T) {
 
 // A forge account is kept once the forge says whose the token is; a token it refuses is not.
 func TestForgeAccounts(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	acptest.SetHome(t.Setenv, t.TempDir())
 	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

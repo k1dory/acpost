@@ -5,14 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-
-	"github.com/creack/pty"
 )
 
 // Terminals: a shell on the node's machine, in an agent's working directory or another, for the
@@ -38,10 +35,20 @@ type Terminal struct {
 	Size     int64     `json:"size"` // output bytes so far: the offset the next byte will have
 }
 
+// console is a shell on a terminal of its own: what it prints is read, what is typed is written.
+type console interface {
+	io.ReadWriteCloser
+	Resize(cols, rows int) error
+	Wait() int // the shell's end: its exit code (0 when it has none to tell)
+	Kill()
+}
+
+// errNoConsole is a system this node gives no terminals on.
+var errNoConsole = errors.New("this node's system has no terminals (Windows before 10 1809 has no pseudo-console)")
+
 type term struct {
 	Terminal
-	cmd    *exec.Cmd
-	pty    *os.File
+	con    console
 	mu     sync.Mutex
 	buf    []byte // the last termKeep bytes of output
 	base   int64  // the offset of buf[0]
@@ -112,26 +119,24 @@ func (n *Node) OpenTerminal(ctx context.Context, p Principal, r TermRequest) (Te
 		n.terms.mu.Unlock()
 	}
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	cmd := exec.Command(shell, "-l")
-	cmd.Dir = dir
+	var env []string
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "ACPOST_") && !strings.HasPrefix(kv, "TERM=") {
-			cmd.Env = append(cmd.Env, kv)
+			env = append(env, kv)
 		}
 	}
-	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "COLORTERM=truecolor")
-	size := &pty.Winsize{Cols: uint16(clamp(r.Cols, 80, 1000)), Rows: uint16(clamp(r.Rows, 24, 1000))}
-	f, err := pty.StartWithSize(cmd, size)
+	env = append(env, "TERM=xterm-256color", "COLORTERM=truecolor")
+	con, err := startConsole(dir, env, clamp(r.Cols, 80, 1000), clamp(r.Rows, 24, 1000))
+	if errors.Is(err, errNoConsole) {
+		release()
+		return Terminal{}, errf("unsupported", "%v", err)
+	}
 	if err != nil {
 		release()
-		return Terminal{}, errf("internal", "start %s: %v", shell, err)
+		return Terminal{}, errf("internal", "%v", err)
 	}
 	t := &term{Terminal: Terminal{ID: termID(), Cwd: dir, Agent: r.Agent, Started: time.Now().UTC(), Running: true},
-		cmd: cmd, pty: f, more: make(chan struct{}), done: make(chan struct{}), closed: make(chan struct{}), in: make(chan []byte, 256)}
+		con: con, more: make(chan struct{}), done: make(chan struct{}), closed: make(chan struct{}), in: make(chan []byte, 256)}
 	go t.feed()
 	n.terms.mu.Lock()
 	n.terms.all[t.ID] = t
@@ -159,7 +164,7 @@ func (n *Node) runTerm(t *term) {
 		defer close(read)
 		b := make([]byte, 32<<10)
 		for {
-			k, err := t.pty.Read(b)
+			k, err := t.con.Read(b)
 			if k > 0 {
 				t.write(b[:k])
 			}
@@ -168,26 +173,21 @@ func (n *Node) runTerm(t *term) {
 			}
 		}
 	}()
-	waited := make(chan error, 1)
-	go func() { waited <- t.cmd.Wait() }()
-	defer t.pty.Close() // closed for good when its reader is done (a pending read keeps the fd)
-	var err error
+	waited := make(chan int, 1)
+	go func() { waited <- t.con.Wait() }()
+	defer t.con.Close() // closed for good when its reader is done (a pending read keeps the fd)
+	var code int
 	select {
-	case err = <-waited:
+	case code = <-waited:
 	case <-n.ctx.Done(): // the node stops: the shell goes, then the rest
 		t.kill()
-		err = <-waited
+		code = <-waited
 	}
 	// What is left to read, for a moment. A process the shell left may hold the terminal open
 	// (the read goes on until it ends): the terminal ends all the same.
 	select {
 	case <-read:
 	case <-time.After(3 * time.Second):
-	}
-	code := 0
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		code = ee.ExitCode()
 	}
 	t.mu.Lock()
 	t.Running, t.ExitCode = false, &code
@@ -226,16 +226,8 @@ func (t *term) wake() { // under t.mu
 	t.more = make(chan struct{})
 }
 
-// kill ends the shell: SIGHUP, then SIGKILL, through os.Process (which signals no process once
-// the shell is reaped: on Linux by its pidfd). The rest of the terminal's processes get SIGHUP
-// from the kernel as their controlling shell goes, as with any terminal.
-func (t *term) kill() {
-	if t.cmd.Process == nil {
-		return
-	}
-	_ = t.cmd.Process.Signal(syscall.SIGHUP)
-	_ = t.cmd.Process.Kill()
-}
+// kill ends the shell (and with it, as with any terminal, what it runs there).
+func (t *term) kill() { t.con.Kill() }
 
 func (t *term) view() Terminal {
 	t.mu.Lock()
@@ -312,7 +304,7 @@ func (t *term) feed() {
 	for {
 		select {
 		case b := <-t.in:
-			_, err := t.pty.Write(b)
+			_, err := t.con.Write(b)
 			t.mu.Lock()
 			t.queued -= len(b)
 			t.mu.Unlock()
@@ -334,7 +326,7 @@ func (n *Node) TermResize(p Principal, id string, cols, rows int) error {
 	if cols <= 0 || rows <= 0 || cols > 1000 || rows > 1000 {
 		return errf("invalid", "size %dx%d", cols, rows)
 	}
-	return pty.Setsize(t.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	return t.con.Resize(cols, rows)
 }
 
 // CloseTerminal ends a terminal's shell and forgets it.

@@ -14,12 +14,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/k1dory/acpost/internal/api"
 	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/node"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -142,7 +142,7 @@ var wrapListener = func(ln net.Listener) net.Listener { return ln }
 // ListenUnix listens on a Unix socket in a private directory, replacing a stale socket file.
 func ListenUnix(path string) (net.Listener, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := plat.MkdirPrivate(dir); err != nil {
 		return nil, err
 	}
 	if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
@@ -156,8 +156,5 @@ func ListenUnix(path string) (net.Listener, error) {
 		}
 		_ = os.Remove(path)
 	}
-	old := syscall.Umask(0o077)
-	ln, err := net.Listen("unix", path)
-	syscall.Umask(old)
-	return ln, err
+	return listenPrivate(path)
 }

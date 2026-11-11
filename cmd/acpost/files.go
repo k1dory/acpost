@@ -13,11 +13,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -85,7 +85,7 @@ func (o *overLimit) Error() string { return fmt.Sprintf("%d bytes, over the limi
 // grows or shrinks while it is read is refused rather than sent cut.
 func readFile(path string, max int64) ([]byte, error) {
 	// Non-blocking: a FIFO or a device opens at once and is refused below, rather than waiting.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := plat.OpenRead(path)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func readLinks(targets []string) ([]store.File, error) {
 				if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
 					return nil, bad(fmt.Errorf("%s names a file on %s, not on this machine", t, u.Host), "--link takes a file of this machine or an http(s) URL")
 				}
-				t = u.Path
+				t = plat.URIPath(u.Path)
 			}
 			abs, err := filepath.Abs(t)
 			if err != nil {
@@ -167,7 +167,7 @@ func readLinks(targets []string) ([]store.File, error) {
 			if !st.Mode().IsRegular() {
 				return nil, bad(fmt.Errorf("%s is not a file", t), "link the files of a directory one by one")
 			}
-			f.URI, f.Name, f.Size = (&url.URL{Scheme: "file", Path: abs}).String(), filepath.Base(abs), int(st.Size())
+			f.URI, f.Name, f.Size = plat.FileURI(abs), filepath.Base(abs), int(st.Size())
 		}
 		out = append(out, f)
 	}

@@ -9,6 +9,7 @@ package store
 // ACPOST_HEAVY=1 multiplies the volumes (gigabyte scale) for a manual run.
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -18,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -461,6 +461,9 @@ func TestCrashMidWriteLeavesConsistentStore(t *testing.T) {
 		for i := 0; ; i++ {
 			m := &Message{ID: NewID(), From: "user:crash", To: "agent:r", Body: body}
 			s.Insert(ctx, m)
+			if i == 20 {
+				fmt.Println("writing") // the parent kills from here on, not before anything is there
+			}
 			if i%50 == 0 {
 				if c, ok, _ := s.Claim(ctx, "agent:r", time.Hour); ok {
 					s.Complete(ctx, c.ID, c.LeaseID, Done, body, "", "")
@@ -472,24 +475,55 @@ func TestCrashMidWriteLeavesConsistentStore(t *testing.T) {
 	for round := range 3 {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestCrashMidWriteLeavesConsistentStore$")
 		cmd.Env = append(os.Environ(), "ACPOST_CRASH_CHILD="+path)
+		out, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(time.Duration(300+round*200) * time.Millisecond)
-		cmd.Process.Signal(syscall.SIGKILL)
+		// Killed in the middle of its writing: once it says it writes, a little later each round
+		// (a slow machine is waited for, not killed before its first row).
+		wrote := make(chan bool, 1)
+		go func() {
+			sc := bufio.NewScanner(out)
+			for sc.Scan() {
+				if sc.Text() == "writing" {
+					wrote <- true
+					return
+				}
+			}
+			wrote <- false
+		}()
+		select {
+		case ok := <-wrote:
+			if !ok {
+				cmd.Process.Kill()
+				cmd.Wait()
+				t.Fatalf("round %d: the writer ended before it wrote", round)
+			}
+		case <-time.After(2 * time.Minute):
+			cmd.Process.Kill()
+			cmd.Wait()
+			t.Fatalf("round %d: the writer wrote nothing in two minutes", round)
+		}
+		time.Sleep(time.Duration(50+round*150) * time.Millisecond)
+		cmd.Process.Kill()
 		cmd.Wait()
-		s, err := Open("sqlite://"+path, Options{})
-		if err != nil {
-			t.Fatalf("round %d: reopen: %v", round, err)
-		}
-		if err := s.IntegrityCheck(ctx); err != nil {
-			t.Fatalf("round %d: %v", round, err)
-		}
-		page, _, err := s.List(ctx, Filter{Limit: 1})
-		if err != nil || len(page) == 0 {
-			t.Fatalf("round %d: nothing written before the kill (%v)", round, err)
-		}
-		s.Close()
+		func() {
+			s, err := Open("sqlite://"+path, Options{})
+			if err != nil {
+				t.Fatalf("round %d: reopen: %v", round, err)
+			}
+			defer s.Close() // also when the round fails: the file is not left open under the cleanup
+			if err := s.IntegrityCheck(ctx); err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+			page, _, err := s.List(ctx, Filter{Limit: 1})
+			if err != nil || len(page) == 0 {
+				t.Fatalf("round %d: nothing written before the kill (%v)", round, err)
+			}
+		}()
 	}
 }
 

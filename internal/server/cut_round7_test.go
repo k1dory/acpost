@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -95,6 +96,9 @@ func TestRunStopDuringACPRequestIsUnavailable(t *testing.T) {
 
 // A handoff whose git is cut by the stop: unavailable, not invalid ("no remote origin").
 func TestRunStopDuringHandoffGitIsUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the git that hangs is a shell script")
+	}
 	real, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("no git")

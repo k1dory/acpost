@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/config"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -91,6 +91,7 @@ type acpSlot struct {
 
 type acpProc struct {
 	cmd      *exec.Cmd
+	group    *plat.Group // the agent and whatever it started
 	stdin    io.WriteCloser
 	conn     *acpx.Conn
 	cl       *acpClient
@@ -340,8 +341,6 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	cmd := exec.Command(a.cfg.Command[0], a.cfg.Command[1:]...)
 	cmd.Dir = s.cwd()
 	cmd.Env = s.env()
-	// The agent and whatever it starts are one process group, stopped as a whole.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -354,10 +353,12 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	// The agent and whatever it starts are one group, stopped as a whole.
+	group, err := plat.Start(cmd)
+	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", a.cfg.Command[0], err)
 	}
-	p := &acpProc{cmd: cmd, stdin: stdin, sessions: map[string]acp.SessionId{}, models: map[acp.SessionId]string{}, states: map[acp.SessionId]acpx.SessionState{}, costBase: map[acp.SessionId]float64{}, fresh: map[acp.SessionId]bool{}, done: make(chan struct{})}
+	p := &acpProc{cmd: cmd, group: group, stdin: stdin, sessions: map[string]acp.SessionId{}, models: map[acp.SessionId]string{}, states: map[acp.SessionId]acpx.SessionState{}, costBase: map[acp.SessionId]float64{}, fresh: map[acp.SessionId]bool{}, done: make(chan struct{})}
 	go func() {
 		sc := bufio.NewScanner(stderr)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -456,29 +457,30 @@ func (s *acpSlot) stopProc() {
 
 // killGroupNow kills an agent's process group at once (SIGKILL: also a stopped or stuck one).
 func killGroupNow(p *acpProc) {
-	if p.cmd.Process == nil {
+	if p.group == nil {
 		return
 	}
+	defer p.group.Close()
 	_ = p.stdin.Close()
-	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+	_ = p.group.Kill()
 	<-p.done
 }
 
 // killGroup stops what is left of an agent's process group: SIGTERM, then SIGKILL.
 func killGroup(p *acpProc) {
-	if p.cmd.Process == nil {
+	if p.group == nil {
 		return
 	}
+	defer p.group.Close()
 	_ = p.stdin.Close()
-	pgid := p.cmd.Process.Pid
-	if syscall.Kill(-pgid, syscall.SIGTERM) != nil {
+	if p.group.Stop() != nil {
 		return
 	}
 	select {
 	case <-p.done:
 	case <-time.After(2 * time.Second):
 	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	_ = p.group.Kill()
 	<-p.done
 }
 

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k1dory/acpost/internal/acptest"
 	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/node"
 	"github.com/k1dory/acpost/internal/store"
@@ -31,7 +32,7 @@ func testServer(t *testing.T) (n *node.Node, tcp, local *httptest.Server) {
 	t.Helper()
 	// Nothing of the user's own: no forge logins or config from HOME, no keychain.
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	acptest.SetHome(t.Setenv, home)
 	t.Setenv("XDG_CONFIG_HOME", home+"/.config")
 	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	y := fmt.Sprintf(`node: {name: hub, listen: ["tcp://127.0.0.1:0"]}

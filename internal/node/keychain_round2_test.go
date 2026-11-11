@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/k1dory/acpost/internal/acptest"
 )
 
 // noKeychain keeps a test away from the user's secrets: a temporary home, the file store, and a
@@ -17,7 +19,7 @@ func noKeychain(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "security"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	acptest.SetHome(t.Setenv, home)
 	t.Setenv("ACPOST_SECRETS_FILE", "1")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Cleanup(func() {
