@@ -286,7 +286,7 @@ func TestLinksNotCopied(t *testing.T) {
 	}
 	dir := filepath.Join(e.dir, "out")
 	out := e.ok("", "files", id, "-o", dir)
-	if !strings.Contains(out, "link big.iso: file://"+local) || !strings.Contains(out, "link doc.pdf: https://example.com/doc.pdf") {
+	if !strings.Contains(out, "link big.iso: "+plat.FileURI(local)) || !strings.Contains(out, "link doc.pdf: https://example.com/doc.pdf") {
 		t.Fatalf("files %q", out)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {

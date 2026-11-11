@@ -81,6 +81,10 @@ func startConsole(dir string, env []string, cols, rows int) (console, error) {
 	}
 	si := windows.StartupInfoEx{ProcThreadAttributeList: attrs.List()}
 	si.Cb = uint32(unsafe.Sizeof(si))
+	// Standard handles named, and none given: the shell takes the console's. Without this a node
+	// whose own output is a file or a pipe (one started in the background) hands the shell those,
+	// and the shell writes past its terminal.
+	si.Flags |= windows.STARTF_USESTDHANDLES
 	line, err := windows.UTF16PtrFromString(windows.EscapeArg(shell))
 	if err != nil {
 		undo()

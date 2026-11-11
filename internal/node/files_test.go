@@ -128,7 +128,7 @@ agents:
 		t.Fatalf("blocks:\n%s", w.Reply)
 	}
 	w = ask(t, n, SendRequest{Body: "prompt", Files: []store.File{file("notes.md", "# notes")}})
-	if !strings.Contains(w.Reply, "- notes.md (text/markdown; charset=utf-8, 7 bytes): /") || !strings.Contains(w.Reply, "acpost attach FILE") {
+	if !strings.Contains(w.Reply, "- notes.md (text/markdown; charset=utf-8, 7 bytes): "+filepath.VolumeName(os.TempDir())+string(filepath.Separator)) || !strings.Contains(w.Reply, "acpost attach FILE") {
 		t.Fatalf("prompt:\n%s", w.Reply)
 	}
 }
