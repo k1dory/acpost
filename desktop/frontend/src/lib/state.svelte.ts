@@ -121,8 +121,12 @@ class App {
   revealInIDE(r: Reveal, agent = "") {
     const folder = this.ideFolder();
     if (!folder) return;
-    Node.IDEReveal(folder, r.path, r.old, r.new, false, agent ? who(agent).name : "").catch(() => {});
+    // One after another, in the order asked (each call to the app runs on its own: a slow one
+    // would be written after the next, and an older edit shown over a newer).
+    const title = agent ? who(agent).name : "";
+    this.revealing = this.revealing.then(() => Node.IDEReveal(folder, r.path, r.old, r.new, false, title)).catch(() => {});
   }
+  private revealing: Promise<unknown> = Promise.resolve();
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
   palette = $state(false); // ⌘K

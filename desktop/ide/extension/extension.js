@@ -43,10 +43,12 @@ function watch(ctx) {
     ctx.workspaceState.update("acpost.shown", fresh);
     // One after another, in the order taken: of two edits of a file the later is shown last.
     queue = queue.then(async () => {
-      // The text the editor has (the diff's right side is that document, unsaved changes and
-      // all): the edit is taken back in it, not in the file on disk.
+      // The text the diff's right side will show: the editor's own when it has unsaved changes
+      // (the edit is taken back among them), else the file's (a document open and unchanged may
+      // not have read the agent's write yet: VS Code brings it up to the file a moment later).
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-      const plan = reveal.plan(cmd, folders, () => doc.getText(), Date.now());
+      const text = doc.isDirty ? doc.getText() : (() => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } })();
+      const plan = reveal.plan(cmd, folders, () => text, Date.now());
       if (plan) await show(plan);
     }).catch(() => {});
   };

@@ -102,13 +102,17 @@ func TestIDEExtensionShowsARequest(t *testing.T) {
 		os.WriteFile(filepath.Join(ext, f), b, 0o600)
 	}
 	os.WriteFile(filepath.Join(work, "a.txt"), []byte("one\nTWO\nthree\n"), 0o600)
+	os.WriteFile(filepath.Join(work, "dirty.txt"), []byte("one\nTWO\nthree\n"), 0o600)
 	os.WriteFile(filepath.Join(ext, "node_modules", "vscode", "index.js"), []byte(`
 exports.shown = []; exports.providers = {};
 exports.EventEmitter = class { constructor() { this.event = () => {}; } fire() {} dispose() {} };
 exports.Uri = { file: p => ({ path: p, toString: () => "file://" + p }), from: o => ({ ...o, toString: () => o.scheme + ":" + o.path }) };
-// The editor's document: the file with a line the user has not saved yet.
+// The editor's documents: dirty.txt has a line the user has not saved; the others are open and
+// unchanged, and have not read the agent's write yet (their text is the old one).
 exports.workspace = { workspaceFolders: [{ uri: { fsPath: process.env.WORK } }],
-  openTextDocument: async u => ({ getText: () => "unsaved\n" + require("fs").readFileSync(u.path, "utf8") }),
+  openTextDocument: async u => u.path.endsWith("dirty.txt")
+    ? { isDirty: true, getText: () => "unsaved\n" + require("fs").readFileSync(u.path, "utf8") }
+    : { isDirty: false, getText: () => "one\ntwo\nthree\n" },
   registerTextDocumentContentProvider: (s, p) => { exports.providers[s] = p; return { dispose() {} }; } };
 exports.window = { showTextDocument: async u => { exports.shown.push({ open: u.path }); } };
 exports.commands = { executeCommand: async (c, left, right, title) => {
@@ -122,7 +126,7 @@ const until = async n => { for (let i = 0; i < 100 && vscode.shown.length < n; i
 (async () => {
   // Requests written before the window was up are shown when it comes up, in the order written
   // (two of one millisecond too); the left side is the editor's text with the edit taken back.
-  const before = "unsaved\none\ntwo\nthree\n";
+  const before = "one\ntwo\nthree\n";
   const first = ctx();
   await ext.activate(first);
   await until(2);
@@ -130,7 +134,7 @@ const until = async n => { for (let i = 0; i < 100 && vscode.shown.length < n; i
   console.log("ready");
   await until(3);
   await new Promise(r => setTimeout(r, 300)); // the other folder's request would have come by now
-  assert.deepEqual(vscode.shown[2], { diff: process.env.WORK + "/a.txt", before, title: "a.txt (Claude)" });
+  assert.deepEqual(vscode.shown[2], { diff: process.env.WORK + "/dirty.txt", before: "unsaved\n" + before, title: "dirty.txt (Claude)" });
   assert.equal(vscode.shown.length, 3);
   for (const s of first.subscriptions) s.dispose();
   // The window opened again (the page reloaded): what it showed is not shown a second time.
@@ -166,7 +170,7 @@ const until = async n => { for (let i = 0; i < 100 && vscode.shown.length < n; i
 	if err := ideReveal(dir, ideRequest{Folder: "/elsewhere", Path: filepath.Join(work, "a.txt"), Old: "two", New: "TWO"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := ideReveal(dir, ideRequest{Folder: work, Path: "a.txt", Old: "two", New: "TWO", Title: "Claude"}, time.Now()); err != nil {
+	if err := ideReveal(dir, ideRequest{Folder: work, Path: "dirty.txt", Old: "two", New: "TWO", Title: "Claude"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	rest, _ := io.ReadAll(stdout)

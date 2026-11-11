@@ -1,6 +1,6 @@
 // Beside the IDE, a file the agent edits is shown there: what it edits while its chat is open.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fakeNode, flush, type Fake } from "../test/fake";
+import { fakeNode, flush, deferred, type Fake } from "../test/fake";
 import { Turn } from "./turn";
 
 let fake: Fake;
@@ -21,6 +21,9 @@ beforeEach(() => {
 const done = (seq: number, id: string, path: string, at: number) => ({ seq, kind: "tool_call", time: new Date(at).toISOString(),
   data: JSON.stringify({ id, status: "completed", edits: [{ path, added: 1, removed: 1, old: "a", new: "b" }] }) });
 
+// An event of the node, and what it starts (the IDE is asked a moment later, in its turn).
+const emit = async (name: string, data: any) => { fake.emit(name, data); await flush(); };
+
 describe("the IDE follows the agent", () => {
   it("shows an edit made while the chat is open; not one made while it was left, on coming back (review round 2)", async () => {
     const { app } = await import("./state.svelte");
@@ -30,7 +33,7 @@ describe("the IDE follows the agent", () => {
     app.view = "ide";
     open();
     await new Promise(r => setTimeout(r, 5));
-    fake.emit("events:m1", { events: [done(1, "c1", "/w/a.txt", Date.now())] });
+    await emit("events:m1", { events: [done(1, "c1", "/w/a.txt", Date.now())] });
     expect(fake.Node.IDEReveal.mock.calls.map(c => c[1])).toEqual(["/w/a.txt"]);
     expect(fake.Node.IDEReveal.mock.calls[0][0]).toBe("/w");
 
@@ -39,10 +42,10 @@ describe("the IDE follows the agent", () => {
     const away = Date.now();
     await new Promise(r => setTimeout(r, 5));
     open();
-    fake.emit("events:m1", { events: [done(1, "c1", "/w/a.txt", away - 50), done(2, "c2", "/w/b.txt", away)] });
+    await emit("events:m1", { events: [done(1, "c1", "/w/a.txt", away - 50), done(2, "c2", "/w/b.txt", away)] });
     expect(fake.Node.IDEReveal).toHaveBeenCalledTimes(1);
     await new Promise(r => setTimeout(r, 5));
-    fake.emit("events:m1", { events: [done(3, "c3", "/w/c.txt", Date.now())] });
+    await emit("events:m1", { events: [done(3, "c3", "/w/c.txt", Date.now())] });
     expect(fake.Node.IDEReveal.mock.calls.map(c => c[1])).toEqual(["/w/a.txt", "/w/c.txt"]);
 
     // An agent elsewhere (a cloud sandbox, another node): its paths are not this Mac's.
@@ -50,16 +53,32 @@ describe("the IDE follows the agent", () => {
       a.msgs = [msg, { ...msg, id: mid, to }];
       a.follow(mid, new Turn(), 0);
       await new Promise(r => setTimeout(r, 5));
-      fake.emit("events:" + mid, { events: [done(1, "r1", "/w/a.txt", Date.now())] });
+      await emit("events:" + mid, { events: [done(1, "r1", "/w/a.txt", Date.now())] });
     }
     expect(fake.Node.IDEReveal).toHaveBeenCalledTimes(2);
 
     // The follow turned off, or another view: nothing is asked of the IDE.
     app.setIdeFollow(false);
-    fake.emit("events:m1", { events: [done(4, "c4", "/w/d.txt", Date.now())] });
+    await emit("events:m1", { events: [done(4, "c4", "/w/d.txt", Date.now())] });
     app.setIdeFollow(true); app.view = "chat";
-    fake.emit("events:m1", { events: [done(5, "c5", "/w/e.txt", Date.now())] });
+    await emit("events:m1", { events: [done(5, "c5", "/w/e.txt", Date.now())] });
     await flush();
     expect(fake.Node.IDEReveal).toHaveBeenCalledTimes(2);
+  });
+  it("asks the IDE one edit after another: a slow first call is not overtaken by the next", async () => {
+    const { app } = await import("./state.svelte");
+    app.home = "/w";
+    const slow = deferred();
+    const order: string[] = [];
+    fake.Node.IDEReveal.mockImplementationOnce(async (_f: string, p: string) => { await slow.promise; order.push(p); });
+    fake.Node.IDEReveal.mockImplementation(async (_f: string, p: string) => { order.push(p); });
+    app.revealInIDE({ path: "/w/a", old: "1", new: "2" });
+    app.revealInIDE({ path: "/w/a", old: "2", new: "3" });
+    await flush();
+    expect(fake.Node.IDEReveal).toHaveBeenCalledTimes(1); // the second waits for the first
+    slow.resolve(undefined);
+    await flush(); await flush();
+    expect(order).toEqual(["/w/a", "/w/a"]);
+    expect(fake.Node.IDEReveal.mock.calls.map(c => c[3])).toEqual(["2", "3"]);
   });
 });
