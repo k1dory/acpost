@@ -391,3 +391,34 @@ func TestReadFileWhileItIsReplaced(t *testing.T) {
 	default:
 	}
 }
+
+// Which file:// paths name a file of this machine's disks: on Windows not a share of another
+// machine, a device, a path with no drive, or a stream of a file, however they are written.
+func TestLocalFile(t *testing.T) {
+	for _, c := range []struct {
+		p      string
+		drives bool
+		want   string
+		ok     bool
+	}{
+		{"/home/u/a.txt", false, "/home/u/a.txt", true},
+		{"relative/a.txt", false, "", false},
+		{"", false, "", false},
+		{"/C:/Users/u/a b.txt", true, `C:\Users\u\a b.txt`, true},
+		{"/c:/x", true, `c:\x`, true},
+		{"//server/share/a.txt", true, "", false}, // file:////server/share/a.txt
+		{`\\server\share\a.txt`, true, "", false}, // the same, its slashes percent-encoded in the link
+		{"//./pipe/x", true, "", false},
+		{"//?/C:/x", true, "", false},
+		{"/Users/u/x", true, "", false},   // no drive
+		{"/C:x", true, "", false},         // of the drive's own directory
+		{"/C:/x:stream", true, "", false}, // a stream of a file
+		{"C:/x", true, "", false},         // not a link's absolute path
+		{"/1:/x", true, "", false},
+	} {
+		got, ok := localFile(c.p, c.drives)
+		if ok != c.ok || ok && got != c.want {
+			t.Errorf("localFile(%q, %v) = %q, %v; want %q, %v", c.p, c.drives, got, ok, c.want, c.ok)
+		}
+	}
+}

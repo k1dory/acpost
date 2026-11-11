@@ -129,3 +129,21 @@ func CreatePrivateTemp(dir, prefix string) (*os.File, error) {
 	}
 	return nil, errors.New("no free name for a temporary file in " + dir)
 }
+
+// LocalFile is the path of this machine a file:// link's path names, and whether it names one: an
+// absolute path of a disk here. On Windows that is a path on a drive (C:\dir\name): a share of
+// another machine (\\server\share), a device (\\.\name, \\?\...), a path with no drive and one
+// with a second colon (a stream of a file) are not, and are not to be opened for the asking.
+func LocalFile(p string) (string, bool) { return localFile(p, runtime.GOOS == "windows") }
+
+func localFile(p string, drives bool) (string, bool) {
+	if !drives {
+		return p, strings.HasPrefix(p, "/") && !strings.ContainsRune(p, 0)
+	}
+	q := uriPath(p, true)
+	letter := len(q) >= 3 && (q[0]|0x20 >= 'a' && q[0]|0x20 <= 'z')
+	if !letter || q[1] != ':' || q[2] != '\\' || strings.ContainsAny(q[2:], ":\x00") || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+		return q, false
+	}
+	return q, true
+}

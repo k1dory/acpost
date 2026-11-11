@@ -93,7 +93,7 @@ func validLink(f *store.File) error {
 	}
 	switch u.Scheme {
 	case "file":
-		if u.Host != "" && u.Host != "localhost" || !filepath.IsAbs(plat.URIPath(u.Path)) {
+		if _, local := plat.LocalFile(u.Path); u.Host != "" && u.Host != "localhost" || !local {
 			return bad("a file link names an absolute path on this machine")
 		}
 	case "http", "https":
