@@ -216,7 +216,7 @@ func (s *Store) openFile(path string, pragmas []string) error {
 	f.Close()
 	// An existing file keeps its mode: make it, and SQLite's side files, private.
 	for _, p := range []string{path, path + "-wal", path + "-shm", path + ".lock"} {
-		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := plat.PrivateFile(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}

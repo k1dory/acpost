@@ -6,6 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -35,13 +38,16 @@ func Unlock(f *os.File) error {
 
 // Group is a started command and whatever it started: a job object.
 type Group struct {
-	mu  sync.Mutex
-	job windows.Handle // 0 once closed
+	mu     sync.Mutex
+	job    windows.Handle // 0 once closed
+	killed bool
 }
 
-// Start starts cmd as the leader of a group of its own. The process is made suspended, put in its
-// job, and only then let run: nothing it starts is outside the job.
-func Start(cmd *exec.Cmd) (*Group, error) {
+// start starts cmd as the leader of a group of its own, and tells publish of the group before
+// anything of it runs. The process is made suspended, put in its job, and only then let run:
+// nothing it starts is outside the job, and a kill that comes meanwhile is not missed. lasting: the
+// job ends with its last handle, this process's: a node that is killed leaves no agent behind.
+func start(cmd *exec.Cmd, lasting bool, publish func(*Group)) (*Group, error) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -50,29 +56,51 @@ func Start(cmd *exec.Cmd) (*Group, error) {
 	if err != nil {
 		return nil, fmt.Errorf("job object: %w", err)
 	}
+	if lasting {
+		var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+		info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+		if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+			windows.CloseHandle(job)
+			return nil, fmt.Errorf("job object: %w", err)
+		}
+	}
+	g := &Group{job: job}
+	if publish != nil {
+		publish(g)
+	}
 	if err := cmd.Start(); err != nil {
-		windows.CloseHandle(job)
+		g.Close()
 		return nil, err
 	}
-	if err := adopt(job, uint32(cmd.Process.Pid)); err != nil {
-		// Still suspended (or already killed by its context): it has started nothing.
+	if err := g.adopt(uint32(cmd.Process.Pid)); err != nil {
+		// Still suspended, or killed with its job: it has started nothing.
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		windows.CloseHandle(job)
+		g.Close()
 		return nil, fmt.Errorf("start %s: %w", cmd.Path, err)
 	}
-	return &Group{job: job}, nil
+	return g, nil
 }
 
-// adopt puts the suspended process pid in job and lets it run.
-func adopt(job windows.Handle, pid uint32) error {
+// adopt puts the suspended process pid in the job and lets it run, unless the group was killed
+// meanwhile: then the process, now of the job, is killed with it and never runs.
+func (g *Group) adopt(pid uint32) error {
 	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, pid)
 	if err != nil {
 		return fmt.Errorf("open the process: %w", err)
 	}
 	defer windows.CloseHandle(h)
-	if err := windows.AssignProcessToJobObject(job, h); err != nil {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.job == 0 {
+		return errors.New("the group was closed while it started")
+	}
+	if err := windows.AssignProcessToJobObject(g.job, h); err != nil {
 		return fmt.Errorf("job object: %w", err)
+	}
+	if g.killed {
+		_ = windows.TerminateJobObject(g.job, 1)
+		return errors.New("killed while it started")
 	}
 	return resume(pid)
 }
@@ -108,8 +136,8 @@ func resume(pid uint32) error {
 	return nil
 }
 
-// killStarting kills a command whose Start has not returned its group yet: suspended, it has
-// started nothing.
+// killStarting kills a command whose group is not known yet. Not reached here: the group is told
+// before the command starts.
 func killStarting(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
@@ -149,6 +177,7 @@ func (g *Group) Stop() error {
 func (g *Group) Kill() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.killed = true // a process on its way into the job does not run
 	if g.job == 0 {
 		return nil
 	}
@@ -163,7 +192,8 @@ func (g *Group) Gone() bool {
 	return err == nil && n == 0
 }
 
-// Close lets go of the job's handle; the group goes on, and is from here taken as gone.
+// Close lets go of the job's handle, and the group is from here taken as gone. One started to
+// last (Start) ends with it; one of a cancelable command goes on, as what a command left running.
 func (g *Group) Close() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -207,15 +237,18 @@ func PrivateDir(dir string) error {
 	if err != nil {
 		return &os.PathError{Op: "access list", Path: dir, Err: err}
 	}
-	fix := `icacls "` + dir + `" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`
-	dacl, _, err := sd.DACL()
-	if err != nil || dacl == nil {
-		return &OpenDirError{Dir: dir, To: "no access list: everyone", Fix: fix}
-	}
 	me, err := currentUser()
 	if err != nil {
 		return err
 	}
+	// The repair: an access list of its own for this user (the system and the administrators
+	// keep theirs or reach it anyway), and each other grant named and removed.
+	fix := `icacls "` + dir + `" /inheritance:r /grant:r "*` + me.String() + `:(OI)(CI)F"`
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return &OpenDirError{Dir: dir, To: "no access list: everyone", Fix: fix}
+	}
+	var others []string
 	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
@@ -226,26 +259,80 @@ func PrivateDir(dir string) error {
 			continue
 		case windows.ACCESS_ALLOWED_ACE_TYPE:
 		default:
-			return &OpenDirError{Dir: dir, To: fmt.Sprintf("an access entry of a kind not known here, %d", ace.Header.AceType), Fix: fix}
+			return &OpenDirError{Dir: dir, To: fmt.Sprintf("an access entry of a kind not known here, %d", ace.Header.AceType),
+				Fix: "give it an access list for this user alone"}
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if ace.Mask == 0 || sid.Equals(me) || sid.IsWellKnown(windows.WinLocalSystemSid) ||
 			sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) || sid.IsWellKnown(windows.WinCreatorOwnerSid) {
 			continue
 		}
-		return &OpenDirError{Dir: dir, To: sid.String(), Fix: fix}
+		if name := sid.String(); !slices.Contains(others, name) {
+			others = append(others, name)
+		}
 	}
-	return nil
+	if len(others) == 0 {
+		return nil
+	}
+	for _, sid := range others {
+		fix += " /remove:g *" + sid
+	}
+	return &OpenDirError{Dir: dir, To: strings.Join(others, ", "), Fix: fix}
 }
 
-// MakePrivate closes to other users a directory this process has just made: an access list of
-// its own, inherited from no parent, for this user, the system and the administrators.
-func MakePrivate(dir string) error {
+// privateSD is the security of what is this user's alone: an access list of its own, inherited
+// from no parent, for this user, the system and the administrators; for a directory, handed on
+// to what is made in it.
+func privateSD(dir bool) (*windows.SECURITY_DESCRIPTOR, error) {
 	me, err := currentUser()
+	if err != nil {
+		return nil, err
+	}
+	on := ""
+	if dir {
+		on = "OICI"
+	}
+	return windows.SecurityDescriptorFromString("D:P(A;" + on + ";FA;;;" + me.String() + ")(A;" + on + ";FA;;;SY)(A;" + on + ";FA;;;BA)")
+}
+
+// MkdirPrivate makes dir (and its parents) when it is not there, closed to other users from the
+// moment it is there: each directory is made with its access list, not given one after. A
+// directory already there is left as it is.
+func MkdirPrivate(dir string) error {
+	dir = filepath.Clean(dir)
+	if st, err := os.Stat(dir); err == nil {
+		if !st.IsDir() {
+			return &os.PathError{Op: "mkdir", Path: dir, Err: syscall.ENOTDIR}
+		}
+		return nil
+	}
+	if parent := filepath.Dir(dir); parent != dir {
+		if err := MkdirPrivate(parent); err != nil {
+			return err
+		}
+	}
+	sd, err := privateSD(true)
 	if err != nil {
 		return err
 	}
-	sd, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;" + me.String() + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
+	p, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return &os.PathError{Op: "mkdir", Path: dir, Err: err}
+	}
+	sa := windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(sa))
+	err = windows.CreateDirectory(p, &sa)
+	if err == nil || errors.Is(err, windows.ERROR_ALREADY_EXISTS) { // made meanwhile by another: as it is
+		return nil
+	}
+	return &os.PathError{Op: "mkdir", Path: dir, Err: err}
+}
+
+// PrivateFile closes a file to other users: an access list of its own, whatever it had. (A file
+// made in a private directory has its list from there; one that was there before, or was moved
+// in, keeps its own, and a path that is known is opened past a closed directory.)
+func PrivateFile(path string) error {
+	sd, err := privateSD(false)
 	if err != nil {
 		return err
 	}
@@ -253,10 +340,10 @@ func MakePrivate(dir string) error {
 	if err != nil {
 		return err
 	}
-	err = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+	err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 	if err != nil {
-		return &os.PathError{Op: "access list", Path: dir, Err: err}
+		return &os.PathError{Op: "access list", Path: path, Err: err}
 	}
 	return nil
 }

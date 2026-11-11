@@ -63,7 +63,7 @@ func TestUnsettledReadIsPaged(t *testing.T) {
 
 func TestExistingStorePathsArePrivateOrRejected(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("modes do not open a directory on Windows: its access list does (plat's TestPrivateDir)")
+		t.Skip("modes do not open a path on Windows: access lists do (TestExistingDatabaseOpenToOthersIsClosed here, plat's TestPrivateDir)")
 	}
 	dir := filepath.Join(t.TempDir(), "state")
 	if err := os.Mkdir(dir, 0o755); err != nil {

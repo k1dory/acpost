@@ -44,7 +44,7 @@ type console interface {
 }
 
 // errNoConsole is a system this node gives no terminals on.
-var errNoConsole = errors.New("this node's system has no terminals here yet")
+var errNoConsole = errors.New("this node's system has no terminals (Windows before 10 1809 has no pseudo-console)")
 
 type term struct {
 	Terminal

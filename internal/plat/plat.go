@@ -20,23 +20,23 @@ var ErrLocked = errors.New("locked by another process")
 // ErrGone is a group asked to stop that has no process left.
 var ErrGone = errors.New("no process left in the group")
 
+// Start starts cmd as the leader of a group of its own, one that lasts as long as its starter
+// wants it: where the system can tell (Windows), a starter that dies takes the group with it.
+func Start(cmd *exec.Cmd) (*Group, error) { return start(cmd, true, nil) }
+
 // StartCancelable starts cmd (one made by exec.CommandContext) as a group its context's end kills
-// whole: what cmd started does not outlive a cancelled cmd.
+// whole: what cmd started does not outlive a cancelled cmd. What it left running at its own end
+// goes on, as after any command.
 func StartCancelable(cmd *exec.Cmd) (*Group, error) {
 	var gp atomic.Pointer[Group]
 	cmd.Cancel = func() error {
 		if g := gp.Load(); g != nil {
 			return g.Kill()
 		}
-		// The context ended while Start was still at work.
+		// The context ended before the group was known (only where it is known after the start).
 		return killStarting(cmd)
 	}
-	g, err := Start(cmd)
-	if err != nil {
-		return nil, err
-	}
-	gp.Store(g)
-	return g, nil
+	return start(cmd, false, func(g *Group) { gp.Store(g) })
 }
 
 // Output runs a cancelable cmd as a group and returns its standard output.
@@ -61,18 +61,6 @@ type OpenDirError struct{ Dir, To, Fix string }
 
 func (e *OpenDirError) Error() string {
 	return e.Dir + " is open to other users (" + e.To + "): use a private directory (" + e.Fix + ")"
-}
-
-// MkdirPrivate makes dir (and its parents) when it is not there, closed to other users; a
-// directory already there is left as it is.
-func MkdirPrivate(dir string) error {
-	if _, err := os.Stat(dir); err == nil {
-		return nil
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return MakePrivate(dir)
 }
 
 // FileURI is the file:// link to an absolute path of this machine: file:///C:/dir/name for

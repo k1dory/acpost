@@ -43,23 +43,31 @@ func TestTerminal(t *testing.T) {
 	}
 }
 
-// A terminal closed while its shell runs ends the shell.
+// A terminal closed while its shell runs ends the shell: seen on the terminal itself (kept from
+// before the close, which forgets it), within a deadline, before the node's own end would end it.
 func TestTerminalClosedEndsItsShell(t *testing.T) {
 	n := newNode(t, inboxCfg)
 	tm, err := n.OpenTerminal(ctx, me, TermRequest{Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	n.terms.mu.Lock()
+	kept := n.terms.all[tm.ID]
+	n.terms.mu.Unlock()
+	select {
+	case <-kept.done:
+		t.Fatal("the shell ended by itself")
+	case <-time.After(500 * time.Millisecond):
+	}
 	if err := n.CloseTerminal(me, tm.ID); err != nil {
 		t.Fatal(err)
 	}
-	for end := time.Now().Add(20 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		ts, _ := n.Terminals(me)
-		if len(ts) == 0 {
-			return
-		}
-		if time.Now().After(end) {
-			t.Fatalf("still there: %+v", ts)
-		}
+	select {
+	case <-kept.done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the shell of a closed terminal runs on")
+	}
+	if ts, _ := n.Terminals(me); len(ts) != 0 {
+		t.Fatalf("still listed: %+v", ts)
 	}
 }

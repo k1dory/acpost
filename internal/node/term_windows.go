@@ -39,7 +39,15 @@ func consoleShell() string {
 	return "cmd.exe"
 }
 
+// hasConsoles says whether this Windows has pseudo-consoles (from Windows 10 1809).
+var hasConsoles = sync.OnceValue(func() bool {
+	return windows.NewLazySystemDLL("kernel32.dll").NewProc("CreatePseudoConsole").Find() == nil
+})
+
 func startConsole(dir string, env []string, cols, rows int) (console, error) {
+	if !hasConsoles() {
+		return nil, errNoConsole
+	}
 	shell := consoleShell()
 	fail := func(what string, err error) (console, error) {
 		return nil, fmt.Errorf("start %s: %s: %v", shell, what, err)
@@ -63,10 +71,12 @@ func startConsole(dir string, env []string, cols, rows int) (console, error) {
 		windows.CloseHandle(outR)
 		return fail("pseudo-console", err)
 	}
+	// What the console shows has no reader yet: its pipe is closed first, or the console's own
+	// close may wait for a reader of what it has to say (before Windows 11 24H2 it does).
 	undo := func() {
-		windows.ClosePseudoConsole(pc)
-		windows.CloseHandle(inW)
 		windows.CloseHandle(outR)
+		windows.CloseHandle(inW)
+		windows.ClosePseudoConsole(pc)
 	}
 	attrs, err := windows.NewProcThreadAttributeList(1)
 	if err != nil {

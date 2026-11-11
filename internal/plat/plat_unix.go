@@ -35,8 +35,9 @@ func Unlock(f *os.File) error { return syscall.Flock(int(f.Fd()), syscall.LOCK_U
 // Group is a started command and whatever it started: a process group.
 type Group struct{ pid int }
 
-// Start starts cmd as the leader of a group of its own.
-func Start(cmd *exec.Cmd) (*Group, error) {
+// start starts cmd as the leader of a group of its own, and tells publish of the group. lasting
+// changes nothing here: a process group does not end with the process that started it.
+func start(cmd *exec.Cmd, lasting bool, publish func(*Group)) (*Group, error) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -44,7 +45,11 @@ func Start(cmd *exec.Cmd) (*Group, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &Group{pid: cmd.Process.Pid}, nil
+	g := &Group{pid: cmd.Process.Pid}
+	if publish != nil {
+		publish(g)
+	}
+	return g, nil
 }
 
 // killStarting kills a command whose Start has not returned its group yet: the group is there
@@ -106,9 +111,12 @@ func PrivateDir(dir string) error {
 	return nil
 }
 
-// MakePrivate closes to other users a directory this process has just made (with mode 0700:
-// nothing more to do here).
-func MakePrivate(dir string) error { return nil }
+// MkdirPrivate makes dir (and its parents) when it is not there, closed to other users; a
+// directory already there is left as it is.
+func MkdirPrivate(dir string) error { return os.MkdirAll(dir, 0o700) }
+
+// PrivateFile closes a file to other users.
+func PrivateFile(path string) error { return os.Chmod(path, 0o600) }
 
 // Denied says whether err is the system refusing this process a file or a socket.
 func Denied(err error) bool {

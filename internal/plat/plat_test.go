@@ -32,6 +32,19 @@ func TestMain(m *testing.M) {
 	case "child":
 		time.Sleep(time.Minute)
 		os.Exit(0)
+	case "owner": // starts a group to last, tells its leader's id, and waits to be killed
+		child := exec.Command(os.Args[0])
+		child.Env = append(os.Environ(), "PLAT_HELPER=child")
+		if _, err := Start(child); err != nil {
+			fmt.Println("error:", err)
+			os.Exit(1)
+		}
+		fmt.Println(child.Process.Pid)
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "mark": // says it ran
+		_ = os.WriteFile(os.Getenv("PLAT_MARK"), []byte("ran"), 0o600)
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
@@ -195,6 +208,9 @@ func TestPrivateDir(t *testing.T) {
 	if err := PrivateDir(dir); err != nil {
 		t.Fatalf("a directory made private is not: %v", err)
 	}
+	if err := PrivateDir(filepath.Dir(dir)); err != nil {
+		t.Fatalf("its parent, made on the way, is not private: %v", err)
+	}
 	if err := MkdirPrivate(dir); err != nil {
 		t.Fatalf("a directory already there: %v", err)
 	}
@@ -258,5 +274,28 @@ func TestFileLinks(t *testing.T) {
 	u, err := url.Parse(uri)
 	if err != nil || URIPath(u.Path) != abs {
 		t.Fatalf("%s reads back as %v (%v), want %q", uri, u, err, abs)
+	}
+}
+
+// A file that was open to others (there before, or moved in) is closed.
+func TestPrivateFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "store.db")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := openToAll(file); err != nil {
+		t.Fatal(err)
+	}
+	if PrivateDir(file) == nil {
+		t.Fatal("a file open to everyone taken as private")
+	}
+	if err := PrivateFile(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrivateDir(file); err != nil {
+		t.Fatalf("a file closed is not private: %v", err)
+	}
+	if err := PrivateFile(filepath.Join(t.TempDir(), "absent")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a file not there: %v", err)
 	}
 }
