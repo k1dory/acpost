@@ -171,12 +171,16 @@ agents:
 	if err := n.st.PutSession(ctx, "agent:fake", "thread:"+m.Thread, "another"); err != nil {
 		t.Fatal(err)
 	}
-	title := "[acpost] Message " + m.ID + " from user:tester."
+	// A fork starts with the prompt of the session it was made of: here a cancelled turn's, made
+	// at once (so nothing but its mark tells it from the session that turn left).
+	gone := cancelledTurn(t, n)
+	title := "[acpost] Message " + gone.ID + " from user:tester."
 	fork, err := n.ForkSession(ctx, me, "fake", "hist-1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(state, fork), []byte("title:"+title), 0o600)
+	os.WriteFile(filepath.Join(state, "same-unmarked"), []byte("title:"+title), 0o600)
 	c, err := n.Chats(ctx, me)
 	if err != nil {
 		t.Fatal(err)
@@ -186,27 +190,27 @@ agents:
 		keys = append(keys, it.Key)
 	}
 	got := strings.Join(keys, " ")
-	if strings.Contains(got, "session:fake/"+first) || !strings.Contains(got, "session:fake/"+fork) || len(keys) != 2 {
+	if strings.Contains(got, "session:fake/"+first) || !strings.Contains(got, "session:fake/"+fork) || strings.Contains(got, "session:fake/same-unmarked") {
 		t.Errorf("chats: %s (the thread's first session %s, the fork %s)", got, first, fork)
 	}
 	withFiles := "[acpost] Attached files:\n- a.png (image/png, 3 bytes): in this prompt\n- b.txt (text/plain, 9 bytes): /tmp/x/b.txt (a copy until this turn ends)\n\n" + title
 	// A turn that ended well left no session: one with its title is someone's (a fork).
-	if n.leftBehind(ctx, title, m.FinishedAt) {
+	if n.leftBehind(ctx, n.agentCfg("fake"), "[acpost] Message "+m.ID+" from user:tester.", m.FinishedAt) {
 		t.Error("a session named after a message that ended well was taken for a left one")
 	}
 	c2 := cancelledTurn(t, n)
 	title = "[acpost] Message " + c2.ID + " from user:tester."
 	withFiles = "[acpost] Attached files:\n- a.png (image/png, 3 bytes): in this prompt\n- b.txt (text/plain, 9 bytes): /tmp/x/b.txt (a copy until this turn ends)\n\n" + title
 	at := c2.FinishedAt
-	if !n.leftBehind(ctx, withFiles, at) || !n.leftBehind(ctx, title, at.Add(2*time.Second)) {
+	if !n.leftBehind(ctx, n.agentCfg("fake"), withFiles, at) || !n.leftBehind(ctx, n.agentCfg("fake"), title, at.Add(2*time.Second)) {
 		t.Error("a title of this node's prompt is not known")
 	}
 	// Written since the message ended: someone's conversation (a fork made before forks were marked).
-	if n.leftBehind(ctx, title, at.Add(time.Minute)) || n.leftBehind(ctx, title, time.Time{}) {
+	if n.leftBehind(ctx, n.agentCfg("fake"), title, at.Add(time.Minute)) || n.leftBehind(ctx, n.agentCfg("fake"), title, time.Time{}) {
 		t.Error("a session written after its message ended was taken for a left one")
 	}
 	for _, other := range []string{"[acpost] Attached files:\n- a.png\n\nmy own text " + title, "see " + title, "[acpost] Message msg_01AAAAAAAAAAAAAAAAAAAAAAAA from user:else."} {
-		if n.leftBehind(ctx, other, at) {
+		if n.leftBehind(ctx, n.agentCfg("fake"), other, at) {
 			t.Errorf("taken for this node's: %q", other)
 		}
 	}
@@ -269,15 +273,55 @@ agents:
 	if len(entries) != 1 {
 		t.Fatalf("%d sessions kept by the fake agent", len(entries))
 	}
+	// A cancelled message's session, named after the node's prompt: its own too.
+	gone := cancelledTurn(t, n)
+	os.WriteFile(filepath.Join(state, "oneoff-cancelled"), []byte("title:[acpost] Message "+gone.ID+" from user:tester."), 0o600)
 	c, err := n.Chats(ctx, me)
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	found, cancelled := false, false
 	for _, it := range c.Items {
 		found = found || it.Key == "session:fake/"+entries[0].Name()
+		cancelled = cancelled || it.Key == "session:fake/oneoff-cancelled"
 	}
-	if !found {
-		t.Errorf("the message's session is not among the chats")
+	if !found || !cancelled {
+		t.Errorf("a message's own session is not among the chats (ended well: %v, cancelled: %v)", found, cancelled)
+	}
+}
+
+// Review round 5. A session some key still runs is not a left one: a thread whose first message
+// had a task and whose next has none (as the desktop sends them) runs two sessions, and the one
+// the thread's chat does not name stays among the chats.
+func TestSessionInUseStaysListed(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    session: task
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, os.Args[0], state))
+	root := ask(t, n, SendRequest{Body: "echo one", Task: "T"})
+	ask(t, n, SendRequest{Body: "echo two", Thread: root.ID})
+	entries, _ := os.ReadDir(state)
+	if len(entries) != 2 {
+		t.Skipf("%d sessions: the two messages share one here", len(entries))
+	}
+	c, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := map[string]bool{}
+	for _, it := range c.Items {
+		if it.Session != "" {
+			shown[it.Session] = true
+		}
+	}
+	for _, e := range entries {
+		if !shown[e.Name()] {
+			t.Errorf("the session %s, which the thread runs, is nowhere among the chats", e.Name())
+		}
 	}
 }

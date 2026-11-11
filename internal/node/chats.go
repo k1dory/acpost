@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -165,13 +166,17 @@ const leftGrace = 10 * time.Second
 // it is written after the message ended, or its message ended well. (One forked outside acpost
 // within leftGrace of a cancelled message's end is taken for the left session: the two cannot be
 // told apart.)
-func (n *Node) leftBehind(ctx context.Context, title string, updated time.Time) bool {
+func (n *Node) leftBehind(ctx context.Context, cfg *config.Agent, title string, updated time.Time) bool {
 	m := ownPrompt.FindStringSubmatch(title)
 	if m == nil || updated.IsZero() {
 		return false
 	}
 	msg, err := n.st.Get(ctx, m[1])
 	if err != nil || msg.FinishedAt.IsZero() {
+		return false
+	}
+	// A message whose session is its own (session: message) has no thread that lists it.
+	if cfg == nil || sessionKey(cfg.Session, msg) == "" {
 		return false
 	}
 	left := msg.State == store.Cancelled || msg.State == store.Failed || msg.Attempts > 1
@@ -312,6 +317,17 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 				fail(err)
 				return
 			}
+			inUse := map[string]bool{}
+			for _, prefix := range []string{"thread:", "task:", "from:"} { // sessionKey's keys
+				ids, err := n.st.SessionsMarked(lctx, a.addr, prefix)
+				if err != nil {
+					fail(err)
+					return
+				}
+				for id := range ids {
+					inUse[id] = true
+				}
+			}
 			for others < chatSessionsPerAgent {
 				list, next, err := sessionsOf(lctx, proc, name, "", cursor)
 				if err != nil {
@@ -328,9 +344,11 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 					// not one of the sessions the agent's limit counts. One made before the node
 					// marked them is known by its title and by not having been written since its
 					// message ended; never a fork, nor a session the user named or put in a folder.
+					// A session some key still runs (a thread's, a task's) is not left, whoever
+					// made it: the threads list theirs, and one no thread claims stays here.
 					updated, _ := time.Parse(time.RFC3339Nano, si.UpdatedAt)
 					key := "session:" + name + "/" + si.ID
-					if made[si.ID] || (!forks[si.ID] && !kept[key] && n.leftBehind(lctx, si.Title, updated)) {
+					if !inUse[si.ID] && (made[si.ID] || (!forks[si.ID] && !kept[key] && n.leftBehind(lctx, a.cfg, si.Title, updated))) {
 						continue
 					}
 					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
