@@ -10,7 +10,9 @@ describe("a prompt acpost sent, read back from a session, shows what the person 
     expect(ownBody(head + "/skills")).toBe("/skills");
     expect(ownBody(head + note + "/skills")).toBe("/skills");
     expect(ownBody(head + note + know + "do it\n\nnow")).toBe("do it\n\nnow");
-    expect(ownBody("[acpost] Attached files:\n- a.png (image/png, 3 bytes): in this prompt\n\n" + head + "look")).toBe("look");
+    expect(ownBody("[acpost] Attached files:\n- a.png (image/png, 3 bytes): in this prompt\n\n" + head + "look")).toBe("look\n\n📎 a.png");
+    // A screenshot alone: the message is not empty (History hides an empty one), its file is named.
+    expect(ownBody("[acpost] Attached files:\n- shot (1).png (image/png, 3 bytes): in this prompt\n- notes.md (text/markdown, 9 bytes): /tmp/x/notes.md (a copy until this turn ends)\n\n" + head + note)).toBe("📎 shot (1).png\n📎 notes.md");
     expect(ownBody(head.replace("from user:lev.", "from user:lev, task t1 (attempt 2: an earlier attempt was interrupted).") + "again")).toBe("again");
   });
   it("leaves any other text as it is", () => {

@@ -277,7 +277,8 @@ const messageHead = /^\[acpost\] Message msg_[0-9A-Za-z]+ from [^\n]*\.\n/;
  * read, the person's knowledge). A session read back (History) has its prompts whole. Only the
  * node's own lines, whole and where it puts them, are taken off: any other text is as it is. */
 export function ownBody(text: string): string {
-  let rest = text.replace(attachedFiles, "");
+  const files = attachedFiles.exec(text);
+  let rest = files ? text.slice(files[0].length) : text;
   const head = messageHead.exec(rest);
   if (!head || !rest.startsWith(promptLines, head[0].length)) return text;
   rest = rest.slice(head[0].length + promptLines.length);
@@ -286,5 +287,9 @@ export function ownBody(text: string): string {
     const end = rest.indexOf(knowledgeEnd, knowledgeHead.length - 2);
     if (end >= 0) rest = rest.slice(end + knowledgeEnd.length);
   }
+  // The files that went with it are named (a message of a screenshot alone has no other text):
+  // their content is not replayed.
+  const names = files ? files[0].split("\n").map(l => /^- (.*) \([^()]*\): /.exec(l)?.[1]).filter(Boolean) : [];
+  if (names.length) rest = (rest.trim() ? rest.replace(/\s+$/, "") + "\n\n" : "") + names.map(n => "📎 " + n).join("\n");
   return rest;
 }

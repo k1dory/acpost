@@ -568,6 +568,11 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 			return "", fmt.Errorf("session/new: %w", procErr(p, err))
 		}
 		sid, st = r.SessionId, acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}
+		// Marked as made here, whatever becomes of the turn (cancelled, tried again in another
+		// session): the chats list it under its thread, never as a session started elsewhere.
+		if err := n.st.PutSession(n.ctx, a.addr, madeSession+string(sid), string(sid)); err != nil {
+			n.log.Warn("mark session", "agent", a.name, "err", err)
+		}
 		p.costBase[sid] = 0 // a new session: its cost starts here
 		p.fresh[sid] = true
 		// The session is the turn's before it is configured and published (the store, the agent's

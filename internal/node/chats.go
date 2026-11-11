@@ -137,13 +137,23 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	return out, nil
 }
 
-// ownPrompt is how a prompt of this node starts (acpSlot.prompt): an agent that names a session
-// after its first message (codex-acp) names one acpost started so.
-var ownPrompt = regexp.MustCompile(`^\[acpost\] Message (msg_[0-9A-Za-z]+) from `)
+// Marks the node keeps of an agent's sessions, in the store's session keys (a namespace of their
+// own, like the sandbox cursors'): one it made for a turn, one it forked. They go with the
+// sessions unused past retention.
+const (
+	madeSession   = "made:"
+	forkedSession = "fork:"
+)
 
-// leftBehind says whether a session with this title is one a message of this node started and its
-// thread no longer runs (the turn was cancelled or tried again, and the thread went on in another
-// session): the thread is its chat, and the session is not shown beside it.
+// ownPrompt is how a prompt of this node starts (acpSlot.prompt: the files it lists, then whose
+// message it is): an agent that names a session after its first message (codex-acp) names one
+// acpost started so.
+var ownPrompt = regexp.MustCompile(`^(?:\[acpost\] Attached files:\n(?:- [^\n]*\n)+\n)?\[acpost\] Message (msg_[0-9A-Za-z]+) from `)
+
+// leftBehind says whether a session with this title is one a message of this node started: its
+// thread is its chat (it runs this session, or went on in another after the turn was cancelled or
+// tried again), and the session is not shown beside it. For sessions made before the node marked
+// its own (madeSession).
 func (n *Node) leftBehind(ctx context.Context, title string) bool {
 	m := ownPrompt.FindStringSubmatch(title)
 	if m == nil {
@@ -258,6 +268,16 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 				fail(errors.New(explainStart(err).Message))
 				return
 			}
+			made, err := n.st.SessionsMarked(lctx, a.addr, madeSession)
+			if err != nil {
+				fail(err)
+				return
+			}
+			forks, err := n.st.SessionsMarked(lctx, a.addr, forkedSession)
+			if err != nil {
+				fail(err)
+				return
+			}
 			for others < chatSessionsPerAgent {
 				list, next, err := sessionsOf(lctx, proc, name, "", cursor)
 				if err != nil {
@@ -269,8 +289,13 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 					break
 				}
 				for _, si := range list {
-					if n.leftBehind(lctx, si.Title) {
-						continue // not shown, and not one of the sessions the agent's limit counts
+					// A session this node made for a turn is its thread's (the thread lists the one
+					// it runs; one a cancelled or repeated turn left is no chat): not shown here, and
+					// not one of the sessions the agent's limit counts. One made before the node
+					// marked them is known by its title, unless it is a fork (which starts with the
+					// same prompt and is a chat of its own).
+					if made[si.ID] || (!forks[si.ID] && n.leftBehind(lctx, si.Title)) {
+						continue
 					}
 					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
 						Title: si.Title, Cwd: si.Cwd}

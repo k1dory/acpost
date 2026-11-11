@@ -121,3 +121,56 @@ func TestOwnPromptTextIsTheDesktops(t *testing.T) {
 		}
 	}
 }
+
+// Review round 2. A session the node made is its thread's whatever its title (the node marks it),
+// also once the thread went on in another; a fork, which starts with the same prompt, is a chat
+// of its own; a title that starts with the files the prompt lists is known too.
+func TestSessionsMadeHereAndForks(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, os.Args[0], state))
+	m := ask(t, n, SendRequest{Body: "echo hi"})
+	first, _ := n.st.Session(ctx, "agent:fake", "thread:"+m.Thread)
+	if first == "" {
+		t.Fatal("no session stored")
+	}
+	if _, err := os.Stat(filepath.Join(state, first)); err != nil {
+		t.Fatalf("the fake agent does not list the session: %v", err)
+	}
+	// The thread goes on in another session (its first turn's was left): the first is still not a chat.
+	if err := n.st.PutSession(ctx, "agent:fake", "thread:"+m.Thread, "another"); err != nil {
+		t.Fatal(err)
+	}
+	title := "[acpost] Message " + m.ID + " from user:tester."
+	fork, err := n.ForkSession(ctx, me, "fake", "hist-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(state, fork), []byte("title:"+title), 0o600)
+	c, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, it := range c.Items {
+		keys = append(keys, it.Key)
+	}
+	got := strings.Join(keys, " ")
+	if strings.Contains(got, "session:fake/"+first) || !strings.Contains(got, "session:fake/"+fork) || len(keys) != 2 {
+		t.Errorf("chats: %s (the thread's first session %s, the fork %s)", got, first, fork)
+	}
+	withFiles := "[acpost] Attached files:\n- a.png (image/png, 3 bytes): in this prompt\n- b.txt (text/plain, 9 bytes): /tmp/x/b.txt (a copy until this turn ends)\n\n" + title
+	if !n.leftBehind(ctx, withFiles) || !n.leftBehind(ctx, title) {
+		t.Error("a title of this node's prompt is not known")
+	}
+	for _, other := range []string{"[acpost] Attached files:\n- a.png\n\nmy own text " + title, "see " + title, "[acpost] Message msg_01AAAAAAAAAAAAAAAAAAAAAAAA from user:else."} {
+		if n.leftBehind(ctx, other) {
+			t.Errorf("taken for this node's: %q", other)
+		}
+	}
+}

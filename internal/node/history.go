@@ -195,6 +195,10 @@ func (n *Node) ForkSession(ctx context.Context, p Principal, agent, id, cwd stri
 	if err != nil {
 		return "", explainACPErr(err, "agent:"+agent+" could not fork the session")
 	}
+	// A fork is a chat of its own, though it starts with the prompt of the session it was made of.
+	if err := n.st.PutSession(n.ctx, a.addr, forkedSession+string(resp.SessionId), string(resp.SessionId)); err != nil {
+		n.log.Warn("mark fork", "agent", agent, "err", err)
+	}
 	n.forgetChats()
 	return string(resp.SessionId), nil
 }
