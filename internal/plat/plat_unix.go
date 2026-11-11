@@ -122,3 +122,8 @@ func PrivateFile(path string) error { return os.Chmod(path, 0o600) }
 func Denied(err error) bool {
 	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
 }
+
+// createPrivate makes a new file for this user alone.
+func createPrivate(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+}

@@ -4,6 +4,8 @@
 package plat
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"os"
@@ -108,4 +110,22 @@ func StateDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".local", "state", "acpost")
+}
+
+// CreatePrivateTemp makes a new file in dir, closed to other users from the moment it is there
+// (not closed after: who opened it meanwhile would keep it open), named prefix and a random
+// part. For what is written whole and then renamed into place.
+func CreatePrivateTemp(dir, prefix string) (*os.File, error) {
+	for range 100 {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return nil, err
+		}
+		f, err := createPrivate(filepath.Join(dir, prefix+hex.EncodeToString(b[:])+".tmp"))
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+	return nil, errors.New("no free name for a temporary file in " + dir)
 }

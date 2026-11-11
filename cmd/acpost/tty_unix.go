@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"golang.org/x/term"
 )
 
 // readFD reads from a terminal's descriptor, past interruptions by signals.
@@ -33,3 +35,10 @@ func onResize(ctx context.Context, fn func()) {
 		}
 	}
 }
+
+// termSize is the size of the terminal this command runs in.
+func termSize() (cols, rows int, err error) { return term.GetSize(int(os.Stdin.Fd())) }
+
+// vtOutput makes the terminal take what a remote shell writes as a terminal's bytes, and returns
+// what puts it back: nothing to do here, a terminal does.
+func vtOutput() func() { return func() {} }

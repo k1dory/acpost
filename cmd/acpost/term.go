@@ -49,7 +49,7 @@ func termCmd(g *globals) *cobra.Command {
 			if !term.IsTerminal(in) {
 				return usageErr(errors.New("acpost term needs a terminal (it is interactive)"))
 			}
-			cols, rows, _ := term.GetSize(in)
+			cols, rows, _ := termSize()
 			if id == "" {
 				r.Cols, r.Rows = cols, rows
 				t, err := c.OpenTerminal(ctx, r)
@@ -69,6 +69,7 @@ func termCmd(g *globals) *cobra.Command {
 				return err
 			}
 			defer term.Restore(in, old)
+			defer vtOutput()()
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			stop := make(chan os.Signal, 1) // ended from outside: the same cleanup
@@ -83,7 +84,7 @@ func termCmd(g *globals) *cobra.Command {
 			}()
 			// The window's size follows it.
 			go onResize(ctx, func() {
-				if w, h, err := term.GetSize(in); err == nil {
+				if w, h, err := termSize(); err == nil {
 					_ = c.TermResize(ctx, id, w, h)
 				}
 			})

@@ -58,16 +58,12 @@ func (s *Store) read() (map[string]string, error) {
 
 func (s *Store) write(m map[string]string) error {
 	b, _ := json.Marshal(m)
-	f, err := os.CreateTemp(s.Dir, s.Service+".secrets.*.tmp")
+	f, err := plat.CreatePrivateTemp(s.Dir, s.Service+".secrets.")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
 	if _, err := f.Write(b); err != nil {
 		f.Close()
 		return err

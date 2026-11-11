@@ -68,17 +68,14 @@ func readJSON(path string, v any) error {
 	return json.Unmarshal(b, v)
 }
 
-func writeJSON(path string, v any, mode os.FileMode) error {
+// writeJSON writes v to path, a file of this user alone, whole or not at all.
+func writeJSON(path string, v any) error {
 	b, _ := json.MarshalIndent(v, "", "  ")
-	f, err := os.CreateTemp(filepath.Dir(path), ".forge-*") // its own: writers do not share one
+	f, err := plat.CreatePrivateTemp(filepath.Dir(path), ".forge-") // its own: writers do not share one
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if err := f.Chmod(mode); err != nil {
-		f.Close()
-		return err
-	}
 	if _, err := f.Write(b); err != nil {
 		f.Close()
 		return err
@@ -133,7 +130,7 @@ func (s *Store) Login(host, kind, token string) error {
 		if kind != "" || kinds[host] == "" {
 			kinds[host] = kind
 		}
-		if err := writeJSON(s.kindsFile(), kinds, 0o600); err != nil {
+		if err := writeJSON(s.kindsFile(), kinds); err != nil {
 			return err
 		}
 		return s.tokens().Set(host, token)
@@ -170,7 +167,7 @@ func (s *Store) Logout(host string) error {
 			return nil
 		}
 		delete(kinds, host)
-		return writeJSON(s.kindsFile(), kinds, 0o600)
+		return writeJSON(s.kindsFile(), kinds)
 	})
 }
 

@@ -233,13 +233,22 @@ func OpenRead(path string) (*os.File, error) { return os.Open(path) }
 // PrivateDir says whether dir is closed to other users: its access list lets in only this user,
 // the system and the administrators (who reach everything anyway). The error says how to close it.
 func PrivateDir(dir string) error {
-	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		return &os.PathError{Op: "access list", Path: dir, Err: err}
 	}
 	me, err := currentUser()
 	if err != nil {
 		return err
+	}
+	// Its owner changes its access list at will: another user's is not this user's alone,
+	// whatever its list says now.
+	if owner, _, err := sd.Owner(); err != nil || !trustedOwner(owner, me) {
+		whose := "an owner not read"
+		if err == nil && owner != nil {
+			whose = "owned by " + owner.String()
+		}
+		return &OpenDirError{Dir: dir, To: whose, Fix: `icacls "` + dir + `" /setowner "*` + me.String() + `"`}
 	}
 	// The repair: an access list of its own for this user (the system and the administrators
 	// keep theirs or reach it anyway), and each other grant named and removed.
@@ -278,6 +287,11 @@ func PrivateDir(dir string) error {
 		fix += " /remove:g *" + sid
 	}
 	return &OpenDirError{Dir: dir, To: strings.Join(others, ", "), Fix: fix}
+}
+
+// trustedOwner says whether owner is this user, the system or the administrators.
+func trustedOwner(owner, me *windows.SID) bool {
+	return owner != nil && (owner.Equals(me) || owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid))
 }
 
 // privateSD is the security of what is this user's alone: an access list of its own, inherited
@@ -332,6 +346,18 @@ func MkdirPrivate(dir string) error {
 // made in a private directory has its list from there; one that was there before, or was moved
 // in, keeps its own, and a path that is known is opened past a closed directory.)
 func PrivateFile(path string) error {
+	had, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return &os.PathError{Op: "owner", Path: path, Err: err}
+	}
+	me, err := currentUser()
+	if err != nil {
+		return err
+	}
+	// Another user's file stays theirs to open again, whatever list it is given: refused.
+	if owner, _, err := had.Owner(); err != nil || !trustedOwner(owner, me) {
+		return &OpenDirError{Dir: path, To: "owned by another user", Fix: `icacls "` + path + `" /setowner "*` + me.String() + `"`}
+	}
 	sd, err := privateSD(false)
 	if err != nil {
 		return err
@@ -359,4 +385,24 @@ func currentUser() (*windows.SID, error) {
 // Denied says whether err is the system refusing this process a file or a socket.
 func Denied(err error) bool {
 	return errors.Is(err, fs.ErrPermission) || errors.Is(err, windows.WSAEACCES)
+}
+
+// createPrivate makes a new file for this user alone: made with its access list.
+func createPrivate(path string) (*os.File, error) {
+	sd, err := privateSD(false)
+	if err != nil {
+		return nil, err
+	}
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &os.PathError{Op: "create", Path: path, Err: err}
+	}
+	sa := windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(sa))
+	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE,
+		&sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "create", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
 }

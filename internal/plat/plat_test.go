@@ -299,3 +299,31 @@ func TestPrivateFile(t *testing.T) {
 		t.Fatalf("a file not there: %v", err)
 	}
 }
+
+// A file made private is so from its first moment, in a directory that hands everyone its
+// access too: a secret written there is not read by others.
+func TestCreatePrivateTempInAnOpenDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := openToAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	f, err := CreatePrivateTemp(dir, "secrets.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := PrivateDir(f.Name()); err != nil {
+		t.Fatalf("made in a directory open to everyone: %v", err)
+	}
+	if _, err := f.Write([]byte("s3cret")); err != nil {
+		t.Fatal(err)
+	}
+	g, err := CreatePrivateTemp(dir, "secrets.")
+	if err != nil || g.Name() == f.Name() {
+		t.Fatalf("a second one: %v %v", g, err)
+	}
+	g.Close()
+}

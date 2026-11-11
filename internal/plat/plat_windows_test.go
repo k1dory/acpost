@@ -127,3 +127,38 @@ func TestStartsACmdFile(t *testing.T) {
 		t.Fatal("what the .cmd file's program started outlived the group's kill")
 	}
 }
+
+// Whose a path is: this user's, the system's and the administrators' are trusted; anyone else's
+// (they change its access list at will) and one not read are not.
+func TestTrustedOwner(t *testing.T) {
+	me, err := currentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := func(k windows.WELL_KNOWN_SID_TYPE) *windows.SID {
+		s, err := windows.CreateWellKnownSid(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for _, s := range []*windows.SID{me, sid(windows.WinLocalSystemSid), sid(windows.WinBuiltinAdministratorsSid)} {
+		if !trustedOwner(s, me) {
+			t.Errorf("%s not trusted", s)
+		}
+	}
+	for _, s := range []*windows.SID{nil, sid(windows.WinWorldSid), sid(windows.WinBuiltinUsersSid), sid(windows.WinBuiltinGuestsSid)} {
+		if trustedOwner(s, me) {
+			t.Errorf("%v trusted", s)
+		}
+	}
+	// What this user makes is this user's (or, for an administrator, the administrators').
+	dir := t.TempDir()
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner, _, err := sd.Owner(); err != nil || !trustedOwner(owner, me) {
+		t.Fatalf("a directory just made: owner %v %v", owner, err)
+	}
+}
