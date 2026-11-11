@@ -38,5 +38,7 @@ func commandLine(pid int) string {
 const noSuchFile = "cannot find the"
 
 // termLine is typed into a terminal's shell (PowerShell): it prints via-http (joined by the
-// shell: not seen in what is typed) and ends.
-const termLine = "pwd; echo ('via-' + 'http'); exit\r"
+// shell: not seen in what is typed) and ends. No pwd before it: PowerShell holds a table it
+// has begun (pwd's) for a moment, and exit ends the shell before that table and what follows it
+// are written.
+const termLine = "echo ('via-' + 'http'); exit\r"
