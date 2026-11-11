@@ -3,14 +3,12 @@ package node
 import (
 	"context"
 	"errors"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/k1dory/acpost/internal/client"
-	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -138,78 +136,10 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 	return out, nil
 }
 
-// Marks the node keeps of an agent's sessions, in the store's session keys (a namespace of their
-// own, like the sandbox cursors'): one it made for a turn, one it forked. They go with the
-// sessions unused past retention.
-const (
-	madeSession   = "made:"
-	forkedSession = "fork:"
-	ownSession    = "own:" // made for one message (session: message): no thread's, a chat of its own
-)
-
-// ownPrompt is how a prompt of this node starts (acpSlot.prompt: the files it lists, then whose
-// message it is): an agent that names a session after its first message (codex-acp) names one
-// acpost started so.
-var ownPrompt = regexp.MustCompile(`^(?:\[acpost\] Attached files:\n(?:- [^\n]*\n)+\n)?\[acpost\] Message (msg_[0-9A-Za-z]+) from `)
-
-// leftGrace is how long after its message ended a session may have been last written and still be
-// the one that message's turn left (the agent writes the end of a cancelled turn a moment later).
-const leftGrace = 10 * time.Second
-
-// leftBehind says whether a session with this title, last written at updated, is one a message of
-// this node started and left: named after the node's prompt for a message the store has, whose
-// turn did leave a session (it was cancelled, failed or tried again: a turn that ended well in one
-// attempt left none, its session is its thread's), and not written since that message ended. The
-// thread is its chat, and the session is not shown beside it.
-//
-// For sessions made before the node marked its own (madeSession); anything less sure stays
-// listed. A fork of the thread's session starts with the same prompt, and so has the same title:
-// it is written after the message ended, or its message ended well. (One forked outside acpost
-// within leftGrace of a cancelled message's end is taken for the left session: the two cannot be
-// told apart.)
-func (n *Node) leftBehind(ctx context.Context, cfg *config.Agent, title string, updated time.Time) bool {
-	m := ownPrompt.FindStringSubmatch(title)
-	if m == nil || updated.IsZero() {
-		return false
-	}
-	msg, err := n.st.Get(ctx, m[1])
-	if err != nil || msg.FinishedAt.IsZero() {
-		return false
-	}
-	// Its thread (or task) went on in a session kept under its key: only then was the message's
-	// session one of a key, left when the key took another. A message whose session was its own
-	// (session: message, now or when it ran: no key was ever kept) has no thread that lists it.
-	if cfg == nil {
-		return false
-	}
-	key := sessionKey(cfg.Session, msg)
-	if key == "" {
-		return false
-	}
-	if now, err := n.st.Session(ctx, msg.To, key); err != nil || now == "" {
-		return false
-	}
-	left := msg.State == store.Cancelled || msg.State == store.Failed || msg.Attempts > 1
-	return left && !updated.After(msg.FinishedAt.Add(leftGrace))
-}
-
-// chatsKept is the chats the user named or put in a folder (by their keys): theirs to see.
-func (n *Node) chatsKept(ctx context.Context) map[string]bool {
-	out := map[string]bool{}
-	if titles, err := n.st.ChatTitles(ctx); err == nil {
-		for k := range titles {
-			out[k] = true
-		}
-	}
-	if folders, err := n.st.Folders(ctx); err == nil {
-		for _, f := range folders {
-			for _, c := range f.Chats {
-				out[c] = true
-			}
-		}
-	}
-	return out
-}
+// madeSession marks, in the store's session keys (a namespace of its own, like the sandbox
+// cursors'), a session the node made for a turn of a thread or a task. It goes with the sessions
+// unused past retention.
+const madeSession = "made:"
 
 // chatCacheFresh: how long the sessions and sandboxes listed elsewhere are shown without asking
 // again; past it they are still shown while a refresh runs apart.
@@ -316,18 +246,7 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 				fail(errors.New(explainStart(err).Message))
 				return
 			}
-			kept := n.chatsKept(lctx)
 			made, err := n.st.SessionsMarked(lctx, a.addr, madeSession)
-			if err != nil {
-				fail(err)
-				return
-			}
-			forks, err := n.st.SessionsMarked(lctx, a.addr, forkedSession)
-			if err != nil {
-				fail(err)
-				return
-			}
-			own, err := n.st.SessionsMarked(lctx, a.addr, ownSession)
 			if err != nil {
 				fail(err)
 				return
@@ -354,16 +273,12 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 					break
 				}
 				for _, si := range list {
-					// A session this node made for a turn is its thread's (the thread lists the one
-					// it runs; one a cancelled or repeated turn left is no chat): not shown here, and
-					// not one of the sessions the agent's limit counts. One made before the node
-					// marked them is known by its title and by not having been written since its
-					// message ended; never a fork, nor a session the user named or put in a folder.
-					// A session some key still runs (a thread's, a task's) is not left, whoever
-					// made it: the threads list theirs, and one no thread claims stays here.
-					updated, _ := time.Parse(time.RFC3339Nano, si.UpdatedAt)
-					key := "session:" + name + "/" + si.ID
-					if !inUse[si.ID] && (made[si.ID] || (!forks[si.ID] && !own[si.ID] && !kept[key] && n.leftBehind(lctx, a.cfg, si.Title, updated))) {
+					// A session this node made for a thread or a task, that no key runs any more
+					// (its turn was cancelled or tried again, and the thread went on in another),
+					// is no chat: not shown, and not one of the sessions the agent's limit counts.
+					// One a key still runs stays: the threads list theirs, and one no thread
+					// claims is a chat here. Anything the node did not make stays too.
+					if made[si.ID] && !inUse[si.ID] {
 						continue
 					}
 					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
