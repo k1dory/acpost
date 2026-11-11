@@ -155,20 +155,27 @@ var ownPrompt = regexp.MustCompile(`^(?:\[acpost\] Attached files:\n(?:- [^\n]*\
 const leftGrace = 10 * time.Second
 
 // leftBehind says whether a session with this title, last written at updated, is one a message of
-// this node started and left: named after the node's prompt for a message the store has, and not
-// written since that message ended (its turn was cancelled or tried again, and the thread went on
-// in another session). The thread is its chat, and the session is not shown beside it.
+// this node started and left: named after the node's prompt for a message the store has, whose
+// turn did leave a session (it was cancelled, failed or tried again: a turn that ended well in one
+// attempt left none, its session is its thread's), and not written since that message ended. The
+// thread is its chat, and the session is not shown beside it.
 //
-// For sessions made before the node marked its own (madeSession). A session written after the
-// message ended is someone's conversation (a fork of the thread's session starts with the same
-// prompt, and so has the same title): it stays.
+// For sessions made before the node marked its own (madeSession); anything less sure stays
+// listed. A fork of the thread's session starts with the same prompt, and so has the same title:
+// it is written after the message ended, or its message ended well. (One forked outside acpost
+// within leftGrace of a cancelled message's end is taken for the left session: the two cannot be
+// told apart.)
 func (n *Node) leftBehind(ctx context.Context, title string, updated time.Time) bool {
 	m := ownPrompt.FindStringSubmatch(title)
 	if m == nil || updated.IsZero() {
 		return false
 	}
 	msg, err := n.st.Get(ctx, m[1])
-	return err == nil && !msg.FinishedAt.IsZero() && !updated.After(msg.FinishedAt.Add(leftGrace))
+	if err != nil || msg.FinishedAt.IsZero() {
+		return false
+	}
+	left := msg.State == store.Cancelled || msg.State == store.Failed || msg.Attempts > 1
+	return left && !updated.After(msg.FinishedAt.Add(leftGrace))
 }
 
 // chatsKept is the chats the user named or put in a folder (by their keys): theirs to see.

@@ -35,6 +35,7 @@ describe("a prompt acpost sent, read back from a session, shows what the person 
     expect(attachedName('- shot (1).png (image/png; name="shot (1).png", 3 bytes): in this prompt')).toBe("shot (1).png");
     expect(attachedName("- shot (1): fixed.png (image/png, 9 bytes): /tmp/x/shot (1): fixed.png (a copy until this turn ends)")).toBe("shot (1): fixed.png");
     expect(attachedName("- spec (application/pdf): a link, https://example.com/a (b).pdf")).toBe("spec");
+    expect(attachedName('- report.txt (text/plain; comment="rendered as (text/html; charset=utf-8)", 5 bytes): in this prompt')).toBe("report.txt");
     // A line not read: whole, not dropped.
     expect(attachedName("- odd line without a type")).toBe("odd line without a type");
     const only = '[acpost] Attached files:\n- shot (1).png (image/png; name="shot (1).png", 3 bytes): in this prompt\n\n' + head;

@@ -274,8 +274,8 @@ const messageHead = /^\[acpost\] Message msg_[0-9A-Za-z]+ from [^\n]*\.\n/;
 
 // A line of the attached-files list (acpSlot.prompt): "- NAME (TYPE[, N bytes]): WHERE". The name may
 // have brackets and colons of its own, and so may the type's parameters: the type is found by its
-// shape (type/subtype), at the last place the line still reads as the node writes it.
-const attachedLine = /^- (.*) \(([\w.+!#$&^-]+\/[\w.+!#$&^-]+(?:;.*?)?)(?:, \d+ bytes)?\): (?:in this prompt|a link, .*|.* \(a copy until this turn ends\))$/;
+// shape (type/subtype), at the first place it has one (a name has no slash).
+const attachedLine = /^- ([^/]*?) \(([\w.+!#$&^-]+\/[\w.+!#$&^-]+(?:;.*?)?)(?:, \d+ bytes)?\): (?:in this prompt|a link, .*|.* \(a copy until this turn ends\))$/;
 
 /** The name of a file in a line of the attached-files list; a line not read is given whole (without
  * its dash): the file is not lost from what is shown. */
