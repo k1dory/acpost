@@ -2,10 +2,13 @@ package plat
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -160,5 +163,49 @@ func TestTrustedOwner(t *testing.T) {
 	}
 	if owner, _, err := sd.Owner(); err != nil || !trustedOwner(owner, me) {
 		t.Fatalf("a directory just made: owner %v %v", owner, err)
+	}
+}
+
+// A .cmd file gets its arguments as they were given: ones with spaces, quotes, and what the
+// command interpreter would otherwise take for its own (& | < > ^), from a path with a space.
+func TestCmdFileGetsItsArgumentsWhole(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "with space")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(dir, "agent.cmd")
+	if err := os.WriteFile(wrapper, []byte("@echo off\r\n\""+os.Args[0]+"\" %*\r\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"plain", "two words", "a&b|c<d>e", `say "hi"`, `C:\dir with space\`, "", "x^y"}
+	cmd := exec.CommandContext(context.Background(), wrapper, args...)
+	cmd.Env = append(os.Environ(), "PLAT_HELPER=args")
+	out, err := Output(cmd)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var got []string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("%q: %v", out, err)
+	}
+	if !slices.Equal(got, args) {
+		t.Fatalf("got  %q\nwant %q", got, args)
+	}
+}
+
+func TestQuoteArg(t *testing.T) {
+	for in, want := range map[string]string{
+		``:        `""`,
+		`a`:       `"a"`,
+		`a b`:     `"a b"`,
+		`a"b`:     `"a\"b"`,
+		`a\b`:     `"a\b"`,
+		`a\`:      `"a\\"`,
+		`a\"b`:    `"a\\\"b"`,
+		`C:\x y\`: `"C:\x y\\"`,
+	} {
+		if got := quoteArg(in); got != want {
+			t.Errorf("quoteArg(%q) = %s, want %s", in, got, want)
+		}
 	}
 }

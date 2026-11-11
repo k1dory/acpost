@@ -17,7 +17,10 @@ import (
 
 func TestWaitFinalTimeoutBoundsHTTPRequest(t *testing.T) {
 	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(250 * time.Millisecond)
+		select { // far longer than the timeout asked, and no longer than the request
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
 		_ = json.NewEncoder(w).Encode(store.Message{
 			ID: "msg_test", State: store.Queued,
 		})
@@ -28,12 +31,12 @@ func TestWaitFinalTimeoutBoundsHTTPRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	_, _ = c.WaitFinal(ctx, "msg_test", 10*time.Millisecond)
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+	if elapsed := time.Since(start); elapsed > 2*time.Second { // the 10ms asked, not the server's 5s: with room for a slow machine
 		t.Fatalf("10ms timeout took %v", elapsed)
 	}
 }

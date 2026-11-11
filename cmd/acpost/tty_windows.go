@@ -26,11 +26,18 @@ func vtOutput() func() {
 	if windows.GetConsoleMode(out, &mode) != nil {
 		return func() {}
 	}
-	want := mode | windows.ENABLE_PROCESSED_OUTPUT | windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING
+	want := vtMode(mode)
 	if want == mode || windows.SetConsoleMode(out, want) != nil {
 		return func() {}
 	}
 	return func() { _ = windows.SetConsoleMode(out, mode) }
+}
+
+// vtMode is a console's output mode made a terminal's: escape sequences applied, and the cursor
+// left at the last column until the next character (a console of its own moves on at once, and a
+// line end after a full line would then be two).
+func vtMode(mode uint32) uint32 {
+	return mode | windows.ENABLE_PROCESSED_OUTPUT | windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING | windows.DISABLE_NEWLINE_AUTO_RETURN
 }
 
 // onResize calls fn each time the console's window changes its size, until ctx ends. Windows

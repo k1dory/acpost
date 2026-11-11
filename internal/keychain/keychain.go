@@ -42,7 +42,7 @@ func (s *Store) file() string {
 
 func (s *Store) read() (map[string]string, error) {
 	out := map[string]string{}
-	b, err := os.ReadFile(s.file())
+	b, err := plat.ReadFile(s.file())
 	if errors.Is(err, os.ErrNotExist) {
 		return out, nil
 	}
@@ -71,7 +71,7 @@ func (s *Store) write(m map[string]string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.file())
+	return plat.Rename(tmp, s.file())
 }
 
 // locked runs fn holding the file's lock (other processes of the same home too).

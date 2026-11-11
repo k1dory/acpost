@@ -127,3 +127,9 @@ func Denied(err error) bool {
 func createPrivate(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 }
+
+// ReadFile reads a file that another process may be replacing by a rename meanwhile.
+func ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// Rename puts a file written whole in place of another, at once.
+func Rename(from, to string) error { return os.Rename(from, to) }

@@ -3,6 +3,7 @@ package plat
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -44,7 +46,9 @@ type Group struct {
 }
 
 // start starts cmd as the leader of a group of its own, and tells publish of the group before
-// anything of it runs. The process is made suspended, put in its job, and only then let run:
+// anything of it runs. (Go's exec cannot make a process in a job from its first moment; between
+// its making and its place in the job, a few system calls, the starter's own death leaves it
+// suspended: it never ran, and is not ended with the job.) The process is made suspended, put in its job, and only then let run:
 // nothing it starts is outside the job, and a kill that comes meanwhile is not missed. lasting: the
 // job ends with its last handle, this process's: a node that is killed leaves no agent behind.
 func start(cmd *exec.Cmd, lasting bool, publish func(*Group)) (*Group, error) {
@@ -52,6 +56,16 @@ func start(cmd *exec.Cmd, lasting bool, publish func(*Group)) (*Group, error) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED | windows.CREATE_NEW_PROCESS_GROUP
+	// A program installed by npm is a .cmd file: run by the command interpreter, with a command
+	// line that keeps its arguments whole.
+	if isBatch(cmd.Path) && cmd.SysProcAttr.CmdLine == "" && cmd.Err == nil {
+		comspec := os.Getenv("ComSpec")
+		if comspec == "" {
+			comspec = filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
+		}
+		cmd.SysProcAttr.CmdLine = batchLine(comspec, cmd.Path, cmd.Args[1:])
+		cmd.Path = comspec
+	}
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("job object: %w", err)
@@ -405,4 +419,78 @@ func createPrivate(path string) (*os.File, error) {
 		return nil, &os.PathError{Op: "create", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(h), path), nil
+}
+
+// ReadFile reads a file that another process may be replacing by a rename meanwhile: opened so
+// that it may be (Go's own open keeps a file from being renamed over while it is read).
+func ReadFile(path string) ([]byte, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	f := os.NewFile(uintptr(h), path)
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// Rename puts a file written whole in place of another. Whoever has the old one open for a
+// moment without letting it be replaced (a reader of another program, a scanner) is waited for,
+// two seconds at most.
+func Rename(from, to string) error {
+	var err error
+	for end := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		err = os.Rename(from, to)
+		if err == nil || !(errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED)) || time.Now().After(end) {
+			return err
+		}
+	}
+}
+
+// batchLine is the command line that runs a .cmd or .bat file with its arguments as they are:
+// the command interpreter named, with /s so that the outer quotes alone are taken off and each
+// argument's own quoting stays. Every argument is quoted: & | < > ^ and spaces are then its
+// text. What the interpreter does all the same, as in any batch call: %NAME% is replaced, and an
+// argument with an odd number of quotes in it turns the quoting of those after it inside out.
+func batchLine(comspec, file string, args []string) string {
+	line := quoteArg(file)
+	for _, a := range args {
+		line += " " + quoteArg(a)
+	}
+	return quoteArg(comspec) + ` /d /s /c "` + line + `"`
+}
+
+// quoteArg is s in double quotes, as programs read their command line: a quote in it escaped,
+// and the backslashes before a quote (or before the closing one) doubled.
+func quoteArg(s string) string {
+	b := []byte{'"'}
+	slashes := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			slashes++
+		case '"':
+			for ; slashes > 0; slashes-- {
+				b = append(b, '\\')
+			}
+			b = append(b, '\\')
+		default:
+			slashes = 0
+		}
+		b = append(b, s[i])
+	}
+	for ; slashes > 0; slashes-- {
+		b = append(b, '\\')
+	}
+	return string(append(b, '"'))
+}
+
+// isBatch says whether path is a file the command interpreter runs.
+func isBatch(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".cmd" || ext == ".bat"
 }

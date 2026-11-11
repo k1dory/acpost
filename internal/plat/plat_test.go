@@ -3,6 +3,7 @@ package plat
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -41,6 +42,10 @@ func TestMain(m *testing.M) {
 		}
 		fmt.Println(child.Process.Pid)
 		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "args": // tells the arguments it got
+		b, _ := json.Marshal(os.Args[1:])
+		fmt.Println(string(b))
 		os.Exit(0)
 	case "mark": // says it ran
 		_ = os.WriteFile(os.Getenv("PLAT_MARK"), []byte("ran"), 0o600)
@@ -326,4 +331,63 @@ func TestCreatePrivateTempInAnOpenDirectory(t *testing.T) {
 		t.Fatalf("a second one: %v %v", g, err)
 	}
 	g.Close()
+}
+
+// A file replaced by a rename while others read it: every reader gets one whole version, and no
+// writer is refused (a reader that kept the file from being renamed over would, on Windows).
+func TestReadFileWhileItIsReplaced(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+	write := func(i int) error {
+		f, err := CreatePrivateTemp(dir, "secrets.")
+		if err != nil {
+			return err
+		}
+		_, err = f.Write([]byte(strings.Repeat(strconv.Itoa(i%10), 4096)))
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+		return Rename(f.Name(), path)
+	}
+	if err := write(0); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	bad := make(chan string, 4)
+	done := make(chan struct{})
+	for range 4 {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				b, err := ReadFile(path)
+				if err != nil || len(b) != 4096 || strings.Trim(string(b), string(b[:1])) != "" {
+					bad <- fmt.Sprintf("%d bytes, %v", len(b), err)
+					return
+				}
+			}
+		}()
+	}
+	for i := 1; i <= 300; i++ {
+		if err := write(i); err != nil {
+			close(stop)
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	close(stop)
+	for range 4 {
+		<-done
+	}
+	select {
+	case why := <-bad:
+		t.Fatal("a reader: " + why)
+	default:
+	}
 }

@@ -58,7 +58,7 @@ func (s *Store) tokens() *keychain.Store {
 func (s *Store) kindsFile() string { return filepath.Join(s.Dir, "forges.json") }
 
 func readJSON(path string, v any) error {
-	b, err := os.ReadFile(path)
+	b, err := plat.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -83,7 +83,7 @@ func writeJSON(path string, v any) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return plat.Rename(f.Name(), path)
 }
 
 // locked runs fn holding the store's lock, across processes (an acpost login and a node).
