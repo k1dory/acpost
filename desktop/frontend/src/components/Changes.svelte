@@ -133,7 +133,7 @@
             <div class="vbar">
               <span class="mono n"><span class="plus">+{Math.max(0, v.file?.added ?? 0)}</span> <span class="minus">−{Math.max(0, v.file?.removed ?? 0)}</span></span>
               <span class="sp"></span>
-              {#if v.file?.status !== "D"}<button class="btn ghost sm" onclick={() => { if (at) { at = null; asked++; } else fileAt(v); }}>{at ? t("This version") : t("File at this version")}</button>{/if}
+              {#if v.file?.status !== "D" && v.turn.after}<button class="btn ghost sm" onclick={() => { if (at) { at = null; asked++; } else fileAt(v); }}>{at ? t("This version") : t("File at this version")}</button>{/if}
             </div>
             {#if at}
               {#if at.err}<div class="empty">{at.err}</div>{:else}<pre class="whole selectable">{at.text}</pre>{/if}

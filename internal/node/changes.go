@@ -213,12 +213,30 @@ func addNumstat(files []store.ChangedFile, b []byte) {
 	}
 }
 
-// recordChanges keeps what a turn of m changed between the snapshots, and says so in an event.
-func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir string) {
-	if before == nil {
+// recordChanges keeps what a turn of m changed, and says so in an event: in its git repository,
+// what differs between the snapshots; outside one (the agent's directory is not a repository, or
+// the file is elsewhere), the edits its tool calls reported.
+func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir string, started time.Time, edits []fileEdit) {
+	ctx := n.ctx
+	repo := ""
+	if before != nil {
+		repo = before.repo
+		n.recordGit(ctx, m, agent, before, dir)
+	}
+	files, diff, cut := reportedChanges(dir, repo, edits)
+	if len(files) == 0 {
 		return
 	}
-	ctx := n.ctx
+	c := store.TurnChanges{Msg: m.ID, Agent: agent, Start: started, At: time.Now().UTC(), Repo: dir, Files: files, Diff: diff, Cut: cut}
+	if err := n.st.AddChanges(ctx, c); err != nil {
+		n.log.Debug("changes", "id", m.ID, "err", err)
+		return
+	}
+	n.tellChanges(ctx, m.ID, agent, dir, "", "", "", files)
+}
+
+// recordGit keeps what differs in the turn's repository between its snapshots.
+func (n *Node) recordGit(ctx context.Context, m store.Message, agent string, before *gitSnap, dir string) {
 	after := snapshot(ctx, dir)
 	if after == nil || after.repo != before.repo || after.tree == before.tree {
 		return
@@ -234,6 +252,11 @@ func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir
 		n.log.Debug("changes", "id", m.ID, "err", err)
 		return
 	}
+	n.tellChanges(ctx, m.ID, agent, before.repo, after.branch, before.tree, after.tree, files)
+}
+
+// tellChanges says what a turn changed in an event (the files; the diff stays on the node).
+func (n *Node) tellChanges(ctx context.Context, id, agent, repo, branch, before, after string, files []store.ChangedFile) {
 	ev := struct {
 		Agent  string              `json:"agent"`
 		Repo   string              `json:"repo"`
@@ -242,7 +265,7 @@ func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir
 		After  string              `json:"after"`
 		Files  []store.ChangedFile `json:"files"`
 		More   int                 `json:"more,omitempty"`
-	}{Agent: agent, Repo: filepath.Base(before.repo), Branch: after.branch, Before: before.tree, After: after.tree, Files: files}
+	}{Agent: agent, Repo: filepath.Base(repo), Branch: branch, Before: before, After: after, Files: files}
 	if len(ev.Files) > changesFiles {
 		ev.Files, ev.More = ev.Files[:changesFiles], len(files)-changesFiles
 	}
@@ -250,7 +273,128 @@ func (n *Node) recordChanges(m store.Message, agent string, before *gitSnap, dir
 		ev.More += len(ev.Files) / 2
 		ev.Files = ev.Files[:len(ev.Files)-len(ev.Files)/2]
 	}
-	_ = n.addEvent(ctx, m.ID, "changes", eventJSON(ev), false)
+	_ = n.addEvent(ctx, id, "changes", eventJSON(ev), false)
+}
+
+// reportedChanges is the edits a turn's tool calls reported as changes: the files (their paths
+// from dir, or whole when elsewhere) and a diff of each edit. Files inside repo are left out:
+// its snapshots tell those, whoever changed them. A turn without a repository has only these,
+// so what a command changed (not an edit of the agent's) is not among them.
+func reportedChanges(dir, repo string, edits []fileEdit) ([]store.ChangedFile, string, bool) {
+	var files []store.ChangedFile
+	at := map[string]int{}
+	var diff strings.Builder
+	cut := false
+	for _, e := range edits {
+		if e.path == "" {
+			continue
+		}
+		abs := e.path
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(dir, abs)
+		}
+		abs = filepath.Clean(abs)
+		if repo != "" && (inside(repo, abs) || inside(repo, realPath(abs))) {
+			continue
+		}
+		p := abs
+		if rel, err := filepath.Rel(dir, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			p = rel
+		}
+		p = filepath.ToSlash(p)
+		old, new := redact(e.old), redact(e.new)
+		hunk := ""
+		if !e.cut {
+			if hunk = unifiedHunk(old, new); hunk == "" && !e.created {
+				continue // nothing changed
+			}
+		}
+		i, ok := at[p]
+		if !ok {
+			st := "M"
+			if e.created {
+				st = "A"
+			}
+			i = len(files)
+			at[p] = i
+			files = append(files, store.ChangedFile{Path: p, Status: st})
+		}
+		files[i].Added += e.added
+		files[i].Removed += e.removed
+		if e.cut {
+			cut = true
+			continue
+		}
+		diff.WriteString("diff --git a/" + p + " b/" + p + "\n")
+		if e.created {
+			diff.WriteString("new file mode 100644\n--- /dev/null\n")
+		} else {
+			diff.WriteString("--- a/" + p + "\n")
+		}
+		diff.WriteString("+++ b/" + p + "\n" + hunk)
+	}
+	text := diff.String()
+	if len(text) > changesDiffMax {
+		cut, text = true, wholeFiles(text, changesDiffMax)
+	}
+	return files, text, cut
+}
+
+// inside says whether file is in dir.
+func inside(dir, file string) bool {
+	rel, err := filepath.Rel(dir, file)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// realPath is file with the links of its directory followed (the file itself may be gone).
+func realPath(file string) string {
+	d, err := filepath.EvalSymlinks(filepath.Dir(file))
+	if err != nil {
+		return file
+	}
+	return filepath.Join(d, filepath.Base(file))
+}
+
+// unifiedHunk is one hunk of a unified diff from old to new: the stretch between the lines they
+// start and end with alike, with three lines around it ("" when they are the same).
+func unifiedHunk(old, new string) string {
+	a, b := lines(old), lines(new)
+	p := 0
+	for p < len(a) && p < len(b) && a[p] == b[p] {
+		p++
+	}
+	s := 0
+	for s < len(a)-p && s < len(b)-p && a[len(a)-1-s] == b[len(b)-1-s] {
+		s++
+	}
+	if p == len(a) && p == len(b) {
+		return ""
+	}
+	const around = 3
+	from := max(p-around, 0)
+	tail := min(s, around)
+	na, nb := len(a)-s+tail-from, len(b)-s+tail-from
+	start := func(n int) int {
+		if n == 0 {
+			return from
+		}
+		return from + 1
+	}
+	var w strings.Builder
+	w.WriteString("@@ -" + strconv.Itoa(start(na)) + "," + strconv.Itoa(na) + " +" + strconv.Itoa(start(nb)) + "," + strconv.Itoa(nb) + " @@\n")
+	for _, l := range a[from:p] {
+		w.WriteString(" " + l + "\n")
+	}
+	for _, l := range a[p : len(a)-s] {
+		w.WriteString("-" + l + "\n")
+	}
+	for _, l := range b[p : len(b)-s] {
+		w.WriteString("+" + l + "\n")
+	}
+	for _, l := range a[len(a)-s : len(a)-s+tail] {
+		w.WriteString(" " + l + "\n")
+	}
+	return w.String()
 }
 
 // Changes is what the turns of a message changed, and with tree those of the messages its agent
@@ -289,7 +433,19 @@ func (n *Node) Changes(ctx context.Context, p Principal, id string, tree, withDi
 		// ends before its lead's).
 		first, last := map[string]*gitSnap{}, map[string]*gitSnap{}
 		var repos []string
+		reported := map[string]*store.RepoDiff{}
+		var reportedIn []string
 		for _, t := range turns {
+			if t.Before == "" { // edits the agent reported, outside a repository: no trees to diff
+				r := reported[t.Repo]
+				if r == nil {
+					r = &store.RepoDiff{Repo: t.Repo}
+					reported[t.Repo] = r
+					reportedIn = append(reportedIn, t.Repo)
+				}
+				r.Files, r.Diff, r.Cut = joinChanged(r.Files, t.Files), r.Diff+t.Diff, r.Cut || t.Cut
+				continue
+			}
 			if f := first[t.Repo]; f == nil {
 				repos = append(repos, t.Repo)
 				first[t.Repo] = &gitSnap{repo: t.Repo, tree: t.Before, at: t.Start}
@@ -307,8 +463,32 @@ func (n *Node) Changes(ctx context.Context, p Principal, id string, tree, withDi
 			}
 			whole = append(whole, store.RepoDiff{Repo: r, Branch: last[r].branch, Before: first[r].tree, After: last[r].tree, Files: files, Diff: diff, Cut: cut})
 		}
+		for _, r := range reportedIn {
+			if d := reported[r]; len(d.Diff) > changesDiffMax {
+				d.Diff, d.Cut = wholeFiles(d.Diff, changesDiffMax), true
+			}
+			whole = append(whole, *reported[r])
+		}
 	}
 	return turns, whole, nil
+}
+
+// joinChanged adds more to files: a file in both once, its lines summed.
+func joinChanged(files, more []store.ChangedFile) []store.ChangedFile {
+	at := map[string]int{}
+	for i, f := range files {
+		at[f.Path] = i
+	}
+	for _, f := range more {
+		if i, ok := at[f.Path]; ok {
+			files[i].Added += f.Added
+			files[i].Removed += f.Removed
+			continue
+		}
+		at[f.Path] = len(files)
+		files = append(files, f)
+	}
+	return files
 }
 
 // gitSafeEnv is the environment git runs in: no prompt, no pager, no external diff, no network

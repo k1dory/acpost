@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -394,6 +395,36 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			out = append(out, []byte("\nerror: "+err.Error())...)
 		}
 		a.say(ctx, sid, string(out))
+	case "write", "writefail":
+		// A file written with an edit tool call, as an agent reports one: "write <path> <text>"
+		// (\n in the text is a line break); writefail reports the call failed and writes nothing.
+		file, text, _ := strings.Cut(arg, " ")
+		text = strings.ReplaceAll(text, `\n`, "\n")
+		a.mu.Lock()
+		abs := file
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(a.cwds[sid], file)
+		}
+		a.mu.Unlock()
+		var old *string
+		if b, err := os.ReadFile(abs); err == nil {
+			o := string(b)
+			old = &o
+		}
+		up := func(u acp.SessionUpdate) {
+			_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: u})
+		}
+		id := acp.ToolCallId("w" + strconv.FormatInt(time.Now().UnixNano(), 36))
+		up(acp.StartToolCall(id, "Write "+file, acp.WithStartKind(acp.ToolKindEdit), acp.WithStartContent([]acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: abs, OldText: old, NewText: text, Type: "diff"}}})))
+		if cmd == "writefail" {
+			up(acp.UpdateToolCall(id, acp.WithUpdateStatus(acp.ToolCallStatusFailed)))
+			a.say(ctx, sid, "failed")
+			break
+		}
+		_ = os.MkdirAll(filepath.Dir(abs), 0o755)
+		_ = os.WriteFile(abs, []byte(text), 0o644)
+		up(acp.UpdateToolCall(id, acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
+		a.say(ctx, sid, "written")
 	case "sessions":
 		a.say(ctx, sid, strconv.FormatInt(a.sessions.Load(), 10))
 	case "give":
