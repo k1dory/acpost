@@ -12,9 +12,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -58,7 +58,6 @@ func gitDefused(ctx context.Context, dir string, defused [][2]string, env []stri
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), append(gitSafeEnv(defused), env...)...)
-	killGroupOnCancel(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -66,9 +65,13 @@ func gitDefused(ctx context.Context, dir string, defused [][2]string, env []stri
 	}
 	stderr := &capped{max: gitStderrMax} // a warning per file of a big add is not kept whole
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
+	// A group of its own, killed whole when the context ends: a hook or filter git started does
+	// not outlive it.
+	group, err := plat.StartCancelable(cmd)
+	if err != nil {
 		return nil, false, err
 	}
+	defer group.Close()
 	out, _ = io.ReadAll(io.LimitReader(stdout, int64(max)+1))
 	if len(out) > max {
 		out, cut = out[:max], true
@@ -674,9 +677,8 @@ func gitDefuse(ctx context.Context, dir string) [][2]string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|smudge|process|required)$`)
 	cmd.Env = append(os.Environ(), gitSafeEnv(nil)...)
-	killGroupOnCancel(cmd)
 	cmd.WaitDelay = 2 * time.Second
-	b, _ := cmd.Output()
+	b, _ := plat.Output(cmd)
 	seen := map[string]bool{}
 	var out [][2]string
 	for _, key := range strings.Split(string(b), "\x00") {
@@ -717,18 +719,6 @@ func untrackedFits(ctx context.Context, repo string, defused [][2]string) bool {
 		}
 	}
 	return true
-}
-
-// killGroupOnCancel makes cmd a process group of its own, killed whole when its context ends: a
-// hook or filter it started does not outlive it.
-func killGroupOnCancel(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
 }
 
 // wholeFiles is the files of a diff that fit in max bytes, each whole (the last one, cut, goes;

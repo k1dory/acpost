@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 // A configuration file someone named must be there, by --config or ACPOST_CONFIG, also when the
@@ -33,8 +34,8 @@ func TestNamedConfigMustExist(t *testing.T) {
 		if err != nil || !strings.Contains(string(out), filepath.Join(binDir, "acpost")+" serve") {
 			return
 		}
-		syscall.Kill(pid, syscall.SIGTERM)
-		until(10*time.Second, func() bool { return syscall.Kill(pid, 0) != nil })
+		askToStop(pid)
+		until(10*time.Second, func() bool { return !plat.Alive(pid) })
 	})
 	for _, c := range []struct {
 		name string

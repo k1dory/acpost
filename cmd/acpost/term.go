@@ -82,21 +82,11 @@ func termCmd(g *globals) *cobra.Command {
 				}
 			}()
 			// The window's size follows it.
-			winch := make(chan os.Signal, 1)
-			signal.Notify(winch, syscall.SIGWINCH)
-			defer signal.Stop(winch)
-			go func() {
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-winch:
-						if w, h, err := term.GetSize(in); err == nil {
-							_ = c.TermResize(ctx, id, w, h)
-						}
-					}
+			go onResize(ctx, func() {
+				if w, h, err := term.GetSize(in); err == nil {
+					_ = c.TermResize(ctx, id, w, h)
 				}
-			}()
+			})
 			go func() { // what is typed goes to the shell
 				b := make([]byte, 4096)
 				for {

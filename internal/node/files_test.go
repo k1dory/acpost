@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -380,7 +379,7 @@ func TestACPReplyFilesPartlyKept(t *testing.T) {
 
 func TestOnDiskRefusesFIFOAtOnce(t *testing.T) {
 	fifo := filepath.Join(t.TempDir(), "p")
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+	if err := mkfifo(fifo); err != nil {
 		t.Skip(err)
 	}
 	done := make(chan bool, 1)

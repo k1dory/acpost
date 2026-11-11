@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -230,7 +229,7 @@ func TestAttachFIFORefusedAtOnce(t *testing.T) {
 	e := newEnv(t, inbox)
 	e.serve()
 	fifo := filepath.Join(e.dir, "input")
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+	if err := mkfifo(fifo); err != nil {
 		t.Skip(err)
 	}
 	done := make(chan result, 1)

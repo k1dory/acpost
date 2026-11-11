@@ -41,10 +41,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 type fakeAgent struct {
@@ -225,7 +226,7 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 			lock := dir + "/" + string(p.SessionId) + ".lock"
 			if b, err := os.ReadFile(lock); err == nil {
 				pid, _ := strconv.Atoi(string(b))
-				if pid != os.Getpid() && pid > 0 && syscall.Kill(pid, 0) == nil {
+				if pid != os.Getpid() && pid > 0 && plat.Alive(pid) {
 					return acp.LoadSessionResponse{}, &acp.RequestError{Code: -32600, Message: "Invalid request: This Codex session is in use by another Codex client", Data: map[string]any{"reason": "thread_active_writer"}}
 				}
 			}

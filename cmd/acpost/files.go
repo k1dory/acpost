@@ -13,11 +13,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/k1dory/acpost/internal/client"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -85,7 +85,7 @@ func (o *overLimit) Error() string { return fmt.Sprintf("%d bytes, over the limi
 // grows or shrinks while it is read is refused rather than sent cut.
 func readFile(path string, max int64) ([]byte, error) {
 	// Non-blocking: a FIFO or a device opens at once and is refused below, rather than waiting.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := plat.OpenRead(path)
 	if err != nil {
 		return nil, err
 	}

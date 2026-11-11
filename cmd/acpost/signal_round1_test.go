@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -28,7 +27,7 @@ func TestInterruptEndsAWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(500 * time.Millisecond) // waiting by now
-	cmd.Process.Signal(syscall.SIGINT)
+	interrupt(cmd.Process)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
@@ -63,7 +62,7 @@ func startInterrupted(t *testing.T, e *env, stdin *os.File, ready func() bool, a
 		cmd.Process.Kill()
 		t.Fatal("never ready")
 	}
-	cmd.Process.Signal(syscall.SIGINT)
+	interrupt(cmd.Process)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {

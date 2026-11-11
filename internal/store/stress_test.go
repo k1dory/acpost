@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -476,7 +475,7 @@ func TestCrashMidWriteLeavesConsistentStore(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Duration(300+round*200) * time.Millisecond)
-		cmd.Process.Signal(syscall.SIGKILL)
+		cmd.Process.Kill()
 		cmd.Wait()
 		s, err := Open("sqlite://"+path, Options{})
 		if err != nil {

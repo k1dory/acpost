@@ -20,14 +20,13 @@ import (
 	"io"
 	"mime"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
-	"syscall"
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -173,7 +172,7 @@ func onDisk(uri string, data []byte) bool {
 	}
 	// One open, non-blocking, checked on its descriptor, read no further than the content: a path
 	// swapped for a FIFO or a device is not waited on or read without end.
-	fd, err := os.OpenFile(u.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	fd, err := plat.OpenRead(u.Path)
 	if err != nil {
 		return false
 	}

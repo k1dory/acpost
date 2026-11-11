@@ -20,10 +20,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 var (
@@ -188,7 +189,7 @@ func pragmaQuery(pragmas []string, sep string) string {
 func (s *Store) openFile(path string, pragmas []string) error {
 	dir := filepath.Dir(path)
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if err := plat.MkdirPrivate(dir); err != nil {
 			return err
 		}
 	}
@@ -199,9 +200,9 @@ func (s *Store) openFile(path string, pragmas []string) error {
 	if err != nil {
 		return err
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := plat.Lock(lock, false); err != nil {
 		lock.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, plat.ErrLocked) {
 			return fmt.Errorf("%s: %w", path, ErrLocked)
 		}
 		return err
@@ -245,14 +246,7 @@ func (s *Store) openFile(path string, pragmas []string) error {
 
 // PrivateDir refuses a directory other users can open: the store and the socket live in it.
 func PrivateDir(dir string) error {
-	st, err := os.Stat(dir)
-	if err != nil {
-		return err
-	}
-	if st.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s is open to other users (mode %o): use a private directory (chmod 700)", dir, st.Mode().Perm())
-	}
-	return nil
+	return plat.PrivateDir(dir)
 }
 
 const schema = `

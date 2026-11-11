@@ -10,10 +10,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/k1dory/acpost/internal/keychain"
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 // Tokens are kept by internal/keychain: the macOS keychain (service "acpost-forge", account the
@@ -94,7 +94,7 @@ func writeJSON(path string, v any, mode os.FileMode) error {
 func (s *Store) locked(fn func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := plat.MkdirPrivate(s.Dir); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(filepath.Join(s.Dir, ".forge.lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -102,10 +102,10 @@ func (s *Store) locked(fn func() error) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := plat.Lock(f, true); err != nil {
 		return err
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer plat.Unlock(f)
 	return fn()
 }
 

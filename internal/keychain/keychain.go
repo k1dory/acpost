@@ -13,7 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
+
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 // Store keeps secrets under a service name, by account.
@@ -79,7 +80,7 @@ func (s *Store) write(m map[string]string) error {
 
 // locked runs fn holding the file's lock (other processes of the same home too).
 func (s *Store) locked(fn func() error) error {
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := plat.MkdirPrivate(s.Dir); err != nil {
 		return err
 	}
 	lf, err := os.OpenFile(filepath.Join(s.Dir, "."+s.Service+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -87,17 +88,17 @@ func (s *Store) locked(fn func() error) error {
 		return err
 	}
 	defer lf.Close()
-	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+	if err := plat.Lock(lf, true); err != nil {
 		return err
 	}
-	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	defer plat.Unlock(lf)
 	return fn()
 }
 
 func security(stdin string, args ...string) ([]byte, error) {
 	cmd := exec.Command("security", args...)
 	cmd.Stdin = strings.NewReader(stdin)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // read from stdin, never a terminal
+	plat.Detach(cmd) // read from stdin, never a terminal
 	return cmd.CombinedOutput()
 }
 
@@ -128,7 +129,7 @@ func (s *Store) Lookup(account string) (string, bool, error) {
 	defer s.mu.Unlock()
 	if !s.File {
 		cmd := exec.Command("security", "find-generic-password", "-s", s.Service, "-a", account, "-w")
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		plat.Detach(cmd)
 		out, err := cmd.Output()
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 44 { // errSecItemNotFound

@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
+
 	"text/tabwriter"
 	"time"
 
@@ -25,6 +25,7 @@ import (
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/node"
+	"github.com/k1dory/acpost/internal/plat"
 	"github.com/k1dory/acpost/internal/store"
 )
 
@@ -169,7 +170,7 @@ func hintOf(err error) string {
 		return ce.Hint
 	}
 	switch {
-	case errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES):
+	case plat.Denied(err):
 		return "this process may not connect to the node's socket (a sandbox, or file permissions); the node itself may be fine: " +
 			"run acpost outside the sandbox (allow the command), or reach the node over TCP with --node http://127.0.0.1:PORT --token …"
 	case errors.Is(err, client.ErrUnavailable):
@@ -344,7 +345,7 @@ func localURL(cfg *config.Config) string {
 // autostart runs `acpost serve` in the background, detached, and waits for it to answer.
 func autostart(ctx context.Context, g *globals, c *client.Client, sock string) error {
 	dir := filepath.Dir(sock)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := plat.MkdirPrivate(dir); err != nil {
 		return err
 	}
 	logf, err := os.OpenFile(filepath.Join(dir, "acpost.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -365,8 +366,8 @@ func autostart(ctx context.Context, g *globals, c *client.Client, sock string) e
 	}
 	cmd := exec.Command(self, args...)
 	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Dir = "/"
+	plat.Detach(cmd)
+	cmd.Dir = filepath.VolumeName(dir) + string(filepath.Separator)
 	if err := cmd.Start(); err != nil {
 		return &exitErr{code: exitNoNode, err: fmt.Errorf("start the local node: %w", err)}
 	}
@@ -499,10 +500,7 @@ func readSecret(ctx context.Context, fd int) ([]byte, error) {
 		var line []byte
 		var b [1]byte
 		for {
-			n, err := syscall.Read(fd, b[:])
-			if err == syscall.EINTR {
-				continue
-			}
+			n, err := readFD(fd, b[:])
 			if err != nil {
 				return line, err
 			}
