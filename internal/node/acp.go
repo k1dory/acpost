@@ -572,10 +572,12 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 		// session): the chats list it under its thread, never as a session started elsewhere.
 		// A session for one message (session: message, no key) is not marked: no thread lists
 		// it, and its entry among the chats is where it is forked from.
-		if key != "" {
-			if err := n.st.PutSession(n.ctx, a.addr, madeSession+string(sid), string(sid)); err != nil {
-				n.log.Warn("mark session", "agent", a.name, "err", err)
-			}
+		mark := madeSession
+		if key == "" {
+			mark = ownSession // whatever the agent's session mode becomes later
+		}
+		if err := n.st.PutSession(n.ctx, a.addr, mark+string(sid), string(sid)); err != nil {
+			n.log.Warn("mark session", "agent", a.name, "err", err)
 		}
 		p.costBase[sid] = 0 // a new session: its cost starts here
 		p.fresh[sid] = true

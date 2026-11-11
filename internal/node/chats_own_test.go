@@ -28,6 +28,13 @@ func cancelledTurn(t *testing.T, n *Node) store.Message {
 			t.Fatal("the turn did not start")
 		}
 	}
+	// Its session is kept under its key by now (where the agent keeps one: not session: message),
+	// as when a turn is cancelled while the agent works.
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if sid, _ := n.st.Session(ctx, "agent:fake", "thread:"+m.Thread); sid != "" {
+			break
+		}
+	}
 	if _, err := n.Cancel(ctx, me, m.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +329,94 @@ agents:
 	for _, e := range entries {
 		if !shown[e.Name()] {
 			t.Errorf("the session %s, which the thread runs, is nowhere among the chats", e.Name())
+		}
+	}
+}
+
+// Review round 6. A session of a message alone stays a chat when the agent's session mode is
+// changed afterwards: one marked as such, and one made before the marks (no key was ever kept for
+// its thread, so it is not taken for a thread's left session).
+func TestOneOffSessionsSurviveAModeChange(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0o700)
+	state, db := t.TempDir(), filepath.Join(dir, "store.db")
+	conf := func(mode string) string {
+		return fmt.Sprintf(`
+store: %q
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    session: %s
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q}
+`, "sqlite://"+db, os.Args[0], mode, state)
+	}
+	n, st := fileNode(t, conf("message"))
+	gone := cancelledTurn(t, n)
+	title := "title:[acpost] Message " + gone.ID + " from user:tester."
+	entries, _ := os.ReadDir(state)
+	if len(entries) != 1 {
+		t.Fatalf("%d sessions kept by the fake agent", len(entries))
+	}
+	marked := entries[0].Name()
+	os.WriteFile(filepath.Join(state, marked), []byte(title), 0o600)
+	os.WriteFile(filepath.Join(state, "before-marks"), []byte(title), 0o600)
+	n.Close()
+	st.Close()
+
+	n, _ = fileNode(t, conf("thread"))
+	c, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := map[string]bool{}
+	for _, it := range c.Items {
+		shown[it.Key] = true
+	}
+	if !shown["session:fake/"+marked] || !shown["session:fake/before-marks"] {
+		t.Errorf("after the mode changed: marked %v, made before the marks %v", shown["session:fake/"+marked], shown["session:fake/before-marks"])
+	}
+}
+
+// A turn cancelled before the node kept its session under the thread's key (the agent had made
+// it already): the session is marked as made at once, so it is not a chat beside the thread.
+func TestSessionOfATurnCancelledAtOnce(t *testing.T) {
+	state := t.TempDir()
+	n := newNode(t, fmt.Sprintf(`
+agents:
+  fake:
+    driver: acp
+    command: [%q]
+    env: {ACPOST_FAKE_AGENT: "1", FAKE_STATE: %q, FAKE_NEW_LOG: %q, FAKE_SLOW_SET: "700"}
+    model: fake-big
+`, os.Args[0], state, filepath.Join(t.TempDir(), "new.log")))
+	m, _, err := n.Send(ctx, me, SendRequest{To: "fake", Body: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The agent has the session; the node is still setting it up (a slow mode change).
+	for end := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if entries, _ := os.ReadDir(state); len(entries) > 0 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("no session made")
+		}
+	}
+	if _, err := n.Cancel(ctx, me, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	n.Wait(ctx, me, m.ID, 20*time.Second)
+	if sid, _ := n.st.Session(ctx, "agent:fake", "thread:"+m.Thread); sid != "" {
+		t.Skip("the session was kept under its key before the cancel: not this case")
+	}
+	c, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range c.Items {
+		if it.Kind == "session" {
+			t.Errorf("the cancelled turn's session is a chat of its own: %s", it.Key)
 		}
 	}
 }

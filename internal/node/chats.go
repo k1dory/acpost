@@ -144,6 +144,7 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 const (
 	madeSession   = "made:"
 	forkedSession = "fork:"
+	ownSession    = "own:" // made for one message (session: message): no thread's, a chat of its own
 )
 
 // ownPrompt is how a prompt of this node starts (acpSlot.prompt: the files it lists, then whose
@@ -175,8 +176,17 @@ func (n *Node) leftBehind(ctx context.Context, cfg *config.Agent, title string, 
 	if err != nil || msg.FinishedAt.IsZero() {
 		return false
 	}
-	// A message whose session is its own (session: message) has no thread that lists it.
-	if cfg == nil || sessionKey(cfg.Session, msg) == "" {
+	// Its thread (or task) went on in a session kept under its key: only then was the message's
+	// session one of a key, left when the key took another. A message whose session was its own
+	// (session: message, now or when it ran: no key was ever kept) has no thread that lists it.
+	if cfg == nil {
+		return false
+	}
+	key := sessionKey(cfg.Session, msg)
+	if key == "" {
+		return false
+	}
+	if now, err := n.st.Session(ctx, msg.To, key); err != nil || now == "" {
 		return false
 	}
 	left := msg.State == store.Cancelled || msg.State == store.Failed || msg.Attempts > 1
@@ -317,6 +327,11 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 				fail(err)
 				return
 			}
+			own, err := n.st.SessionsMarked(lctx, a.addr, ownSession)
+			if err != nil {
+				fail(err)
+				return
+			}
 			inUse := map[string]bool{}
 			for _, prefix := range []string{"thread:", "task:", "from:"} { // sessionKey's keys
 				ids, err := n.st.SessionsMarked(lctx, a.addr, prefix)
@@ -348,7 +363,7 @@ func (n *Node) listExternal(ctx context.Context, ours map[string]bool) ([]client
 					// made it: the threads list theirs, and one no thread claims stays here.
 					updated, _ := time.Parse(time.RFC3339Nano, si.UpdatedAt)
 					key := "session:" + name + "/" + si.ID
-					if !inUse[si.ID] && (made[si.ID] || (!forks[si.ID] && !kept[key] && n.leftBehind(lctx, a.cfg, si.Title, updated))) {
+					if !inUse[si.ID] && (made[si.ID] || (!forks[si.ID] && !own[si.ID] && !kept[key] && n.leftBehind(lctx, a.cfg, si.Title, updated))) {
 						continue
 					}
 					c := client.Chat{Key: "session:" + name + "/" + si.ID, Kind: "session", Agent: a.addr, Session: si.ID,
