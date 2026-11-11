@@ -395,7 +395,7 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			out = append(out, []byte("\nerror: "+err.Error())...)
 		}
 		a.say(ctx, sid, string(out))
-	case "write", "writefail":
+	case "write", "writefail", "writelate":
 		// A file written with an edit tool call, as an agent reports one: "write <path> <text>"
 		// (\n in the text is a line break); writefail reports the call failed and writes nothing.
 		file, text, _ := strings.Cut(arg, " ")
@@ -415,7 +415,16 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 			_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: u})
 		}
 		id := acp.ToolCallId("w" + strconv.FormatInt(time.Now().UnixNano(), 36))
-		up(acp.StartToolCall(id, "Write "+file, acp.WithStartKind(acp.ToolKindEdit), acp.WithStartContent([]acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: abs, OldText: old, NewText: text, Type: "diff"}}})))
+		content := []acp.ToolCallContent{{Diff: &acp.ToolCallContentDiff{Path: abs, OldText: old, NewText: text, Type: "diff"}}}
+		if cmd == "writelate" { // the status first, what was edited after it
+			up(acp.StartToolCall(id, "Write "+file, acp.WithStartKind(acp.ToolKindEdit)))
+			_ = os.WriteFile(abs, []byte(text), 0o644)
+			up(acp.UpdateToolCall(id, acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
+			up(acp.UpdateToolCall(id, acp.WithUpdateContent(content)))
+			a.say(ctx, sid, "written")
+			break
+		}
+		up(acp.StartToolCall(id, "Write "+file, acp.WithStartKind(acp.ToolKindEdit), acp.WithStartContent(content)))
 		if cmd == "writefail" {
 			up(acp.UpdateToolCall(id, acp.WithUpdateStatus(acp.ToolCallStatusFailed)))
 			a.say(ctx, sid, "failed")

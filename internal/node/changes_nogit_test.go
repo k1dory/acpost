@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	acp "github.com/coder/acp-go-sdk"
+	"github.com/k1dory/acpost/internal/store"
 )
 
 func fakeIn(t *testing.T, dir string) *Node {
@@ -88,15 +92,123 @@ func TestChangesInGitAreNotToldTwice(t *testing.T) {
 }
 
 func TestUnifiedHunk(t *testing.T) {
-	for _, c := range []struct{ old, new, want string }{
-		{"a\n", "a\n", ""},
-		{"", "a\nb\n", "@@ -0,0 +1,2 @@\n+a\n+b\n"},
-		{"a\nb\n", "", "@@ -1,2 +0,0 @@\n-a\n-b\n"},
-		{"1\n2\n3\n4\n5\n6\n7\n8\n9\n", "1\n2\n3\n4\nX\n6\n7\n8\n9\n", "@@ -2,7 +2,7 @@\n 2\n 3\n 4\n-5\n+X\n 6\n 7\n 8\n"},
-		{"a\na\n", "a\n", "@@ -1,2 +1,1 @@\n a\n-a\n"},
+	for _, c := range []struct {
+		old, new, want string
+		added, removed int
+	}{
+		{"a\n", "a\n", "", 0, 0},
+		{"", "a\nb\n", "@@ -0,0 +1,2 @@\n+a\n+b\n", 2, 0},
+		{"a\nb\n", "", "@@ -1,2 +0,0 @@\n-a\n-b\n", 0, 2},
+		{"1\n2\n3\n4\n5\n6\n7\n8\n9\n", "1\n2\n3\n4\nX\n6\n7\n8\n9\n", "@@ -2,7 +2,7 @@\n 2\n 3\n 4\n-5\n+X\n 6\n 7\n 8\n", 1, 1},
+		{"a\na\n", "a\n", "@@ -1,2 +1,1 @@\n a\n-a\n", 0, 1},
+		// The line end of the last line is part of it (finding 6).
+		{"a", "a\n", "@@ -1,1 +1,1 @@\n-a\n\\ No newline at end of file\n+a\n", 1, 1},
+		{"x\na", "x\nb", "@@ -1,2 +1,2 @@\n x\n-a\n\\ No newline at end of file\n+b\n\\ No newline at end of file\n", 1, 1},
+		{"a\nend", "b\nend", "@@ -1,2 +1,2 @@\n-a\n+b\n end\n\\ No newline at end of file\n", 1, 1},
 	} {
-		if got := unifiedHunk(c.old, c.new); got != c.want {
-			t.Errorf("%q → %q:\n%s\nwant\n%s", c.old, c.new, got, c.want)
+		got, added, removed := unifiedHunk(c.old, c.new)
+		if got != c.want || added != c.added || removed != c.removed {
+			t.Errorf("%q → %q: +%d -%d\n%s\nwant +%d -%d\n%s", c.old, c.new, added, removed, got, c.added, c.removed, c.want)
 		}
+	}
+}
+
+// An edit of a secret alone is an edit: the file is listed, its lines shown masked (finding 5).
+func TestReportedSecretRotationIsAChange(t *testing.T) {
+	files, diff, _ := reportedChanges("/w", "", []fileEdit{{path: "/w/.env", old: "A=1\nAPI_TOKEN=oldvalue123\n", new: "A=1\nAPI_TOKEN=newvalue456\n"}})
+	if len(files) != 1 || files[0].Path != ".env" || files[0].Added != 1 || files[0].Removed != 1 {
+		t.Fatalf("files: %+v", files)
+	}
+	if strings.Contains(diff, "oldvalue123") || strings.Contains(diff, "newvalue456") || !strings.Contains(diff, "-API_TOKEN=") || !strings.Contains(diff, "+API_TOKEN=") {
+		t.Errorf("the diff:\n%s", diff)
+	}
+}
+
+// A link outside the repository to a file in it is the repository's file: its snapshots tell it,
+// the edit is not told again (finding 3). A file in a repository whose snapshot could not be taken
+// is not told from its edit either (finding 2).
+func TestReportedLeavesTheRepositoryToItsSnapshots(t *testing.T) {
+	repo, _ := filepath.EvalSymlinks(testRepo(t))
+	out, _ := filepath.EvalSymlinks(t.TempDir())
+	link := filepath.Join(out, "link.txt")
+	if err := os.Symlink(filepath.Join(repo, "a.txt"), link); err != nil {
+		t.Fatal(err)
+	}
+	if files, _, _ := reportedChanges(out, repo, []fileEdit{{path: link, old: "one\n", new: "1\n"}}); len(files) != 0 {
+		t.Errorf("a link into the repository: %+v", files)
+	}
+	if got := repoRoot(ctx, filepath.Join(repo)); got != repo {
+		t.Errorf("the repository of %s: %q", repo, got)
+	}
+	if got := repoRoot(ctx, out); got != "" {
+		t.Errorf("a plain directory's repository: %q", got)
+	}
+	n := fakeIn(t, repo)
+	m := ask(t, n, SendRequest{Body: "echo hi"})
+	n.recordChanges(m, "agent:fake", nil, repo, m.CreatedAt, []fileEdit{{path: filepath.Join(repo, "ignored", "x"), new: "s\n", created: true}}, false)
+	if turns, _, _ := n.Changes(ctx, me, m.ID, false, true); len(turns) != 0 {
+		t.Errorf("no snapshot, in a repository: %+v", turns)
+	}
+}
+
+// A call's diff sent after its status counts (finding 1), and once: the same call saying it again
+// replaces what it said.
+func TestReportedLateContentCounts(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	n := fakeIn(t, dir)
+	m := ask(t, n, SendRequest{Body: `writelate late.txt a\n`})
+	turns, _, err := n.Changes(ctx, me, m.ID, false, true)
+	if err != nil || len(turns) != 1 || len(turns[0].Files) != 1 || turns[0].Files[0].Path != "late.txt" || turns[0].Files[0].Added != 1 {
+		t.Fatalf("turns: %+v, %v", turns, err)
+	}
+}
+
+// Every edit of a call is taken, past what its event shows (finding 4); an edit too long to keep
+// is listed without a diff, and the record says so (finding 9).
+func TestReportedTakesAllEditsOfACall(t *testing.T) {
+	turn := &acpTurn{}
+	var content []acp.ToolCallContent
+	for i := range 40 {
+		content = append(content, acp.ToolCallContent{Diff: &acp.ToolCallContentDiff{Path: fmt.Sprintf("/w/f%02d", i), NewText: "x\n"}})
+	}
+	big := strings.Repeat("y\n", editKeepMax/2+1)
+	content = append(content, acp.ToolCallContent{Diff: &acp.ToolCallContentDiff{Path: "/w/big", OldText: acp.Ptr("old\n"), NewText: big}})
+	turn.trackCall(&acp.SessionUpdateToolCall{ToolCallId: "c1", Status: acp.ToolCallStatusCompleted, Content: content})
+	edits, more := turn.edits()
+	if len(edits) != 41 || more {
+		t.Fatalf("%d edits, more %v", len(edits), more)
+	}
+	files, diff, cut := reportedChanges("/w", "", edits)
+	if len(files) != 41 || !cut || strings.Contains(diff, "b/big") || files[40].Path != "big" || files[40].Added == 0 {
+		t.Errorf("%d files, cut %v, the last %+v", len(files), cut, files[len(files)-1])
+	}
+	// The same call again, with one edit: what it says now, not both.
+	turn.trackUpdate(&acp.SessionToolCallUpdate{ToolCallId: "c1", Content: content[:1]})
+	if edits, _ := turn.edits(); len(edits) != 1 {
+		t.Errorf("%d edits after the call said one", len(edits))
+	}
+}
+
+// A message's whole is put together within the diff's bound (finding 7).
+func TestReportedWholeIsBounded(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	n := fakeIn(t, dir)
+	m := ask(t, n, SendRequest{Body: "echo hi"})
+	section := func(name string) string {
+		return "diff --git a/" + name + " b/" + name + "\n--- a/" + name + "\n+++ b/" + name + "\n@@ -0,0 +1,1 @@\n+" + strings.Repeat("z", 400<<10) + "\n"
+	}
+	for i, name := range []string{"a", "b", "c"} {
+		c := store.TurnChanges{Msg: m.ID, Agent: "agent:fake", Start: m.CreatedAt, At: m.CreatedAt.Add(time.Duration(i) * time.Second), Repo: dir,
+			Files: []store.ChangedFile{{Path: name, Status: "A", Added: 1}}, Diff: section(name)}
+		if err := n.st.AddChanges(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, whole, err := n.Changes(ctx, me, m.ID, false, true)
+	if err != nil || len(whole) != 1 {
+		t.Fatalf("%+v, %v", whole, err)
+	}
+	if w := whole[0]; len(w.Diff) > changesDiffMax || !w.Cut || len(w.Files) != 3 || !strings.Contains(w.Diff, "b/b") || strings.Contains(w.Diff, "b/c\n") {
+		t.Errorf("the whole: %d bytes, cut %v, %d files", len(w.Diff), w.Cut, len(w.Files))
 	}
 }

@@ -63,7 +63,12 @@
     return m;
   });
   const repos = $derived(new Set([...stats.values()].map(s => s.repo)).size);
-  const shown = $derived(files.find((f: any) => keyOf(f.repo, f.path) === pick) ?? files[0]);
+  // A file listed without a diff (an edit too long to keep) is shown all the same, saying so.
+  const shown = $derived.by(() => {
+    const k = stats.has(pick) ? pick : stats.keys().next().value ?? "";
+    const s = stats.get(k);
+    return files.find((f: any) => keyOf(f.repo, f.path) === k) ?? (s ? { repo: s.repo, path: s.path, lines: [] as any[] } : files[0]);
+  });
 
   // A file's versions: the turns that changed it, in order — each with its own diff of the file
   // and, on request, the whole file as that turn left it.
@@ -74,7 +79,7 @@
     return ((data?.turns ?? []) as any[])
       .filter(t => t.repo === shown.repo && (t.files ?? []).some((f: any) => f.path === shown.path))
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-      .map(t => ({ turn: t, file: (t.files as any[]).find(f => f.path === shown.path), lines: splitDiff(t.diff ?? "").find(f => f.path === shown.path)?.lines ?? [] }));
+      .map(t => ({ turn: t, file: (t.files as any[]).find(f => f.path === shown.path), lines: splitDiff(t.diff ?? "").filter(f => f.path === shown.path).flatMap(f => f.lines) }));
   });
   let asked = 0; // the file's text asked last: an earlier answer is dropped
   $effect(() => { shown?.path; shown?.repo; version = -1; at = null; asked++; });
@@ -99,7 +104,7 @@
     <div class="pad"><div class="sk" style="height:14px;width:70%"></div></div>
   {:else if err}
     <div class="empty">{err}</div>
-  {:else if !files.length}
+  {:else if !files.length && !stats.size}
     <div class="empty">{t("No changes in this session yet.")}</div>
   {:else}
     <div class="split">
@@ -138,7 +143,8 @@
             {#if at}
               {#if at.err}<div class="empty">{at.err}</div>{:else}<pre class="whole selectable">{at.text}</pre>{/if}
             {:else}<DiffLines lines={v.lines} />{/if}
-          {:else}<DiffLines lines={shown.lines} />{/if}
+          {:else if shown.lines.length}<DiffLines lines={shown.lines} />
+          {:else}<div class="empty">{t("No diff is kept for this file (binary, or an edit too long): see the file itself.")}</div>{/if}
         {/if}
       </div>
     </div>

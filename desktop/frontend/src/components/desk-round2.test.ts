@@ -97,6 +97,39 @@ const repo = (r: string, path: string) =>
      repos: [{ repo: r, before: "a", after: "b", files: [{ path, status: "M", added: 1, removed: 0 }], diff: `diff --git a/${path} b/${path}\n@@ -1 +1 @@\n+hi` }] });
 const listed = () => [...document.querySelectorAll("button.f")].map(b => b.getAttribute("title"));
 
+describe("Changes outside git: what the agent's edits reported", () => {
+  const sec = (path: string, a: string, b: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@\n-${a}\n+${b}\n`;
+  it("a file edited twice in one turn: its version shows both edits", async () => {
+    const app = await setup();
+    const files = [{ path: "a.txt", status: "M", added: 2, removed: 2 }];
+    const diff = sec("a.txt", "first", "second") + sec("a.txt", "second", "third");
+    fake.Node.Changes.mockResolvedValue({ turns: [{ msg: "m1", agent: "agent:claude", start: "", at: "2026-11-11T10:00:00Z", repo: "/d", before: "", after: "", files, diff }], repos: [{ repo: "/d", before: "", after: "", files, diff }] });
+    app.thread = "T"; app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    const v1 = [...document.querySelectorAll("button.vb")].find(b => b.textContent?.trim().startsWith("v1")) as HTMLButtonElement;
+    v1.click();
+    await settle();
+    const text = document.querySelector(".view")!.textContent!;
+    expect(text).toContain("second");
+    expect(text).toContain("third");
+    expect(text).not.toContain("File at this version"); // no tree to read it from
+  });
+  it("a file listed without a diff (an edit too long to keep) is shown, saying so", async () => {
+    const app = await setup();
+    const files = [{ path: "big.bin", status: "M", added: 9000, removed: 1 }];
+    fake.Node.Changes.mockResolvedValue({ turns: [{ msg: "m1", agent: "agent:claude", start: "", at: "", repo: "/d", before: "", after: "", files, diff: "", cut: true }], repos: [{ repo: "/d", before: "", after: "", files, diff: "", cut: true }] });
+    app.thread = "T"; app.msgs = [m("m1", 0)];
+    const Changes = (await import("./Changes.svelte")).default;
+    mounted.push(mount(Changes, { target: document.body }));
+    await settle();
+    expect(listed()).toEqual(["big.bin"]);
+    expect(document.body.textContent).toContain("No diff is kept for this file");
+    expect(document.body.textContent).not.toContain("No changes in this session yet.");
+  });
+});
+
 describe("Changes is the open chat's, all of it (findings 6, 7)", () => {
   it("asks every message of the person in the chat, not only the first, and shows them together", async () => {
     const app = await setup();

@@ -183,6 +183,16 @@ message's turns and each repository's diff from its first snapshot to its last; 
 (`tree=1`) adds the messages its agent sent while working (subagents) on this node. Turns that run
 at once in one repository each see the other's changes.
 
+Outside a repository (the agent's directory is not one, or it edited a file elsewhere) a turn's
+changes are the edits its completed tool calls reported (ACP diff content): the files, their lines
+and a diff of each edit, secrets masked. Such a record has the turn's directory as `repo` and empty
+tree ids (`before`, `after`: there is no snapshot, so no file at a version), and a message's whole
+is its turns' diffs one after another, per directory. Only what the agent reports as an edit is
+seen: what a command changed outside a repository is not. An edit's texts are kept up to 512 KiB a
+call and 4 MiB a turn (500 edits a call, 2000 a turn); past that the file and its lines are still
+listed, without its diff, and the record says `cut`. Inside a repository the snapshots alone tell
+what changed, also when one could not be taken.
+
 **A terminal.** `acpost term` (and `POST /v1/terminals`) starts the user's login shell in a
 pseudo-terminal on the node's machine, in an agent's working directory or another; for the
 node's user only (not its agents, not tokens), at most 32 at once. Its output streams as

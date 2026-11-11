@@ -61,8 +61,8 @@ type toolTrack struct {
 	term     strings.Builder // its terminal's output so far (the tail kept)
 	hadInput bool
 	ended    bool
-	full     []fileEdit // its edits whole, for what the turn changed (changes.go); taken when it completes
-	taken    bool
+	full     []fileEdit // its edits whole, as last sent and not yet taken for what the turn changed (changes.go)
+	fullMore bool       // more edits than kept
 }
 
 // fileEdit is an edit as the agent reported it: the file and its text before and after, whole
@@ -78,34 +78,55 @@ type fileEdit struct {
 const (
 	editKeepMax  = 512 << 10 // the text of one call's edits kept whole
 	editsKeepMax = 4 << 20   // and of a turn's
-	editsMax     = 2000      // the edits of a turn kept
+	callEditsMax = 500       // the edits of one call kept (more: said as cut)
+	editsMax     = 2000      // and of a turn
 )
 
-// take moves a completed call's edits to the turn's (once: a failed or cancelled call edited
-// nothing). Called with t.mu held.
+// take makes a completed call's edits the turn's: what the call says it edited now, in the place
+// of what it said before (an agent may send the diff after the status: the last word counts). A
+// failed or cancelled call edited nothing. Called with t.mu held.
 func (t *acpTurn) take(tr *toolTrack) {
-	if tr.taken || tr.Status != string(acp.ToolCallStatusCompleted) {
+	if tr.Status != string(acp.ToolCallStatusCompleted) || tr.full == nil {
 		return
 	}
-	tr.taken = true
+	if t.edited == nil {
+		t.edited = map[string][]fileEdit{}
+	}
+	was, had := t.edited[tr.ID]
+	for _, e := range was {
+		t.editedBytes -= len(e.old) + len(e.new)
+	}
+	t.editedCount -= len(was)
+	kept := make([]fileEdit, 0, len(tr.full))
 	for _, e := range tr.full {
-		if len(t.edited) >= editsMax {
+		if t.editedCount+len(kept) >= editsMax {
+			t.editedMore = true
 			break
 		}
 		if t.editedBytes+len(e.old)+len(e.new) > editsKeepMax {
 			e.old, e.new, e.cut = "", "", true
 		}
 		t.editedBytes += len(e.old) + len(e.new)
-		t.edited = append(t.edited, e)
+		kept = append(kept, e)
 	}
-	tr.full = nil
+	t.editedCount += len(kept)
+	t.editedMore = t.editedMore || tr.fullMore
+	t.edited[tr.ID] = kept
+	if !had {
+		t.editedOrder = append(t.editedOrder, tr.ID)
+	}
+	tr.full = nil // taken: the same content is not taken twice
 }
 
-// edits is what the turn's completed tool calls edited, in order.
-func (t *acpTurn) edits() []fileEdit {
+// edits is what the turn's completed tool calls edited, in the order the calls completed; more
+// says some were not kept (past the turn's or a call's count).
+func (t *acpTurn) edits() (out []fileEdit, more bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return append([]fileEdit(nil), t.edited...)
+	for _, id := range t.editedOrder {
+		out = append(out, t.edited[id]...)
+	}
+	return out, t.editedMore
 }
 
 // maxTracked bounds the calls of a turn tracked at once (a call is let go when it ends).
@@ -218,6 +239,7 @@ func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp
 	var text strings.Builder
 	var edits []toolEdit
 	var full []fileEdit
+	fullMore := false
 	room, keep := toolDiffMax, editKeepMax
 	for _, c := range content {
 		switch {
@@ -225,11 +247,27 @@ func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp
 			if t := c.Content.Content.Text.Text; t != tr.Description {
 				text.WriteString(t)
 			}
-		case c.Diff != nil && len(edits) < toolEditsMax:
-			ed, used := editOf(c.Diff, room)
-			room -= used
-			edits = append(edits, ed)
-			fe := fileEdit{path: c.Diff.Path, new: c.Diff.NewText, created: c.Diff.OldText == nil, added: ed.Added, removed: ed.Removed}
+		case c.Diff != nil:
+			// The event shows the first of them, cut to its room; what the turn changed takes them
+			// all, within its own bounds.
+			added, removed := 0, 0
+			if len(edits) < toolEditsMax {
+				ed, used := editOf(c.Diff, room)
+				room -= used
+				edits = append(edits, ed)
+				added, removed = ed.Added, ed.Removed
+			} else {
+				old := ""
+				if c.Diff.OldText != nil {
+					old = *c.Diff.OldText
+				}
+				removed, added = lineChange(old, c.Diff.NewText)
+			}
+			if len(full) >= callEditsMax {
+				fullMore = true
+				continue
+			}
+			fe := fileEdit{path: c.Diff.Path, new: c.Diff.NewText, created: c.Diff.OldText == nil, added: added, removed: removed}
 			if c.Diff.OldText != nil {
 				fe.old = *c.Diff.OldText
 			}
@@ -247,9 +285,9 @@ func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp
 	}
 	if len(edits) > 0 || (content != nil && len(content) == 0) {
 		tr.Edits = edits
-		if !tr.taken {
-			tr.full = full
-		}
+	}
+	if len(full) > 0 {
+		tr.full, tr.fullMore = full, fullMore
 	}
 	if output != nil { // sent, even empty: the raw output as it is now
 		s, code := outputOf(output)

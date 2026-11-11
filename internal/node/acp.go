@@ -997,7 +997,8 @@ func (s *acpSlot) handle(m store.Message) {
 	timedOut := pastDeadline()
 	turnCancel()
 	p.cl.end(sid)
-	n.recordChanges(m, a.addr+"@"+n.Name(), before, dir, started, turn.edits()) // after the turn's deadline was read
+	edits, moreEdits := turn.edits()
+	n.recordChanges(m, a.addr+"@"+n.Name(), before, dir, started, edits, moreEdits) // after the turn's deadline was read
 	reply := turn.reply(a.cfg.Reply)
 
 	if err != nil || timedOut {
@@ -1078,8 +1079,11 @@ type acpTurn struct {
 	dropped            int
 	usage              *acp.SessionUsageUpdate // the agent's last word on the session's context and cost
 	tools              map[string]*toolTrack   // the turn's tool calls as their updates made them
-	edited             []fileEdit              // what its completed calls edited, as the agent reported it
+	edited             map[string][]fileEdit   // what its completed calls edited, as the agent reported it, by call
+	editedOrder        []string                // the calls, in the order they completed
 	editedBytes        int
+	editedCount        int
+	editedMore         bool            // edits not kept (too many)
 	ctx                context.Context // the turn's: ended by its timeout or its message's cancel
 	lease              string          // the attempt's: its events are taken under it ("" outside a message's turn)
 	history            bool            // a session's history replayed (session/load): its user's messages too
