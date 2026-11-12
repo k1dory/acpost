@@ -17,6 +17,7 @@ import (
 
 	"github.com/k1dory/acpost/desktop/preview"
 	"github.com/k1dory/acpost/internal/config"
+	"github.com/k1dory/acpost/internal/plat"
 )
 
 // Modules: views the person adds to the app beside "Agents" and "IDE" — a web page (a tracker, a
@@ -39,6 +40,31 @@ const (
 )
 
 var modulesMu sync.Mutex // one reader or writer of the file at a time; the panes' calls in order
+
+// lockModules takes the list for a change, in this app and across the apps of this user that
+// share it (the installed one and a build beside it): each reads what the other wrote, none
+// writes over it. The lock is a file of its own beside the list (the list is replaced whole).
+func lockModules() (unlock func(), err error) {
+	modulesMu.Lock()
+	path := modulesPath() + ".lock"
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		modulesMu.Unlock()
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err == nil {
+		if err = plat.Lock(f, true); err != nil {
+			f.Close()
+		}
+	}
+	if err != nil {
+		modulesMu.Unlock()
+		return nil, err
+	}
+	return func() { _ = plat.Unlock(f); f.Close(); modulesMu.Unlock() }, nil
+}
+
+var moduleEvents sync.Once
 
 // modulesPath is the file (a variable: tests keep theirs).
 var modulesPath = func() string { return filepath.Join(filepath.Dir(config.DefaultPath()), "modules.json") }
@@ -112,8 +138,11 @@ func (n *Node) PutModule(m Module) (Module, error) {
 	if err != nil {
 		return m, err
 	}
-	modulesMu.Lock()
-	defer modulesMu.Unlock()
+	unlock, err := lockModules()
+	if err != nil {
+		return m, err
+	}
+	defer unlock()
 	ms, err := readModules()
 	if err != nil {
 		return m, err
@@ -149,8 +178,11 @@ func (n *Node) PutModule(m Module) (Module, error) {
 
 // DeleteModule removes a module, and its pane with its page.
 func (n *Node) DeleteModule(id string) error {
-	modulesMu.Lock()
-	defer modulesMu.Unlock()
+	unlock, err := lockModules()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	ms, err := readModules()
 	if err != nil {
 		return err
@@ -177,6 +209,10 @@ var (
 		if n.win == nil {
 			return errPreview
 		}
+		// What becomes of its page (loaded, or not and why) is told to the interface.
+		moduleEvents.Do(func() {
+			preview.OnModuleEvent(func(e preview.ModuleEvent) { n.app.Event.Emit("module:event", e) })
+		})
 		return preview.ModuleShow(n.win.NativeWindow(), m.ID, m.URL, x, y, w, h, dark)
 	}
 	forgetModule = preview.ModuleForget

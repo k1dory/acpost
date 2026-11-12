@@ -119,9 +119,20 @@ class App {
    * no right panel. */
   get beside(): boolean { return this.view === "ide" || this.view.startsWith("mod:"); }
   /** The section Settings opens at next ("": its first). */
-  settingsAt = "";
+  settingsAt = $state("");
+  /** Why a module's page did not load (by module), until one does. */
+  moduleErr = $state<Record<string, string>>({});
+  noteModule(e: { id: string; kind: string; message?: string }) {
+    if (!e?.id) return;
+    const { [e.id]: _was, ...rest } = this.moduleErr;
+    this.moduleErr = e.kind === "load" ? { ...rest, [e.id]: e.message || t("The page did not load") } : rest;
+  }
+  /** The list as the app keeps it. Not read (a file that does not parse, no answer): the list
+   * shown stays, and why is said; a module is taken as removed only by a list that was read. */
   async loadModules() {
-    try { this.modules = ((await Node.Modules()) ?? []) as any; } catch { this.modules = []; }
+    let got: Module[];
+    try { got = ((await Node.Modules()) ?? []) as any; } catch (e) { this.error = errText(e); return; }
+    this.modules = got;
     if (this.view.startsWith("mod:") && !this.module) this.view = "chat"; // the one shown was removed
   }
   /** In the IDE: a file the agent just edited is shown there, as a diff (kept between launches). */

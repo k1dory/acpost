@@ -227,6 +227,34 @@ func goNavigation(s *C.char) {
 	}
 }
 
+// ModuleEvent is what became of a module's page: Kind "nav" (a page loaded) or "load" (it did
+// not: Message says why).
+type ModuleEvent struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Message string `json:"message,omitempty"`
+}
+
+var moduleHandler func(ModuleEvent)
+
+// OnModuleEvent sets what is told of each (called off the main thread).
+func OnModuleEvent(f func(ModuleEvent)) {
+	mu.Lock()
+	moduleHandler = f
+	mu.Unlock()
+}
+
+//export goModuleEvent
+func goModuleEvent(id, kind, message *C.char) {
+	e := ModuleEvent{ID: C.GoString(id), Kind: C.GoString(kind), Message: C.GoString(message)}
+	mu.Lock()
+	f := moduleHandler
+	mu.Unlock()
+	if f != nil {
+		go f(e) // never the main thread's wait
+	}
+}
+
 //export goPreviewEvent
 func goPreviewEvent(s *C.char) {
 	var e Event

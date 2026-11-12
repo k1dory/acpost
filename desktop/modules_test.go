@@ -3,9 +3,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -98,5 +101,38 @@ func TestModuleShowOpensTheKeptAddress(t *testing.T) {
 	}
 	if err := n.ModuleShow("mod_none", 0, 0, 10, 10, true); err == nil {
 		t.Fatal("a module that is not there was shown")
+	}
+}
+
+// Two apps add modules to the same list at once (the installed one and a build beside it): every
+// one of them is kept, none written over.
+func TestModulesOfTwoAppsAreAllKept(t *testing.T) {
+	if path := os.Getenv("ACPOST_MODULES_ADD"); path != "" { // the other app
+		modulesPath = func() string { return path }
+		n := &Node{}
+		for i := 0; i < 8; i++ {
+			if _, err := n.PutModule(Module{Name: fmt.Sprintf("%s-%d", os.Getenv("ACPOST_MODULES_AS"), i), URL: "https://a.example"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
+	}
+	path := modulesIn(t)
+	var wg sync.WaitGroup
+	for _, as := range []string{"one", "two", "three"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cmd := exec.Command(os.Args[0], "-test.run", "^TestModulesOfTwoAppsAreAllKept$")
+			cmd.Env = append(os.Environ(), "ACPOST_MODULES_ADD="+path, "ACPOST_MODULES_AS="+as)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("%v\n%s", err, out)
+			}
+		}()
+	}
+	wg.Wait()
+	ms, err := (&Node{}).Modules()
+	if err != nil || len(ms) != 24 {
+		t.Fatalf("%d modules kept of 24: %v", len(ms), err)
 	}
 }

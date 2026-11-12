@@ -288,6 +288,79 @@ void apIDEReload(void) { dispatch_async(dispatch_get_main_queue(), ^{ if (apIDE)
 static NSMutableDictionary<NSString *, WKWebView *> *apMods = nil;
 static NSMutableDictionary<NSString *, NSString *> *apModURL = nil; // the address each was opened at
 
+static NSString *apModOf(WKWebView *w) {
+	for (NSString *k in apMods) if (apMods[k] == w) return k;
+	return nil;
+}
+
+// What a page of a browser has and a bare web view has not: its dialogs (alert, confirm, prompt),
+// choosing files to upload, and a link meant for a new window (opened in the pane itself). And
+// what became of a load, told to the interface (a page that did not load is a blank pane).
+@interface APModule : NSObject <WKNavigationDelegate, WKUIDelegate>
+@end
+
+static void apModTell(WKWebView *w, NSString *kind, NSString *message) {
+	NSString *mid = apModOf(w);
+	if (!mid) return;
+	if (message.length > apMaxField) message = [message substringToIndex:apMaxField];
+	goModuleEvent((char *)[mid UTF8String], (char *)[kind UTF8String], (char *)[(message ?: @"") UTF8String]);
+}
+
+@implementation APModule
+- (void)webView:(WKWebView *)w didFinishNavigation:(WKNavigation *)n { apModTell(w, @"nav", @""); }
+- (void)webView:(WKWebView *)w didFailProvisionalNavigation:(WKNavigation *)n withError:(NSError *)e {
+	if (e.code == NSURLErrorCancelled) return; // another load took its place
+	apModTell(w, @"load", e.localizedDescription);
+}
+- (void)webView:(WKWebView *)w didFailNavigation:(WKNavigation *)n withError:(NSError *)e {
+	if (e.code == NSURLErrorCancelled) return;
+	apModTell(w, @"load", e.localizedDescription);
+}
+- (WKWebView *)webView:(WKWebView *)w createWebViewWithConfiguration:(WKWebViewConfiguration *)c forNavigationAction:(WKNavigationAction *)a windowFeatures:(WKWindowFeatures *)f {
+	NSString *s = a.request.URL.scheme.lowercaseString;
+	if ([s isEqualToString:@"http"] || [s isEqualToString:@"https"]) [w loadRequest:a.request];
+	return nil;
+}
+- (void)webView:(WKWebView *)w runJavaScriptAlertPanelWithMessage:(NSString *)m initiatedByFrame:(WKFrameInfo *)f completionHandler:(void (^)(void))done {
+	NSAlert *al = [NSAlert new];
+	al.messageText = w.URL.host ?: @"";
+	al.informativeText = m ?: @"";
+	if (w.window) [al beginSheetModalForWindow:w.window completionHandler:^(NSModalResponse r) { done(); }];
+	else done();
+}
+- (void)webView:(WKWebView *)w runJavaScriptConfirmPanelWithMessage:(NSString *)m initiatedByFrame:(WKFrameInfo *)f completionHandler:(void (^)(BOOL))done {
+	NSAlert *al = [NSAlert new];
+	al.messageText = w.URL.host ?: @"";
+	al.informativeText = m ?: @"";
+	[al addButtonWithTitle:@"OK"];
+	[al addButtonWithTitle:@"Cancel"];
+	if (w.window) [al beginSheetModalForWindow:w.window completionHandler:^(NSModalResponse r) { done(r == NSAlertFirstButtonReturn); }];
+	else done(NO);
+}
+- (void)webView:(WKWebView *)w runJavaScriptTextInputPanelWithPrompt:(NSString *)m defaultText:(NSString *)d initiatedByFrame:(WKFrameInfo *)f completionHandler:(void (^)(NSString *))done {
+	NSAlert *al = [NSAlert new];
+	al.messageText = w.URL.host ?: @"";
+	al.informativeText = m ?: @"";
+	NSTextField *tf = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+	tf.stringValue = d ?: @"";
+	al.accessoryView = tf;
+	[al addButtonWithTitle:@"OK"];
+	[al addButtonWithTitle:@"Cancel"];
+	if (w.window) [al beginSheetModalForWindow:w.window completionHandler:^(NSModalResponse r) { done(r == NSAlertFirstButtonReturn ? tf.stringValue : nil); }];
+	else done(nil);
+}
+- (void)webView:(WKWebView *)w runOpenPanelWithParameters:(WKOpenPanelParameters *)p initiatedByFrame:(WKFrameInfo *)f completionHandler:(void (^)(NSArray<NSURL *> *))done {
+	NSOpenPanel *op = [NSOpenPanel openPanel];
+	op.allowsMultipleSelection = p.allowsMultipleSelection;
+	op.canChooseDirectories = p.allowsDirectories;
+	op.canChooseFiles = YES;
+	if (w.window) [op beginSheetModalForWindow:w.window completionHandler:^(NSModalResponse r) { done(r == NSModalResponseOK ? op.URLs : nil); }];
+	else done(nil);
+}
+@end
+
+static APModule *apModDelegate = nil;
+
 void apModShow(void *nswindow, const char *cid, const char *curl, double x, double y, double w, double h, int dark) {
 	NSString *mid = [NSString stringWithUTF8String:cid], *u = [NSString stringWithUTF8String:curl];
 	dispatch_async(dispatch_get_main_queue(), ^{
@@ -301,6 +374,9 @@ void apModShow(void *nswindow, const char *cid, const char *curl, double x, doub
 			v = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:[WKWebViewConfiguration new]];
 			if ([v respondsToSelector:@selector(setInspectable:)]) [v setValue:@YES forKey:@"inspectable"];
 			v.allowsBackForwardNavigationGestures = YES;
+			if (!apModDelegate) apModDelegate = [APModule new];
+			v.navigationDelegate = apModDelegate;
+			v.UIDelegate = apModDelegate;
 			apMods[mid] = v;
 			made = YES;
 		}

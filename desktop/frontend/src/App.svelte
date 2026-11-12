@@ -28,11 +28,12 @@
     document.documentElement.lang = i18n.lang;
     app.connect();
     const offPreview = on("preview:event", e => app.notePreview(e));
+    const offModule = on("module:event", e => app.noteModule(e));
     const offNav = on("app:navigate", (u: string) => route(u));
     Node.GuardNavigation().catch(() => {});
     const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadChats(); } }, 20000);
     const asking = setInterval(() => { if (app.conn?.ok) app.watchAsking(); }, 8000);
-    return () => { clearInterval(poll); clearInterval(asking); offPreview(); offNav(); };
+    return () => { clearInterval(poll); clearInterval(asking); offPreview(); offModule(); offNav(); };
   });
 
   // Links never take the app's own page away. A page of this Mac (localhost, 127.0.0.1) opens in the

@@ -65,6 +65,12 @@
     <button class="btn ghost icon nodrag" onclick={() => pane.reload(m.id).catch(() => {})} title={t("Back to the module's address")} aria-label={t("Back to the module's address")}><Icon name="refresh" size={headerIcon} /></button>
   </div>
   {#if err}<div class="err selectable">{err}</div>{/if}
+  <!-- The page did not load (the service is down, the name does not resolve, its certificate is
+       refused): said here, over nothing (the pane is blank), with a way to try again. -->
+  {#if app.moduleErr[m.id]}
+    <div class="err selectable"><span>{app.moduleErr[m.id]}</span>
+      <button class="btn sm nodrag" onclick={() => pane.reload(m.id).catch(() => {})}>{t("Try again")}</button></div>
+  {/if}
   <div class="box" bind:this={box}></div>
 </section>
 
@@ -75,5 +81,5 @@
   .sp { flex: 1; }
   .ask { color: var(--warn); font-weight: 600; }
   .box { flex: 1; min-height: 0; }
-  .err { margin: 8px; padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }
+  .err { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin: 8px; padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }
 </style>

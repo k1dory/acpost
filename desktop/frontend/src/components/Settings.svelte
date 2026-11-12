@@ -13,8 +13,8 @@
 
   type Section = "git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "cloud" | "modules" | "general";
   // Opened at a section when asked for one (the view switcher's "Add a module…"), once.
-  let section = $state<Section>((app.settingsAt as Section) || "git");
-  app.settingsAt = "";
+  let section = $state<Section>("git");
+  $effect(() => { if (app.settingsAt) { section = app.settingsAt as Section; app.settingsAt = ""; err = ""; } });
   // Modules: pages the person adds as views of the app, beside the chat.
   let mod = $state<{ id: string; name: string; url: string } | null>(null);
   async function saveModule() {
