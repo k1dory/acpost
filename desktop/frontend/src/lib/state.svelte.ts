@@ -650,7 +650,10 @@ class App {
     const at = this.sendAt(d), lim = at.limits, owned = sendFiles(d, lim);
     // "@codex look at this": to that agent of the chat, without the name. The draft stays as it
     // was typed until the node has the message: sent again, it is the same message to the same agent.
-    const named = at.thread ? this.mention(sent) : null;
+    // (A message already sent whole from where there was no one else to name — a session that
+    // became this thread, its answer lost — is that message again, as it was first made.)
+    const again = !!d.sending?.moved && d.sending.task?.body === sent.trim();
+    const named = at.thread && !again ? this.mention(sent) : null;
     if (named) { at.target = named.to; at.named = true; at.settings[named.to] = this.settingsFor(named.to); }
     // Sent to the agent shown: that is who this thread's messages go to until the person chooses
     // another (opened again with this one unanswered, it is sent again to the same agent).

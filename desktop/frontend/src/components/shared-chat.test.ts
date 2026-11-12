@@ -243,6 +243,30 @@ describe("a chat shared by several agents", () => {
     });
   }
 
+  it("a session's message that starts with @name, its answer lost, is sent again as it was: to the session's agent, whole, with its key", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = ["claude", "codex"].map(name => ({ name, address: "agent:" + name, driver: "acp", queued: 0, running: 0 }));
+    app.conn = { ok: true };
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T", kind: "thread" as const, thread: "T", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [S] });
+    await app.loadChats();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S as any);
+    app.draftOf().text = "@codex check the tests"; // no one else to name in a session: the text is the message
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout"));
+    expect(await app.submit(app.draftOf())).toBe(false);
+    fake.Node.Chats.mockResolvedValue({ items: [T] });
+    await app.loadChats();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "agent:claude")]);
+    await app.open(T as any);
+    expect(await app.submit(app.draftOf())).toBe(true);
+    const [first, again] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(first).toMatchObject({ to: "agent:claude", session: "s1", body: "@codex check the tests" });
+    expect(again).toEqual(first);
+  });
+
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
     let app = await setup([msg("m1", "agent:claude")], ["claude"]);
     expect(chip()).toBeNull();
