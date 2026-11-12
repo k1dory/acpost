@@ -7,14 +7,19 @@
   import { mount, unmount, untrack } from "svelte";
   import { parseUi, keepFor, fenceClosed } from "../lib/genui";
   import GenUi from "./genui/GenUi.svelte";
+  import { wikiMarkdown, markdownOptions, type WikiResolve } from "../lib/wikigraph";
   // scope: what names the place of this text (a message, a turn of a history), for what a person did
   // to its components to be kept when it is shown again; without one it is kept while it is shown.
-  let { text, scope = "" }: { text: string; scope?: string } = $props();
+  // wikiLink: the text is a wiki's, its [[links]] resolved by it (the wiki's reader and drawer).
+  let { text, scope = "", wikiLink }: { text: string; scope?: string; wikiLink?: WikiResolve } = $props();
 
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   // A code block: its language (the fence's, else guessed from the code), highlighted, with a copy
   // button in its header.
-  const md = new Marked({ gfm: true, breaks: true });
+  const md = new Marked(markdownOptions);
+  // The resolver read as it is when the text is rendered (a prop: it may change).
+  // Whether it is a wiki's is fixed when the component is made (the chat's Markdown has no [[links]]).
+  if (untrack(() => wikiLink)) md.use(wikiMarkdown(target => wikiLink?.(target) ?? null));
   // A file path written as code (`src/app.ts`, `/tmp/report.html`): clickable, opens as an artifact.
   const filePath = /^(~\/|\/|\.{1,2}\/)?[\w@.+-]+(\/[\w@.+-]+)*\.[A-Za-z0-9]{1,8}$/;
   md.use({
@@ -59,7 +64,10 @@
     },
   });
   // No forms or fields, nothing loaded from the web as it is shown (lib/sanitize.ts).
-  const html = $derived(cleanHtml(md.parse(text ?? "", { async: false }) as string));
+  const html = $derived.by(() => {
+    wikiLink; // a new resolver (the set changed) renders the links again
+    return cleanHtml(md.parse(text ?? "", { async: false }) as string);
+  });
 
   let box: HTMLDivElement;
   let seq = 0;
