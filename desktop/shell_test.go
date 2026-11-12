@@ -146,3 +146,20 @@ func TestShellStopBeforeTheRun(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+
+// The app on a node of another machine runs nothing: the chat's directory is that machine's.
+func TestShellRefusedOnAnotherMachinesNode(t *testing.T) {
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "ran")
+	t.Setenv("ACPOST_NODE", "https://node.example:7443")
+	if r, err := (&Node{}).Shell("", "touch "+mark, dir); err == nil {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("the command ran")
+	}
+	t.Setenv("ACPOST_NODE", "unix://"+filepath.Join(dir, "acpost.sock")) // another socket of this Mac
+	if r, err := (&Node{}).Shell("", "echo ok", dir); err != nil || !strings.Contains(r.Output, "ok") {
+		t.Fatalf("%+v %v", r, err)
+	}
+}

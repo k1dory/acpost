@@ -262,4 +262,28 @@ describe("! in the composer", () => {
     expect(fake.Node.Shell).toHaveBeenCalledTimes(1);
     expect(fake.Node.Shell.mock.calls[0][1]).toBe("echo 日本");
   });
+
+  it("runs the command to the letter; where the chat's files are not this Mac's it runs nothing and keeps the draft", async () => {
+    const app = await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    type("!printf '<%s>' foo\\ ");
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0][1]).toBe("printf '<%s>' foo\\ ");
+    fake.Node.Shell.mockClear();
+    for (const set of [
+      () => { app.conn = { ok: true, url: "https://node.example:7443" } as any; },
+      () => { app.conn = { ok: true, url: "unix:///x/acpost.sock" } as any; app.target = "agent:claude@far"; },
+      () => { app.target = "agent:sb_1"; },
+    ]) {
+      set();
+      type("!rm -rf build");
+      enter();
+      await flush(); svelte.flushSync();
+      expect(fake.Node.Shell).not.toHaveBeenCalled();
+      expect(textarea().value).toBe("!rm -rf build");
+      expect(app.error).toContain("this Mac");
+      app.error = "";
+    }
+  });
 });

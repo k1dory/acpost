@@ -92,8 +92,12 @@
   const bang = $derived(d.typed !== null && d.text === d.typed && d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
   async function send() {
     if (bang) {
-      const cmd = d.text.slice(1).trim();
-      if (!cmd) return;
+      // As typed, to the letter (a space at its end may be an escaped one); nothing but spaces is no command.
+      const cmd = d.text.slice(1);
+      if (!cmd.trim()) return;
+      // Not where the chat's files are not this Mac's: said, the draft kept.
+      const no = app.shellRefused();
+      if (no) { app.error = no; return; }
       d.text = "";
       ta?.focus();
       app.runShell(cmd);

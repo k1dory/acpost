@@ -169,6 +169,17 @@ class App {
   private shellOwner = new Map<string, ComposerDraft>();
   /** (By the key its draft has now: a session whose draft moved to its thread shows that thread's.) */
   shellsHere(): ShellRun[] { const k = this.draftOf().key; return this.shells.filter(s => s.chat === k); }
+  /** Why a command cannot be run from this chat ("" when it can): it runs on this Mac, in the
+   * chat's directory — not for a chat whose files are elsewhere (a cloud sandbox's, an agent of
+   * another node, the app on a node of another machine), where the same path here is another
+   * directory, if any. */
+  shellRefused(): string {
+    const to = this.target;
+    if (this.chat?.kind === "cloud" || to.startsWith("agent:sb_")) return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
+    if ((this.chat || this.thread) && to.includes("@")) return t("This chat's agent is on another node: a command would run on this Mac");
+    if (this.conn?.url && !this.conn.url.startsWith("unix://")) return t("The app is on another node: a command would run on this Mac");
+    return "";
+  }
   /** Runs the person's command in the chat's directory; its output is shown in the chat. */
   async runShell(cmd: string) {
     const owner = this.draftOf();

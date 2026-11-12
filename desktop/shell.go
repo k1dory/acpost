@@ -78,6 +78,11 @@ func (c *capped) Write(p []byte) (int, error) {
 // Shell runs command in cwd (the home directory when there is none) and gives what it printed
 // and how it ended. id names the run for ShellStop.
 func (n *Node) Shell(id, command, cwd string) (ShellResult, error) {
+	// On a node of another machine (ACPOST_NODE, not a socket of this Mac) the chats' directories
+	// are that machine's: a path of theirs here is another directory, if any. Nothing is run.
+	if u := os.Getenv("ACPOST_NODE"); u != "" && !strings.HasPrefix(u, "unix://") {
+		return ShellResult{}, errors.New("the app is on another node (ACPOST_NODE): a command here would run on this Mac, not where the chat's files are")
+	}
 	return runShell(id, command, cwd, shellTimeout)
 }
 
