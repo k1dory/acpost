@@ -54,27 +54,58 @@ const linkRe = /\[\[([^[\]|\n]{1,200})(?:\|([^[\]\n]{0,200}))?\]\]/g;
  */
 export function codeRanges(text: string): [number, number][] {
   const out: [number, number][] = [];
-  let at = 0;
-  const mark = (raw: string) => {
-    const i = text.indexOf(raw, at);
-    if (i >= 0) { out.push([i, i + raw.length]); at = i + raw.length; return; }
-    // Code inside a quote or a list item comes without the line's marker: found line by line.
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      const j = text.indexOf(line, at);
-      if (j >= 0) { out.push([j, j + line.length]); at = j + line.length; }
-    }
-  };
+  let tokens: unknown[];
+  try { tokens = lexer.lex(text); } catch { return out; } // text the lexer cannot read: no code found in it
+  // Each top-level token's raw is the next stretch of the text (they follow one another); a code
+  // token inside one is looked for within that stretch only, after the code found before it there.
+  let start = 0;
+  for (const top of tokens as { raw?: string }[]) {
+    const raw = top.raw ?? "";
+    const at = text.startsWith(raw, start) ? start : text.indexOf(raw, start);
+    if (at < 0) continue;
+    const span = { at, end: at + raw.length };
+    walk(top, span);
+    start = span.end;
+  }
+  return out;
+
   // Tokens in the order they are in the text (blocks, then their inline tokens, list items, cells).
-  const walk = (v: unknown) => {
-    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+  function walk(v: unknown, span: { at: number; end: number }) {
+    if (Array.isArray(v)) { for (const x of v) walk(x, span); return; }
     if (!v || typeof v !== "object") return;
     const tok = v as Record<string, unknown>;
-    if ((tok.type === "code" || tok.type === "codespan") && typeof tok.raw === "string") { mark(tok.raw); return; }
-    for (const k of Object.keys(tok)) if (k !== "raw" && typeof tok[k] === "object") walk(tok[k]);
-  };
-  try { walk(lexer.lex(text)); } catch { /* text the lexer cannot read: no code found in it */ }
-  return out;
+    if ((tok.type === "code" || tok.type === "codespan") && typeof tok.raw === "string") { mark(tok.raw, span); return; }
+    for (const k of Object.keys(tok)) if (k !== "raw" && typeof tok[k] === "object") walk(tok[k], span);
+  }
+  function mark(raw: string, span: { at: number; end: number }) {
+    const i = text.indexOf(raw, span.at);
+    if (i >= 0 && i + raw.length <= span.end) { out.push([i, i + raw.length]); span.at = i + raw.length; return; }
+    const r = prefixed(raw.replace(/\n$/, "").split("\n"), span);
+    if (r) { out.push(r); span.at = r[1]; }
+  }
+  // Code in a quote or a list item comes without the lines' markers ("> ", the item's indent): it
+  // is the first run of whole lines of the stretch, from where the search is, each ending with the
+  // code's line in turn.
+  function prefixed(lines: string[], span: { at: number; end: number }): [number, number] | null {
+    const starts: number[] = [];
+    for (let p = text.lastIndexOf("\n", span.at - 1) + 1; p < span.end; ) {
+      starts.push(p);
+      const nl = text.indexOf("\n", p);
+      p = nl < 0 ? text.length : nl + 1;
+    }
+    const lineAt = (k: number) => {
+      const nl = text.indexOf("\n", starts[k]);
+      return text.slice(starts[k], nl < 0 || nl > span.end ? span.end : nl);
+    };
+    for (let k = 0; k + lines.length <= starts.length; k++) {
+      if (!lines.every((l, j) => lineAt(k + j).endsWith(l))) continue;
+      const first = lineAt(k), lastEnd = starts[k + lines.length - 1] + lineAt(k + lines.length - 1).length;
+      const from = Math.max(starts[k] + first.length - lines[0].length, span.at);
+      if (from >= lastEnd && lines.join("")) continue;
+      return [from, lastEnd];
+    }
+    return null;
+  }
 }
 const lexer = { lex: (s: string) => new Lexer({ gfm: true, breaks: true }).lex(s) };
 
