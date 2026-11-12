@@ -87,6 +87,9 @@ type AgentInfo struct {
 	Queued  int    `json:"queued"`
 	Running int    `json:"running"`
 	Process bool   `json:"process,omitempty"` // an acp agent's process is up
+	// Product is the program behind an acp agent: what it said it is when it last started (ACP's
+	// agentInfo), else its command's name (claude-agent-acp, codex-acp, gemini, …).
+	Product string `json:"product,omitempty"`
 }
 
 // AgentOptions is what an ACP agent offers to choose (models, reasoning levels, modes) and its

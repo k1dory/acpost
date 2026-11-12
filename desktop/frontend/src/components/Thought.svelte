@@ -2,14 +2,14 @@
   import { t } from "../lib/i18n.svelte";
   import { dur } from "../lib/format";
   import Icon from "./Icon.svelte";
-  import AgentMark, { brandOf } from "./AgentMark.svelte";
+  import AgentMark, { markOf } from "./AgentMark.svelte";
   let { text, ms, live, agent = "" }: { text: string; ms: number; live: boolean; agent?: string } = $props();
   let open = $state(false);
 </script>
 
 <div class="th">
   <button class="head" onclick={() => (open = !open)}>
-    {#if brandOf(agent)}<AgentMark of={agent} size={14} busy={live} />{:else}<Icon name="brain" size={14} />{/if}
+    {#if markOf(agent)}<AgentMark of={agent} size={14} busy={live} />{:else}<Icon name="brain" size={14} />{/if}
     <span class:live>{live ? t("Thinking…") : ms >= 1000 ? t("Thought for {d}", { d: dur(ms) }) : t("Thought briefly")}</span>
     <span class="chev" class:rot={open}><Icon name="chev" size={12} /></span>
   </button>

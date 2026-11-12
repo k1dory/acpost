@@ -9,6 +9,7 @@
   import PhaseBar from "./PhaseBar.svelte";
   import TraceTurn from "./TraceTurn.svelte";
   import Icon from "./Icon.svelte";
+  import AgentMark from "./AgentMark.svelte";
 
   // Traces: the recent conversations and where their time went; one opened, its turns; a turn
   // opened, its timeline (TraceTurn).
@@ -99,7 +100,7 @@
           <tbody>
             {#each [...turns].reverse() as { msg, trace } (msg.id)}
               <tr class="click" onclick={() => (analytics.turn = msg.id)}>
-                <td class="mono">{who(msg.to).name}{#if trace.running}<span class="chip warn">{t("running")}</span>{:else if msg.state !== "done"}<span class="chip" class:crit={msg.state === "failed"}>{t(msg.state)}</span>{/if}</td>
+                <td class="mono"><span class="am"><AgentMark of={msg.to} size={13} /></span>{who(msg.to).name}{#if trace.running}<span class="chip warn">{t("running")}</span>{:else if msg.state !== "done"}<span class="chip" class:crit={msg.state === "failed"}>{t(msg.state)}</span>{/if}</td>
                 <td class="muted num">{clock(msg.created_at)}</td>
                 <td class="r num">{dur(trace.active) || "—"}</td>
                 <td class="r num">{trace.calls}</td>
@@ -138,6 +139,7 @@
 </section>
 
 <style>
+  .am { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
   .tr { flex: 1; min-width: 0; padding: 0 36px 36px; background: var(--page); }
   header { height: 60px; display: flex; align-items: center; gap: 10px; }
   .sp { flex: 1; }

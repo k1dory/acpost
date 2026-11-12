@@ -4,6 +4,7 @@
   import { tokens, money } from "../lib/format";
   import { latest } from "../lib/latest";
   import { usageTotal, costText } from "../lib/usage";
+  import AgentMark from "./AgentMark.svelte";
   import type { Snippet } from "svelte";
 
   // The title (and the Analytics view's tabs) the view puts in its header.
@@ -52,7 +53,7 @@
           {#each sorted as r (r.key)}
             {@const tok = r.input + r.output + r.cache_read + r.cache_write}
             <tr>
-              <td class="key mono" title={r.key}>{r.key || "—"}</td>
+              <td class="key mono" title={r.key}>{#if by === "agent" && r.key}<span class="am"><AgentMark of={r.key} size={14} /></span>{/if}{r.key || "—"}</td>
               <td class="r num">{r.turns}</td>
               <td class="bar"><span class="b"><span class="i" style="width:{(r.input / maxTok) * 100}%"></span><span class="c" style="width:{(r.cache_read / maxTok) * 100}%"></span><span class="o" style="width:{(r.output / maxTok) * 100}%"></span></span><span class="num muted">{tokens(tok)}</span></td>
               <td class="r num">{(r.cache_ratio * 100).toFixed(0)}%</td>
@@ -81,6 +82,7 @@
   td { padding: 0 14px; height: 44px; border-bottom: 1px solid var(--line-soft); }
   tr:last-child td { border-bottom: 0; }
   .r { text-align: right; }
+  .am { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
   .key { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
   .bar { width: 40%; } .bar .num { font-size: 12px; margin-left: 8px; }
   .b { display: inline-flex; width: calc(100% - 60px); height: 8px; border-radius: 8px; background: var(--track); overflow: hidden; vertical-align: middle; }
