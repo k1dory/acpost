@@ -140,6 +140,11 @@ export class ChangedFile {
     "status": string;
 
     /**
+     * a rename's or copy's source path (rows recorded before it have none)
+     */
+    "from"?: string;
+
+    /**
      * lines; -1 for a binary file
      */
     "added": number;

@@ -91,18 +91,32 @@ func artifactsSQL() string {
 	for _, e := range docExts {
 		ext = append(ext, "lower(path) LIKE '%"+e+"'")
 	}
-	return `WITH ch AS (
+	whole := func(col string) string {
+		return "CASE WHEN " + col + " LIKE '/%' OR " + col + " LIKE '\\%' OR " + col + " LIKE '_:%' THEN " + col + " ELSE repo || '/' || " + col + " END"
+	}
+	return `WITH RECURSIVE ch AS (
 		SELECT tc.id, CAST(j.key AS INTEGER) AS idx, tc.repo, tc.msg, tc.agent, tc.ts,
-			coalesce(json_extract(j.value, '$.path'), '') AS path, coalesce(json_extract(j.value, '$.status'), '') AS status
+			coalesce(json_extract(j.value, '$.path'), '') AS path, coalesce(json_extract(j.value, '$.status'), '') AS status,
+			coalesce(json_extract(j.value, '$.from'), '') AS src
 		FROM turn_changes tc, json_each(tc.files) j
-	), chf AS (
-		SELECT ch.*, CASE WHEN path LIKE '/%' OR path LIKE '\%' OR path LIKE '_:%' THEN path ELSE repo || '/' || path END AS whole
+	), chw AS (
+		SELECT ch.*, ` + whole("path") + ` AS whole, CASE WHEN src = '' THEN '' ELSE ` + whole("src") + ` END AS srcwhole
 		FROM ch WHERE path <> ''
+	), chf AS (
+		SELECT id, idx, repo, msg, agent, ts, path, status, whole FROM chw
+		UNION ALL
+		-- A rename retires its source: from then on the old path is not there.
+		SELECT id, idx, repo, msg, agent, ts, src, 'D', srcwhole FROM chw WHERE status LIKE 'R%' AND srcwhole <> ''
+	), made(whole) AS (
+		-- Paths a turn created, and where a rename or a copy took them (a chain of them too).
+		SELECT whole FROM chw WHERE status = 'A'
+		UNION
+		SELECT r.whole FROM chw r JOIN made m ON r.srcwhole = m.whole WHERE r.status LIKE 'R%' OR r.status LIKE 'C%'
 	), ranked AS (
-		-- A path's whole history first: its latest change is what it is now (a deletion: gone), and
-		-- whether any turn created it.
+		-- A path's whole history first: its latest change is what it is now (a deletion, or a rename
+		-- away: gone), and whether a turn made it.
 		SELECT chf.*, ROW_NUMBER() OVER (PARTITION BY whole ORDER BY ts DESC, id DESC, idx DESC) AS rn,
-			max(status = 'A') OVER (PARTITION BY whole) AS created
+			whole IN (SELECT whole FROM made) AS created
 		FROM chf
 	), docs AS (
 		SELECT * FROM ranked WHERE rn = 1 AND status NOT LIKE 'D%'
