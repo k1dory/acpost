@@ -6,6 +6,7 @@
   import Markdown from "./Markdown.svelte";
   import { pageSandbox } from "../lib/sanitize";
   import { bytes } from "../lib/names";
+  import { dirOf } from "../lib/artifactref";
 
   // One artifact shown as what it is: a page, a picture, a PDF, Markdown, code; or opened in its
   // own app, or saved. The chat's artifacts panel and the library both show theirs with it.
@@ -59,6 +60,10 @@
     return () => URL.revokeObjectURL(url);
   });
 
+  // Where the shown file's relative links lead from: a file of this Mac's own directory (as the
+  // app's side resolved it), else what the reference says (an attachment: its chat's directory).
+  const linkBase = $derived(art?.path ? dirOf(art.path) : cur?.base ?? "");
+
   async function openOutside() {
     if (!art) return;
     try { if (cur?.path) await Node.OpenLocal(cur.path, cur.base ?? ""); else await Node.OpenArtifact(art.name, art.data); } catch (e) { err = errText(e); }
@@ -69,7 +74,7 @@
   }
 </script>
 
-<div class="av" data-artifact-base={cur?.base || undefined}>
+<div class="av" data-artifact-base={linkBase || undefined}>
   <div class="bar">
     <b class="nm" title={art?.path ?? art?.name}>{art?.name ?? cur?.name}</b>
     {#if art}<span class="muted small">{art.type.split(";")[0]} · {bytes(art.size)}</span>{/if}
