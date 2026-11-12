@@ -120,8 +120,10 @@ export function traceTurn(m: Pick<TMsg, "id" | "state" | "created_at" | "updated
   const start = ms(m.created_at) || marks[0]?.at || now;
   const first = marks.length ? Math.min(...marks.map(x => x.at)) : null;
   const lastMark = marks.reduce((a, x) => Math.max(a, x.end ?? x.at), 0);
-  const end0 = running ? now : (ms(m.finished_at) || ms(m.updated_at) || lastMark || start);
-  const end = Math.max(end0, lastMark, start);
+  // A finished turn ended when the node says: an event recorded after (a notice of a cancel that
+  // raced the reply) is shown at most, and extends nothing.
+  const fin = running ? 0 : ms(m.finished_at);
+  const end = fin ? Math.max(fin, start) : Math.max(running ? now : (ms(m.updated_at) || lastMark || start), lastMark, start);
 
   // What an unfinished span came to: the turn's end ended it.
   const left: SpanState = running ? "running" : m.state === "done" ? "done" : m.state === "failed" ? "unknown" : "cancelled";
@@ -179,6 +181,7 @@ export function traceTurn(m: Pick<TMsg, "id" | "state" | "created_at" | "updated
     spans.push({ id: "msg:" + c.id, kind: "agent", ref: c.id, name: c.to.replace(/^agent:/, ""), label: c.to, start: cs, end: ce,
       state: cRunning ? "running" : c.state === "done" ? "done" : c.state === "failed" || c.state === "expired" ? "failed" : "cancelled", parent: under?.id });
   }
+  if (fin) for (const s of spans) { s.start = Math.min(s.start, end); s.end = Math.min(Math.max(s.end, s.start), end); }
   spans.sort((a, b) => a.start - b.start || a.id.localeCompare(b.id));
 
   const phases = phasesOf(start, first, end, spans);
@@ -246,6 +249,19 @@ export function threadSum(th: TThread, now: number): ThreadSum {
   return { thread: th.thread, title: th.title, updated: ms(th.updated_at), turns: turns.length, active, calls, errors, phases,
     // A turn it asked may still run when its own are over: it is running until they all are.
     running: th.messages.some(m => !isFinal(m.state)), cut: threadCut(th) };
+}
+
+/** Each turn the conversations hold, once: a chat continued from a turn another conversation asked
+ * is a conversation of its own and has that turn too. The copy not cut is kept (then the one with
+ * more events). */
+export function uniqueTurns(threads: TThread[]): { msg: TMsg; th: TThread }[] {
+  const by = new Map<string, { msg: TMsg; th: TThread }>();
+  const worse = (a: TMsg, b: TMsg) => (!!a.cut !== !!b.cut ? !!a.cut : (a.events?.length ?? 0) < (b.events?.length ?? 0));
+  for (const th of threads) for (const msg of th.messages) {
+    const had = by.get(msg.id);
+    if (!had || worse(had.msg, msg)) by.set(msg.id, { msg, th });
+  }
+  return [...by.values()];
 }
 
 /** Whether what a conversation's numbers count is short: the node left turns or events out, or

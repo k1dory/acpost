@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { marksOf, traceTurn, phasesOf, threadSum, threadCut, sortSums, rows, commandKey, commandGroups, clip, shown, ticks, type Mark, type TMsg, type TThread, type Span } from "./trace";
+import { marksOf, traceTurn, phasesOf, threadSum, threadCut, uniqueTurns, sortSums, rows, commandKey, commandGroups, clip, shown, ticks, type Mark, type TMsg, type TThread, type Span } from "./trace";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
 const iso = (dt: number) => new Date(T0 + dt).toISOString();
@@ -230,5 +230,35 @@ describe("review round 2", () => {
     expect(threadCut({ ...th, messages: [own, { ...helper, events: [] }] })).toBe(false);
     expect(threadCut({ ...th, messages: [own, { ...helper, events: [], cut: true }] })).toBe(true);
     expect(threadCut({ ...th, messages: [own], cut: true })).toBe(true);
+  });
+});
+
+describe("review round 3", () => {
+  it("an event after a finished turn's end extends neither it, its spans nor its phases", () => {
+    const m = msg({ finished_at: iso(2000), updated_at: iso(10_000) });
+    const marks: Mark[] = [
+      { seq: 1, at: T0 + 500, kind: "tool_call", call: "c", status: "pending" },
+      { seq: 2, at: T0 + 10_000, kind: "notice", status: "warning" }, // a cancel that raced the reply
+    ];
+    const tr = traceTurn(m, marks, [], T0 + 99_000);
+    expect(tr.end).toBe(T0 + 2000);
+    expect(tr.active).toBe(1500);
+    expect(sum(tr.phases)).toBe(2000);
+    expect(tr.spans[0]).toMatchObject({ start: T0 + 500, end: T0 + 2000, state: "done" });
+    // A call recorded after the end is shown at the end, with no length.
+    const late = traceTurn(m, [...marks, { seq: 3, at: T0 + 9000, kind: "tool_call", call: "z" }], [], T0);
+    expect(late.spans.find(s => s.ref === "z")).toMatchObject({ start: T0 + 2000, end: T0 + 2000 });
+    expect(late.end).toBe(T0 + 2000);
+  });
+
+  it("a turn two conversations hold is counted once, the copy not cut kept", () => {
+    const callMarks: Mark[] = [{ seq: 1, at: T0 + 1000, kind: "tool_call", call: "c", tool: "read" }, { seq: 2, at: T0 + 2000, kind: "tool_call_update", call: "c", status: "completed" }];
+    const sub = msg({ id: "msg_s", thread: "msg_s", parent: "msg_a", depth: 1, events: callMarks });
+    const parent: TThread = { thread: "msg_a", title: "", updated_at: iso(0), messages: [msg(), { ...sub, cut: true, events: [] }] };
+    const continued: TThread = { thread: "msg_s", title: "", updated_at: iso(0), messages: [sub] };
+    const turns = uniqueTurns([parent, continued]);
+    expect(turns.map(x => x.msg.id)).toEqual(["msg_a", "msg_s"]);
+    expect(turns[1].msg.cut).toBeFalsy();
+    expect(turns[1].msg.events.length).toBe(2);
   });
 });
