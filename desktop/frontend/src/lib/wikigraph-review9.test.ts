@@ -49,4 +49,10 @@ describe("tables without blank lines between them", () => {
       expect((html.match(/<a /g) ?? []).length).toBe(1);
     }
   });
+  it("a row that begins like a numbered item past 1 is a row of the table, its link whole", () => {
+    const html = renderWiki("| Step | Doc |\n|---|---|\n2. Build | [[arch|Architecture]]\n", () => ({ id: "page:/r#arch", broken: false, title: "Arch" }) as any);
+    expect((html.match(/<a /g) ?? []).length).toBe(1);
+    expect(html).toContain("Architecture");
+    expect((html.match(/<tr/g) ?? []).length).toBe(2);
+  });
 });

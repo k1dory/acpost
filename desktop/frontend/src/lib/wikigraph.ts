@@ -151,7 +151,7 @@ export const tableScan = { chars: 0 };
 // A GFM delimiter row: dashes, colons, pipes and spaces, with a dash and a pipe or colon.
 const delimiterRow = /^[ \t]*[|:-][ \t|:-]*$/;
 // A line a table does not go on into: blank, or the start of another block.
-const tableEnds = /^[ \t]*$|^(?: {4}|\t)|^ {0,3}(?:#{1,6}(?:\s|$)|>|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$|[-*+][ \t]|\d{1,9}[.)][ \t]|<\/?[a-zA-Z!?])/;
+const tableEnds = /^[ \t]*$|^(?: {4}| {0,3}\t)|^ {0,3}(?:#{1,6}(?:\s|$)|>|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$|[-*+][ \t]|1[.)][ \t]|<\/?[a-zA-Z!?])/;
 function wikiTable(state: MaskState) {
   return function (this: Tokenizer, src: string): Tokens.Table | false {
     const mask = state.mask;
