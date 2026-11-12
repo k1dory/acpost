@@ -166,3 +166,30 @@ func TestShellRefusedOnAnotherMachinesNode(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+
+// A start-up file of the shell that changes directory does not move the command: it runs in the
+// directory asked for.
+func TestShellRunsWhereAskedWhateverTheStartupFilesDo(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	elsewhere, _ := filepath.EvalSymlinks(t.TempDir())
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	for _, f := range []string{".zprofile", ".zshenv", ".profile", ".bash_profile"} {
+		if err := os.WriteFile(filepath.Join(home, f), []byte("cd "+elsewhere+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	r, err := runShell("", "pwd; touch here", dir, time.Minute)
+	if err != nil || strings.TrimSpace(r.Output) != dir {
+		t.Fatalf("ran in %q, asked for %q (%v)", strings.TrimSpace(r.Output), dir, err)
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, "here")); err == nil {
+		t.Fatal("the command wrote where the start-up file went")
+	}
+	// The command is the person's line, whole: quotes, variables and several commands as typed.
+	r, err = runShell("", `x="a b"; printf '<%s>' "$x" 'c d'; echo; echo "$0"`, dir, time.Minute)
+	if err != nil || !strings.HasPrefix(r.Output, "<a b><c d>") {
+		t.Fatalf("%q %v", r.Output, err)
+	}
+}

@@ -428,7 +428,8 @@ class App {
     // A draft of its own: a send still going owns the last one (its answer edits that, not this).
     // What was typed carries over, unless it is what is being sent.
     const old = this.draftMap.get("new"), d = new ComposerDraft("new");
-    if (old && !old.busy) { d.text = old.text; d.files = old.files; old.forward(d); }
+    // (As typed it stays as typed: the same text, carried, is still the person's own.)
+    if (old && !old.busy) { d.text = old.text; if (old.typed === old.text) d.typed = old.text; d.files = old.files; old.forward(d); }
     // What was run from the task before: with its text, in this one; a task whose first message is
     // still going keeps its runs to itself (shown in its thread once it is one).
     if (old) this.moveShells(old, old.busy ? "sending:" + newId() : "new", old.busy ? old : d);

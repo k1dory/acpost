@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,7 +18,10 @@ import (
 
 // A command of the person's own, run from the chat's composer ("!git status"): in the person's
 // login shell, in the chat's directory, its output shown in the chat. It is the person's command,
-// run as they would in a terminal; no agent starts one this way.
+// run as they would in a terminal; no agent starts one this way. What it starts ends with it (its
+// process group); a process the command itself puts in a session or group of its own (setsid,
+// nohup with its own group) is detached by the person's choice, as from a terminal, and is not
+// followed.
 
 const (
 	shellTimeout = 2 * time.Minute // a command that has not ended by then is ended
@@ -102,8 +106,12 @@ func runShell(id, command, cwd string, timeout time.Duration) (ShellResult, erro
 	} else if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
 		return ShellResult{}, fmt.Errorf("the chat's directory %s is not there: nothing was run", cwd)
 	}
+	// The person's login shell when it reads the line below (sh, bash, zsh, dash, ksh); another
+	// (fish, nu) has a grammar of its own: zsh then.
 	sh := os.Getenv("SHELL")
-	if sh == "" {
+	switch filepath.Base(sh) {
+	case "sh", "bash", "zsh", "dash", "ksh":
+	default:
 		sh = "/bin/zsh"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -127,7 +135,10 @@ func runShell(id, command, cwd string, timeout time.Duration) (ShellResult, erro
 	shells.Unlock()
 	defer func() { shells.Lock(); delete(shells.stop, id); shells.Unlock(); shells.running.Done() }()
 	out := &capped{max: shellOutput}
-	cmd := exec.CommandContext(ctx, sh, "-lc", command)
+	// The directory is entered again after the shell's own start-up files ran (one of them may
+	// change it), and the command is not run if that fails: it runs where it was meant to, or not
+	// at all. The command and the directory are handed over as arguments, never spliced into the line.
+	cmd := exec.CommandContext(ctx, sh, "-lc", `cd -- "$1" || exit 126; eval "$2"`, "acpost", cwd, command)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "TERM=dumb", "NO_COLOR=1")
 	cmd.Stdout, cmd.Stderr = out, out

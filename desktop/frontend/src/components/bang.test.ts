@@ -338,4 +338,32 @@ describe("! in the composer", () => {
     await flush();
     expect(fake.Node.Shell.mock.calls[0][1]).toBe("echo next");
   });
+
+  it("a command typed in a new task is still a command when the person comes back to a new task", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.home = "/Users/me";
+    app.newTask();
+    app.draft.agent = "agent:claude";
+    const Composer = (await import("./Composer.svelte")).default;
+    let c = svelte.mount(Composer, { target: document.body });
+    svelte.flushSync();
+    type("!printf retained");
+    svelte.unmount(c);
+    fake.Node.Thread.mockResolvedValue([]);
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", cwd: "/w", title: "t", updated: "" } as any);
+    app.newTask();
+    c = svelte.mount(Composer, { target: document.body });
+    mounted.push(c);
+    svelte.flushSync();
+    expect(textarea().value).toBe("!printf retained");
+    expect(document.querySelector(".comp.bang")).toBeTruthy();
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["printf retained", "/Users/me"]);
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+  });
 });
