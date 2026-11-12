@@ -3,6 +3,8 @@
   import { headerIcon } from "../lib/ui";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
+  import { markOf } from "./AgentMark.svelte";
+  import { brand } from "../lib/brand";
   import { tick } from "svelte";
   import Logo from "./Logo.svelte";
   import Message from "./Message.svelte";
@@ -29,10 +31,10 @@
     for (let i = app.history.length - 1; i >= 0; i--) if (app.history[i].turn.usage) return app.history[i].turn.usage;
     return null;
   });
-  const brand = (a: string) => a.includes("codex") ? "Codex" : a.includes("claude") ? "Claude Code" : who(a).name;
-  // A chat shared by several agents names them all.
+  // An agent said as its product (Codex, Gemini CLI), else its name; a chat shared by several agents names them all.
+  const named = (a: string) => brand(markOf(a))?.title ?? who(a).name;
   const shared = $derived((app.msgs.length, app.thread ? app.targets().filter(a => app.msgs.some(m => !m.depth && m.to === a && m.from.startsWith("user:") && !m.from.includes("@"))) : []));
-  const source = $derived(shared.length > 1 ? shared.map(brand).join(" + ") : app.chat?.kind === "cloud" ? t("Cloud") : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
+  const source = $derived(shared.length > 1 ? shared.map(named).join(" + ") : app.chat?.kind === "cloud" ? t("Cloud") : brand(markOf(app.chat?.agent ?? app.target))?.title ?? "");
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => tilde(d, app.home);
 

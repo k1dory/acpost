@@ -21,6 +21,11 @@ The bundle's identity (`dev.acpost.desktop`, the version) is set in `build/confi
 looking at the interface in a browser. Bindings in `frontend/bindings` are generated:
 `wails3 generate bindings -ts -d frontend/bindings ./`.
 
+An agent is drawn with the mark of the CLI behind it (`frontend/src/lib/brand.ts`): what the agent
+said it is when its process last started (ACP's `agentInfo`), else the known agent program its
+command runs (a fixed table in `internal/node/product.go`), else the agent's own name. Claude Code, Codex, Gemini CLI, GitHub Copilot and Cursor have drawn marks; the
+other known CLIs show their initials on a tile in their hue.
+
 Analytics has three tabs. Usage is tokens and cost by agent, model, day or session. Traces is where
 agents' time went: the recent conversations with their active time, calls, errors and a bar of
 phases (waiting to start, the model, tools, waiting for approval, other agents); a turn opened is a

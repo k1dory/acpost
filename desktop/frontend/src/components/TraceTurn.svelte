@@ -8,6 +8,7 @@
   import { EventFeed } from "../lib/feed";
   import { marksOf, traceTurn, rows, shown, ticks, type TThread, type Row } from "../lib/trace";
   import PhaseBar from "./PhaseBar.svelte";
+  import AgentMark from "./AgentMark.svelte";
 
   // A turn's timeline: each call, permission wait and message to another agent on the turn's time
   // axis, under what ran it; the phases on top; what a span carried beside it. Its events are read
@@ -123,7 +124,7 @@
   <div class="empty muted">{t("This turn is not in the conversation's last turns")}</div>
 {:else if trace}
   <div class="top">
-    <div class="who"><b class="mono">{who(msg.to).name}</b>
+    <div class="who"><AgentMark of={msg.to} size={16} /><b class="mono">{who(msg.to).name}</b>
       {#if trace.running}<span class="chip warn">{t("running")}</span>{:else if msg.state !== "done"}<span class="chip" class:crit={msg.state === "failed"}>{t(msg.state)}</span>{/if}
       <span class="muted num">{clock(msg.created_at)}</span>
       {#if parentTurn}<button class="btn sm" onclick={() => (analytics.turn = parentTurn.id)}>{t("The turn that asked")}</button>{/if}

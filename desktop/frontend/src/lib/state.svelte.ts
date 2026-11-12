@@ -16,7 +16,7 @@ export type Msg = {
 export type ShellRun = { id: string; chat: string; cmd: string; running: boolean; output: string; code: number; ms: number;
   cut?: boolean; timedOut?: boolean; stopped?: boolean; error?: string };
 export type Module = { id: string; name: string; url: string };
-export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
+export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean; product?: string };
 export type Chat = {
   key: string; kind: "thread" | "session" | "cloud"; agent?: string; agents?: string[]; parent?: string; title: string; cwd?: string; repo?: string;
   thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;

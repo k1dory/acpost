@@ -60,6 +60,12 @@ export class AgentInfo {
      */
     "process"?: boolean;
 
+    /**
+     * Product is the program behind an acp agent: what it said it is when it last started (ACP's
+     * agentInfo), else its command's name (claude-agent-acp, codex-acp, gemini, …).
+     */
+    "product"?: string;
+
     /** Creates a new AgentInfo instance. */
     constructor($$source: Partial<AgentInfo> = {}) {
         if (!("name" in $$source)) {

@@ -6,6 +6,7 @@
   import { Node } from "../lib/api";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
+  import AgentMark from "./AgentMark.svelte";
 
   // Where a new task runs, which agent, in which directory (a repository in the cloud).
   const cloud = $derived(app.draft.where === "cloud");
@@ -84,7 +85,7 @@
   {#if !cloud}
     <div class="seg">
       {#each local as a (a.address)}
-        <button class:on={app.draft.agent === a.address} onclick={() => chooseAgent(a.address)}>{label(a.address)}</button>
+        <button class:on={app.draft.agent === a.address} onclick={() => chooseAgent(a.address)}><AgentMark of={a.address} size={14} />{label(a.address)}</button>
       {/each}
     </div>
     <div class="dir">
