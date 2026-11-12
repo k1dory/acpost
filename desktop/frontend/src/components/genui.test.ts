@@ -534,19 +534,41 @@ describe("review round 3", () => {
     expect(q("div.chart svg").classList.contains("wide")).toBe(false);
   });
 
-describe("review round 4: an answer whose last line ends with a space", () => {
-  it("is found whole, replaced in place and not added twice", async () => {
-    const { answerAt } = await import("./genui/draft");
+describe("review round 4 and 5: answers in the draft", () => {
+  async function fresh() {
+    const { app } = await import("../lib/state.svelte");
+    const draft = await import("./genui/draft");
+    app.newTask();
+    return { app, ...draft };
+  }
+  it("an answer whose last line ends with a space is found whole and replaced in place, through toDraft", async () => {
+    const { app, toDraft, answerAt } = await fresh();
     const first = "> Deploy?\n- Env: prod\n- Notes: \n\n";
-    const draft = "hello\n" + first.replace(/\n+$/, "") + "\nbye";
-    const at = answerAt(draft, first);
-    expect(at).toBe(6);
-    expect(answerAt("hello\n> Deploy?\n- Env: prod\n- Notes: x\nbye", first)).toBe(-1);   // another answer
+    app.draftOf().text = "hello\n" + first;
+    expect(answerAt(app.draftOf().text, first)).toBe(6);
     const next = "> Deploy?\n- Env: stage\n- Notes: \n\n";
-    const whole = (t: string) => t.replace(/^\n+|\n+$/g, "");
-    const replaced = draft.slice(0, at) + whole(next) + draft.slice(at + whole(first).length);
-    expect(replaced).toBe("hello\n> Deploy?\n- Env: stage\n- Notes: \nbye");
-    expect(answerAt(replaced, next)).toBe(6);
+    toDraft(next, first);
+    expect(app.draftOf().text).toBe("hello\n> Deploy?\n- Env: stage\n- Notes: \n\n");
+    expect(app.quote).toBe("");
+    expect(answerAt(app.draftOf().text, next)).toBe(6);
+  });
+  it("one form's answer is never changed by another's: lines inside another block are not it", async () => {
+    const { app, toDraft, answerAt } = await fresh();
+    const a1 = "- Host: a\n- Port: 80\n\n", b1 = "- Host: b\n\n";
+    app.draftOf().text = a1 + b1;
+    const a2 = "- Host: b\n- Port: 80\n\n";
+    toDraft(a2, a1);                                    // A updated: now holds a line B's answer is
+    expect(app.draftOf().text).toBe(a2 + b1);
+    const b2 = "- Host: c\n\n";
+    toDraft(b2, b1);                                    // B updated: B's own block, not the line in A
+    expect(app.draftOf().text).toBe(a2 + b2);
+    expect(answerAt(app.draftOf().text, a2)).toBe(0);
+    // The same answer there twice: which one is not known, so neither is replaced (it is added).
+    app.draftOf().text = b1 + b1;
+    app.quote = "";
+    toDraft(b2, b1);
+    expect(app.draftOf().text).toBe(b1 + b1);
+    expect(app.quote).toBe(b2);
   });
 });
 });

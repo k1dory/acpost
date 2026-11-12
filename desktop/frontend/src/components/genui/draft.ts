@@ -9,11 +9,18 @@ const whole = (text: string) => text.replace(/^\n+|\n+$/g, "");
 export function answerAt(hay: string, text: string): number {
   const s = whole(text);
   if (!s) return -1;
+  // An answer is put in as a block: it starts a line and nothing follows it but a blank line or
+  // the end (its lines inside another answer's block — two forms with a field of one name — are
+  // that other answer's). Found twice, it is not known which is meant: neither.
+  let at = -1;
   for (let i = hay.indexOf(s); i >= 0; i = hay.indexOf(s, i + 1)) {
     const end = i + s.length;
-    if ((i === 0 || hay[i - 1] === "\n") && (end === hay.length || hay[end] === "\n")) return i;
+    if (i !== 0 && hay[i - 1] !== "\n") continue;
+    if (!/^(?:[ \t]*\n[ \t]*(?:\n|$)|[ \t]*\n?$)/.test(hay.slice(end, end + 200) + (end + 200 >= hay.length ? "" : "x"))) continue;
+    if (at >= 0) return -1;
+    at = i;
   }
-  return -1;
+  return at;
 }
 
 /** An answer from a reply's question or form, put into the person's message being written: in
