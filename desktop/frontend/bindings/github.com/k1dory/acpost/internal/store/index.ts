@@ -17,6 +17,7 @@ export {
     State,
     TurnChanges,
     Wiki,
+    WikiEntry,
     WikiPage
 } from "./models.js";
 

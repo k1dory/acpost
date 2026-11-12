@@ -106,6 +106,29 @@ func (n *Node) WikiPages(ctx context.Context, p Principal, repo string) ([]store
 	return out, nil
 }
 
+// The pages of every wiki in one listing, a part at a time: at most wikiEntriesMax pages and about
+// wikiEntriesBytes of their text in each answer.
+const (
+	wikiEntriesMax   = 500
+	wikiEntriesBytes = 2 << 20
+)
+
+// WikiEntries is the pages of all the wikis, with their text, after a cursor (empty: from the
+// first): those, and the cursor of the rest ("" when none is left).
+func (n *Node) WikiEntries(ctx context.Context, p Principal, after string, limit int) ([]store.WikiEntry, string, error) {
+	if err := userOnly(p, "the wiki"); err != nil {
+		return nil, "", err
+	}
+	if limit <= 0 || limit > wikiEntriesMax {
+		limit = wikiEntriesMax
+	}
+	out, next, err := n.st.WikiEntries(ctx, after, limit, wikiEntriesBytes)
+	if err != nil {
+		return nil, "", errf("unavailable", "%v", err)
+	}
+	return out, next, nil
+}
+
 // WriteWiki has an agent of this node write (or write again) the wiki of a directory: the
 // message's id, whose thread shows the work.
 func (n *Node) WriteWiki(ctx context.Context, p Principal, repo, agent, lang string) (store.Message, error) {

@@ -6,6 +6,7 @@ export {
     AgentInfo,
     AgentOption,
     AgentOptions,
+    AllWikis,
     AskingRequest,
     Changes,
     Chat,
