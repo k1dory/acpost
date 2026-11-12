@@ -26,6 +26,7 @@
   import Icon from "./Icon.svelte";
   import { Node, errText } from "../lib/api";
   import { bytes } from "../lib/names";
+  import { openTrace } from "../lib/analytics.svelte";
 
   let { m }: { m: Msg } = $props();
   const turn = $derived.by(() => { app.rev; return app.turns[m.id]?.view(); });
@@ -51,7 +52,7 @@
 </script>
 
 <div class="pair" class:focus={app.focus === m.id}>
-  <div class="user">
+  <div class="user" class:editing={editing !== null}>
     <div class="meta"><Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span><span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">{t("subagent")}</span>{/if}</div>
     {#if editing !== null}
       <textarea class="ubody edit" bind:value={editing} readonly={saving} rows="3"
@@ -77,6 +78,7 @@
       {:else if m.state === "failed"}<span class="chip crit">{t("failed")}</span>
       {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>
       {:else if m.state === "expired"}<span class="chip warn">{t("expired")}</span>{/if}
+      {#if m.state !== "queued" && m.to.startsWith("agent:")}<button class="btn ghost sm trace" title={t("Where this turn's time went")} onclick={e => { e.stopPropagation(); openTrace(m.thread || m.id, m.id); }}><Icon name="activity" size={12} /> {t("Trace")}</button>{/if}
     </div>
 
     {#if turn}<TurnBlocks view={turn} msg={m.id} msgState={m.state} agent={m.to} />{/if}
@@ -110,11 +112,16 @@
 </div>
 
 <style>
-  .pair { display: grid; gap: 18px; padding: 4px 0 32px; }
+  /* One column no wider than the chat: a long line in it (a command, an approval's buttons) wraps
+     or is cut there, it does not push the column past a narrow window. */
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 4px 0 32px; }
   .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; flex-wrap: wrap; }
   .nm { font-weight: 600; }
   .user { justify-self: end; max-width: 85%; }
-  .edit { width: 100%; min-width: 360px; resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
+  /* The editor is 360px wide where there is room (the bubble sizes itself to it), the column's
+     width where there is not. */
+  .user.editing { width: 360px; }
+  .edit { width: 100%; min-width: 0; resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
   .eacts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
   .user .meta { justify-content: flex-end; }
   .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
@@ -126,8 +133,10 @@
   .fbtn { cursor: default; }
   .fbtn:hover { border-color: var(--accent); }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
-  .agent { min-width: 0; display: grid; gap: 8px; }
+  .agent { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .agent > .meta { margin-bottom: 2px; }
+  .trace { margin-left: auto; gap: 4px; color: var(--muted); opacity: 0; }
+  .agent:hover .trace, .trace:focus-visible { opacity: 1; }
   .err .hint { margin-top: 6px; opacity: .85; }
   .err { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
   .wait { display: grid; gap: 8px; } .wait .sk { height: 12px; }
