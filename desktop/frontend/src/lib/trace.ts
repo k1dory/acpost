@@ -27,7 +27,7 @@ export type Phases = Record<Phase, number>;
 const noPhases = (): Phases => ({ queue: 0, model: 0, tools: 0, approval: 0, agents: 0 });
 
 export type SpanKind = "tool" | "permission" | "agent";
-export type SpanState = "running" | "done" | "failed" | "cancelled" | "unknown" | "waiting";
+export type SpanState = "running" | "done" | "failed" | "cancelled" | "unknown" | "waiting" | "answered";
 export type Span = {
   id: string;        // unique in the turn: "tool:<call>", "perm:<request>", "msg:<id>"
   kind: SpanKind;
@@ -98,6 +98,9 @@ export function marksOf(evs: Ev[]): Mark[] {
         out.push({ seq: e.seq, at, kind: e.kind });
         break;
     }
+    // The turn's first event is when its work began, whatever it was (a plan, usage, one not
+    // read): its time is kept, nothing of it (as the node's short form does).
+    if (!out.length) out.push({ seq: e.seq, at, kind: e.kind });
   }
   return out;
 }
@@ -109,6 +112,18 @@ function commandOf(input: any): string | undefined {
   if (typeof c === "string") return c || undefined;
   if (Array.isArray(c)) return c.filter(x => typeof x === "string").join(" ") || undefined;
   return undefined;
+}
+
+/** What a permission's decision came to, by the words the node records: approved (an allow
+ * option of ACP, a forge's "allowed"), refused (a reject option, "rejected", nobody in time), ended
+ * without one (cancelled, undelivered, superseded), or answered — a sandbox says "selected" without
+ * which option; anything else is that too, never a failure. */
+export function decisionState(decision: string | undefined): SpanState {
+  const d = (decision ?? "").toLowerCase();
+  if (/^allow/.test(d) || d === "allowed" || d === "approved") return "done";
+  if (/^reject/.test(d) || d === "rejected" || d === "timeout" || d === "denied" || d === "declined") return "failed";
+  if (/^cancel/.test(d) || d === "undelivered" || d === "superseded") return "cancelled";
+  return "answered";
 }
 
 const bareTitles = new Set(["terminal", "tool", "bash", "shell"]);
@@ -153,7 +168,7 @@ export function traceTurn(m: Pick<TMsg, "id" | "state" | "created_at" | "updated
         state: running ? "waiting" : "unknown", parent: x.call ? "tool:" + x.call : undefined, tool: x.tool });
     } else if (x.kind === "permission" && x.request) {
       const p = perms.get(x.request);
-      if (p) { p.ended = x.at; p.state = x.status && /^(allow|approve)/.test(x.status) ? "done" : "failed"; p.label ||= x.status ?? ""; }
+      if (p) { p.ended = x.at; p.state = decisionState(x.status); p.label ||= x.status ?? ""; }
     }
   }
   const spans: Span[] = [];

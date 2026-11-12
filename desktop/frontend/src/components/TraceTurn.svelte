@@ -113,7 +113,9 @@
   const request = $derived.by(() => { rev; return selected?.kind === "permission" ? full.requests.get(selected.ref) : undefined; });
   const child = $derived(selected?.kind === "agent" ? thread.messages.find(m => m.id === selected.ref) : undefined);
   const parentTurn = $derived(msg?.parent ? thread.messages.find(m => m.id === msg.parent) : undefined);
-  const stateNames: Record<string, string> = { running: "running", done: "done", failed: "failed", cancelled: "cancelled", unknown: "unknown", waiting: "waiting" };
+  const stateNames: Record<string, string> = { running: "running", done: "done", failed: "failed", cancelled: "cancelled", unknown: "unknown", waiting: "waiting", answered: "answered" };
+  // A permission's states said as decisions.
+  const decisionNames: Record<string, string> = { ...stateNames, done: "approved", failed: "refused" };
   const kindNames: Record<string, string> = { tool: "Call", permission: "Approval", agent: "Agent" };
 </script>
 
@@ -174,7 +176,7 @@
         <div class="kv num">
           <span class="muted">{t("Started")}</span><span>+{dur(selected.start - trace.start) || "0"}</span>
           <span class="muted">{t("Duration")}</span><span>{dur(selected.end - selected.start) || "0"}</span>
-          <span class="muted">{t("State")}</span><span class:bad={selected.state === "failed"}>{t(stateNames[selected.state])}</span>
+          <span class="muted">{t("State")}</span><span class:bad={selected.state === "failed"}>{t((selected.kind === "permission" ? decisionNames : stateNames)[selected.state])}</span>
           {#if selected.kind === "tool"}<span class="muted">{t("Kind")}</span><span class="mono">{selected.name}</span>{/if}
           {#if typeof selected.exit === "number"}<span class="muted">{t("Exit code")}</span><span>{selected.exit}</span>{/if}
         </div>
@@ -248,6 +250,7 @@
   .dot.failed, .bar.failed { background: var(--crit); }
   .bar.running, .bar.waiting { background-image: repeating-linear-gradient(45deg, transparent 0 5px, rgba(255,255,255,.35) 5px 10px); }
   .dot.cancelled, .bar.cancelled, .dot.unknown, .bar.unknown { opacity: .5; }
+  .dot.answered, .bar.answered { background: var(--muted); }
   .none { padding: 18px; text-align: center; font-size: 12.5px; }
   .det { padding: 14px 16px; display: grid; gap: 10px; max-height: calc(100vh - 300px); overflow: auto; font-size: 12.5px; }
   .dh { display: flex; align-items: center; }

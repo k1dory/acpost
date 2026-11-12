@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { marksOf, traceTurn, phasesOf, threadSum, threadCut, uniqueTurns, sortSums, rows, commandKey, commandGroups, clip, shown, ticks, type Mark, type TMsg, type TThread, type Span } from "./trace";
+import { marksOf, traceTurn, phasesOf, threadSum, threadCut, uniqueTurns, decisionState, sortSums, rows, commandKey, commandGroups, clip, shown, ticks, type Mark, type TMsg, type TThread, type Span } from "./trace";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
 const iso = (dt: number) => new Date(T0 + dt).toISOString();
@@ -260,5 +260,45 @@ describe("review round 3", () => {
     expect(turns.map(x => x.msg.id)).toEqual(["msg_a", "msg_s"]);
     expect(turns[1].msg.cut).toBeFalsy();
     expect(turns[1].msg.events.length).toBe(2);
+  });
+});
+
+describe("review round 4", () => {
+  it("a turn that starts with a plan began then, through both forms alike", () => {
+    const m = msg({ finished_at: iso(10_000) });
+    const full = marksOf([
+      ev(1, 1000, "plan", ["pending: a step"]),
+      ev(2, 5000, "usage", { input: 1 }),
+      ev(3, 9000, "text", { text: "done" }),
+    ]);
+    // What GET /v1/traces gives for them: the first event's time, whatever it was, and the text run.
+    const compact: Mark[] = [{ seq: 1, at: T0 + 1000, kind: "plan" }, { seq: 3, at: T0 + 9000, end: T0 + 9000, kind: "text" }];
+    expect(full).toEqual(compact);
+    for (const marks of [full, compact]) {
+      const tr = traceTurn(m, marks, [], T0);
+      expect(tr.first).toBe(T0 + 1000);
+      expect(tr.phases.queue).toBe(1000);
+      expect(tr.active).toBe(9000);
+    }
+  });
+
+  it("a permission's decision is read by its words: a sandbox's \"selected\" is answered, not failed", () => {
+    expect(["allow_once", "allow_always", "allowed"].map(decisionState)).toEqual(["done", "done", "done"]);
+    expect(["reject_once", "reject_always", "rejected", "timeout"].map(decisionState)).toEqual(["failed", "failed", "failed", "failed"]);
+    expect(["cancelled", "cancelled (no matching option)", "undelivered", "superseded"].map(decisionState)).toEqual(["cancelled", "cancelled", "cancelled", "cancelled"]);
+    expect(["selected", "something new", "", undefined].map(decisionState)).toEqual(["answered", "answered", "answered", "answered"]);
+    // The sandbox's events (internal/node sandbox.go: the request, then "selected" by sandbox:user).
+    const sandbox = marksOf([
+      ev(1, 1000, "permission_request", { request_id: "req_00000000000000aa", kind: "permission", title: "Run rm -rf build" }),
+      ev(2, 3000, "permission", { request_id: "req_00000000000000aa", decision: "selected", by: "sandbox:user" }),
+    ]);
+    const p = traceTurn(msg(), sandbox, [], T0).spans.find(s => s.kind === "permission")!;
+    expect(p).toMatchObject({ state: "answered", start: T0 + 1000, end: T0 + 3000 });
+    // ACP's (internal/node ask.go: the option's kind).
+    const acp = marksOf([
+      ev(1, 1000, "permission_request", { request_id: "r", tool_call_id: "c", title: "Write a.go" }),
+      ev(2, 2000, "permission", { request_id: "r", decision: "allow_once", by: "user:me" }),
+    ]);
+    expect(traceTurn(msg(), acp, [], T0).spans.find(s => s.kind === "permission")!.state).toBe("done");
   });
 });
