@@ -1,9 +1,6 @@
 package node
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -30,7 +27,7 @@ func TestCommandProduct(t *testing.T) {
 	}
 }
 
-// Before the agent's process starts, Agents names its command's program; once it started, what it
+// Before the agent's process starts, Agents names its command's program when it is a known one; once it started, what it
 // said it is; and that stays after the process idles out. Listing agents starts no process.
 func TestAgentsProduct(t *testing.T) {
 	n := acpNode(t, "preamble: false\nidle_timeout: 100ms")
@@ -43,9 +40,8 @@ func TestAgentsProduct(t *testing.T) {
 		t.Fatal("agent:fake not listed")
 		return ""
 	}
-	exe := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
-	if got := product(); got != exe {
-		t.Fatalf("before a start: %q, want %q", got, exe)
+	if got := product(); got != "" { // the test binary is no known agent program
+		t.Fatalf("before a start: %q", got)
 	}
 	if n.agentRunning("fake") {
 		t.Fatal("listing the agents started its process")

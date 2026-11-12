@@ -17,10 +17,10 @@ func TestCommandProductDisclosesNothing(t *testing.T) {
 	}{
 		{[]string{"env", "OPENAI_API_KEY=" + secret, "codex-acp"}, "codex-acp"},
 		{[]string{"env", "A=1", "OPENAI_API_KEY=" + secret, "B=" + secret, "/usr/local/bin/codex-acp", "--key", secret}, "codex-acp"},
-		{[]string{"env", "-i", "A=" + secret, "prog"}, "prog"},
+		{[]string{"env", "-i", "A=" + secret, "prog"}, ""},
 		{[]string{"env", "-u", "HOME", "-C", "/tmp", "K=" + secret, "--", "gemini", secret}, "gemini"},
 		{[]string{"/usr/bin/env", "K=" + secret}, ""},
-		{[]string{"npx", "-y", "--package", "x@1", "bin"}, "bin"},
+		{[]string{"npx", "-y", "--package", "x@1", "bin"}, ""},
 		{[]string{"npx", "-y", "--package", secret}, ""},
 		{[]string{"npx", "--registry", secret, "@zed-industries/claude-code-acp@latest"}, "claude-code-acp"},
 		{[]string{"pnpm", "dlx", "--package", secret, "opencode"}, "opencode"},

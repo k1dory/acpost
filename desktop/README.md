@@ -22,8 +22,8 @@ looking at the interface in a browser. Bindings in `frontend/bindings` are gener
 `wails3 generate bindings -ts -d frontend/bindings ./`.
 
 An agent is drawn with the mark of the CLI behind it (`frontend/src/lib/brand.ts`): what the agent
-said it is when its process last started (ACP's `agentInfo`), else its command's name, else the
-agent's own name. Claude Code, Codex, Gemini CLI, GitHub Copilot and Cursor have drawn marks; the
+said it is when its process last started (ACP's `agentInfo`), else the known agent program its
+command runs (a fixed table in `internal/node/product.go`), else the agent's own name. Claude Code, Codex, Gemini CLI, GitHub Copilot and Cursor have drawn marks; the
 other known CLIs show their initials on a tile in their hue.
 
 Analytics has three tabs. Usage is tokens and cost by agent, model, day or session. Traces is where

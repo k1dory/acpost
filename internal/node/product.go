@@ -9,7 +9,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 )
 
-// maxProduct bounds a product's length: a program's name, not a text.
+// maxProduct bounds what an agent says it is: a program's name, not a text.
 const maxProduct = 64
 
 // learnProduct keeps what the agent said it is when its process initialized: its programmatic
@@ -51,14 +51,43 @@ func printable(s string) string {
 	return s
 }
 
-// commandProduct names the program a command runs (npx -y @scope/codex-acp@1 → codex-acp), as
-// every client that lists the agents sees it. A command holds what the configuration put there
-// (an env assignment can be a key): only a word identified as the program, or the package a
-// launcher runs, is ever returned, and only when it looks like a program's name. "" when the
-// command does not say.
+// commandProduct names the agent program a command runs (npx -y @scope/codex-acp@1 → codex-acp),
+// as every client that lists the agents sees it. A command holds what the configuration put there
+// (an env assignment, an option's value can be a key): the word found as the program is only a
+// candidate, and what is returned is the name of a known agent program it matches, from the table
+// below, never the command's own text. "" for anything else.
 func commandProduct(cmd []string) string {
-	return programName(programOf(cmd))
+	return knownPrograms[strings.ToLower(baseName(programOf(cmd)))]
 }
+
+// knownPrograms are the commands and packages (npm, pip) of the coding agents the app draws, and
+// their ACP adapters, to the name the node says: the only text a command's product can be.
+var knownPrograms = func() map[string]string {
+	m := map[string]string{}
+	for _, n := range []string{
+		"claude", "claude-code", "claude-agent-acp", "claude-code-acp",
+		"codex", "codex-acp",
+		"gemini", "gemini-cli",
+		"copilot", "copilot-cli", "copilot-acp",
+		"opencode", "opencode-ai",
+		"cursor-agent", "cursor-acp",
+		"amp", "amp-acp", "ampcode",
+		"devin", "devin-acp",
+		"kiro", "kiro-cli",
+		"goose", "goose-cli",
+		"qwen", "qwen-code",
+		"kimi", "kimi-cli",
+		"deepseek", "deepseek-cli",
+		"cline", "cline-cli",
+		"aider", "aider-chat", "aider-acp",
+		"zed",
+		"auggie", "augment",
+		"codebuddy", "codebuddy-code",
+	} {
+		m[n] = n
+	}
+	return m
+}()
 
 // The options of the launchers the program is found behind that take the next word.
 var (
@@ -169,22 +198,4 @@ func baseName(w string) string {
 		}
 	}
 	return w
-}
-
-// programName is word's base name when it looks like a program's name (letters, digits, @._+-,
-// at most maxProduct long); else "": never an assignment, an argument or a text.
-func programName(word string) string {
-	if word == "" || strings.Contains(word, "=") {
-		return ""
-	}
-	n := baseName(word)
-	if n == "" || n == "." || n == ".." || n == "/" || len(n) > maxProduct {
-		return ""
-	}
-	for _, r := range n {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("@._+-", r)) {
-			return ""
-		}
-	}
-	return n
 }
