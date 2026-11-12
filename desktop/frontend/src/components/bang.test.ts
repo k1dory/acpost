@@ -226,4 +226,22 @@ describe("! in the composer", () => {
     await flush();
     expect(fake.Node.Shell.mock.calls[0][1]).toBe("echo typed");
   });
+
+  it("the same text as a command run before, put back by the app, is a message", async () => {
+    const app = await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    type("!echo x >> log");
+    enter();
+    await flush(); svelte.flushSync();
+    expect(fake.Node.Shell).toHaveBeenCalledTimes(1);
+    app.draftOf().text = "!echo x >> log";   // a send given back, a draft joined: not typed now
+    svelte.flushSync();
+    expect(textarea().value).toBe("!echo x >> log");
+    expect(document.querySelector(".comp.bang")).toBeNull();
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    enter();
+    await flush(); await flush();
+    expect(fake.Node.Shell).toHaveBeenCalledTimes(1);
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+  });
 });

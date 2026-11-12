@@ -164,12 +164,19 @@ export class SendOp {
 }
 
 export class ComposerDraft {
-  text = $state("");
-  /** The text as the person's own typing (or pasting) in the composer last left it. A draft is a
-   * command to run ("!…") only while its text is exactly this: text that anything else put or
-   * changed (a quotation, a playbook, another draft joined to it, what is left after a send) is
-   * never run, whatever it starts with. */
-  typed = $state("");
+  #text = $state("");
+  /** The draft's text. Set by anything but the person's own input in the composer (type()), it is
+   * no longer what they typed: typed is forgotten. */
+  get text(): string { return this.#text; }
+  set text(v: string) { this.#text = v; this.typed = null; }
+  /** The text as the person's own typing (or pasting) in the composer left it; null once anything
+   * else set the text (cleared it, put a quotation or a playbook, joined another draft to it, gave
+   * a send back, left what remains after one). A draft is a command to run ("!…") only while its
+   * text is this: nothing the app put there is ever run, whatever it starts with — also when it is
+   * letter for letter what was typed before. */
+  typed = $state<string | null>(null);
+  /** The person's own input in the composer. */
+  type(v: string) { this.#text = v; this.typed = v; }
   /** The draft's files. Their names are unique whatever puts files here (an add, a paste, a file
    * handed over, a send given back, drafts merged): each set goes through uniqueNames, the
    * earlier keeping its name, a later one told apart (identity and order kept). The node takes no
