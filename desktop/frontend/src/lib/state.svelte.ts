@@ -182,18 +182,29 @@ class App {
     }
     // The conversation's own agent (its first message's, the chat's): where its directory is. Who
     // the next message goes to (another agent called into it) does not move its files.
-    const to = this.msgs.find(m => !m.depth)?.to ?? this.chat?.agent ?? this.target;
+    // (Its first message is the one the thread is named after; not on screen — a long thread shows
+    // its latest — the chat's own agent says it.)
+    const to = this.shellRoot()?.to ?? this.chat?.agent ?? this.target;
     if (this.chat?.kind === "cloud" || to.startsWith("agent:sb_")) return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
     if (to.includes("@")) return t("This chat's agent is on another node: a command would run on this Mac");
     // A chat whose directory the app does not know (started elsewhere without one: it runs in its
     // agent's own): not the home directory instead.
-    if (!this.chatCwd()) return t("This chat's directory is not known here: nothing was run");
+    if (!this.shellCwd()) return t("This chat's directory is not known here: nothing was run");
     return "";
   }
   /** Where a command of the open conversation runs: the chat's directory; a new task's chosen one
    * (the home directory when none is, as the task's setup shows). */
   shellCwd(): string {
-    return this.chat || this.thread ? this.chatCwd() : this.draft.cwd || this.home;
+    if (!this.chat && !this.thread) return this.draft.cwd || this.home;
+    // The conversation's own directory: its first message's, else the chat's as the node lists it
+    // (never a later message's of another participant).
+    const m = this.shellRoot();
+    return m?.meta?.acp_cwd || m?.meta?.acp_session_cwd || this.chat?.cwd || "";
+  }
+  /** The open thread's first message (the one it is named after), when it is on screen. */
+  private shellRoot(): Msg | undefined {
+    const id = this.thread || this.chat?.thread;
+    return id ? this.msgs.find(m => m.id === id) : undefined;
   }
   /** Runs the person's command in the chat's directory; its output is shown in the chat. */
   async runShell(cmd: string) {

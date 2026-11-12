@@ -408,12 +408,36 @@ describe("! in the composer", () => {
 
   it("a shared chat's files stay where its first agent is, whoever the next message goes to", async () => {
     const app = await setup();
-    app.msgs = [{ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "done", created_at: "", updated_at: "" }] as any;
+    app.msgs = [{ id: "T", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "done", created_at: "", updated_at: "" }] as any;
     app.target = "agent:codex@far";                           // another agent called into the chat
     fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
     type("!pwd");
     enter();
     await flush();
     expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/work/repo"]);
+  });
+
+  it("a thread of another node's agent whose shown history begins with a local participant runs nothing", async () => {
+    const app = await setup();
+    // The thread's first message is not on screen (a long thread shows its latest); the chat is the remote agent's.
+    app.chat = { key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude@far", title: "t", updated: "" } as any;
+    app.msgs = [{ id: "m900", from: "user:me", to: "agent:codex", thread: "T", depth: 0, state: "done", meta: { acp_cwd: "/work/local" }, created_at: "", updated_at: "" }] as any;
+    svelte.flushSync();
+    type("!rm -rf build");
+    enter();
+    await flush(); svelte.flushSync();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+    expect(app.error).toContain("this Mac");
+    // And a root an agent made (depth above zero) is still the root.
+    app.error = "";
+    app.chat = { key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", cwd: "/work/repo", title: "t", updated: "" } as any;
+    app.msgs = [{ id: "T", from: "agent:lead", to: "agent:claude", thread: "T", depth: 1, state: "done", meta: { acp_cwd: "/work/root" }, created_at: "", updated_at: "" },
+      { id: "m2", from: "user:me", to: "agent:codex@far", thread: "T", depth: 0, state: "done", created_at: "", updated_at: "" }] as any;
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    type("");
+    type("!pwd");
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/work/root"]);
   });
 });
