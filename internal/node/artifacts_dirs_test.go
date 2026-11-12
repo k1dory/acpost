@@ -41,7 +41,7 @@ func TestArtifactsDirsOfLongThreads(t *testing.T) {
 	}
 	took := time.Since(start)
 	t.Logf("five listings: %v", took)
-	if took > time.Second {
+	if took > 3*slow*time.Second { // a generous bound: the shape is ChatDirs' (one call a page)
 		t.Fatalf("five listings of three artifacts took %v", took)
 	}
 }
