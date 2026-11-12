@@ -16,7 +16,7 @@ export type Msg = {
 export type Module = { id: string; name: string; url: string };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
 export type Chat = {
-  key: string; kind: "thread" | "session" | "cloud"; agent?: string; agents?: string[]; title: string; cwd?: string; repo?: string;
+  key: string; kind: "thread" | "session" | "cloud"; agent?: string; agents?: string[]; parent?: string; title: string; cwd?: string; repo?: string;
   thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;
   messages?: number; running?: number; queued?: number; failed?: number; folder?: string; cloud_agent?: string;
 };
@@ -550,8 +550,11 @@ class App {
     // node's, never a namesake elsewhere.
     const m = /^\s*@([^\s@]+(?:@[^\s@]+)?)(?:\s+|$)/.exec(text);
     if (!m) return null;
-    const name = m[1].toLowerCase();
-    const to = all.find(a => a.slice("agent:".length).toLowerCase() === name);
+    // The name as written; another case only when one agent alone has it ("reviewer" and
+    // "Reviewer" are two agents).
+    const named = (a: string) => a.slice("agent:".length);
+    const loose = all.filter(a => named(a).toLowerCase() === m[1].toLowerCase());
+    const to = all.find(a => named(a) === m[1]) ?? (loose.length === 1 ? loose[0] : undefined);
     return to ? { to, rest: text.slice(m[0].length) } : null;
   }
 

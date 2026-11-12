@@ -61,6 +61,12 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 				if slices.Contains(c.Agents, root.To) {
 					chat.Agent = root.To
 				}
+				// What an agent asked another while it handled a message: a chat under that one's.
+				if root.Parent != "" {
+					if up, err := n.st.Get(ctx, root.Parent); err == nil && up.Thread != "" && up.Thread != c.Thread {
+						chat.Parent = "thread:" + up.Thread
+					}
+				}
 			}
 			if len(c.Agents) > 1 {
 				chat.Agents = slices.Clone(c.Agents) // the store's order stays for what follows

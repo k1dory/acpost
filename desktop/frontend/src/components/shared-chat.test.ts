@@ -300,6 +300,19 @@ describe("a chat shared by several agents", () => {
     });
   }
 
+  it("agents whose names differ by case alone are named as written, by @name and by the menu", async () => {
+    const app = await setup([msg("m1", "agent:claude")], ["claude", "reviewer", "Reviewer"]);
+    expect(app.mention("@Reviewer inspect")).toEqual({ to: "agent:Reviewer", rest: "inspect" });
+    expect(app.mention("@reviewer inspect")).toEqual({ to: "agent:reviewer", rest: "inspect" });
+    expect(app.mention("@REVIEWER inspect")).toBeNull();          // which of the two is not said
+    expect(app.mention("@Claude hi")).toEqual({ to: "agent:claude", rest: "hi" });
+    type("@Reviewer");
+    // (each row: the avatar's initial, then the name)
+    expect([...document.querySelectorAll(".menu .mi.who")].map(i => i.textContent!.trim().slice(-8))).toEqual(["Reviewer", "reviewer"]);
+    press("Enter");
+    expect(app.target).toBe("agent:Reviewer");
+  });
+
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
     let app = await setup([msg("m1", "agent:claude")], ["claude"]);
     expect(chip()).toBeNull();

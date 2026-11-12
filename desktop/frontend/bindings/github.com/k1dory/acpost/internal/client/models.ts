@@ -291,6 +291,12 @@ export class Chat {
      * Agents: all a thread's messages went to, when more than one (a shared chat).
      */
     "agents"?: string[];
+
+    /**
+     * Parent is the chat (its key) an agent of which started this one: a thread whose first
+     * message an agent sent while it handled a message of that chat (a subagent's chat).
+     */
+    "parent"?: string;
     "title": string;
     "cwd"?: string;
     "repo"?: string;

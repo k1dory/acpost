@@ -273,3 +273,30 @@ func TestSharedChatKeepsItsSession(t *testing.T) {
 		t.Fatalf("after another agent joined: %q of %q, was %q of %q", s, a, sid, agent)
 	}
 }
+
+// The task's first message that ran is found past a page of others of the same label.
+func TestSharedChatTaskSessionsDirectoryPastAPage(t *testing.T) {
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := func(name, extra string) string {
+		return fmt.Sprintf("  %s:\n    driver: acp\n    command: [%q]\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n%s", name, os.Args[0], t.TempDir(), extra)
+	}
+	n := newNode(t, "limits: {max_queued_per_agent: 2000}\nagents:\n"+agent("fake", "    session: task\n")+agent("other", ""))
+	// More than a page of the label's messages that made no session of the user's: a client's, settled.
+	for i := 0; i < store.MaxPage+5; i++ {
+		m := &store.Message{ID: store.NewID(), From: "client:ci", To: "agent:fake", Task: "x", Body: "theirs", Origin: "hub"}
+		if _, _, err := n.st.Insert(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		if err := n.st.Settle(ctx, m.ID, store.Done, "", "", "", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask(t, n, SendRequest{To: "fake", Task: "x", Cwd: work, Body: "echo one"})
+	second := ask(t, n, SendRequest{To: "fake", Task: "x", Body: "cwd"})
+	if got := ask(t, n, SendRequest{To: "other", Thread: second.Thread, Body: "cwd"}).Reply; got != work {
+		t.Fatalf("the agent called in runs in %q, the task's session in %q", got, work)
+	}
+}

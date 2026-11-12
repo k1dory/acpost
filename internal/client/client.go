@@ -145,12 +145,15 @@ type Chat struct {
 	Kind  string `json:"kind"` // thread, session, cloud
 	Agent string `json:"agent,omitempty"`
 	// Agents: all a thread's messages went to, when more than one (a shared chat).
-	Agents  []string `json:"agents,omitempty"`
-	Title   string   `json:"title"`
-	Cwd     string   `json:"cwd,omitempty"`
-	Repo    string   `json:"repo,omitempty"`
-	Thread  string   `json:"thread,omitempty"`
-	Session string   `json:"session,omitempty"` // the ACP session (a thread's, or the chat itself)
+	Agents []string `json:"agents,omitempty"`
+	// Parent is the chat (its key) an agent of which started this one: a thread whose first
+	// message an agent sent while it handled a message of that chat (a subagent's chat).
+	Parent  string `json:"parent,omitempty"`
+	Title   string `json:"title"`
+	Cwd     string `json:"cwd,omitempty"`
+	Repo    string `json:"repo,omitempty"`
+	Thread  string `json:"thread,omitempty"`
+	Session string `json:"session,omitempty"` // the ACP session (a thread's, or the chat itself)
 	// SessionAgent is the agent whose session Session is (a thread's agents differ).
 	SessionAgent string    `json:"session_agent,omitempty"`
 	Sandbox      string    `json:"sandbox,omitempty"`
