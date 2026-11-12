@@ -220,6 +220,7 @@
   .md :global(.mm.drawn svg) { max-width: 100%; height: auto; }
   .md :global(.mm pre) { border: 1px solid var(--line-soft); border-radius: 14px; }
   .md :global(.uib.drawn > .code) { display: none; }
+  .md :global(.uib) { min-width: 0; max-width: 100%; }
   .md :global(code.pl) { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .md :global(code.pl:hover) { color: var(--accent); }
   .md :global(a) { color: var(--accent); text-decoration: none; }

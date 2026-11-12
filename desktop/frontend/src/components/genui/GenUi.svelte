@@ -78,8 +78,10 @@
 </div>
 
 <style>
-  .gu { display: flex; flex-direction: column; gap: 10px; margin: 0 0 .8em; line-height: 1.45; overflow-wrap: anywhere; }
-  .card { border: 1px solid var(--line-soft); border-radius: 14px; padding: 12px 14px; background: var(--page); min-width: 0; }
+  /* Never wider than the chat's column (its grids are minmax(0, 1fr)): a wide table or board
+     scrolls inside its own card. */
+  .gu { display: flex; flex-direction: column; gap: 10px; margin: 0 0 .8em; line-height: 1.45; overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
+  .card { border: 1px solid var(--line-soft); border-radius: 14px; padding: 12px 14px; background: var(--page); min-width: 0; max-width: 100%; overflow-x: auto; box-sizing: border-box; }
   h4 { margin: 0 0 9px; font-size: 13px; font-weight: 600; }
   .t { font-weight: 500; }
   .txt { color: var(--ink-2); font-size: 12.5px; white-space: pre-wrap; }
