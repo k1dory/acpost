@@ -70,7 +70,7 @@ describe("artifact references, review round 2", () => {
     await follow(app, 1);
     await follow(app, 0); // the first one again
     expect(app.openedArtifacts.map((a: any) => a.path)).toEqual(["/project-a/docs/notes.md", "/project-b/docs/notes.md"]);
-    expect(app.artifact.path).toBe("/project-a/docs/notes.md");
+    expect(app.artifact?.path).toBe("/project-a/docs/notes.md");
 
     const panel = document.createElement("div");
     document.body.append(panel);
@@ -84,7 +84,7 @@ describe("artifact references, review round 2", () => {
   it("follows relative links one after another from where each document is", async () => {
     const app = await showApp();
     await follow(app, 0);
-    expect(app.artifact.path).toBe("/project-a/docs/notes.md");
+    expect(app.artifact?.path).toBe("/project-a/docs/notes.md");
     const panel = document.createElement("div");
     document.body.append(panel);
     mounted.push(mount((await import("./Artifacts.svelte")).default, { target: panel }));
@@ -92,7 +92,7 @@ describe("artifact references, review round 2", () => {
     expect(panel.querySelector(".md-wrap")?.textContent).toContain("Then");
     click(panel.querySelector(".md-wrap a")); // more.md, from /project-a/docs
     await settle();
-    expect(app.artifact.path).toBe("/project-a/docs/more.md");
+    expect(app.artifact?.path).toBe("/project-a/docs/more.md");
     expect(panel.querySelector(".md-wrap")?.textContent).toContain("The end.");
   });
 });
