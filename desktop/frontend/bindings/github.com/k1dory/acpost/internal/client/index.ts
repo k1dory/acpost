@@ -6,6 +6,7 @@ export {
     AgentInfo,
     AgentOption,
     AgentOptions,
+    Artifacts,
     AskingRequest,
     Changes,
     Chat,

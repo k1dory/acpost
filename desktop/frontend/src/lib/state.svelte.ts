@@ -106,7 +106,7 @@ class App {
     this.panel = on;
     try { localStorage.setItem("panel-open", on ? "1" : "0"); } catch {}
   }
-  view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide">("chat");
+  view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "artifacts" | "ide">("chat");
   /** In the IDE: a file the agent just edited is shown there, as a diff (kept between launches). */
   ideFollow = $state(savedFollow());
   setIdeFollow(on: boolean) {

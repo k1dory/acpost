@@ -58,6 +58,8 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("POST /v1/terminals/{id}/resize", s.auth(s.termResize))
 	mux.HandleFunc("DELETE /v1/terminals/{id}", s.auth(s.termClose))
 	mux.HandleFunc("GET /v1/messages/{id}/files", s.auth(s.files))
+	mux.HandleFunc("GET /v1/artifacts", s.auth(s.artifacts))
+	mux.HandleFunc("GET /v1/artifacts/head", s.auth(s.artifactHead))
 	mux.HandleFunc("POST /v1/attach", s.auth(s.attach))
 	mux.HandleFunc("POST /v1/messages/{id}/cancel", s.auth(s.cancel))
 	mux.HandleFunc("POST /v1/messages/{id}/disown", s.auth(s.disown)) // a joined node gives up a send it has no answer for
@@ -452,6 +454,43 @@ func (s *server) files(w http.ResponseWriter, r *http.Request, p node.Principal)
 		files = []store.File{}
 	}
 	writeJSON(w, 200, map[string]any{"items": files})
+}
+
+// artifacts lists a page of the node's user's artifacts: ?q= matches a name or an address,
+// ?before= is a page's next, ?limit= its length.
+func (s *server) artifacts(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	q := r.URL.Query()
+	aq := store.ArtifactQuery{Match: q.Get("q"), Before: q.Get("before")}
+	if l := q.Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil || n < 0 {
+			writeErr(w, &node.Error{Code: "invalid", Message: "limit: a number of artifacts"})
+			return
+		}
+		aq.Limit = n
+	}
+	out, err := s.n.Artifacts(r.Context(), p, aq)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+// artifactHead is a reply's file with the start of its content: ?msg=, ?name=, ?max= bytes.
+func (s *server) artifactHead(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	q := r.URL.Query()
+	max, err := strconv.Atoi(q.Get("max"))
+	if err != nil || max <= 0 || q.Get("msg") == "" || q.Get("name") == "" {
+		writeErr(w, &node.Error{Code: "invalid", Message: "msg, name and max (bytes) are asked for"})
+		return
+	}
+	out, err := s.n.ArtifactHead(r.Context(), p, q.Get("msg"), q.Get("name"), max)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *server) attach(w http.ResponseWriter, r *http.Request, p node.Principal) {

@@ -162,6 +162,9 @@
       <button class="row nr" class:sel={app.view === "wiki"} onclick={() => (app.view = "wiki")}>
         <span class="ic"><Icon name="book" size={14} /></span><span class="t"><span class="title">{t("Wiki")}</span></span>
       </button>
+      <button class="row nr" class:sel={app.view === "artifacts"} onclick={() => (app.view = "artifacts")}>
+        <span class="ic"><Icon name="file" size={14} /></span><span class="t"><span class="title">{t("Artifacts")}</span></span>
+      </button>
     </div>
   </div>
 

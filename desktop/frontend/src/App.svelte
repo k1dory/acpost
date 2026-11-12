@@ -13,6 +13,7 @@
   import Board from "./components/Board.svelte";
   import Palette from "./components/Palette.svelte";
   import Wiki from "./components/Wiki.svelte";
+  import Library from "./components/Library.svelte";
   import IDE from "./components/IDE.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
 
@@ -131,6 +132,8 @@
     <Board />
   {:else if app.view === "wiki"}
     <Wiki />
+  {:else if app.view === "artifacts"}
+    <Library />
   {:else}
     <!-- The chat, and in the IDE the same chat as a column on the right (one instance: a draft being
          typed stays), VS Code taking the rest of the window. -->

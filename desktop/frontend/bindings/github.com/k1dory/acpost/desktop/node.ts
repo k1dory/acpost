@@ -42,17 +42,38 @@ export function Answer(msgID: string, requestID: string, optionID: string): $Can
 }
 
 /**
+ * ArtifactPreview is what a card shows of an artifact: a picture whole when it is small, the start
+ * of a text; of anything else (a page, a PDF, a bigger picture) its name, type and size, no
+ * content. msg and name are a reply's file; path is a file of this Mac.
+ */
+export function ArtifactPreview(msg: string, name: string, path: string): $CancellablePromise<$models.Artifact> {
+    return $Call.ByID(2908061038, msg, name, path).then(($result: any) => {
+        return $$createType2($result);
+    });
+}
+
+/**
+ * Artifacts lists a page of the artifacts of every chat, newest first: match filters by name or
+ * address, before is the previous page's next.
+ */
+export function Artifacts(match: string, before: string, limit: number): $CancellablePromise<client$0.Artifacts> {
+    return $Call.ByID(4200384051, match, before, limit).then(($result: any) => {
+        return $$createType3($result);
+    });
+}
+
+/**
  * Asking lists the permission requests waiting for a person.
  */
 export function Asking(): $CancellablePromise<client$0.AskingRequest[]> {
     return $Call.ByID(1866426735).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType5($result);
     });
 }
 
 export function Backlog(): $CancellablePromise<store$0.BacklogItem[]> {
     return $Call.ByID(2175759499).then(($result: any) => {
-        return $$createType5($result);
+        return $$createType7($result);
     });
 }
 
@@ -68,7 +89,7 @@ export function CILog(agent: string, job: string, target: string): $CancellableP
  */
 export function Cancel(id: string): $CancellablePromise<store$0.Message> {
     return $Call.ByID(4186738330, id).then(($result: any) => {
-        return $$createType6($result);
+        return $$createType8($result);
     });
 }
 
@@ -77,7 +98,7 @@ export function Cancel(id: string): $CancellablePromise<store$0.Message> {
  */
 export function Changes(id: string): $CancellablePromise<client$0.Changes> {
     return $Call.ByID(2722447793, id).then(($result: any) => {
-        return $$createType7($result);
+        return $$createType9($result);
     });
 }
 
@@ -86,7 +107,7 @@ export function Changes(id: string): $CancellablePromise<client$0.Changes> {
  */
 export function Chats(): $CancellablePromise<client$0.Chats> {
     return $Call.ByID(2665631487).then(($result: any) => {
-        return $$createType8($result);
+        return $$createType10($result);
     });
 }
 
@@ -95,7 +116,7 @@ export function Chats(): $CancellablePromise<client$0.Chats> {
  */
 export function Checks(agent: string, ref: string): $CancellablePromise<forge$0.Check[]> {
     return $Call.ByID(2396732497, agent, ref).then(($result: any) => {
-        return $$createType10($result);
+        return $$createType12($result);
     });
 }
 
@@ -110,7 +131,7 @@ export function CloseTerminal(id: string): $CancellablePromise<void> {
 
 export function CloudAgents(): $CancellablePromise<$models.CloudCatalog> {
     return $Call.ByID(1938270843).then(($result: any) => {
-        return $$createType11($result);
+        return $$createType13($result);
     });
 }
 
@@ -119,7 +140,7 @@ export function CloudAgents(): $CancellablePromise<$models.CloudCatalog> {
  */
 export function CloudBuild(): $CancellablePromise<client$0.CloudCatalogue> {
     return $Call.ByID(121105999).then(($result: any) => {
-        return $$createType12($result);
+        return $$createType14($result);
     });
 }
 
@@ -130,7 +151,7 @@ export function CloudBuild(): $CancellablePromise<client$0.CloudCatalogue> {
  */
 export function CloudConnect(rawURL: string, token: string, ca: string): $CancellablePromise<$models.CloudConnected> {
     return $Call.ByID(2604279397, rawURL, token, ca).then(($result: any) => {
-        return $$createType13($result);
+        return $$createType15($result);
     });
 }
 
@@ -146,7 +167,7 @@ export function CloudDeleteAgent(cloud: string, name: string): $CancellablePromi
  */
 export function CloudDeployAgent(cloud: string, a: client$0.CloudAgentSpec, plan: string): $CancellablePromise<client$0.CloudDeployed> {
     return $Call.ByID(1925151599, cloud, a, plan).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType16($result);
     });
 }
 
@@ -155,7 +176,7 @@ export function CloudDeployAgent(cloud: string, a: client$0.CloudAgentSpec, plan
  */
 export function CloudDraft(r: client$0.CloudDraftRequest): $CancellablePromise<client$0.CloudDraft> {
     return $Call.ByID(2557897080, r).then(($result: any) => {
-        return $$createType15($result);
+        return $$createType17($result);
     });
 }
 
@@ -165,7 +186,7 @@ export function CloudDraft(r: client$0.CloudDraftRequest): $CancellablePromise<c
  */
 export function CloudDraftResult(msg: string): $CancellablePromise<client$0.CloudDraft> {
     return $Call.ByID(266151553, msg).then(($result: any) => {
-        return $$createType15($result);
+        return $$createType17($result);
     });
 }
 
@@ -174,7 +195,7 @@ export function CloudDraftResult(msg: string): $CancellablePromise<client$0.Clou
  */
 export function CloudHistory(id: string): $CancellablePromise<store$0.Event[]> {
     return $Call.ByID(1162270963, id).then(($result: any) => {
-        return $$createType17($result);
+        return $$createType19($result);
     });
 }
 
@@ -183,7 +204,7 @@ export function CloudHistory(id: string): $CancellablePromise<store$0.Event[]> {
  */
 export function CloudInfo(): $CancellablePromise<client$0.CloudInfo> {
     return $Call.ByID(3600612553).then(($result: any) => {
-        return $$createType18($result);
+        return $$createType20($result);
     });
 }
 
@@ -193,7 +214,7 @@ export function CloudInfo(): $CancellablePromise<client$0.CloudInfo> {
  */
 export function CloudPlanAgent(cloud: string, a: client$0.CloudAgentSpec): $CancellablePromise<client$0.CloudPlan> {
     return $Call.ByID(2681127083, cloud, a).then(($result: any) => {
-        return $$createType19($result);
+        return $$createType21($result);
     });
 }
 
@@ -204,7 +225,7 @@ export function CloudPlanAgent(cloud: string, a: client$0.CloudAgentSpec): $Canc
  */
 export function CreateCloudTask(agent: string, repo: string, name: string, idem: string): $CancellablePromise<client$0.Chat> {
     return $Call.ByID(1313616452, agent, repo, name, idem).then(($result: any) => {
-        return $$createType20($result);
+        return $$createType22($result);
     });
 }
 
@@ -213,7 +234,7 @@ export function CreateCloudTask(agent: string, repo: string, name: string, idem:
  */
 export function CreateFolder(name: string): $CancellablePromise<store$0.Folder> {
     return $Call.ByID(1518361552, name).then(($result: any) => {
-        return $$createType21($result);
+        return $$createType23($result);
     });
 }
 
@@ -257,7 +278,7 @@ export function EditQueued(id: string, body: string): $CancellablePromise<string
  */
 export function Events(id: string, after: number): $CancellablePromise<store$0.Event[]> {
     return $Call.ByID(3699874913, id, after).then(($result: any) => {
-        return $$createType17($result);
+        return $$createType19($result);
     });
 }
 
@@ -283,19 +304,19 @@ export function Follow(id: string, after: number, gen: number): $CancellableProm
  */
 export function Forge(agent: string): $CancellablePromise<client$0.ForgeInfo> {
     return $Call.ByID(4032596231, agent).then(($result: any) => {
-        return $$createType22($result);
+        return $$createType24($result);
     });
 }
 
 export function ForgeAccounts(): $CancellablePromise<client$0.ForgeAccount[]> {
     return $Call.ByID(2024987971).then(($result: any) => {
-        return $$createType24($result);
+        return $$createType26($result);
     });
 }
 
 export function ForgeLogin(host: string, kind: string, token: string): $CancellablePromise<client$0.ForgeAccount> {
     return $Call.ByID(976311564, host, kind, token).then(($result: any) => {
-        return $$createType23($result);
+        return $$createType25($result);
     });
 }
 
@@ -323,7 +344,7 @@ export function GuardNavigation(): $CancellablePromise<void> {
  */
 export function Handoff(r: client$0.HandoffRequest): $CancellablePromise<client$0.HandoffResult> {
     return $Call.ByID(3875074966, r).then(($result: any) => {
-        return $$createType25($result);
+        return $$createType27($result);
     });
 }
 
@@ -386,7 +407,7 @@ export function IDETheme(dark: boolean): $CancellablePromise<void> {
 
 export function Knowledge(): $CancellablePromise<store$0.Note[]> {
     return $Call.ByID(871242260).then(($result: any) => {
-        return $$createType27($result);
+        return $$createType29($result);
     });
 }
 
@@ -397,13 +418,13 @@ export function Knowledge(): $CancellablePromise<store$0.Note[]> {
  */
 export function LocalFile(path: string, base: string): $CancellablePromise<$models.Artifact> {
     return $Call.ByID(302168629, path, base).then(($result: any) => {
-        return $$createType28($result);
+        return $$createType2($result);
     });
 }
 
 export function MCPServers(): $CancellablePromise<store$0.MCPServer[]> {
     return $Call.ByID(3433588060).then(($result: any) => {
-        return $$createType30($result);
+        return $$createType31($result);
     });
 }
 
@@ -422,7 +443,7 @@ export function Menu(x: number, y: number, titles: string[], keys: string[], che
  */
 export function MessageFile(id: string, name: string): $CancellablePromise<$models.Artifact> {
     return $Call.ByID(1039725801, id, name).then(($result: any) => {
-        return $$createType28($result);
+        return $$createType2($result);
     });
 }
 
@@ -457,7 +478,7 @@ export function OpenLocal(path: string, base: string): $CancellablePromise<void>
  */
 export function OpenTerminal(agent: string, cols: number, rows: number): $CancellablePromise<client$0.Terminal> {
     return $Call.ByID(2110126032, agent, cols, rows).then(($result: any) => {
-        return $$createType31($result);
+        return $$createType32($result);
     });
 }
 
@@ -466,7 +487,7 @@ export function OpenTerminal(agent: string, cols: number, rows: number): $Cancel
  */
 export function Options(agent: string): $CancellablePromise<client$0.AgentOptions> {
     return $Call.ByID(3215550814, agent).then(($result: any) => {
-        return $$createType32($result);
+        return $$createType33($result);
     });
 }
 
@@ -479,7 +500,7 @@ export function PickDirectory(start: string): $CancellablePromise<string> {
 
 export function Playbooks(): $CancellablePromise<store$0.Playbook[]> {
     return $Call.ByID(3511904892).then(($result: any) => {
-        return $$createType34($result);
+        return $$createType35($result);
     });
 }
 
@@ -517,13 +538,13 @@ export function PreviewShow(x: number, y: number, w: number, h: number): $Cancel
  */
 export function Pulls(agent: string, state: string): $CancellablePromise<forge$0.Pull[]> {
     return $Call.ByID(2911689412, agent, state).then(($result: any) => {
-        return $$createType36($result);
+        return $$createType37($result);
     });
 }
 
 export function PutBacklogItem(b: store$0.BacklogItem): $CancellablePromise<store$0.BacklogItem> {
     return $Call.ByID(409587051, b).then(($result: any) => {
-        return $$createType4($result);
+        return $$createType6($result);
     });
 }
 
@@ -545,7 +566,7 @@ export function PutPlaybook(name: string, body: string): $CancellablePromise<voi
 
 export function PutSchedule(sc: store$0.Schedule): $CancellablePromise<store$0.Schedule> {
     return $Call.ByID(2968062976, sc).then(($result: any) => {
-        return $$createType37($result);
+        return $$createType38($result);
     });
 }
 
@@ -566,7 +587,7 @@ export function SaveArtifact(name: string, data: string): $CancellablePromise<st
 
 export function Schedules(): $CancellablePromise<store$0.Schedule[]> {
     return $Call.ByID(1407160058).then(($result: any) => {
-        return $$createType38($result);
+        return $$createType39($result);
     });
 }
 
@@ -575,7 +596,7 @@ export function Schedules(): $CancellablePromise<store$0.Schedule[]> {
  */
 export function SearchDirs(q: string): $CancellablePromise<string[]> {
     return $Call.ByID(3291189440, q).then(($result: any) => {
-        return $$createType39($result);
+        return $$createType40($result);
     });
 }
 
@@ -584,7 +605,7 @@ export function SearchDirs(q: string): $CancellablePromise<string[]> {
  */
 export function SendTask(t: $models.Task): $CancellablePromise<store$0.Message> {
     return $Call.ByID(1924030611, t).then(($result: any) => {
-        return $$createType6($result);
+        return $$createType8($result);
     });
 }
 
@@ -593,7 +614,7 @@ export function SendTask(t: $models.Task): $CancellablePromise<store$0.Message> 
  */
 export function SessionHistory(agent: string, id: string, cwd: string): $CancellablePromise<store$0.Event[]> {
     return $Call.ByID(3891057372, agent, id, cwd).then(($result: any) => {
-        return $$createType17($result);
+        return $$createType19($result);
     });
 }
 
@@ -613,7 +634,7 @@ export function StartBacklogItem(id: string, agent: string): $CancellablePromise
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType40($result);
+        return $$createType41($result);
     });
 }
 
@@ -647,7 +668,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType41($result);
+        return $$createType42($result);
     });
 }
 
@@ -656,7 +677,7 @@ export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
  */
 export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
     return $Call.ByID(3080916840, id).then(($result: any) => {
-        return $$createType43($result);
+        return $$createType44($result);
     });
 }
 
@@ -674,19 +695,19 @@ export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType45($result);
+        return $$createType46($result);
     });
 }
 
 export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
     return $Call.ByID(3522603132, repo).then(($result: any) => {
-        return $$createType47($result);
+        return $$createType48($result);
     });
 }
 
 export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
     return $Call.ByID(52380493).then(($result: any) => {
-        return $$createType49($result);
+        return $$createType50($result);
     });
 }
 
@@ -700,51 +721,52 @@ export function WriteWiki(repo: string, agent: string, lang: string): $Cancellab
 // Private type creation functions
 const $$createType0 = client$0.AgentInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = client$0.AskingRequest.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = store$0.BacklogItem.createFrom;
+const $$createType2 = $models.Artifact.createFrom;
+const $$createType3 = client$0.Artifacts.createFrom;
+const $$createType4 = client$0.AskingRequest.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = store$0.Message.createFrom;
-const $$createType7 = client$0.Changes.createFrom;
-const $$createType8 = client$0.Chats.createFrom;
-const $$createType9 = forge$0.Check.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = $models.CloudCatalog.createFrom;
-const $$createType12 = client$0.CloudCatalogue.createFrom;
-const $$createType13 = $models.CloudConnected.createFrom;
-const $$createType14 = client$0.CloudDeployed.createFrom;
-const $$createType15 = client$0.CloudDraft.createFrom;
-const $$createType16 = store$0.Event.createFrom;
-const $$createType17 = $Create.Array($$createType16);
-const $$createType18 = client$0.CloudInfo.createFrom;
-const $$createType19 = client$0.CloudPlan.createFrom;
-const $$createType20 = client$0.Chat.createFrom;
-const $$createType21 = store$0.Folder.createFrom;
-const $$createType22 = client$0.ForgeInfo.createFrom;
-const $$createType23 = client$0.ForgeAccount.createFrom;
-const $$createType24 = $Create.Array($$createType23);
-const $$createType25 = client$0.HandoffResult.createFrom;
-const $$createType26 = store$0.Note.createFrom;
-const $$createType27 = $Create.Array($$createType26);
-const $$createType28 = $models.Artifact.createFrom;
-const $$createType29 = store$0.MCPServer.createFrom;
-const $$createType30 = $Create.Array($$createType29);
-const $$createType31 = client$0.Terminal.createFrom;
-const $$createType32 = client$0.AgentOptions.createFrom;
-const $$createType33 = store$0.Playbook.createFrom;
-const $$createType34 = $Create.Array($$createType33);
-const $$createType35 = forge$0.Pull.createFrom;
-const $$createType36 = $Create.Array($$createType35);
-const $$createType37 = store$0.Schedule.createFrom;
-const $$createType38 = $Create.Array($$createType37);
-const $$createType39 = $Create.Array($Create.Any);
-const $$createType40 = $models.Connection.createFrom;
-const $$createType41 = $Create.Array($$createType6);
-const $$createType42 = client$0.TreeNode.createFrom;
-const $$createType43 = $Create.Array($$createType42);
-const $$createType44 = client$0.UsageReport.createFrom;
-const $$createType45 = $Create.Array($$createType44);
-const $$createType46 = store$0.WikiPage.createFrom;
-const $$createType47 = $Create.Array($$createType46);
-const $$createType48 = store$0.Wiki.createFrom;
-const $$createType49 = $Create.Array($$createType48);
+const $$createType6 = store$0.BacklogItem.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = store$0.Message.createFrom;
+const $$createType9 = client$0.Changes.createFrom;
+const $$createType10 = client$0.Chats.createFrom;
+const $$createType11 = forge$0.Check.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = $models.CloudCatalog.createFrom;
+const $$createType14 = client$0.CloudCatalogue.createFrom;
+const $$createType15 = $models.CloudConnected.createFrom;
+const $$createType16 = client$0.CloudDeployed.createFrom;
+const $$createType17 = client$0.CloudDraft.createFrom;
+const $$createType18 = store$0.Event.createFrom;
+const $$createType19 = $Create.Array($$createType18);
+const $$createType20 = client$0.CloudInfo.createFrom;
+const $$createType21 = client$0.CloudPlan.createFrom;
+const $$createType22 = client$0.Chat.createFrom;
+const $$createType23 = store$0.Folder.createFrom;
+const $$createType24 = client$0.ForgeInfo.createFrom;
+const $$createType25 = client$0.ForgeAccount.createFrom;
+const $$createType26 = $Create.Array($$createType25);
+const $$createType27 = client$0.HandoffResult.createFrom;
+const $$createType28 = store$0.Note.createFrom;
+const $$createType29 = $Create.Array($$createType28);
+const $$createType30 = store$0.MCPServer.createFrom;
+const $$createType31 = $Create.Array($$createType30);
+const $$createType32 = client$0.Terminal.createFrom;
+const $$createType33 = client$0.AgentOptions.createFrom;
+const $$createType34 = store$0.Playbook.createFrom;
+const $$createType35 = $Create.Array($$createType34);
+const $$createType36 = forge$0.Pull.createFrom;
+const $$createType37 = $Create.Array($$createType36);
+const $$createType38 = store$0.Schedule.createFrom;
+const $$createType39 = $Create.Array($$createType38);
+const $$createType40 = $Create.Array($Create.Any);
+const $$createType41 = $models.Connection.createFrom;
+const $$createType42 = $Create.Array($$createType8);
+const $$createType43 = client$0.TreeNode.createFrom;
+const $$createType44 = $Create.Array($$createType43);
+const $$createType45 = client$0.UsageReport.createFrom;
+const $$createType46 = $Create.Array($$createType45);
+const $$createType47 = store$0.WikiPage.createFrom;
+const $$createType48 = $Create.Array($$createType47);
+const $$createType49 = store$0.Wiki.createFrom;
+const $$createType50 = $Create.Array($$createType49);

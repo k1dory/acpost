@@ -46,3 +46,10 @@ another machine's). The diff's left side is the file as it is with the edit take
 once, replaced by the old): an edit whose text the event cut, or that is no longer in the file, opens
 the file without a diff. The chat's header there has "New task" and "Another chat" (the palette),
 the sidebar being hidden.
+
+Artifacts, in the sidebar beside Tasks and Wiki, gathers what the agents of every chat produced:
+the files attached to their replies, and the documents their turns made or changed on this Mac
+(pages, Markdown, pictures, PDFs, tables; not every source file). A card shows a little of its
+file, read only once the card comes near the screen (a small picture whole, the first lines of a
+text); a click opens it in the same viewer as a chat's artifacts panel, and its chat is a click
+away.
