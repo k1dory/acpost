@@ -16,7 +16,7 @@
 </div>
 
 <style>
-  .plan { border: 1px solid var(--line-soft); border-radius: var(--r-row); padding: 12px 14px; background: var(--card); display: grid; gap: 6px; }
+  .plan { border: 1px solid var(--line-soft); border-radius: var(--r-row); padding: 12px 14px; background: var(--card); display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .h { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 12.5px; margin-bottom: 4px; }
   .bar { flex: 1; height: 4px; border-radius: 4px; background: var(--track); overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--good); border-radius: 4px; transition: width .3s; }
