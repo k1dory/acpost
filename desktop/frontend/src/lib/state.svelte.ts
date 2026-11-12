@@ -180,7 +180,9 @@ class App {
       if (this.draft.where === "cloud") return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
       return this.draft.agent.includes("@") ? t("This chat's agent is on another node: a command would run on this Mac") : "";
     }
-    const to = this.target;
+    // The conversation's own agent (its first message's, the chat's): where its directory is. Who
+    // the next message goes to (another agent called into it) does not move its files.
+    const to = this.msgs.find(m => !m.depth)?.to ?? this.chat?.agent ?? this.target;
     if (this.chat?.kind === "cloud" || to.startsWith("agent:sb_")) return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
     if (to.includes("@")) return t("This chat's agent is on another node: a command would run on this Mac");
     // A chat whose directory the app does not know (started elsewhere without one: it runs in its
@@ -429,7 +431,7 @@ class App {
     // What was typed carries over, unless it is what is being sent.
     const old = this.draftMap.get("new"), d = new ComposerDraft("new");
     // (As typed it stays as typed: the same text, carried, is still the person's own.)
-    if (old && !old.busy) { d.text = old.text; if (old.typed === old.text) d.typed = old.text; d.files = old.files; old.forward(d); }
+    if (old && !old.busy) { d.put(old.text, old.own); d.files = old.files; old.forward(d); }
     // What was run from the task before: with its text, in this one; a task whose first message is
     // still going keeps its runs to itself (shown in its thread once it is one).
     if (old) this.moveShells(old, old.busy ? "sending:" + newId() : "new", old.busy ? old : d);
@@ -678,7 +680,9 @@ class App {
     const there = this.draftMap.get(to);
     if (there && there !== d) {
       // Two texts joined are not what the person typed as one: never a command (draft.ts asMessage).
-      there.text = there.text && d.text ? asMessage(there.text + "\n" + d.text) : there.text || d.text;
+      // (One of them empty: the other's text, whole, with whose it was.)
+      if (there.text && d.text) there.text = asMessage(there.text + "\n" + d.text);
+      else if (d.text) there.put(d.text, d.own);
       mergeFiles(there, d); // a request given back keeps its files first
       if (!there.op.pending() && d.op.pending()) there.op = d.op; // whole: its key with its sandbox
       d.forward(there);
@@ -876,7 +880,7 @@ class App {
       if (sent && same) {
         // (Only when something of it went: text typed since, whole, stays as typed.)
         const left = afterSent(d.text, sent.text);
-        if (left !== d.text) d.text = left;
+        if (left !== d.text) d.text = asMessage(left); // a remainder the app made: a message
         // Exactly the attachments it sent, by identity: the same file attached again meanwhile stays.
         const gone = new Set(sent.files.map(f => f.rid));
         d.files = d.files.filter(f => !gone.has(f.rid));

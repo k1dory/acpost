@@ -168,18 +168,20 @@ export class SendOp {
 
 export class ComposerDraft {
   #text = $state("");
-  /** The draft's text. Set by anything but the person's own input in the composer (type()), it is
-   * no longer what they typed: typed is forgotten. */
+  /** The draft's text. Set by anything but the person's own input in the composer (type()), a
+   * text that is not empty is no longer only theirs (own). */
   get text(): string { return this.#text; }
-  set text(v: string) { this.#text = v; this.typed = null; }
-  /** The text as the person's own typing (or pasting) in the composer left it; null once anything
-   * else set the text (cleared it, put a quotation or a playbook, joined another draft to it, gave
-   * a send back, left what remains after one). A draft is a command to run ("!…") only while its
-   * text is this: nothing the app put there is ever run, whatever it starts with — also when it is
-   * letter for letter what was typed before. */
-  typed = $state<string | null>(null);
+  set text(v: string) { this.#text = v; this.own = v === ""; }
+  /** Whether everything in the text is the person's own typing (or pasting) in the composer since
+   * it was last empty. Once anything else put text there (a quotation, a playbook, another draft
+   * joined to it, a send given back, what remains after one), it stays not theirs — whatever they
+   * type into it after — until the field is empty again. A draft is a command to run ("!…") only
+   * while it is theirs: nothing the app put there is ever run, edited or not. */
+  own = $state(true);
   /** The person's own input in the composer. */
-  type(v: string) { this.#text = v; this.typed = v; }
+  type(v: string) { this.#text = v; if (v === "") this.own = true; }
+  /** Text carried whole from another draft, with whose it was (a draft moved, nothing joined). */
+  put(v: string, own: boolean) { this.#text = v; this.own = own || v === ""; }
   /** The draft's files. Their names are unique whatever puts files here (an add, a paste, a file
    * handed over, a send given back, drafts merged): each set goes through uniqueNames, the
    * earlier keeping its name, a later one told apart (identity and order kept). The node takes no

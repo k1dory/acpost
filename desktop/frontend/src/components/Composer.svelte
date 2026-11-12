@@ -111,8 +111,9 @@
   // The text and files leave the draft only once the node has them (app.submit).
   // "!git status" is a command of the person's own, run in the chat's directory and shown in the
   // chat; not a message (one that must start with "!" starts with a space).
-  // Only what the person typed here, as they left it (d.typed): never text put in by anything else.
-  const bang = $derived(d.typed !== null && d.text === d.typed && d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
+  // Only what the person typed here since the field was last empty (d.own): never text anything
+  // else put in, edited or not.
+  const bang = $derived(d.own && d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
   async function send() {
     if (bang) {
       // As typed, to the letter (a space at its end may be an escaped one); nothing but spaces is no command.

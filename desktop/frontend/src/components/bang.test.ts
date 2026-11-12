@@ -219,6 +219,9 @@ describe("! in the composer", () => {
     app.draftOf().text = "!echo a; rm -rf x";
     svelte.flushSync();
     expect(document.querySelector(".comp.bang")).toBeNull();
+    type("!echo typed");                      // typed over what the app put: still not theirs alone
+    expect(document.querySelector(".comp.bang")).toBeNull();
+    type("");                                 // emptied: what is typed now is theirs
     type("!echo typed");
     expect(document.querySelector(".comp.bang")).toBeTruthy();
     fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
@@ -273,8 +276,8 @@ describe("! in the composer", () => {
     fake.Node.Shell.mockClear();
     for (const set of [
       () => { app.conn = { ok: true, url: "https://node.example:7443" } as any; },
-      () => { app.conn = { ok: true, url: "unix:///x/acpost.sock" } as any; app.target = "agent:claude@far"; },
-      () => { app.target = "agent:sb_1"; },
+      () => { app.conn = { ok: true, url: "unix:///x/acpost.sock" } as any; app.chat = { ...app.chat!, agent: "agent:claude@far" } as any; },
+      () => { app.chat = { ...app.chat!, agent: "agent:sb_1" } as any; },
     ]) {
       set();
       type("!rm -rf build");
@@ -365,5 +368,52 @@ describe("! in the composer", () => {
     await flush();
     expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["printf retained", "/Users/me"]);
     expect(fake.Node.SendTask).not.toHaveBeenCalled();
+  });
+
+  it("what the app left in the field does not become a command by being edited", async () => {
+    const app = await setup();
+    let ack!: (m: any) => void;
+    fake.Node.SendTask.mockImplementationOnce(() => new Promise(r => { ack = r; }));
+    fake.Node.Chats.mockResolvedValue({ items: [] });
+    type("Review");
+    enter();
+    await flush();
+    app.draftOf().text = "Review\n!printf from_playbook";   // a playbook chosen while it went
+    ack({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    await flush(); await flush(); svelte.flushSync();
+    expect(textarea().value.trim()).toBe("!printf from_playbook");
+    type(textarea().value + " ");                           // an ordinary edit of it
+    expect(document.querySelector(".comp.bang")).toBeNull();
+    fake.Node.SendTask.mockResolvedValue({ id: "m2", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    enter();
+    await flush(); await flush();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+  });
+
+  it("a command typed in a thread's own draft stays one when an emptied draft is joined to it", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    const { ComposerDraft } = await import("../lib/composer.svelte");
+    const there = app.draftOf("thread:T7");
+    there.type("!echo typed-here");
+    const from = new ComposerDraft("new");
+    (app as any).moveDraft(from, "thread:T7");
+    expect(app.draftOf("thread:T7").text).toBe("!echo typed-here");
+    expect(app.draftOf("thread:T7").own).toBe(true);
+    const other = new ComposerDraft("new");
+    other.type("typed elsewhere");
+    (app as any).moveDraft(other, "thread:T7");               // two texts joined: not a command
+    expect(app.draftOf("thread:T7").own).toBe(false);
+  });
+
+  it("a shared chat's files stay where its first agent is, whoever the next message goes to", async () => {
+    const app = await setup();
+    app.msgs = [{ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "done", created_at: "", updated_at: "" }] as any;
+    app.target = "agent:codex@far";                           // another agent called into the chat
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    type("!pwd");
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/work/repo"]);
   });
 });
