@@ -86,6 +86,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/file-at", s.auth(s.fileAt))
 	mux.HandleFunc("GET /v1/wiki", s.auth(s.wikis))
 	mux.HandleFunc("GET /v1/wiki/pages", s.auth(s.wikiPages))
+	mux.HandleFunc("GET /v1/wiki/entries", s.auth(s.wikiEntries))
 	mux.HandleFunc("POST /v1/wiki", s.auth(s.writeWiki))
 	mux.HandleFunc("DELETE /v1/wiki", s.auth(s.deleteWiki))
 	mux.HandleFunc("GET /v1/knowledge", s.auth(s.knowledge))
@@ -769,6 +770,21 @@ func (s *server) wikiPages(w http.ResponseWriter, r *http.Request, p node.Princi
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": out})
+}
+
+// wikiEntries pages through every wiki's pages: ?after= the previous answer's next, ?limit= at most.
+func (s *server) wikiEntries(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	limit, err := intParam(r, "limit")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, next, err := s.n.WikiEntries(r.Context(), p, r.URL.Query().Get("after"), int(limit))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": nonNilSlice(out), "next": next})
 }
 
 func (s *server) writeWiki(w http.ResponseWriter, r *http.Request, p node.Principal) {

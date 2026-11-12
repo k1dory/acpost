@@ -829,6 +829,51 @@ export class Wiki {
 }
 
 /**
+ * WikiEntry is a page of any repository's wiki, for a view of them all.
+ */
+export class WikiEntry {
+    "repo": string;
+    "slug": string;
+    "title": string;
+    "parent"?: string;
+    "body": string;
+
+    /**
+     * its wiki's
+     */
+    "updated": string;
+
+    /** Creates a new WikiEntry instance. */
+    constructor($$source: Partial<WikiEntry> = {}) {
+        if (!("repo" in $$source)) {
+            this["repo"] = "";
+        }
+        if (!("slug" in $$source)) {
+            this["slug"] = "";
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("body" in $$source)) {
+            this["body"] = "";
+        }
+        if (!("updated" in $$source)) {
+            this["updated"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new WikiEntry instance from a string or object.
+     */
+    static createFrom($$source: any = {}): WikiEntry {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new WikiEntry($$parsedSource as Partial<WikiEntry>);
+    }
+}
+
+/**
  * WikiPage is a page of it.
  */
 export class WikiPage {

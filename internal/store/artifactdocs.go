@@ -9,6 +9,12 @@ package store
 // the library lists are kept, so a rename carries "made" from such a path only (a temporary
 // report.tmp renamed to report.json is not counted as made). Retention removes a row with the
 // message of its latest change; collecting older changes leaves it as it is.
+//
+// Known limit (review round 10, accepted): a JSON may drop out of the listing when three things
+// meet — its creation was collected by retention, it was later renamed onto a path that had been
+// deleted before, and a turn's changes for it arrive behind a newer turn (a rebuild). The file
+// and its chat are untouched; only the library no longer lists it until a turn changes it again
+// by creating it.
 
 import (
 	"context"

@@ -425,6 +425,59 @@ func (c *Client) WikiPages(ctx context.Context, repo string) ([]store.WikiPage, 
 	return out.Items, err
 }
 
+// WikiEntries is a part of every wiki's pages, after a cursor: those and the cursor of the rest.
+func (c *Client) WikiEntries(ctx context.Context, after string, limit int) ([]store.WikiEntry, string, error) {
+	var out struct {
+		Items []store.WikiEntry `json:"items"`
+		Next  string            `json:"next"`
+	}
+	q := url.Values{}
+	if after != "" {
+		q.Set("after", after)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	_, err := c.do(ctx, "GET", "/v1/wiki/entries", q, nil, &out, nil)
+	return out.Items, out.Next, err
+}
+
+// AllWikis is every wiki's pages, up to a bound: More says some were left out.
+type AllWikis struct {
+	Pages []store.WikiEntry `json:"pages"`
+	More  bool              `json:"more,omitempty"`
+}
+
+// AllWikiEntries reads every wiki's pages, part by part, until there are none left or max pages or
+// maxBytes of their text are read.
+func (c *Client) AllWikiEntries(ctx context.Context, max, maxBytes int) (AllWikis, error) {
+	out := AllWikis{Pages: []store.WikiEntry{}}
+	after, size := "", 0
+	for {
+		part, next, err := c.WikiEntries(ctx, after, max-len(out.Pages))
+		if err != nil {
+			return AllWikis{}, err
+		}
+		for _, e := range part {
+			if len(out.Pages) == max || size+len(e.Body) > maxBytes {
+				out.More = true
+				return out, nil
+			}
+			size += len(e.Body)
+			out.Pages = append(out.Pages, e)
+		}
+		// A cursor that does not move would loop for ever: the answer is taken as the last.
+		if next == "" || next == after || len(part) == 0 {
+			return out, nil
+		}
+		if len(out.Pages) == max {
+			out.More = true
+			return out, nil
+		}
+		after = next
+	}
+}
+
 // WriteWiki has an agent write a directory's wiki: the task doing it.
 func (c *Client) WriteWiki(ctx context.Context, repo, agent, lang string) (store.Message, error) {
 	var out store.Message
