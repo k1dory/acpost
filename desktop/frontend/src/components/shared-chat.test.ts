@@ -373,6 +373,22 @@ describe("a chat shared by several agents", () => {
     expect(calls[2]).toEqual(calls[0]);
   });
 
+  it("a retry that differs only by space around it is the same message, though an agent it names is there by then", async () => {
+    const app = await setup([msg("m1", "agent:claude")], ["claude"]);
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost"));
+    type("@codex review this  ");
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    app.agents = ["claude", "codex"].map(name => ({ name, address: "agent:" + name, driver: "acp", queued: 0, running: 0 })) as any;
+    svelte.flushSync();
+    type("@codex review this");
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    const [first, again] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(first).toMatchObject({ to: "agent:claude", body: "@codex review this" });
+    expect(again).toEqual(first);
+  });
+
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
     let app = await setup([msg("m1", "agent:claude")], ["claude"]);
     expect(chip()).toBeNull();

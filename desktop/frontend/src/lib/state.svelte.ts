@@ -542,7 +542,8 @@ class App {
    * nothing in it is read as naming an agent. */
   sentBefore(d: ComposerDraft): boolean {
     const s = d.sending;
-    return !!s && (s.typed === d.text || (!!s.moved && s.task?.body === d.text.trim()));
+    // (Compared as it is sent: without the space around it.)
+    return !!s && (s.typed?.trim() === d.text.trim() || (!!s.moved && s.task?.body === d.text.trim()));
   }
   /** A message that starts by naming an agent of the chat ("@codex look at this"): the agent, and
    * the message without the name. Only where there is another agent to choose: elsewhere the
