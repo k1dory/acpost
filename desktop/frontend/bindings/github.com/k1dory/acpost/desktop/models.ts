@@ -154,6 +154,38 @@ export class Connection {
 }
 
 /**
+ * Module is one of them.
+ */
+export class Module {
+    "id": string;
+    "name": string;
+    "url": string;
+
+    /** Creates a new Module instance. */
+    constructor($$source: Partial<Module> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("url" in $$source)) {
+            this["url"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Module instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Module {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Module($$parsedSource as Partial<Module>);
+    }
+}
+
+/**
  * ShellResult is what a command did.
  */
 export class ShellResult {
