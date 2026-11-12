@@ -98,7 +98,7 @@
       {:else if kind === "pdf"}
         <iframe class="page" title={art.name} src={pdf}></iframe>
       {:else if kind === "markdown"}
-        <div class="md-wrap"><Markdown {text} /></div>
+        <div class="md-wrap"><Markdown {text} scope={cur ? "artifact:" + (cur.path ? (cur.base ?? "") + ":" + cur.path : (cur.msg ?? "") + ":" + cur.name) : ""} /></div>
       {:else if kind === "text"}
         <pre class="code selectable"><code class="hljs">{@html code}</code></pre>
       {:else}

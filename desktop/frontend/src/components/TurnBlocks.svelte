@@ -10,14 +10,15 @@
   import Icon from "./Icon.svelte";
 
   // A turn's blocks as the agent did them: text, thinking, tool calls, requests, plan, notices.
-  // msgState: the message's (a replayed history is "done").
-  let { view, msg = "", msgState, agent = "" }: { view: ReturnType<Turn["view"]>; msg?: string; msgState: string; agent?: string } = $props();
+  // msgState: the message's (a replayed history is "done"). scope: what names the turn, for what a
+  // person did to the components in its text to be kept (the message's id when it has one).
+  let { view, msg = "", msgState, agent = "", scope = msg }: { view: ReturnType<Turn["view"]>; msg?: string; msgState: string; agent?: string; scope?: string } = $props();
   const done = $derived(final(msgState));
 </script>
 
 {#each view.blocks as b, i}
   {#if b.t === "text"}
-    <Markdown text={b.text} />
+    <Markdown text={b.text} scope={scope ? scope + ":" + i : ""} />
   {:else if b.t === "thought"}
     <Thought text={b.text} ms={b.end - b.start} live={!done && i === view.blocks.length - 1} {agent} />
   {:else if b.t === "tool"}

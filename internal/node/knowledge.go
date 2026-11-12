@@ -54,11 +54,21 @@ func (n *Node) DeleteNote(ctx context.Context, p Principal, name string) error {
 }
 
 // readerNote tells an agent, once a session, how its answers are read: the acpost app renders
-// Markdown and Mermaid, so a flow is drawn rather than described.
-const readerNote = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks and Mermaid. " +
+// Markdown, Mermaid and components (```ui blocks, desktop/frontend/src/lib/genui.ts), so a flow is
+// drawn rather than described, data is a chart or a table, and a question to the user is one they
+// answer with a click. An earlier note (without components) is in turn.ts too: the app still takes
+// it off prompts of sessions started before.
+const readerNote = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks, Mermaid and ```ui components. " +
 	"When a flow, an architecture, a sequence of calls or a state machine is clearer as a picture, draw it in a ```mermaid block " +
 	"(flowchart TD/LR or sequenceDiagram; every label in double quotes, A[\"api (HTTP)\"] -->|\"calls\"| B[\"store\"]; no HTML; about 15 nodes at most). " +
-	"Do not draw what a sentence says as well.\n\n"
+	"Do not draw what a sentence says as well. " +
+	"When data, a plan or a question for the user is clearer as a component than as prose, put one strict JSON object (or an array of up to 8) in a ```ui block, " +
+	"each with \"type\" and an optional \"title\": stats {items:[{label,value,delta?}]}; " +
+	"chart {kind:\"bar\"|\"line\"|\"area\"|\"pie\",labels:[…],series:[{name,values:[a number a label]}],unit?}; " +
+	"table {columns:[…],rows:[[…]]} (the user sorts and filters it); timeline {items:[{time,title,text?,status?}]}; " +
+	"kanban {columns:[{title,cards:[{title,text?,tag?}]}]}; steps {items:[{title,status:\"done\"|\"doing\"|\"todo\"|\"failed\"}]}; " +
+	"choices {question,options:[…],multiple?}; form {fields:[{label,type:\"text\"|\"number\"|\"select\"|\"checkbox\",options?}]}. " +
+	"What the user picks or fills in comes back in their next message. Plain text in every field, no HTML.\n\n"
 
 // knowledgeSender: a message the user's notes may go with — sent here by this node's own user or
 // one of its agents (not a token client, not another node, not through the hub), whose reply could
