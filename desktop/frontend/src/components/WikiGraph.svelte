@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { t } from "../lib/i18n.svelte";
-  import { layout, type Point } from "../lib/forcelayout";
+  import { startLayout, type Point } from "../lib/forcelayout";
   import type { Edge, Item } from "../lib/wikigraph";
 
   // The graph of what the agents keep, drawn as SVG: laid out once per set (seeded, so the same
@@ -22,8 +22,27 @@
   let svg: SVGSVGElement;
   // Where a dragged node was put: kept over a new layout of the same set.
   let moved = $state(new Map<string, Point>());
-  // A drag does not lay the set out again: where nodes were put is read, not followed.
-  const base = $derived(layout(ids, edges, { seed: 1, distance: compact ? 60 : 70, pinned: untrack(() => moved) }));
+  // The layout of the set, made off the render path: steps for about 12 ms at a time, the window
+  // the person's between them (a few hundred items are done in the first slice). Until it is done
+  // the graph says so. A drag does not lay the set out again: where nodes were put is read, not
+  // followed.
+  let base = $state.raw(new Map<string, Point>());
+  let laying = $state(0); // how far a layout under way is (0: none)
+  $effect(() => {
+    const run = startLayout(ids, edges, { seed: 1, distance: compact ? 60 : 70, pinned: untrack(() => moved) });
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slice = () => {
+      const t0 = performance.now();
+      let done = run.step(1);
+      while (!done && performance.now() - t0 < 12) done = run.step(1);
+      if (done) { laying = 0; base = run.positions(); return; }
+      laying = Math.max(run.progress(), 0.01);
+      timer = setTimeout(() => { if (!stop) slice(); }, 0);
+    };
+    slice();
+    return () => { stop = true; clearTimeout(timer); };
+  });
   const pos = (id: string): Point => moved.get(id) ?? base.get(id) ?? { x: 0, y: 0 };
 
   // The view: x' = x·k + tx. Fitted to the set when it changes, not when a node is dragged.
@@ -48,8 +67,8 @@
     for (const e of edges) { if (e.from === selected) s.add(e.to); if (e.to === selected) s.add(e.from); }
     return s;
   });
-  const shown = $derived(ids.filter(id => items.has(id)));
-  const lines = $derived(edges.filter(e => items.has(e.from) && items.has(e.to)));
+  const shown = $derived(laying ? [] : ids.filter(id => items.has(id)));
+  const lines = $derived(laying ? [] : edges.filter(e => items.has(e.from) && items.has(e.to)));
   const labels = $derived(compact || k >= 1.1);
 
   function zoomAt(f: number, cx: number, cy: number) {
@@ -134,6 +153,7 @@
       {/each}
     </g>
   </svg>
+  {#if laying}<div class="laying muted"><span class="spin"></span> {t("Laying out… {n}%", { n: Math.round(laying * 100) })}</div>{/if}
   {#if !compact}
     <div class="tools">
       <button class="btn sm" onclick={() => zoomAt(1.25, w / 2, h / 2)} title={t("Zoom in")}>+</button>
@@ -171,6 +191,7 @@
   .node:focus-visible circle { stroke: var(--accent); stroke-width: 3; }
   .node text { fill: var(--ink-2); pointer-events: none; paint-order: stroke; stroke: var(--page); stroke-width: 3px; }
   .node.sel text { fill: var(--ink); font-weight: 600; }
+  .laying { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12.5px; pointer-events: none; }
   .tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
   .legend { position: absolute; left: 12px; bottom: 8px; display: flex; gap: 12px; font-size: 11px; align-items: center; flex-wrap: wrap; pointer-events: none; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }

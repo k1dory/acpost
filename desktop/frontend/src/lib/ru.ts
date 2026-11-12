@@ -304,6 +304,7 @@ export const ru: Record<string, string> = {
   "Nothing matches": "Ничего не найдено",
   "Unconnected": "Без связей",
   "Broken links": "Битые ссылки",
+  "Laying out… {n}%": "Раскладываю граф… {n}%",
   "Not every page is loaded: there are more than the app reads at once.": "Загружены не все страницы: их больше, чем приложение читает за раз",
   "Nothing yet: write a wiki for a repository, or add knowledge in Settings.": "Пока пусто: создайте вики репозитория или добавьте знания в настройках",
   "Agents view": "Чаты",
