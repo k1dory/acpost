@@ -38,7 +38,8 @@
     const toast = app.toast ? document.querySelector('[role="alert"]') : null;
     const r = paneRect(rectOf(box), f, toast ? rectOf(toast) : null);
     if (!r) return hide();
-    pane.show(m.id, r).then(() => { err = ""; }).catch(e => { if (alive) err = errText(e); });
+    // Not shown (the module was removed elsewhere): no other module's pane is left under this title.
+    pane.show(m.id, r).then(() => { err = ""; }).catch(e => { if (alive) { err = errText(e); hide(); } });
   }
   const onResize = () => place();
   $effect(() => {

@@ -163,6 +163,44 @@ describe("modules", () => {
       expect(shown()).toBe("");
     });
 
+    it("a module that cannot be shown leaves no other module's pane under its title", async () => {
+      const app = await setup();
+      fake.Node.Modules.mockResolvedValue([wiki, other]);
+      await app.loadModules();
+      const ModuleView = (await import("./ModuleView.svelte")).default;
+      let late!: () => void;
+      fake.Node.ModuleShow.mockImplementationOnce(() => new Promise<void>(r => { late = r; }));
+      let cur = svelte.mount(ModuleView, { target: document.body, props: { m: wiki } });
+      await flush(); svelte.flushSync();
+      svelte.unmount(cur);
+      fake.Node.ModuleShow.mockRejectedValue(new Error("that module is no longer there"));
+      cur = svelte.mount(ModuleView, { target: document.body, props: { m: other } });
+      mounted.push(cur);
+      await flush(); svelte.flushSync();
+      late();
+      await settle();
+      expect(shown()).toBe("");
+      expect(document.body.textContent).toContain("no longer there");
+    });
+
+    it("what is chosen in the system's menu is the entry it showed, though the list changed meanwhile", async () => {
+      const app = await setup();
+      fake.Node.Modules.mockResolvedValue([]);
+      await app.loadModules();
+      let choose!: (i: number) => void;
+      fake.Node.Menu.mockImplementation(() => new Promise<number>(r => { choose = r; }));
+      const ViewSwitch = (await import("./ViewSwitch.svelte")).default;
+      mounted.push(svelte.mount(ViewSwitch, { target: document.body }));
+      svelte.flushSync();
+      (document.querySelector("button.trig") as HTMLButtonElement).click();
+      await flush();
+      app.modules = [wiki];   // a refresh while the menu is open
+      svelte.flushSync();
+      choose(2);              // "Add a module…" as shown
+      await flush(); svelte.flushSync();
+      expect(app.view).toBe("settings");
+    });
+
     it("a page that did not load is said, with a way to try again; one that loads clears it", async () => {
       const app = await setup();
       fake.Node.Modules.mockResolvedValue([wiki]);

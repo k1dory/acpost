@@ -37,9 +37,11 @@
     const z = app.textSize, k = screenScale();
     const f = Math.abs(k - z) < 0.01 ? 1 : z;
     let i = -2;
-    try { i = await Node.Menu(r.left * f, (r.bottom + 4) * f, views.map(name), views.map(v => (v.key ? "I" : "")), views.indexOf(cur)); } catch {}
+    // The entries as the menu shows them: what is chosen is one of these, whatever the list is by then.
+    const list = views;
+    try { i = await Node.Menu(r.left * f, (r.bottom + 4) * f, list.map(name), list.map(v => (v.key ? "I" : "")), list.indexOf(cur)); } catch {}
     if (i === -2) set(true);
-    else if (i >= 0) go(views[i].view);
+    else if (i >= 0 && list[i]) go(list[i].view);
   }
   function go(v: V["view"]) {
     set(false);

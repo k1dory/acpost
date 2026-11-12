@@ -235,7 +235,23 @@ type ModuleEvent struct {
 	Message string `json:"message,omitempty"`
 }
 
-var moduleHandler func(ModuleEvent)
+var (
+	moduleHandler func(ModuleEvent)
+	moduleEvents  = make(chan ModuleEvent, 64) // to the handler, in order (a load that failed after one that ended is told after it)
+)
+
+func init() {
+	go func() {
+		for e := range moduleEvents {
+			mu.Lock()
+			f := moduleHandler
+			mu.Unlock()
+			if f != nil {
+				f(e)
+			}
+		}
+	}()
+}
 
 // OnModuleEvent sets what is told of each (called off the main thread).
 func OnModuleEvent(f func(ModuleEvent)) {
@@ -247,11 +263,9 @@ func OnModuleEvent(f func(ModuleEvent)) {
 //export goModuleEvent
 func goModuleEvent(id, kind, message *C.char) {
 	e := ModuleEvent{ID: C.GoString(id), Kind: C.GoString(kind), Message: C.GoString(message)}
-	mu.Lock()
-	f := moduleHandler
-	mu.Unlock()
-	if f != nil {
-		go f(e) // never the main thread's wait
+	select { // off the main thread, never blocking it
+	case moduleEvents <- e:
+	default:
 	}
 }
 
