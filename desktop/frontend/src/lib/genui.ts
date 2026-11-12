@@ -175,10 +175,12 @@ export function fmt(n: number): string {
 }
 
 /** A label of a chart's axis: as many decimals as its step has (0.25 → 0.00, 0.25, 0.50), every
- * label alike; scientific for a step below 1e-4. */
-export function axisLabel(v: number, step: number): string {
+ * label alike; scientific for a step below 1e-4, or when asked to be short (labels too wide for the
+ * axis's margin). */
+export function axisLabel(v: number, step: number, short = false): string {
   if (v === 0) return "0";
   step = Math.abs(step);
+  if (short) return expo(v, 3);
   if (!(step > 0) || !Number.isFinite(step)) return fmt(v);
   if (step < 1e-4 || Math.abs(v) >= 1e15) return expo(v, 3);
   let d = 0;

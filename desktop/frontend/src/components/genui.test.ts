@@ -476,4 +476,61 @@ describe("review round 3", () => {
     q<HTMLButtonElement>(".form .btn").click(); await settle();
     expect(ta.value).toBe("- n: 1\n\n");
   });
+
+  // The plot's geometry as drawn: the left margin (the grid's start), its width, a category's band.
+  const geometry = (chart: Element) => {
+    const grid = chart.querySelector("line.grid")!;
+    const L = +grid.getAttribute("x1")!, right = +grid.getAttribute("x2")!;
+    const W = +chart.querySelector("svg")!.getAttribute("viewBox")!.split(" ")[2];
+    return { L, right, W };
+  };
+
+  it("gives large axis labels room, short beyond what fits (P2)", async () => {
+    await show(block([
+      { type: "chart", kind: "bar", labels: ["a", "b"], series: [{ name: "x", values: [1e14, 3e14] }] },
+      { type: "chart", kind: "line", labels: ["a", "b"], series: [{ name: "x", values: [12000, 98000] }] },
+      { type: "chart", kind: "line", labels: ["a", "b"], series: [{ name: "x", values: [1, 3] }] },
+    ]));
+    for (const chart of all("div.chart")) {
+      const { L } = geometry(chart);
+      const labels = [...chart.querySelectorAll("text.ax[text-anchor=end]")];
+      expect(labels.length).toBeGreaterThan(1);
+      for (const l of labels) {
+        // Right-aligned at its x: its leading digit, about 6.2 units each, stays in the picture.
+        expect(+l.getAttribute("x")! - l.textContent!.length * 6.2, l.textContent!).toBeGreaterThanOrEqual(0);
+        expect(+l.getAttribute("x")!).toBe(L - 6);
+      }
+    }
+    const [huge, mid, small] = all("div.chart").map(c => [...c.querySelectorAll("text.ax[text-anchor=end]")].map(e => e.textContent));
+    expect(huge).toContain("1e14"); // written short: grouped it would not fit
+    expect(huge.every(l => !l!.includes(","))).toBe(true);
+    expect(mid).toContain("100,000"); // fits as it is, the margin wider for it
+    expect(geometry(all("div.chart")[1]).L).toBeGreaterThan(geometry(all("div.chart")[2]).L);
+    expect(small).toEqual(["0", "1", "2", "3"]);
+  });
+
+  it("keeps each category's bars in its band at the most bars a block may have, wider and scrolled (P2)", async () => {
+    const labels = Array.from({ length: 60 }, (_, i) => "c" + i);
+    const series = Array.from({ length: 8 }, (_, k) => ({ name: "s" + k, values: labels.map((_, i) => ((i * 7 + k * 3) % 11) + 1) }));
+    await show(block({ type: "chart", kind: "bar", labels, series }));
+    const chart = q("div.chart");
+    const { L, right, W } = geometry(chart);
+    const band = (right - L) / 60;
+    expect(W).toBeGreaterThan(560);
+    expect(chart.querySelector("svg")!.classList.contains("wide")).toBe(true);
+    expect(chart.querySelector("svg")!.getAttribute("style")).toContain(`width: ${W}px`);
+    const bars = [...chart.querySelectorAll("rect.bar")];
+    expect(bars).toHaveLength(480);
+    bars.forEach((b, j) => {
+      const i = j % 60; // series by series, a bar a category
+      const x = +b.getAttribute("x")!, w = +b.getAttribute("width")!;
+      expect(w).toBeGreaterThanOrEqual(2.5);
+      expect(x).toBeGreaterThanOrEqual(L + band * i - 1e-6);
+      expect(x + w).toBeLessThanOrEqual(L + band * (i + 1) + 1e-6);
+    });
+    // A few bars: as wide as the card, not wider.
+    await show(block({ type: "chart", kind: "bar", labels: ["a", "b"], series: [{ name: "x", values: [1, 2] }] }));
+    expect(geometry(q("div.chart")).W).toBe(560);
+    expect(q("div.chart svg").classList.contains("wide")).toBe(false);
+  });
 });

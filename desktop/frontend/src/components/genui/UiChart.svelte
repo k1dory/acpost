@@ -5,12 +5,27 @@
   import { fmt, axisLabel, ticks, type Chart } from "../../lib/genui";
   let { c }: { c: Chart } = $props();
 
-  const W = 560, H = 220, L = 48, R = 12, T = 10, B = 34;
-  const pw = W - L - R, ph = H - T - B;
+  // The plot's size in its own units (one a pixel when the chart is as wide as them). Its left
+  // margin is as wide as the value labels (a digit about DIGIT wide), up to LMAX: labels longer
+  // than that are written short (scientific).
+  const BASE = 560, H = 220, R = 12, T = 10, B = 34, DIGIT = 6.2, LMAX = 96;
+  // Bars of a category side by side in GROUP of its band, each at least MINBAR wide: a band too thin
+  // for that makes the chart wider than BASE, scrolled in its card.
+  const GROUP = 0.8, MINBAR = 3;
+  const ph = H - T - B;
   const n = $derived(c.labels.length);
   const all = $derived(c.series.flatMap(s => s.values));
   const scale = $derived(ticks(Math.min(...all), Math.max(...all)));
   const lo = $derived(scale[0]), hi = $derived(scale[scale.length - 1]);
+  const step = $derived(scale.length > 1 ? scale[1] - scale[0] : 1);
+  const room = (ls: string[]) => Math.max(...ls.map(l => l.length)) * DIGIT + 12;
+  const yLabels = $derived.by(() => {
+    const full = scale.map(v => axisLabel(v, step));
+    return room(full) <= LMAX ? full : scale.map(v => axisLabel(v, step, true));
+  });
+  const L = $derived(c.kind === "pie" ? 0 : Math.min(LMAX, Math.max(28, room(yLabels))));
+  const W = $derived(c.kind === "bar" ? Math.max(BASE, Math.ceil(L + R + n * (c.series.length * MINBAR) / GROUP)) : BASE);
+  const pw = $derived(W - L - R);
   // A place on the plot for any value: one the scale cannot place (never for a checked block) sits on
   // its floor rather than giving the drawing NaN.
   const y = (v: number) => {
@@ -37,8 +52,9 @@
     return c.labels[i] + ": " + of.map(k => (many ? c.series[k].name + " " : "") + fmt(c.series[k].values[i]) + unit).join(", ");
   });
 
-  // Bars side by side within a category.
-  const bw = $derived(Math.max(2, (band * 0.72) / c.series.length));
+  // Bars side by side within their category's band: a slot each, the bar most of its slot.
+  const bw = $derived((band * GROUP) / c.series.length);
+  const barX = (i: number, k: number) => x(i) - (band * GROUP) / 2 + bw * k + bw * 0.08;
   const zero = $derived(y(Math.max(lo, Math.min(0, hi))));
   const path = (vals: number[]) => vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
   const area = (vals: number[]) => path(vals) + `L${x(vals.length - 1).toFixed(1)},${zero.toFixed(1)}L${x(0).toFixed(1)},${zero.toFixed(1)}Z`;
@@ -64,15 +80,15 @@
 </script>
 
 <div class="chart">
-  <svg viewBox="0 0 {W} {H}" role="img" aria-label={c.title ?? t("Chart")} onmouseleave={() => hover = null}>
+  <svg viewBox="0 0 {W} {H}" class:wide={W > BASE} style:width={W > BASE ? W + "px" : null} role="img" aria-label={c.title ?? t("Chart")} onmouseleave={() => hover = null}>
     {#if c.kind === "pie"}
       {#each slices as s (s.i)}
         <path class="slice" class:dim={hover && hover.i !== s.i} d={s.d} fill={colour(s.i)} onmouseenter={() => hover = { i: s.i }} role="presentation"><title>{c.labels[s.i]}: {fmt(s.v)}{unit}</title></path>
       {/each}
     {:else}
-      {#each scale as v}
+      {#each scale as v, j}
         <line class="grid" x1={L} x2={W - R} y1={y(v)} y2={y(v)} />
-        <text class="ax" x={L - 6} y={y(v) + 3.5} text-anchor="end">{axisLabel(v, scale[1] - scale[0])}</text>
+        <text class="ax" x={L - 6} y={y(v) + 3.5} text-anchor="end">{yLabels[j]}</text>
       {/each}
       <line class="axis" x1={L} x2={W - R} y1={zero} y2={zero} />
       {#each c.labels as l, i}
@@ -81,7 +97,7 @@
       {#if c.kind === "bar"}
         {#each c.series as s, k}
           {#each s.values as v, i}
-            <rect class="bar" class:dim={hover && (hover.i !== i || hover.s !== k)} x={x(i) - (bw * c.series.length) / 2 + bw * k} width={bw - 1}
+            <rect class="bar" class:dim={hover && (hover.i !== i || hover.s !== k)} x={barX(i, k)} width={bw * 0.84}
               y={Math.min(y(v), zero)} height={Math.max(1, Math.abs(zero - y(v)))} rx="2" fill={colour(k)}
               onmouseenter={() => hover = { i, s: k }} role="presentation"><title>{c.labels[i]}: {fmt(v)}{unit}</title></rect>
           {/each}
@@ -111,12 +127,15 @@
 </div>
 
 <style>
+  /* A chart wider than its card (many bars) scrolls in it. */
   .chart {
+    overflow-x: auto; max-width: 100%; min-width: 0;
     --s1: var(--accent); --s2: var(--good); --s3: var(--warn); --s4: var(--crit);
     --s5: #8a5cd0; --s6: #1b9aaa; --s7: #c4568f; --s8: var(--muted);
   }
   :global([data-theme="dark"]) .chart { --s5: #b393ef; --s6: #4fc6d4; --s7: #e58bbb; }
   svg { width: 100%; height: auto; display: block; max-height: 260px; }
+  svg.wide { max-width: none; max-height: none; }
   .grid { stroke: var(--line-soft); }
   .axis { stroke: var(--line); }
   .ax { font: 10px var(--sans); fill: var(--muted); }
