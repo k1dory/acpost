@@ -65,7 +65,7 @@
 
 <style>
   .anchor { height: 0; }
-  .st { margin-top: 8px; border: 1px solid var(--line-soft); border-radius: 12px; padding: 4px; display: grid; }
+  .st { margin-top: 8px; border: 1px solid var(--line-soft); border-radius: 12px; padding: 4px; display: grid; grid-template-columns: minmax(0, 1fr); }
   .sh { border: 0; background: transparent; text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 5px 8px; display: flex; gap: 6px; align-items: center; }
   .chev { display: inline-block; transition: transform .15s; }
   .chev.rot { transform: rotate(90deg); }
