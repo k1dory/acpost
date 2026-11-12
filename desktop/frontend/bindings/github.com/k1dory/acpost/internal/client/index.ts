@@ -7,6 +7,7 @@ export {
     AgentOption,
     AgentOptions,
     AllWikis,
+    Artifacts,
     AskingRequest,
     Changes,
     Chat,

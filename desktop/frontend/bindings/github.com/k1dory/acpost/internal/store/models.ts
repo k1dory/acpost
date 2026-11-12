@@ -6,6 +6,94 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * Artifact is a file an agent handed back with a reply, or a document a turn made or changed.
+ */
+export class Artifact {
+    /**
+     * file (content kept here), link (a reply's link), change (a file a turn created or edited)
+     */
+    "kind": string;
+
+    /**
+     * a file's name; a change's base name
+     */
+    "name": string;
+
+    /**
+     * a file's or link's, as kept
+     */
+    "type"?: string;
+
+    /**
+     * -1 when not known
+     */
+    "size": number;
+
+    /**
+     * a link's
+     */
+    "uri"?: string;
+
+    /**
+     * a change's file, absolute (a link's to a file here, filled by the node)
+     */
+    "path"?: string;
+
+    /**
+     * a change's: A, M, R…
+     */
+    "status"?: string;
+    "msg": string;
+    "thread"?: string;
+
+    /**
+     * the chat's
+     */
+    "title"?: string;
+
+    /**
+     * the chat's directory (filled by the node)
+     */
+    "cwd"?: string;
+    "agent"?: string;
+    "at": string;
+
+    /**
+     * the file is no longer there (filled by the node)
+     */
+    "gone"?: boolean;
+
+    /** Creates a new Artifact instance. */
+    constructor($$source: Partial<Artifact> = {}) {
+        if (!("kind" in $$source)) {
+            this["kind"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("size" in $$source)) {
+            this["size"] = 0;
+        }
+        if (!("msg" in $$source)) {
+            this["msg"] = "";
+        }
+        if (!("at" in $$source)) {
+            this["at"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Artifact instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Artifact {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Artifact($$parsedSource as Partial<Artifact>);
+    }
+}
+
+/**
  * BacklogItem is a task kept for later.
  */
 export class BacklogItem {
@@ -50,6 +138,11 @@ export class ChangedFile {
      * A, M, D, R…
      */
     "status": string;
+
+    /**
+     * a rename's or copy's source path (rows recorded before it have none)
+     */
+    "from"?: string;
 
     /**
      * lines; -1 for a binary file

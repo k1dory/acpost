@@ -1870,3 +1870,36 @@ func (c *Client) CloudDraftResult(ctx context.Context, msg string) (CloudDraft, 
 	_, err := c.do(ctx, "GET", "/v1/cloud/drafts/"+url.PathEscape(msg), nil, nil, &out, nil)
 	return out, err
 }
+
+// Artifacts is a page of the node's user's artifacts, newest first; Next asks for the page after it.
+type Artifacts struct {
+	Items []store.Artifact `json:"items"`
+	Next  string           `json:"next,omitempty"`
+}
+
+// Artifacts lists the artifacts of every chat — files agents attached to their replies, documents
+// their turns made or changed — whose name or address has match in it, older than before (a
+// page's Next), at most limit (0: the node's default).
+func (c *Client) Artifacts(ctx context.Context, match, before string, limit int) (Artifacts, error) {
+	q := url.Values{}
+	if match != "" {
+		q.Set("q", match)
+	}
+	if before != "" {
+		q.Set("before", before)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out Artifacts
+	_, err := c.do(ctx, "GET", "/v1/artifacts", q, nil, &out, nil)
+	return out, err
+}
+
+// ArtifactHead is a file of a message's reply with at most max bytes of its content; its Size is
+// the whole file's.
+func (c *Client) ArtifactHead(ctx context.Context, msg, name string, max int) (store.File, error) {
+	var out store.File
+	_, err := c.do(ctx, "GET", "/v1/artifacts/head", url.Values{"msg": {msg}, "name": {name}, "max": {strconv.Itoa(max)}}, nil, &out, nil)
+	return out, err
+}

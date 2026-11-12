@@ -178,7 +178,7 @@ func parseNameStatus(b []byte) []store.ChangedFile {
 			if i+2 >= len(parts) {
 				break
 			}
-			f.Path = parts[i+2]
+			f.From, f.Path = parts[i+1], parts[i+2]
 			i += 2
 		} else {
 			f.Path = parts[i+1]

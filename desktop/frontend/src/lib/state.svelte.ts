@@ -7,6 +7,7 @@ import { afterSent, overLimits } from "./draft";
 import { Turn, ownBody, type Ev } from "./turn";
 import { editsToReveal, localFiles, type Reveal } from "./ide";
 import { who } from "./format";
+import { normalizeRef, sameRef } from "./artifactref";
 
 export type Msg = {
   id: string; from: string; to: string; thread: string; parent?: string; depth: number; state: string;
@@ -107,7 +108,7 @@ class App {
     this.panel = on;
     try { localStorage.setItem("panel-open", on ? "1" : "0"); } catch {}
   }
-  view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide" | `mod:${string}`>("chat");
+  view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "artifacts" | "ide" | `mod:${string}`>("chat");
   /** The modules: views the person added (a web page beside the chat, as the IDE is). */
   modules = $state<Module[]>([]);
   /** The module shown, if one is. */
@@ -974,10 +975,16 @@ class App {
   /** The artifact shown, and those opened in this chat. */
   artifact = $state<ArtifactRef | null>(null);
   openedArtifacts = $state<ArtifactRef[]>([]);
-  openArtifact(a: ArtifactRef) {
-    const same = (x: ArtifactRef) => x.msg === a.msg && x.name === a.name && x.path === a.path && x.base === a.base;
-    if (!this.openedArtifacts.some(same)) this.openedArtifacts = [...this.openedArtifacts, a];
-    this.artifact = a;
+  openArtifact(ref: ArtifactRef) {
+    // An attachment of the open chat: its relative links lead from the chat's directory, whichever
+    // place opened it (a message, the panel).
+    if (ref.msg && !ref.base && this.msgs.some(m => m.id === ref.msg)) ref = { ...ref, base: this.chatCwd() };
+    const a = normalizeRef(ref, this.home);
+    const known = this.openedArtifacts.find(x => sameRef(x, a));
+    if (!known) this.openedArtifacts = [...this.openedArtifacts, a];
+    // A reference of its own each time: opened again, the file is read again (changed since, or
+    // its read failed); the list keeps one.
+    this.artifact = { ...(known ?? a) };
     if (this.view !== "chat") this.view = "chat";
     this.openTab("artifacts");
   }
