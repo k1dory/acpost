@@ -354,6 +354,25 @@ describe("a chat shared by several agents", () => {
     expect(again).toEqual(first);
   });
 
+  it("the same request typed a little differently keeps its key, and that text is the one a later retry repeats", async () => {
+    const app = await setup([msg("m1", "agent:claude")], ["claude"]);
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost")).mockRejectedValueOnce(new Error("lost"));
+    type("@claude explain this  ");
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    type("@claude explain this");            // the trailing spaces gone: the same request
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    app.agents = ["claude", "codex"].map(name => ({ name, address: "agent:" + name, driver: "acp", queued: 0, running: 0 })) as any;
+    svelte.flushSync();
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    const calls = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(calls).toHaveLength(3);
+    expect(calls[1]).toEqual(calls[0]);
+    expect(calls[2]).toEqual(calls[0]);
+  });
+
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
     let app = await setup([msg("m1", "agent:claude")], ["claude"]);
     expect(chip()).toBeNull();

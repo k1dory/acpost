@@ -787,6 +787,9 @@ class App {
         to = task.to; // the agent it went to, shown as such once it is acknowledged
       }
       if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest, typed: at.typed, named: at.mention };
+      // The same request from text typed a little differently (a space gone): its key stays, and
+      // this text is what the next unchanged retry is.
+      else if (!d.sending.moved || at.typed !== undefined) { d.sending.typed = at.typed; d.sending.named = at.mention; }
       const key = d.sending.key;
       task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;
