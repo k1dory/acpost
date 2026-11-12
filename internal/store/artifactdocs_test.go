@@ -51,7 +51,7 @@ func TestArtifactDocsBuiltForAnOlderStore(t *testing.T) {
 	addTurn(t, s, now.Add(4*time.Minute), ChangedFile{Path: "a.md", Status: "D"})
 	want := names(listAll(t, s, ArtifactQuery{Limit: 2}))
 	// A store from before the projection: the changes, no artifact_docs.
-	if _, err := s.w.Exec("DROP TABLE artifact_docs"); err != nil {
+	if _, err := s.w.Exec("DROP TABLE artifact_docs; DROP TABLE artifact_docs_built"); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()

@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS artifact_docs (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS artifact_docs_listed ON artifact_docs (ts, change, idx) WHERE listed = 1;
 CREATE INDEX IF NOT EXISTS artifact_docs_msg ON artifact_docs (msg);
+CREATE TABLE IF NOT EXISTS artifact_docs_built (done INTEGER NOT NULL);
+-- The replay of changes in their order (a migration, a rebuild), and the reply files' listing:
+-- index searches, not scans and sorts.
+CREATE INDEX IF NOT EXISTS turn_changes_ts ON turn_changes (ts, id);
+CREATE INDEX IF NOT EXISTS messages_reply_ts ON messages ((CASE WHEN finished_at > 0 THEN finished_at ELSE created_at END), seq);
+CREATE INDEX IF NOT EXISTS files_reply ON files (msg, reply, id);
 `
 
 // fold is the one rule a filter matches by, for every kind of artifact: Unicode lower case, in
@@ -87,55 +93,91 @@ func getDoc(ctx context.Context, t *sql.Tx, path string) (*docRow, error) {
 // isNow says whether a row holds a file there now, made by a turn.
 func (d *docRow) madeNow() bool { return d != nil && d.made && !strings.HasPrefix(d.status, "D") }
 
-// applyChanges updates the projection with one turn's changes, in their order. A change older
-// than what a path's row has (turns recorded out of order) leaves that row.
-func applyChanges(ctx context.Context, t *sql.Tx, c TurnChanges, change int64, thread string) error {
-	put := func(path string, k artifactKey, status string, made bool, have *docRow) error {
-		if have != nil && !have.key.less(k) {
-			return nil
-		}
-		listed := isDoc(path, status, made)
-		_, err := t.ExecContext(ctx, `INSERT INTO artifact_docs (path, ts, change, idx, msg, thread, agent, status, made, listed)
-			VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT (path) DO UPDATE SET ts = excluded.ts, change = excluded.change, idx = excluded.idx,
-			msg = excluded.msg, thread = excluded.thread, agent = excluded.agent, status = excluded.status, made = excluded.made, listed = excluded.listed`,
-			path, k.ts, k.id, k.idx, c.Msg, thread, c.Agent, status, made, listed)
+// docTurn is what of a turn's changes the projection uses.
+type docTurn struct {
+	change           int64
+	ts               int64
+	msg, agent, repo string
+	files            []ChangedFile
+}
+
+func isRename(f ChangedFile) bool {
+	return (strings.HasPrefix(f.Status, "R") || strings.HasPrefix(f.Status, "C")) && f.From != ""
+}
+
+// putDoc writes a path's row.
+func putDoc(ctx context.Context, t *sql.Tx, path string, k artifactKey, c docTurn, thread, status string, made bool) error {
+	_, err := t.ExecContext(ctx, `INSERT INTO artifact_docs (path, ts, change, idx, msg, thread, agent, status, made, listed)
+		VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT (path) DO UPDATE SET ts = excluded.ts, change = excluded.change, idx = excluded.idx,
+		msg = excluded.msg, thread = excluded.thread, agent = excluded.agent, status = excluded.status, made = excluded.made, listed = excluded.listed`,
+		path, k.ts, k.id, k.idx, c.msg, thread, c.agent, status, made, isDoc(path, status, made))
+	return err
+}
+
+// applyFile applies one change of a turn, in order after every change the rows it reads have.
+func applyFile(ctx context.Context, t *sql.Tx, c docTurn, i int, thread string) error {
+	f := c.files[i]
+	k := artifactKey{ts: c.ts, id: c.change, idx: int64(i)}
+	w := wholePath(c.repo, f.Path)
+	cur, err := getDoc(ctx, t, w)
+	if err != nil {
 		return err
 	}
-	for i, f := range c.Files {
-		if f.Path == "" {
-			continue
-		}
-		rename := (strings.HasPrefix(f.Status, "R") || strings.HasPrefix(f.Status, "C")) && f.From != ""
-		if !docKept(f.Path) && !rename {
-			continue // a source file: nothing of it is kept, nothing to read
-		}
-		k := artifactKey{ts: ms(c.At), id: change, idx: int64(i)}
-		w := wholePath(c.Repo, f.Path)
-		cur, err := getDoc(ctx, t, w)
+	made := cur.madeNow()
+	switch {
+	case f.Status == "A":
+		made = true
+	case strings.HasPrefix(f.Status, "D"):
+		made = false
+	case isRename(f):
+		sw := wholePath(c.repo, f.From)
+		src, err := getDoc(ctx, t, sw)
 		if err != nil {
 			return err
 		}
-		made := cur.madeNow()
-		switch {
-		case f.Status == "A":
-			made = true
-		case strings.HasPrefix(f.Status, "D"):
-			made = false
-		case rename:
-			sw := wholePath(c.Repo, f.From)
-			src, err := getDoc(ctx, t, sw)
-			if err != nil {
+		made = src.madeNow()
+		if strings.HasPrefix(f.Status, "R") && src != nil { // a rename retires its source
+			if err := putDoc(ctx, t, sw, k, c, thread, "D", false); err != nil {
 				return err
 			}
-			made = src.madeNow()
-			if strings.HasPrefix(f.Status, "R") && src != nil { // a rename retires its source
-				if err := put(sw, k, "D", false, src); err != nil {
-					return err
-				}
+		}
+	}
+	if docKept(f.Path) {
+		return putDoc(ctx, t, w, k, c, thread, f.Status, made)
+	}
+	return nil
+}
+
+// touches says whether the projection reads or writes anything for a change.
+func touches(f ChangedFile) bool { return f.Path != "" && (docKept(f.Path) || isRename(f)) }
+
+// applyChanges updates the projection with one turn's changes (already stored), in their order.
+// A turn recorded after a later one (two turns finishing out of order) is not applied on top:
+// the paths it touches are rebuilt from their history (rebuildDocs) — the later turn may have
+// renamed or changed them already, with or without a row to show it.
+func applyChanges(ctx context.Context, t *sql.Tx, c docTurn, thread string) error {
+	touched := map[string]bool{}
+	for _, f := range c.files {
+		if touches(f) {
+			touched[wholePath(c.repo, f.Path)] = true
+			if isRename(f) {
+				touched[wholePath(c.repo, f.From)] = true
 			}
 		}
-		if docKept(f.Path) {
-			if err := put(w, k, f.Status, made, cur); err != nil {
+	}
+	if len(touched) == 0 {
+		return nil // source files only: nothing of them is kept
+	}
+	var later int
+	if err := t.QueryRowContext(ctx, "SELECT count(*) FROM (SELECT 1 FROM turn_changes WHERE (ts, id) > (?, ?) LIMIT 1)", c.ts, c.change).Scan(&later); err != nil {
+		return err
+	}
+	if later > 0 {
+		return rebuildDocs(ctx, t, touched)
+	}
+	for i, f := range c.files {
+		if touches(f) {
+			if err := applyFile(ctx, t, c, i, thread); err != nil {
 				return err
 			}
 		}
@@ -143,57 +185,165 @@ func applyChanges(ctx context.Context, t *sql.Tx, c TurnChanges, change int64, t
 	return nil
 }
 
-// buildArtifactDocs fills the projection from the changes a store already has, once (a store from
-// before it): replayed in order, a batch at a time.
-func (s *Store) buildArtifactDocs() error {
-	var have int
-	if err := s.w.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'artifact_docs'").Scan(&have); err != nil || have > 0 {
+// changesInOrder calls fn with every stored turn's changes, in their order (turn_changes_ts).
+func changesInOrder(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, fn func(c docTurn) error) error {
+	rows, err := q.QueryContext(ctx, "SELECT id, ts, msg, agent, repo, files FROM turn_changes ORDER BY ts, id")
+	if err != nil {
 		return err
 	}
+	var all []docTurn
+	for rows.Next() {
+		var c docTurn
+		var files string
+		if err := rows.Scan(&c.change, &c.ts, &c.msg, &c.agent, &c.repo, &files); err != nil {
+			rows.Close()
+			return err
+		}
+		_ = json.Unmarshal([]byte(files), &c.files)
+		all = append(all, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, c := range all {
+		if err := fn(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rebuildDocs makes the rows of these paths again from the stored history, in order: the paths,
+// and every path a rename links to them (a rename is read with both its ends). It reads the whole
+// history twice — acceptable on this rare path (a turn recorded after a later one), never taken
+// by a turn in order. A change already collected by retention is not in the history: a path
+// rebuilt here may lose what only that change said.
+func rebuildDocs(ctx context.Context, t *sql.Tx, seeds map[string]bool) error {
+	// The renames, to close the set over them.
+	var links [][2]string
+	err := changesInOrder(ctx, t, func(c docTurn) error {
+		for _, f := range c.files {
+			if f.Path != "" && isRename(f) {
+				links = append(links, [2]string{wholePath(c.repo, f.Path), wholePath(c.repo, f.From)})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	set := map[string]bool{}
+	for p := range seeds {
+		set[p] = true
+	}
+	for grew := true; grew; {
+		grew = false
+		for _, l := range links {
+			if set[l[0]] != set[l[1]] {
+				set[l[0]], set[l[1]], grew = true, true, true
+			}
+		}
+	}
+	for p := range set {
+		if _, err := t.ExecContext(ctx, "DELETE FROM artifact_docs WHERE path = ?", p); err != nil {
+			return err
+		}
+	}
+	return changesInOrder(ctx, t, func(c docTurn) error {
+		var thread string
+		for i, f := range c.files {
+			if !touches(f) || !set[wholePath(c.repo, f.Path)] && !(isRename(f) && set[wholePath(c.repo, f.From)]) {
+				continue
+			}
+			if thread == "" {
+				_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", c.msg).Scan(&thread)
+			}
+			if err := applyFile(ctx, t, c, i, thread); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// docsBatchSQL is a batch of the stored changes after a key, in order: a range of turn_changes_ts.
+const docsBatchSQL = `SELECT id, ts, msg, agent, repo, files FROM turn_changes WHERE (ts, id) > (?, ?) ORDER BY ts, id LIMIT ?`
+
+// docsBatch is how many turns' changes a transaction of the build applies; afterDocsBatch, in
+// tests, cuts a build short.
+var (
+	docsBatch      = 500
+	afterDocsBatch func() error
+)
+
+// buildArtifactDocs fills the projection from the changes a store already has, once: replayed in
+// order, a batch at a time. It is built when artifact_docs_built says so, in the build's last
+// transaction; a build cut short (a crash, an error) is not taken as done, and is made again from
+// the start at the next open.
+func (s *Store) buildArtifactDocs() error {
 	if _, err := s.w.Exec(artifactDocsSchema); err != nil {
 		return err
 	}
+	var built int
+	if err := s.w.QueryRow("SELECT count(*) FROM artifact_docs_built").Scan(&built); err != nil || built > 0 {
+		return err
+	}
+	if _, err := s.w.Exec("DELETE FROM artifact_docs"); err != nil {
+		return err
+	}
 	ctx := context.Background()
-	for after := (artifactKey{ts: -1}); ; {
-		var batch []TurnChanges
-		var ids []int64
-		rows, err := s.w.Query(`SELECT tc.id, tc.ts, tc.msg, tc.agent, tc.repo, tc.files FROM turn_changes tc
-			WHERE (tc.ts, tc.id) > (?, ?) ORDER BY tc.ts, tc.id LIMIT 500`, after.ts, after.id)
+	for after := (artifactKey{ts: -1 << 62}); ; {
+		var batch []docTurn
+		rows, err := s.w.Query(docsBatchSQL, after.ts, after.id, docsBatch)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var c TurnChanges
-			var id, ts int64
+			var c docTurn
 			var files string
-			if err := rows.Scan(&id, &ts, &c.Msg, &c.Agent, &c.Repo, &files); err != nil {
+			if err := rows.Scan(&c.change, &c.ts, &c.msg, &c.agent, &c.repo, &files); err != nil {
 				rows.Close()
 				return err
 			}
-			c.At = fromMS(ts)
-			_ = json.Unmarshal([]byte(files), &c.Files)
-			batch, ids = append(batch, c), append(ids, id)
-			after = artifactKey{ts: ts, id: id}
+			_ = json.Unmarshal([]byte(files), &c.files)
+			batch = append(batch, c)
+			after = artifactKey{ts: c.ts, id: c.change}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		if len(batch) == 0 {
-			return nil
-		}
 		err = s.tx(ctx, func(t *sql.Tx) error {
-			for i, c := range batch {
+			for _, c := range batch {
 				var thread string
-				_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", c.Msg).Scan(&thread)
-				if err := applyChanges(ctx, t, c, ids[i], thread); err != nil {
-					return err
+				_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", c.msg).Scan(&thread)
+				for i, f := range c.files {
+					if touches(f) {
+						if err := applyFile(ctx, t, c, i, thread); err != nil {
+							return err
+						}
+					}
 				}
+			}
+			if len(batch) < docsBatch {
+				_, err := t.ExecContext(ctx, "INSERT INTO artifact_docs_built (done) VALUES (1)")
+				return err
 			}
 			return nil
 		})
 		if err != nil {
 			return err
+		}
+		if len(batch) < docsBatch {
+			return nil
+		}
+		if afterDocsBatch != nil {
+			if err := afterDocsBatch(); err != nil {
+				return err
+			}
 		}
 	}
 }

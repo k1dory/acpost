@@ -81,7 +81,7 @@ func (s *Store) AddChanges(ctx context.Context, c TurnChanges) error {
 		// The library's documents, in the same transaction (artifactdocs.go).
 		var thread string
 		_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", c.Msg).Scan(&thread)
-		return applyChanges(ctx, t, c, id, thread)
+		return applyChanges(ctx, t, docTurn{change: id, ts: ms(c.At), msg: c.Msg, agent: c.Agent, repo: c.Repo, files: c.Files}, thread)
 	})
 }
 

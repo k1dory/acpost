@@ -88,14 +88,20 @@ func parseArtifactKey(s string) (artifactKey, error) {
 	return artifactKey{ts: v[0], src: int(v[1]), id: v[2], idx: v[3]}, nil
 }
 
+// replyTS is when a reply's file is from: its message's end, or its start while it runs. The
+// index messages_reply_ts (artifactdocs.go) is on it.
+const replyTS = "(CASE WHEN m.finished_at > 0 THEN m.finished_at ELSE m.created_at END)"
+
 // replyFilesSQL lists the files of replies older than a cursor, whose name or address has the
-// (folded) match in it.
-const replyFilesSQL = `SELECT ts, id, name, type, size, uri, msg, thread, agent FROM (
-		SELECT CASE WHEN m.finished_at > 0 THEN m.finished_at ELSE m.created_at END AS ts, f.id AS id,
-			f.name AS name, f.type AS type, f.size AS size, f.uri AS uri, m.id AS msg, m.thread AS thread, m.recipient AS agent
-		FROM files f JOIN messages m ON m.seq = f.msg WHERE f.reply = 1
-	) WHERE (ts, 1, id, 0) < (?, ?, ?, ?) AND (? = '' OR instr(acpost_fold(name), ?) > 0 OR instr(acpost_fold(uri), ?) > 0)
-	ORDER BY ts DESC, id DESC LIMIT ?`
+// (folded) match in it. Driven by the messages' index, newest first, each message's reply files
+// probed by theirs (the order forced: CROSS JOIN, INDEXED BY): no sort, and the scan ends at
+// limit+1 found. Their key is (when, 1, message
+// seq, file id).
+const replyFilesSQL = `SELECT ` + replyTS + `, m.seq, f.id, f.name, f.type, f.size, f.uri, m.id, m.thread, m.recipient
+	FROM messages m INDEXED BY messages_reply_ts CROSS JOIN files f INDEXED BY files_reply
+	WHERE f.msg = m.seq AND f.reply = 1 AND ` + replyTS + ` <= ? AND (` + replyTS + ` < ? OR ? = 1 AND (m.seq < ? OR m.seq = ? AND f.id < ?))
+		AND (? = '' OR instr(acpost_fold(f.name), ?) > 0 OR instr(acpost_fold(f.uri), ?) > 0)
+	ORDER BY ` + replyTS + ` DESC, m.seq DESC, f.id DESC LIMIT ?`
 
 // docsSQL lists the documents on disk older than a cursor, whose path has the (folded) match in
 // it: an indexed read of the projection (artifactdocs.go).
@@ -166,14 +172,14 @@ func (s *Store) Artifacts(ctx context.Context, q ArtifactQuery) ([]Artifact, str
 
 	// Each source, a page's worth at most; merged, the page.
 	m := fold(match)
-	rows, err := s.r.QueryContext(ctx, replyFilesSQL, from.ts, from.src, from.id, from.idx, m, m, m, q.Limit+1)
+	rows, err := s.r.QueryContext(ctx, replyFilesSQL, from.ts, from.ts, from.src, from.id, from.id, from.idx, m, m, m, q.Limit+1)
 	if err != nil {
 		return nil, "", err
 	}
 	for rows.Next() {
 		var a Artifact
 		k := artifactKey{src: 1}
-		if err := rows.Scan(&k.ts, &k.id, &a.Name, &a.Type, &a.Size, &a.URI, &a.Msg, &a.Thread, &a.Agent); err != nil {
+		if err := rows.Scan(&k.ts, &k.id, &k.idx, &a.Name, &a.Type, &a.Size, &a.URI, &a.Msg, &a.Thread, &a.Agent); err != nil {
 			rows.Close()
 			return nil, "", err
 		}
