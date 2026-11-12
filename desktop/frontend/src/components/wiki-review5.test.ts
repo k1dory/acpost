@@ -29,8 +29,8 @@ describe("a wiki link's label", () => {
     ["an e-mail", "[[arch|me@example.com]]", "me@example.com"],
     ["an <a href>", "[[arch|<a href=\"https://evil.example\">x</a>]]", "<a href=\"https://evil.example\">x</a>"],
     ["an <img onerror>", "[[arch|<img src=x onerror=alert(1)>]]", "<img src=x onerror=alert(1)>"],
-    ["a Markdown link", "[[arch|see [x](https://evil.example)]]", "see x"],
-    ["an autolink in emphasis", "[[arch|*go <https://evil.example>*]]", "go https://evil.example"],
+    ["a Markdown link", "[[arch|see [x](https://evil.example)]]", "see [x](https://evil.example)"],
+    ["an autolink in emphasis", "[[arch|*go <https://evil.example>*]]", "go <https://evil.example>"],
   ];
   for (const [name, text, shown] of cases) {
     it(`is text when it is ${name}`, async () => {

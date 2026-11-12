@@ -4,7 +4,7 @@
 // name); a note's is a note, then a page of the wiki of its directory. A page is also part of its
 // parent. A link to nothing is kept as broken, so it can be shown and fixed.
 
-import { Marked, type MarkedExtension, type Token, type TokenizerAndRendererExtension } from "marked";
+import { Marked, Tokenizer, type MarkedExtension, type Token, type Tokens, type TokenizerAndRendererExtension } from "marked";
 
 export type Kind = "page" | "note";
 export type Item = {
@@ -50,8 +50,10 @@ export type WikiLinkToken = { type: "wikilink"; raw: string; target: string; lab
 /** What a target resolves to, for the renderer: an item (its id and title), or null (broken). */
 export type WikiResolve = (target: string) => { id: string; title: string } | null;
 
-// The pipe between target and label may be escaped (\|): in a table row it must be (tableSafe).
-const wikiRule = /^\[\[([^[\]|\n]{1,200}?)(?:\\?\|((?:[^[\]\n]|\[[^[\]\n]*\]){0,200}))?\]\]/;
+// Between target and label: a pipe, an escaped one (\|, as a table row needs it), or the mask a
+// table row's link pipe is given while the row is split into cells (wikiTable).
+const MASK = "";
+const wikiRule = /^\[\[([^[\]|\n]{1,200}?)(?:(?:\\?\||)((?:[^[\]\n]|\[[^[\]\n]*\]){0,200}))?\]\]/;
 const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
@@ -70,84 +72,80 @@ export function wikiLinkExtension(resolve?: WikiResolve): TokenizerAndRendererEx
       const target = m?.[1].trim();
       if (!m || !target) return undefined;
       const label = m[2]?.trim() || undefined;
-      const tok: WikiLinkToken = { type: "wikilink", raw: m[0], target, label, tokens: label ? plainLabel(this.lexer.inlineTokens(label)) : [] };
+      const tok: WikiLinkToken = { type: "wikilink", raw: m[0], target, label, tokens: label ? this.lexer.inlineTokens(label) : [] };
       return tok;
     },
     renderer(token) {
       const tok = token as unknown as WikiLinkToken;
       const to = resolve?.(tok.target) ?? null;
-      const inner = tok.label ? this.parser.parseInline(tok.tokens) : escHtml(to ? to.title : tok.target);
+      const inner = tok.label ? renderLabel(tok.tokens) : escHtml(to ? to.title : tok.target);
       const href = to ? "#wiki:" + encodeHref(to.id) : "#wiki-broken:" + encodeHref(tok.target);
       return `<a href="${href}">${inner}</a>`;
     },
   };
 }
 
-// What a label keeps of its Markdown: text, code spans, emphasis, strong, strike-through and
-// escapes. Anything else — a link, an autolinked address or e-mail, a picture, HTML — is its text,
-// at any depth: a label never holds a link of its own (the click is the wiki link's) nor markup.
-const labelKeeps = new Set(["text", "codespan", "em", "strong", "del", "escape"]);
-function plainLabel(tokens: Token[]): Token[] {
+/**
+ * A label, rendered here and not by marked's renderers (whose text may come through as it is, as
+ * HTML): text, code spans, emphasis, strong, strike-through and escapes, each escaped from its own
+ * source; anything else — a link, an autolinked address or e-mail, a picture, HTML — is its source
+ * as text. A label never holds a link of its own (the click is the wiki link's) nor markup.
+ */
+export function renderLabel(tokens: Token[]): string {
   return tokens.map(t => {
     const tok = t as Token & { tokens?: Token[]; text?: string };
-    if (!labelKeeps.has(tok.type)) {
-      const text = tok.type === "html" ? tok.raw : tok.text ?? tok.raw;
-      return { type: "text", raw: tok.raw, text } as Token; // the text renderer escapes it
+    switch (tok.type) {
+      case "text": return escHtml(tok.raw);
+      case "codespan": return `<code>${escHtml(tok.text ?? "")}</code>`;
+      case "escape": return escHtml(tok.text ?? "");
+      case "em": case "strong": case "del": return `<${tok.type}>${renderLabel(tok.tokens ?? [])}</${tok.type}>`;
+      default: return escHtml(tok.raw);
     }
-    return tok.tokens ? ({ ...tok, tokens: plainLabel(tok.tokens) } as Token) : tok;
-  });
+  }).join("");
 }
 
 /**
- * A body with the pipe of each labelled wiki link in a table row escaped ([[a\|b]]): GFM splits a
- * row into cells at every unescaped pipe before any inline syntax is read, so [[a|b]] would be cut
- * in two. The table rows are those marked finds (a table at any depth: in a quote, a list item);
- * the rest of the body is left as it is. Within a row, a code span is left alone too: GFM's rule
- * holds there — its pipe splits the cell unless the author escaped it.
+ * GFM tables, with wiki links in their cells: a row is split into cells at every unescaped pipe
+ * before any inline syntax is read, so [[a|b]] would be cut in two. Marked's own table tokenizer is
+ * given the text with each wiki link's pipe masked (a link's [[ anywhere on a row, its label code
+ * or not), and the mask is turned back into the pipe in what it makes (restorePipes). A fence is
+ * never a table, so a table shown as code is left as it is; tables in quotes and lists come here
+ * too. A code span in a cell that holds [[a|b]] is masked as well: it stays one cell (not GFM's
+ * split), its text whole.
  */
-export function tableSafe(body: string): string {
-  const text = body ?? "";
-  if (!text.includes("[[") || !text.includes("|")) return text;
-  // Tables are found in the body with every labelled link's pipe escaped (a header row with one
-  // would otherwise have a column too many, and be no table); its lines are the body's, one for one.
-  const probe = text.replace(labelled, "[[$1\\|$2]]");
-  let tokens: Token[];
-  try { tokens = reader.lexer(probe); } catch { return text; }
-  // Each top-level token's raw is the next stretch of the text; a table's rows are lines of it
-  // (behind a quote's ">" or a list item's indent when nested), found in order within it.
-  const rowsAt = new Set<number>();
-  let line = 0;
-  for (const top of tokens) {
-    const rows: string[] = [];
-    reader.walkTokens([top], t => { if (t.type === "table") rows.push(...t.raw.split("\n").map(l => l.trim()).filter(Boolean)); });
-    const lines = top.raw.split("\n");
-    let k = 0;
-    lines.forEach((l, i) => { if (k < rows.length && l.trimEnd().endsWith(rows[k])) { k++; rowsAt.add(line + i); } });
-    line += lines.length - 1;
-  }
-  if (!rowsAt.size) return text;
-  return text.split("\n").map((l, i) => (rowsAt.has(i) ? escapeRow(l) : l)).join("\n");
+const linkPipe = /\[\[([^[\]|\n]*[^[\]|\n\\])\|((?:[^[\]\n]|\[[^[\]\n]*\]){0,200})\]\]/g;
+const stockTable = Tokenizer.prototype.table;
+function wikiTable(this: Tokenizer, src: string): Tokens.Table | false {
+  const masked = src.replace(linkPipe, (_all, target: string, label: string) => `[[${target}${MASK}${label}]]`);
+  if (masked === src) return false; // no wiki link: marked's own, as it is
+  const tok = stockTable.call(this, masked);
+  if (!tok) return false;
+  tok.raw = src.slice(0, tok.raw.length); // the mask is one character for one: the same length
+  return tok;
 }
-// A label may hold brackets one deep ([[a|see [x](y)]]), as the tokenizer reads it.
-const labelled = /\[\[([^[\]|\n]*[^[\]|\n\\])\|((?:[^[\]\n]|\[[^[\]\n]*\]){0,200})\]\]/g;
-// A row with its wiki links' pipes escaped, outside its code spans.
-const escapeRow = (line: string) => line.split(/((`+)[^`]+?\2(?!`))/).map((part, i) => (i % 3 === 0 ? part.replace(labelled, "[[$1\\|$2]]") : part)).filter((_, i) => i % 3 !== 2).join("");
+// The mask, wherever it could stay in a token (a code span's text, a text that is no link).
+function restorePipes(t: Token) {
+  const tok = t as Token & { text?: string };
+  if (typeof tok.text === "string" && tok.text.includes(MASK)) tok.text = tok.text.replaceAll(MASK, "|");
+  if (tok.raw.includes(MASK)) tok.raw = tok.raw.replaceAll(MASK, "|");
+}
 
-/** The wiki's Markdown for marked: the link, and the body made safe for tables first. */
+/** The wiki's Markdown for marked: the link, and tables that keep it in one cell. */
 export function wikiMarkdown(resolve?: WikiResolve): MarkedExtension {
-  return { extensions: [wikiLinkExtension(resolve)], hooks: { preprocess: tableSafe } };
+  return { extensions: [wikiLinkExtension(resolve)], tokenizer: { table: wikiTable }, walkTokens: restorePipes };
 }
 
 // The options the app renders Markdown with (components/Markdown.svelte): the graph lexes alike.
 export const markdownOptions = { gfm: true, breaks: true } as const;
-const reader = new Marked(markdownOptions).use({ extensions: [wikiLinkExtension()] });
+const reader = new Marked(markdownOptions).use(wikiMarkdown());
 
 /** The [[links]] of a body, in order, where Markdown has them (not in code or HTML). */
 export function parseLinks(body: string): Link[] {
   const found: Link[] = [];
   let tokens: Token[];
-  try { tokens = reader.lexer(tableSafe(body ?? "")); } catch { return found; } // text marked cannot read: no links
+  try { tokens = reader.lexer(body ?? ""); } catch { return found; } // text marked cannot read: no links
   reader.walkTokens(tokens, t => {
+    restorePipes(t);
     if (t.type !== "wikilink") return;
     const w = t as unknown as WikiLinkToken;
     found.push(w.label ? { target: w.target, label: w.label } : { target: w.target });

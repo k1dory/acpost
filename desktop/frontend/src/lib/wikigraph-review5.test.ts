@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLinks, buildGraph, renderWiki, tableSafe, pageId } from "./wikigraph";
+import { parseLinks, buildGraph, renderWiki, pageId } from "./wikigraph";
 
 // Review round 5: a labelled wiki link in a GFM table row stays one link in one cell, for the
 // graph and the page alike; the body outside tables is not touched.
@@ -48,18 +48,21 @@ describe("wiki links in tables", () => {
     expect(parseLinks("see [[arch\\|Label]]")).toEqual([{ target: "arch", label: "Label" }]);
   });
 
-  it("a code span in a cell follows GFM: its pipe splits the cell, and it holds no link", () => {
+  it("a code span in a cell holding [[a|b]] stays one cell, its text whole, and holds no link", () => {
+    // Not GFM's split: a wiki link's pipe is masked wherever its [[ is on a row, in code too
+    // (round 6, the table tokenizer), and the code span keeps the pipe.
     const { doc, links } = both("| a | b |\n|---|---|\n| `[[arch|x]]` | y |");
     expect(links).toEqual([]);
     expect(doc.querySelectorAll("a")).toHaveLength(0);
-    // The pipe ended the first cell: the code span is cut and "y" is a third, dropped column.
-    expect(cells(doc)[1]).toEqual(["`[[arch", "x]]`"]);
+    expect(cells(doc)[1]).toEqual(["[[arch|x]]", "y"]);
+    expect(doc.querySelector("td code")?.textContent).toBe("[[arch|x]]");
   });
 
-  it("leaves the body outside tables as it is", () => {
-    const body = "```\n| [[arch|x]] | y |\n```\n\n`[[arch|x]]` and [[arch|x]]\n\n| a | b |\n|---|---|\n| [[arch|x]] | y |";
-    const out = tableSafe(body);
-    expect(out.slice(0, out.lastIndexOf("| a |"))).toBe(body.slice(0, body.lastIndexOf("| a |")));
-    expect(out.endsWith("| [[arch\\|x]] | y |")).toBe(true);
+  it("leaves a fenced copy of a table as it is, before the real one", () => {
+    const table = "| Page | About |\n|---|---|\n| [[arch|Architecture]] | Details |";
+    const { doc, links } = both("```\n" + table + "\n```\n\n" + table);
+    expect(doc.querySelector("pre code")?.textContent).toBe(table + "\n");
+    expect(links).toEqual([{ target: "arch", label: "Architecture" }]);
+    expect(cells(doc)).toEqual([["Page", "About"], ["Architecture", "Details"]]);
   });
 });
