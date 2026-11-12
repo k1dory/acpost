@@ -21,7 +21,7 @@
       {#if s.view.blocks.length}
         <div class="agent">
           <div class="meta"><Avatar addr={agent} size={20} brand={app.chat?.cloud_agent ?? ""} /><span class="nm">{who(agent).name}</span></div>
-          <TurnBlocks view={s.view} msgState="done" {agent} />
+          <TurnBlocks view={s.view} msgState="done" {agent} scope={app.chat ? "history:" + app.chat.key + ":" + i : ""} />
         </div>
       {/if}
     </div>

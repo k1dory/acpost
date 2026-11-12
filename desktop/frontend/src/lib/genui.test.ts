@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseUi, caps, ticks, sortRows, filterRows, numeric, choiceAnswer, formAnswer, keepFor, type Ui } from "./genui";
+import { parseUi, caps, ticks, fenceClosed, sortRows, filterRows, numeric, choiceAnswer, formAnswer, keepFor, type Ui } from "./genui";
 
 const ok = (v: unknown): Ui[] => {
   const p = parseUi(JSON.stringify(v));
@@ -85,11 +85,45 @@ describe("what the components compute in the page", () => {
     expect(formAnswer(f, ["web1", true], "yes", "no")).toBe("> Deploy\n\n- Host: web1\n- Now: yes\n\n");
   });
   it("keeps a block's state for the same block only", () => {
-    const a = keepFor(0, "{}");
+    const a = keepFor("msg_1", 0, "{}");
     a.x = 1;
-    expect(keepFor(0, "{}")).toBe(a);
-    expect(keepFor(1, "{}")).not.toBe(a);
-    expect(keepFor(0, "{ }")).not.toBe(a);
+    expect(keepFor("msg_1", 0, "{}")).toBe(a);
+    expect(keepFor("msg_1", 1, "{}")).not.toBe(a);
+    expect(keepFor("msg_1", 0, "{ }")).not.toBe(a);
+    expect(keepFor("msg_2", 0, "{}")).not.toBe(a); // the same block in another message
+  });
+});
+
+describe("review round 1", () => {
+  it("refuses numbers a chart cannot scale, and draws an axis of a few ticks for any it takes (P1)", () => {
+    const chart = (values: number[]) => ({ type: "chart", kind: "bar", labels: values.map((_, i) => "l" + i), series: [{ name: "x", values }] });
+    expect(why(chart([1.7e308]))).toMatch(/beyond/);
+    expect(why(chart([-1.7e308]))).toMatch(/beyond/);
+    expect(why(chart([1, 1e15 + 1e3]))).toMatch(/beyond/);
+    expect(why({ type: "stats", items: [{ label: "a", value: 1e300 }] })).toMatch(/beyond/);
+    expect(ok(chart([5e-324]))).toHaveLength(1);
+    expect(ok(chart([5e-324, 1e15, -1e15, 0]))).toHaveLength(1);
+    // The scale for any finite numbers at all: a few ticks, every one finite (no loop to run away).
+    const extremes = [0, 1, -1, 5e-324, -5e-324, 1e-300, 1e15, -1e15, 1.7e308, -1.7e308, Number.MAX_VALUE, -Number.MAX_VALUE];
+    for (const lo of extremes) for (const hi of extremes) {
+      const tk = ticks(Math.min(lo, hi), Math.max(lo, hi));
+      expect(tk.length, `${lo}..${hi}`).toBeGreaterThanOrEqual(2);
+      expect(tk.length, `${lo}..${hi}`).toBeLessThanOrEqual(11);
+      expect(tk.every(Number.isFinite), `${lo}..${hi}: ${tk}`).toBe(true);
+      expect(tk[tk.length - 1] > tk[0], `${lo}..${hi}`).toBe(true);
+    }
+  });
+
+  it("knows a fenced block whose closing fence has not come (P2)", () => {
+    expect(fenceClosed("```ui\n{}\n```")).toBe(true);
+    expect(fenceClosed("```ui\n{}\n```\n\n")).toBe(true);
+    expect(fenceClosed("````ui\n{}\n`````")).toBe(true);
+    expect(fenceClosed("~~~ui\n{}\n~~~")).toBe(true);
+    expect(fenceClosed("```ui\n{}")).toBe(false);
+    expect(fenceClosed("```ui\n{}\n")).toBe(false);
+    expect(fenceClosed("```ui")).toBe(false);
+    expect(fenceClosed("````ui\n{}\n```")).toBe(false); // shorter than the opening
+    expect(fenceClosed("```ui\n{}\n~~~")).toBe(false);
   });
 });
 

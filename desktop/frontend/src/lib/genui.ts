@@ -215,15 +215,29 @@ export function formAnswer(f: Form, values: (string | number | boolean)[], yes: 
 }
 
 // What a person did to a block (a sorted table, a ticked choice), kept while the app runs: the same
-// block drawn again (the reply re-rendered as it streams, the chat opened again) is as they left it.
+// block of the same place (a message, a turn of a history) drawn again, as its chat is opened again,
+// is as they left it. Another place's block with the same text is another block.
 const kept = new Map<string, Record<string, unknown>>();
-/** The state of the n-th ui block with this text: the same object each time it is asked for. */
-export function keepFor(n: number, src: string): Record<string, unknown> {
-  const key = n + "\u0000" + src;
+/** The state of the n-th ui block with this text in the place named scope: the same object each
+ * time it is asked for. */
+export function keepFor(scope: string, n: number, src: string): Record<string, unknown> {
+  const key = scope + "\u0000" + n + "\u0000" + src;
   let k = kept.get(key);
   if (!k) {
     if (kept.size >= 300) kept.delete(kept.keys().next().value!); // the oldest first
     kept.set(key, k = {});
   }
   return k;
+}
+
+/** Whether a fenced code block's text (marked's raw) has its closing fence: one still being
+ * written runs to the end of the text without it. */
+export function fenceClosed(raw: string): boolean {
+  const open = /^ {0,3}(`{3,}|~{3,})/.exec(raw);
+  if (!open) return true; // an indented block: whole as it is
+  const lines = raw.replace(/\n+$/, "").split("\n");
+  if (lines.length < 2) return false;
+  const last = lines[lines.length - 1];
+  const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(last);
+  return !!m && m[1][0] === open[1][0] && m[1].length >= open[1].length;
 }

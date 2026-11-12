@@ -1,6 +1,7 @@
 <script lang="ts">
-  // A question from a reply: the person picks, and the answer goes into their message being
-  // written (the composer's draft, as ⌘L puts text there). Nothing is sent from here.
+  // A question from a reply: the person picks (one option, or several), and "Add to message" puts
+  // the answer into their message being written, in place of the one added before. Nothing is sent
+  // from here.
   import { untrack } from "svelte";
   import { t } from "../../lib/i18n.svelte";
   import { choiceAnswer, type Choices } from "../../lib/genui";
@@ -8,18 +9,20 @@
   let { c, keep }: { c: Choices; keep: Record<string, unknown> } = $props();
 
   // As it was left: a mounted block's props do not change (Markdown.svelte mounts it anew).
+  // sent: the answer as it was put into the draft (replaced there by the next).
   let picked = $state<string[]>(untrack(() => ((keep.picked as string[] | undefined) ?? []).filter(o => c.options.includes(o))));
   let added = $state(untrack(() => !!keep.added));
   function pick(o: string) {
     picked = c.multiple ? (picked.includes(o) ? picked.filter(x => x !== o) : [...picked, o]) : [o];
     keep.picked = $state.snapshot(picked);
     added = keep.added = false;
-    if (!c.multiple) answer();
   }
   function answer() {
     if (!picked.length) return;
     // In the order the agent gave them, not the order of the clicks.
-    toDraft(choiceAnswer(c, c.options.filter(o => picked.includes(o))));
+    const text = choiceAnswer(c, c.options.filter(o => picked.includes(o)));
+    toDraft(text, (keep.sent as string | undefined) ?? "");
+    keep.sent = text;
     added = keep.added = true;
   }
 </script>
@@ -33,14 +36,10 @@
       </button>
     {/each}
   </div>
-  {#if c.multiple}
-    <div class="foot">
-      <button type="button" class="btn primary" disabled={!picked.length} onclick={answer}>{t("Add to message")}</button>
-      {#if added}<span class="muted">{t("Added to your message")}</span>{/if}
-    </div>
-  {:else if added}
-    <div class="foot"><span class="muted">{t("Added to your message")}</span></div>
-  {/if}
+  <div class="foot">
+    <button type="button" class="btn primary" disabled={!picked.length || added} onclick={answer}>{t("Add to message")}</button>
+    {#if added}<span class="muted">{t("Added to your message")}</span>{/if}
+  </div>
 </div>
 
 <style>

@@ -18,8 +18,11 @@
     keep.values = $state.snapshot(values);
     added = keep.added = false;
   }
+  // In place of the answers added before, if the draft still has them.
   function answer() {
-    toDraft(formAnswer(c, values, t("yes"), t("no")));
+    const text = formAnswer(c, values, t("yes"), t("no"));
+    toDraft(text, (keep.sent as string | undefined) ?? "");
+    keep.sent = text;
     added = keep.added = true;
   }
 </script>
@@ -43,7 +46,7 @@
     </div>
   {/each}
   <div class="foot">
-    <button type="button" class="btn primary" onclick={answer}>{c.submit ?? t("Add to message")}</button>
+    <button type="button" class="btn primary" disabled={added} onclick={answer}>{c.submit ?? t("Add to message")}</button>
     {#if added}<span class="muted">{t("Added to your message")}</span>{/if}
   </div>
 </div>

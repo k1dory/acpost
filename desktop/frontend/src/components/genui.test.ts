@@ -28,12 +28,12 @@ afterEach(() => { for (const m of mounted) unmount(m); mounted = []; reply = nul
 
 const block = (v: unknown) => "Here:\n\n```ui\n" + (typeof v === "string" ? v : JSON.stringify(v)) + "\n```\n\nafter";
 // A reply shown; shown again (as it streams on, or as its chat is opened again), in place of the last.
-async function show(text: string) {
+async function show(text: string, scope?: string) {
   const Markdown = (await import("./Markdown.svelte")).default;
   if (reply) { unmount(reply); mounted = mounted.filter(m => m !== reply); }
   let box = document.getElementById("reply");
   if (!box) { box = document.createElement("div"); box.id = "reply"; document.body.append(box); }
-  reply = mount(Markdown, { target: box, props: { text } });
+  reply = mount(Markdown, { target: box, props: scope === undefined ? { text } : { text, scope } });
   mounted.push(reply);
   flushSync();
   await flush(); flushSync();
@@ -81,7 +81,7 @@ describe("a ui block in a reply", () => {
 
   it("draws a table that sorts and filters in the page, kept as it was left", async () => {
     const src = block({ type: "table", columns: ["host", "load"], rows: [["b", 2], ["a", 10], ["c", 1], ["d", 5], ["e", 3], ["f", 4]] });
-    await show(src);
+    await show(src, "msg_1");
     expect(q("td.num").textContent).toBe("2"); // numbers right-aligned
     q<HTMLButtonElement>("th:nth-child(2) button").click();
     flushSync();
@@ -93,8 +93,8 @@ describe("a ui block in a reply", () => {
     box.value = "a"; box.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
     expect(texts("tbody td:first-child")).toEqual(["a"]);
-    // The reply goes on streaming: the page is drawn again, the table as the person left it.
-    await show(src + " and more");
+    // The message shown again (its chat opened again): the table as the person left it.
+    await show(src + " and more", "msg_1");
     expect(texts("tbody td:first-child")).toEqual(["a"]);
     expect(q<HTMLInputElement>(".tbl input").value).toBe("a");
     expect(q("th:nth-child(2)").getAttribute("aria-sort")).toBe("descending");
@@ -121,9 +121,9 @@ describe("a ui block in a reply", () => {
 
   it("shows the code of a block not valid, or still being written", async () => {
     await show("Here:\n\n```ui\n{\"type\":\"stats\",\"items\":[{\"label\":\"Us");
-    expect(q(".uib").classList.contains("drawn")).toBe(false);
-    expect(q(".uib .lang").textContent).toBe("ui");
-    expect(q(".uib code").textContent).toContain('"label"');
+    expect(document.querySelector(".uib")).toBeNull();
+    expect(q(".code .lang").textContent).toBe("ui");
+    expect(q(".code code").textContent).toContain('"label"');
     expect(document.querySelector(".gu")).toBeNull();
     // Whole: drawn.
     await show(block({ type: "stats", items: [{ label: "Users", value: 1 }] }));
@@ -144,7 +144,7 @@ describe("a ui block in a reply that streams", () => {
     mounted.push(r);
     flushSync();
     expect(document.querySelector(".gu")).toBeNull();
-    expect(q(".uib code").textContent).toContain('"host"');
+    expect(q(".code code").textContent).toContain('"host"');
     r.set(head + src + "\n```\n");
     flushSync(); await flush(); flushSync();
     expect(all(".gu")).toHaveLength(1);
@@ -172,10 +172,13 @@ describe("an answer from a reply", () => {
   }
   const textarea = () => q<HTMLTextAreaElement>("textarea");
 
-  it("of a single choice goes into the draft on a click, and nothing is sent", async () => {
+  it("of a single choice goes into the draft when added, and nothing is sent", async () => {
     await withComposer();
     await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }));
     all(".opt")[1].click();
+    flushSync(); await flush(); flushSync();
+    expect(textarea().value).toBe(""); // a pick alone writes nothing
+    q<HTMLButtonElement>(".ask .btn").click();
     flushSync(); await flush(); flushSync();
     expect(textarea().value).toBe("> Which DB?\n\nSQLite\n\n");
     expect(q(".ask .muted").textContent).toBeTruthy();
@@ -212,5 +215,131 @@ describe("an answer from a reply", () => {
     flushSync(); await flush(); flushSync();
     expect(textarea().value).toBe("mine\n> Deploy\n\n- Host: web2\n- Replicas: 2\n- Region: us\n- Now: yes\n\n");
     expect(fake.Node.SendTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("review round 1", () => {
+  const streaming = async (text: string) => {
+    const Streaming = (await import("../test/Streaming.svelte")).default;
+    const r = mount(Streaming, { target: document.body, props: { text } }) as unknown as { set(t: string): void };
+    mounted.push(r);
+    flushSync(); await flush(); flushSync();
+    return async (t: string) => { r.set(t); flushSync(); await flush(); flushSync(); };
+  };
+
+  it("draws a chart of extreme numbers with a few finite ticks, and shows one of numbers out of range as code (P1)", async () => {
+    await show(block({ type: "chart", kind: "line", labels: ["a", "b", "c"], series: [{ name: "x", values: [5e-324, 1e15, -1e15] }] }));
+    const axis = all("div.chart svg text.ax").filter(e => !["a", "b", "c"].includes(e.textContent!));
+    expect(axis.length).toBeGreaterThanOrEqual(2);
+    expect(axis.length).toBeLessThanOrEqual(11);
+    expect(q("div.chart").innerHTML).not.toMatch(/NaN|Infinity/);
+    await show(block({ type: "chart", kind: "bar", labels: ["a"], series: [{ name: "x", values: [1.7e308] }] }));
+    expect(document.querySelector(".gu")).toBeNull();
+    expect(q(".uib code").textContent).toContain("1.7e+308");
+  });
+
+  it("keeps what was done to a block per message: the same form in another message starts empty (P2)", async () => {
+    const form = block({ type: "form", fields: [{ label: "Host" }] });
+    const fill = (v: string) => { const i = q<HTMLInputElement>(".form input"); i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); flushSync(); };
+    await show(form, "msg_A");
+    fill("web1");
+    q<HTMLButtonElement>(".form .btn").click();
+    flushSync();
+    await show(form, "msg_B");
+    expect(q<HTMLInputElement>(".form input").value).toBe("");
+    expect(document.querySelector(".form .muted")).toBeNull(); // not "added" here
+    await show(form, "msg_A"); // the first opened again: as it was left
+    expect(q<HTMLInputElement>(".form input").value).toBe("web1");
+    expect(q(".form .muted")).toBeTruthy();
+    // Without a scope (a page that names no place): nothing carried over from another showing.
+    await show(form);
+    fill("x");
+    await show(form);
+    expect(q<HTMLInputElement>(".form input").value).toBe("");
+  });
+
+  it("replaces a choice's earlier answer in the draft rather than adding a second (P2)", async () => {
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.draft.agent = "agent:claude";
+    mounted.push(mount((await import("./Composer.svelte")).default, { target: document.body }));
+    flushSync();
+    await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }), "msg_C");
+    const add = () => q<HTMLButtonElement>(".ask .btn");
+    all(".opt")[1].click(); flushSync();
+    add().click(); flushSync(); await flush(); flushSync();
+    expect(add().disabled).toBe(true); // added, nothing changed since
+    const ta = q<HTMLTextAreaElement>("textarea");
+    ta.value = "first, " + ta.value + "thanks"; ta.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+    all(".opt")[0].click(); flushSync();
+    add().click(); flushSync(); await flush(); flushSync();
+    expect(ta.value).toBe("first, > Which DB?\n\nPostgres\n\nthanks");
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+  });
+
+  it("keeps a component, its focus and its selection, as the reply streams on (P2)", async () => {
+    const src = JSON.stringify({ type: "table", columns: ["host"], rows: [["a"], ["b"], ["c"], ["d"], ["e"], ["f"]] });
+    const set = await streaming("Here:\n\n```ui\n" + src + "\n```\n");
+    const input = q<HTMLInputElement>(".tbl input");
+    input.focus();
+    input.value = "abc"; input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.setSelectionRange(1, 2);
+    flushSync();
+    // Never out of the page: a browser would take the focus and the selection off it.
+    const removed: Node[] = [];
+    const watch = new MutationObserver(rs => { for (const r of rs) removed.push(...r.removedNodes); });
+    watch.observe(document.body, { childList: true, subtree: true });
+    const focus = vi.spyOn(input, "focus");
+    await set("Here:\n\n```ui\n" + src + "\n```\n\nThe busiest");
+    await set("Here:\n\n```ui\n" + src + "\n```\n\nThe busiest is a.");
+    await flush();
+    watch.disconnect();
+    expect(removed.filter(n => n.contains(input))).toEqual([]);
+    expect(focus).not.toHaveBeenCalled(); // nothing to put back
+    expect(q(".tbl input")).toBe(input); // the same element, never mounted again
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([1, 2]);
+    expect(input.value).toBe("abc");
+  });
+
+  it("keeps the focus of a component whose block moved into a new part of the page (P2)", async () => {
+    // A block in a list: the list is new with each item streamed in, the block moved into it.
+    // (happy-dom's DOMPurify unwraps the outer list; this text is the test's own, shown unsanitized
+    // here to have the page a browser has.)
+    vi.doMock("../lib/sanitize", () => ({ cleanHtml: (h: string) => h, cleanSvg: (h: string) => h }));
+    const src = JSON.stringify({ type: "form", fields: [{ label: "Host" }] });
+    const item = "- one\n\n  ```ui\n  " + src + "\n  ```\n";
+    const set = await streaming(item);
+    expect(q("ul .uib .form")).toBeTruthy();
+    const input = q<HTMLInputElement>(".form input");
+    input.focus();
+    input.value = "web"; input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.setSelectionRange(0, 3);
+    flushSync();
+    // Its block's node is new: the field is moved there, and the focus put back with its selection
+    // (happy-dom keeps the focus of a detached field; a browser does not).
+    const focus = vi.spyOn(input, "focus"), select = vi.spyOn(input, "setSelectionRange");
+    await set(item + "- two\n");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith(0, 3, expect.any(String));
+    expect(document.activeElement).toBe(input);
+    expect(q("ul li:nth-child(2)").textContent!.trim()).toBe("two");
+    vi.doUnmock("../lib/sanitize");
+    expect(q(".form input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 3]);
+    expect(all(".gu")).toHaveLength(1);
+  });
+
+  it("stays code until its closing fence comes, even when its JSON is whole (P2)", async () => {
+    const src = JSON.stringify({ type: "stats", items: [{ label: "Users", value: 1 }] });
+    const set = await streaming("Here:\n\n```ui\n" + src);
+    expect(document.querySelector(".gu")).toBeNull();
+    expect(q(".code code").textContent).toBe(src);
+    await set("Here:\n\n```ui\n" + src + "\n");
+    expect(document.querySelector(".gu")).toBeNull();
+    await set("Here:\n\n```ui\n" + src + "\n```");
+    expect(q(".gu .tile .label").textContent).toBe("Users");
   });
 });
