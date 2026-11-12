@@ -22,7 +22,7 @@ const brands: (Brand & { re: RegExp })[] = [
   { id: "claude", title: "Claude Code", short: "Claude", mark: true, tile: "C", hue: 15, sat: 60, re: /claude|anthropic/ },
   { id: "codebuddy", title: "CodeBuddy", short: "CodeBuddy", mark: false, tile: "CB", hue: 245, sat: 60, re: /codebuddy/ },
   { id: "opencode", title: "OpenCode", short: "OpenCode", mark: false, tile: "OC", hue: 220, sat: 8, re: /opencode/ },
-  { id: "codex", title: "Codex", short: "Codex", mark: true, tile: "AI", hue: 160, sat: 10, re: /codex|openai|(?<![a-z])gpt/ },
+  { id: "codex", title: "Codex", short: "Codex", mark: true, tile: "AI", hue: 160, sat: 10, re: /codex|openai|(?:^|[^a-z])gpt/ },
   { id: "gemini", title: "Gemini CLI", short: "Gemini", mark: true, tile: "G", hue: 220, sat: 70, re: /gemini/ },
   { id: "copilot", title: "GitHub Copilot", short: "Copilot", mark: true, tile: "GH", hue: 260, sat: 15, re: /copilot/ },
   { id: "cursor", title: "Cursor", short: "Cursor", mark: true, tile: "Cu", hue: 220, sat: 8, re: /cursor/ },
@@ -32,11 +32,11 @@ const brands: (Brand & { re: RegExp })[] = [
   { id: "deepseek", title: "DeepSeek", short: "DeepSeek", mark: false, tile: "DS", hue: 228, sat: 70, re: /deepseek/ },
   { id: "goose", title: "Goose", short: "Goose", mark: false, tile: "G", hue: 30, sat: 10, re: /goose/ },
   { id: "kiro", title: "Kiro", short: "Kiro", mark: false, tile: "K", hue: 270, sat: 65, re: /kiro/ },
-  { id: "devin", title: "Devin", short: "Devin", mark: false, tile: "D", hue: 170, sat: 50, re: /(?<![a-z])devin(?![a-z])/ },
-  { id: "cline", title: "Cline", short: "Cline", mark: false, tile: "Cl", hue: 200, sat: 12, re: /(?<![a-z])cline(?![a-z])/ },
-  { id: "aider", title: "Aider", short: "Aider", mark: false, tile: "Ai", hue: 135, sat: 50, re: /(?<![a-z])aider/ },
-  { id: "amp", title: "Amp", short: "Amp", mark: false, tile: "A", hue: 350, sat: 60, re: /(?<![a-z])amp(?![a-z])|ampcode|sourcegraph/ },
-  { id: "zed", title: "Zed", short: "Zed", mark: false, tile: "Z", hue: 212, sat: 60, re: /(?<![a-z])zed(?![a-z])/ },
+  { id: "devin", title: "Devin", short: "Devin", mark: false, tile: "D", hue: 170, sat: 50, re: /(?:^|[^a-z])devin(?![a-z])/ },
+  { id: "cline", title: "Cline", short: "Cline", mark: false, tile: "Cl", hue: 200, sat: 12, re: /(?:^|[^a-z])cline(?![a-z])/ },
+  { id: "aider", title: "Aider", short: "Aider", mark: false, tile: "Ai", hue: 135, sat: 50, re: /(?:^|[^a-z])aider/ },
+  { id: "amp", title: "Amp", short: "Amp", mark: false, tile: "A", hue: 350, sat: 60, re: /(?:^|[^a-z])amp(?![a-z])|ampcode|sourcegraph/ },
+  { id: "zed", title: "Zed", short: "Zed", mark: false, tile: "Z", hue: 212, sat: 60, re: /(?:^|[^a-z])zed(?![a-z])/ },
 ];
 
 const byId = new Map<string, Brand>(brands.map(b => [b.id, b]));
