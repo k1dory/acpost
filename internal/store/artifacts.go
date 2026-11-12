@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -84,68 +85,127 @@ func parseArtifactKey(s string) (artifactKey, error) {
 	return artifactKey{ts: v[0], src: int(v[1]), id: v[2], idx: v[3]}, nil
 }
 
-// artifactsSQL lists both kinds as one ordered list. A change's whole path is its directory and
-// its path from there, unless that path is whole already (a file outside the repository).
-func artifactsSQL() string {
-	var ext []string
-	for _, e := range docExts {
-		ext = append(ext, "lower(path) LIKE '%"+e+"'")
-	}
-	whole := func(col string) string {
-		return "CASE WHEN " + col + " LIKE '/%' OR " + col + " LIKE '\\%' OR " + col + " LIKE '_:%' THEN " + col + " ELSE repo || '/' || " + col + " END"
-	}
-	return `WITH RECURSIVE ch AS (
-		SELECT tc.id, CAST(j.key AS INTEGER) AS idx, tc.repo, tc.msg, tc.agent, tc.ts,
-			coalesce(json_extract(j.value, '$.path'), '') AS path, coalesce(json_extract(j.value, '$.status'), '') AS status,
-			coalesce(json_extract(j.value, '$.from'), '') AS src
-		FROM turn_changes tc, json_each(tc.files) j
-	), chw AS (
-		SELECT ch.*, ` + whole("path") + ` AS whole, CASE WHEN src = '' THEN '' ELSE ` + whole("src") + ` END AS srcwhole
-		FROM ch WHERE path <> ''
-	), chf AS (
-		SELECT id, idx, repo, msg, agent, ts, path, status, whole FROM chw
-		UNION ALL
-		-- A rename retires its source: from then on the old path is not there.
-		SELECT id, idx, repo, msg, agent, ts, src, 'D', srcwhole FROM chw WHERE status LIKE 'R%' AND srcwhole <> ''
-	), made(whole, ts, id, idx) AS (
-		-- When a turn made a path: a creation, and where a later rename or copy took what it made (a
-		-- chain of them too). Only forward in time, and only while the source was not deleted (or
-		-- renamed away) in between: a path used again later is another file.
-		SELECT whole, ts, id, idx FROM chw WHERE status = 'A'
-		UNION
-		SELECT r.whole, r.ts, r.id, r.idx FROM chw r JOIN made m ON r.srcwhole = m.whole
-		WHERE (r.status LIKE 'R%' OR r.status LIKE 'C%') AND (r.ts, r.id, r.idx) > (m.ts, m.id, m.idx)
-			AND NOT EXISTS (SELECT 1 FROM chf d WHERE d.whole = m.whole AND d.status LIKE 'D%'
-				AND (d.ts, d.id, d.idx) > (m.ts, m.id, m.idx) AND (d.ts, d.id, d.idx) < (r.ts, r.id, r.idx))
-	), ranked AS (
-		-- A path's whole history first: its latest change is what it is now (a deletion, or a rename
-		-- away: gone), and whether a turn made the file there now (made, and not deleted since).
-		SELECT chf.*, ROW_NUMBER() OVER (PARTITION BY whole ORDER BY ts DESC, id DESC, idx DESC) AS rn,
-			EXISTS (SELECT 1 FROM made m WHERE m.whole = chf.whole AND NOT EXISTS (SELECT 1 FROM chf d
-				WHERE d.whole = m.whole AND d.status LIKE 'D%' AND (d.ts, d.id, d.idx) > (m.ts, m.id, m.idx))) AS created
-		FROM chf
-	), docs AS (
-		SELECT * FROM ranked WHERE rn = 1 AND status NOT LIKE 'D%'
-			AND (` + strings.Join(ext, " OR ") + ` OR (created = 1 AND lower(path) LIKE '%.json'))
-			AND '/' || replace(whole, '\', '/') NOT LIKE '%/.%' AND '/' || replace(whole, '\', '/') NOT LIKE '%/node_modules/%'
-	), items AS (
-		SELECT CASE WHEN m.finished_at > 0 THEN m.finished_at ELSE m.created_at END AS ts, 1 AS src, f.id AS id, 0 AS idx,
-			f.name AS name, f.type AS type, f.size AS size, f.uri AS uri, '' AS whole, '' AS status,
-			m.id AS msg, m.thread AS thread, m.recipient AS agent, CASE WHEN f.uri <> '' THEN f.uri ELSE f.name END AS addr
+// replyFilesSQL lists the files of replies older than a cursor, matching a name or address.
+const replyFilesSQL = `SELECT ts, id, name, type, size, uri, msg, thread, agent FROM (
+		SELECT CASE WHEN m.finished_at > 0 THEN m.finished_at ELSE m.created_at END AS ts, f.id AS id,
+			f.name AS name, f.type AS type, f.size AS size, f.uri AS uri, m.id AS msg, m.thread AS thread, m.recipient AS agent
 		FROM files f JOIN messages m ON m.seq = f.msg WHERE f.reply = 1
-		UNION ALL
-		SELECT d.ts, 0, d.id, d.idx, '', '', -1, '', d.whole, d.status, d.msg, coalesce(m.thread, ''), d.agent, d.whole
-		FROM docs d LEFT JOIN messages m ON m.id = d.msg
-	)
-	SELECT ts, src, id, idx, name, type, size, uri, whole, status, msg, thread, agent FROM items
-	WHERE (ts, src, id, idx) < (?, ?, ?, ?) AND (? = '' OR name LIKE ? ESCAPE '\' OR addr LIKE ? ESCAPE '\')
-	ORDER BY ts DESC, src DESC, id DESC, idx DESC LIMIT ?`
+	) WHERE (ts, 1, id, 0) < (?, ?, ?, ?) AND (? = '' OR name LIKE ? ESCAPE '\' OR (CASE WHEN uri <> '' THEN uri ELSE name END) LIKE ? ESCAPE '\')
+	ORDER BY ts DESC, id DESC LIMIT ?`
+
+// changeRowsSQL is every file a turn's changes name, without the diffs: what the library reads
+// its documents from, oldest first.
+const changeRowsSQL = `SELECT tc.ts, tc.id, CAST(j.key AS INTEGER), tc.repo, tc.msg, tc.agent,
+		coalesce(json_extract(j.value, '$.path'), ''), coalesce(json_extract(j.value, '$.status'), ''), coalesce(json_extract(j.value, '$.from'), '')
+	FROM turn_changes tc, json_each(tc.files) j ORDER BY tc.ts, tc.id, j.key`
+
+// docState is a path as the turns' changes left it.
+type docState struct {
+	key          artifactKey
+	path, status string
+	msg, agent   string
+	made         bool // a turn made the file there now: created it, or renamed or copied there one it made
+}
+
+// wholePath is a change's path whole: its directory and its path from there, unless that path is
+// whole already (a file outside the repository).
+func wholePath(repo, p string) string {
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) || len(p) > 1 && p[1] == ':' {
+		return p
+	}
+	return repo + "/" + p
+}
+
+// isDoc says whether a path as it is now is a document the library lists.
+func isDoc(d *docState) bool {
+	if strings.HasPrefix(d.status, "D") {
+		return false
+	}
+	slashed := "/" + strings.ReplaceAll(d.path, `\`, "/")
+	if strings.Contains(slashed, "/.") || strings.Contains(slashed, "/node_modules/") {
+		return false
+	}
+	low := strings.ToLower(d.path)
+	for _, e := range docExts {
+		if strings.HasSuffix(low, e) {
+			return true
+		}
+	}
+	return d.made && strings.HasSuffix(low, ".json")
+}
+
+// documents reads the turns' changes once and replays them in order: each path ends as its latest
+// change left it (deleted, or renamed away: gone), and what a turn made follows a rename or copy
+// only forward in time, from a file there at that moment. One pass, whatever the history holds.
+func (s *Store) documents(ctx context.Context) ([]*docState, error) {
+	rows, err := s.r.QueryContext(ctx, changeRowsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	state := map[string]*docState{}
+	at := func(w string) *docState {
+		d := state[w]
+		if d == nil {
+			d = &docState{path: w}
+			state[w] = d
+		}
+		return d
+	}
+	for rows.Next() {
+		var k artifactKey
+		var repo, msg, agent, p, status, from string
+		if err := rows.Scan(&k.ts, &k.id, &k.idx, &repo, &msg, &agent, &p, &status, &from); err != nil {
+			return nil, err
+		}
+		if p == "" {
+			continue
+		}
+		d := at(wholePath(repo, p))
+		made := d.made
+		switch {
+		case status == "A":
+			made = true
+		case strings.HasPrefix(status, "D"):
+			made = false
+		case (strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C")) && from != "":
+			src := at(wholePath(repo, from))
+			made = src.made
+			if strings.HasPrefix(status, "R") { // a rename retires its source
+				src.key, src.status, src.msg, src.agent, src.made = k, "D", msg, agent, false
+			}
+		}
+		d.key, d.status, d.msg, d.agent, d.made = k, status, msg, agent, made
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []*docState
+	for _, d := range state {
+		if isDoc(d) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 // likePattern is s to find anywhere, its wildcards taken as themselves.
 func likePattern(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return "%" + r.Replace(s) + "%"
+}
+
+func (a artifactKey) less(b artifactKey) bool {
+	if a.ts != b.ts {
+		return a.ts < b.ts
+	}
+	if a.src != b.src {
+		return a.src < b.src
+	}
+	if a.id != b.id {
+		return a.id < b.id
+	}
+	return a.idx < b.idx
 }
 
 // Artifacts lists a page of artifacts, newest first, and the cursor of the next ("" for none).
@@ -162,37 +222,66 @@ func (s *Store) Artifacts(ctx context.Context, q ArtifactQuery) ([]Artifact, str
 		from = k
 	}
 	match := strings.TrimSpace(q.Match)
+	type item struct {
+		a Artifact
+		k artifactKey
+	}
+	var all []item
+
+	// Reply files: the page's worth, at most.
 	pat := likePattern(match)
-	rows, err := s.r.QueryContext(ctx, artifactsSQL(), from.ts, from.src, from.id, from.idx, match, pat, pat, q.Limit+1)
+	rows, err := s.r.QueryContext(ctx, replyFilesSQL, from.ts, from.src, from.id, from.idx, match, pat, pat, q.Limit+1)
 	if err != nil {
 		return nil, "", err
 	}
-	defer rows.Close()
-	var out []Artifact
-	var keys []artifactKey
 	for rows.Next() {
 		var a Artifact
-		var k artifactKey
-		var ts int64
-		if err := rows.Scan(&ts, &k.src, &k.id, &k.idx, &a.Name, &a.Type, &a.Size, &a.URI, &a.Path, &a.Status, &a.Msg, &a.Thread, &a.Agent); err != nil {
+		k := artifactKey{src: 1}
+		if err := rows.Scan(&k.ts, &k.id, &a.Name, &a.Type, &a.Size, &a.URI, &a.Msg, &a.Thread, &a.Agent); err != nil {
+			rows.Close()
 			return nil, "", err
 		}
-		k.ts = ts
-		a.At = fromMS(ts)
-		switch {
-		case k.src == 0:
-			a.Kind = "change"
-			a.Path = filepath.Clean(filepath.FromSlash(a.Path))
-			a.Name = filepath.Base(a.Path)
-		case a.URI != "":
+		a.Kind = "file"
+		if a.URI != "" {
 			a.Kind = "link"
-		default:
-			a.Kind = "file"
 		}
-		out = append(out, a)
-		keys = append(keys, k)
+		all = append(all, item{a, k})
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	// Documents on disk: those older than the cursor, matching.
+	docs, err := s.documents(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	low := strings.ToLower(match)
+	for _, d := range docs {
+		if !d.key.less(from) {
+			continue
+		}
+		p := filepath.Clean(filepath.FromSlash(d.path))
+		name := filepath.Base(p)
+		if low != "" && !strings.Contains(strings.ToLower(name), low) && !strings.Contains(strings.ToLower(d.path), low) {
+			continue
+		}
+		all = append(all, item{Artifact{Kind: "change", Name: name, Size: -1, Path: p, Status: d.status, Msg: d.msg, Agent: d.agent}, d.key})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[j].k.less(all[i].k) })
+
+	var out []Artifact
+	var keys []artifactKey
+	for _, it := range all {
+		if len(out) == q.Limit+1 {
+			break
+		}
+		it.a.At = fromMS(it.k.ts)
+		out = append(out, it.a)
+		keys = append(keys, it.k)
+	}
+	if err := s.threadsOf(ctx, out); err != nil {
 		return nil, "", err
 	}
 	next := ""
@@ -244,4 +333,40 @@ func (s *Store) ReplyFileHead(ctx context.Context, id, name string, max int) (Fi
 		f.Data = []byte{}
 	}
 	return f, err
+}
+
+// threadsOf fills in the threads of the documents of a page, by their messages (one look for
+// the page).
+func (s *Store) threadsOf(ctx context.Context, as []Artifact) error {
+	var ids []any
+	for _, a := range as {
+		if a.Kind == "change" {
+			ids = append(ids, a.Msg)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.r.QueryContext(ctx, "SELECT id, thread FROM messages WHERE id IN (?"+strings.Repeat(",?", len(ids)-1)+")", ids...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	thread := map[string]string{}
+	for rows.Next() {
+		var id, th string
+		if err := rows.Scan(&id, &th); err != nil {
+			return err
+		}
+		thread[id] = th
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range as {
+		if as[i].Kind == "change" {
+			as[i].Thread = thread[as[i].Msg]
+		}
+	}
+	return nil
 }
