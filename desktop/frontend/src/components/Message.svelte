@@ -110,11 +110,13 @@
 </div>
 
 <style>
-  .pair { display: grid; gap: 18px; padding: 4px 0 32px; }
+  /* One column no wider than the chat: a long line in it (a command, an approval's buttons) wraps
+     or is cut there, it does not push the column past a narrow window. */
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 4px 0 32px; }
   .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; flex-wrap: wrap; }
   .nm { font-weight: 600; }
   .user { justify-self: end; max-width: 85%; }
-  .edit { width: 100%; min-width: 360px; resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
+  .edit { width: 100%; min-width: min(360px, 100%); resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
   .eacts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
   .user .meta { justify-content: flex-end; }
   .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
@@ -126,7 +128,7 @@
   .fbtn { cursor: default; }
   .fbtn:hover { border-color: var(--accent); }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
-  .agent { min-width: 0; display: grid; gap: 8px; }
+  .agent { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .agent > .meta { margin-bottom: 2px; }
   .err .hint { margin-top: 6px; opacity: .85; }
   .err { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
