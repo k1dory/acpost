@@ -202,4 +202,28 @@ describe("! in the composer", () => {
     await app.open(T as any);
     expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo one", "echo two"]);
   });
+
+  it("text that starts with ! but was not typed here as it stands is a message, however it came to be there", async () => {
+    const app = await setup();
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    // Put there by the app (what is left after a send, a draft given back, anything): not typed.
+    app.draftOf().text = "!printf from-playbook";
+    svelte.flushSync();
+    expect(document.querySelector(".comp.bang")).toBeNull();
+    enter();
+    await flush(); await flush();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+    expect(fake.Node.SendTask.mock.calls[0][0].body).toBe("!printf from-playbook");
+    // Typed, then changed by the app: not a command either. Typed and left as typed: a command.
+    type("!echo a");
+    app.draftOf().text = "!echo a; rm -rf x";
+    svelte.flushSync();
+    expect(document.querySelector(".comp.bang")).toBeNull();
+    type("!echo typed");
+    expect(document.querySelector(".comp.bang")).toBeTruthy();
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0][1]).toBe("echo typed");
+  });
 });

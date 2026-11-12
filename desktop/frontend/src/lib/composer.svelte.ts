@@ -165,6 +165,11 @@ export class SendOp {
 
 export class ComposerDraft {
   text = $state("");
+  /** The text as the person's own typing (or pasting) in the composer last left it. A draft is a
+   * command to run ("!…") only while its text is exactly this: text that anything else put or
+   * changed (a quotation, a playbook, another draft joined to it, what is left after a send) is
+   * never run, whatever it starts with. */
+  typed = $state("");
   /** The draft's files. Their names are unique whatever puts files here (an add, a paste, a file
    * handed over, a send given back, drafts merged): each set goes through uniqueNames, the
    * earlier keeping its name, a later one told apart (identity and order kept). The node takes no

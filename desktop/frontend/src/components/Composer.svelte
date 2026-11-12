@@ -88,7 +88,8 @@
   // The text and files leave the draft only once the node has them (app.submit).
   // "!git status" is a command of the person's own, run in the chat's directory and shown in the
   // chat; not a message (one that must start with "!" starts with a space).
-  const bang = $derived(d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
+  // Only what the person typed here, as they left it (d.typed): never text put in by anything else.
+  const bang = $derived(d.text.startsWith("!") && d.text === d.typed && !d.files.length && d.reading.size === 0);
   async function send() {
     if (bang) {
       const cmd = d.text.slice(1).trim();
@@ -176,7 +177,7 @@
       {/each}
     </div>
   {/if}
-  <textarea bind:this={ta} bind:value={d.text} onkeydown={key} rows="1"
+  <textarea bind:this={ta} bind:value={d.text} oninput={() => (d.typed = d.text)} onkeydown={key} rows="1"
     placeholder={isNew ? t("/ for the model, effort and commands") : t("Reply…")}></textarea>
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
