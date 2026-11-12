@@ -14,8 +14,9 @@ import (
 // ChangedFile is a file a turn changed.
 type ChangedFile struct {
 	Path    string `json:"path"`
-	Status  string `json:"status"` // A, M, D, R…
-	Added   int    `json:"added"`  // lines; -1 for a binary file
+	Status  string `json:"status"`         // A, M, D, R…
+	From    string `json:"from,omitempty"` // a rename's or copy's source path (rows recorded before it have none)
+	Added   int    `json:"added"`          // lines; -1 for a binary file
 	Removed int    `json:"removed"`
 }
 
@@ -68,9 +69,19 @@ CREATE INDEX IF NOT EXISTS messages_parent ON messages (parent) WHERE parent != 
 func (s *Store) AddChanges(ctx context.Context, c TurnChanges) error {
 	files, _ := json.Marshal(c.Files)
 	return s.tx(ctx, func(t *sql.Tx) error {
-		_, err := t.ExecContext(ctx, `INSERT INTO turn_changes (msg, ts, start, agent, repo, branch, before, after, files, diff, cut)
+		res, err := t.ExecContext(ctx, `INSERT INTO turn_changes (msg, ts, start, agent, repo, branch, before, after, files, diff, cut)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?)`, c.Msg, ms(c.At), ms(c.Start), c.Agent, c.Repo, c.Branch, c.Before, c.After, string(files), c.Diff, c.Cut)
-		return err
+		if err != nil {
+			return err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		// The library's documents, in the same transaction (artifactdocs.go).
+		var thread string
+		_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", c.Msg).Scan(&thread)
+		return applyChanges(ctx, t, docTurn{change: id, ts: ms(c.At), msg: c.Msg, agent: c.Agent, repo: c.Repo, files: c.Files}, thread)
 	})
 }
 

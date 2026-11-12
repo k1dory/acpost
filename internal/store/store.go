@@ -323,6 +323,9 @@ func (s *Store) migrate() error {
 	if _, err := s.w.Exec(changesSchema); err != nil {
 		return err
 	}
+	if err := s.buildArtifactDocs(); err != nil { // artifactdocs.go
+		return fmt.Errorf("build artifact_docs: %w", err)
+	}
 	if _, err := s.w.Exec(foldersSchema); err != nil {
 		return err
 	}
@@ -1308,6 +1311,10 @@ func (s *Store) GC(ctx context.Context, before time.Time) (int, error) {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE msg IN ("+sel+")", t, gcBatch); err != nil {
+				return err
+			}
+			// A document whose latest change goes, goes with it; older changes leave it (artifactdocs.go).
+			if _, err := tx.ExecContext(ctx, "DELETE FROM artifact_docs WHERE msg IN (SELECT id FROM messages WHERE seq IN ("+sel+"))", t, gcBatch); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM turn_changes WHERE msg IN (SELECT id FROM messages WHERE seq IN ("+sel+"))", t, gcBatch); err != nil {

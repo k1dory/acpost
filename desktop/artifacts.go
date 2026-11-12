@@ -74,17 +74,12 @@ func (n *Node) LocalFile(path, base string) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
-	// Opened as checked: no symlink anywhere on the resolved path (macOS's O_NOFOLLOW_ANY: a folder
-	// swapped for a link meanwhile fails), a FIFO does not block (O_NONBLOCK), the open file itself
-	// regular, read up to the limit.
-	fd, err := syscall.Open(p, syscall.O_RDONLY|oNoFollowAny|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	f, st, err := openLocal(p)
 	if err != nil {
-		return Artifact{}, errArtifact
+		return Artifact{}, err
 	}
-	f := os.NewFile(uintptr(fd), p)
 	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() || st.Size() > artifactMax {
+	if st.Size() > artifactMax {
 		return Artifact{}, errArtifact
 	}
 	b, err := io.ReadAll(io.LimitReader(f, artifactMax+1))
@@ -92,6 +87,23 @@ func (n *Node) LocalFile(path, base string) (Artifact, error) {
 		return Artifact{}, errArtifact
 	}
 	return Artifact{Name: filepath.Base(p), Path: p, Type: typeOf(p, "", b), Size: len(b), Data: base64.StdEncoding.EncodeToString(b)}, nil
+}
+
+// openLocal opens a file of this Mac as checked: no symlink anywhere on the resolved path (macOS's
+// O_NOFOLLOW_ANY: a folder swapped for a link meanwhile fails), a FIFO does not block
+// (O_NONBLOCK), the open file itself regular. The caller reads it up to its limit.
+func openLocal(p string) (*os.File, os.FileInfo, error) {
+	fd, err := syscall.Open(p, syscall.O_RDONLY|oNoFollowAny|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, nil, errArtifact
+	}
+	f := os.NewFile(uintptr(fd), p)
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		f.Close()
+		return nil, nil, errArtifact
+	}
+	return f, st, nil
 }
 
 // OpenLocal opens a file of this Mac a chat links to in its own app.

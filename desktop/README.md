@@ -61,6 +61,13 @@ once, replaced by the old): an edit whose text the event cut, or that is no long
 the file without a diff. The chat's header there has "New task" and "Another chat" (the palette),
 the sidebar being hidden.
 
+Artifacts, in the sidebar beside Tasks and Wiki, gathers what the agents of every chat produced:
+the files attached to their replies, and the documents their turns made or changed on this Mac
+(pages, Markdown, pictures, PDFs, tables; not every source file). A card shows a little of its
+file, read only once the card comes near the screen (a small picture whole, the first lines of a
+text); a click opens it in the same viewer as a chat's artifacts panel, and its chat is a click
+away.
+
 A reply can carry components besides Markdown and Mermaid: a ```` ```ui ```` block holds one JSON
 object `{"type": …}` (or an array of up to 8) that the chat draws in its place: `stats` tiles, a
 `chart` (bar, line, area or pie, drawn as SVG in the app's colours), a `table` the person sorts and
