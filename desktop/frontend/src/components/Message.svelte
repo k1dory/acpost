@@ -26,6 +26,7 @@
   import Icon from "./Icon.svelte";
   import { Node, errText } from "../lib/api";
   import { bytes } from "../lib/names";
+  import { openTrace } from "../lib/analytics.svelte";
 
   let { m }: { m: Msg } = $props();
   const turn = $derived.by(() => { app.rev; return app.turns[m.id]?.view(); });
@@ -77,6 +78,7 @@
       {:else if m.state === "failed"}<span class="chip crit">{t("failed")}</span>
       {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>
       {:else if m.state === "expired"}<span class="chip warn">{t("expired")}</span>{/if}
+      {#if m.state !== "queued" && m.to.startsWith("agent:")}<button class="btn ghost sm trace" title={t("Where this turn's time went")} onclick={e => { e.stopPropagation(); openTrace(m.thread || m.id, m.id); }}><Icon name="activity" size={12} /> {t("Trace")}</button>{/if}
     </div>
 
     {#if turn}<TurnBlocks view={turn} msg={m.id} msgState={m.state} agent={m.to} />{/if}
@@ -133,6 +135,8 @@
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
   .agent { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .agent > .meta { margin-bottom: 2px; }
+  .trace { margin-left: auto; gap: 4px; color: var(--muted); opacity: 0; }
+  .agent:hover .trace, .trace:focus-visible { opacity: 1; }
   .err .hint { margin-top: 6px; opacity: .85; }
   .err { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
   .wait { display: grid; gap: 8px; } .wait .sk { height: 12px; }

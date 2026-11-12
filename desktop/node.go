@@ -364,6 +364,14 @@ func (n *Node) Usage(days int, by string) ([]client.UsageReport, error) {
 	})
 }
 
+// Traces are where agents' time went: the most recently active conversations' turns (limit of
+// them), or one conversation's, with their events' timing (internal/node/traces.go).
+func (n *Node) Traces(thread string, limit int) ([]client.TraceThread, error) {
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) ([]client.TraceThread, error) {
+		return c.Traces(ctx, thread, limit)
+	})
+}
+
 // Forge is an agent's repository's forge.
 func (n *Node) Forge(agent string) (client.ForgeInfo, error) {
 	return call(n, func(ctx context.Context, c *client.Client) (client.ForgeInfo, error) {
