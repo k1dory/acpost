@@ -158,6 +158,9 @@ func TestShellRefusedOnAnotherMachinesNode(t *testing.T) {
 	if _, err := os.Stat(mark); err == nil {
 		t.Fatal("the command ran")
 	}
+	if r, err := (&Node{}).Shell("", "touch "+mark, ""); err == nil { // no directory named: not the home directory
+		t.Fatalf("%+v", r)
+	}
 	t.Setenv("ACPOST_NODE", "unix://"+filepath.Join(dir, "acpost.sock")) // another socket of this Mac
 	if r, err := (&Node{}).Shell("", "echo ok", dir); err != nil || !strings.Contains(r.Output, "ok") {
 		t.Fatalf("%+v %v", r, err)

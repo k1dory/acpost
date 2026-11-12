@@ -286,4 +286,56 @@ describe("! in the composer", () => {
       app.error = "";
     }
   });
+
+  it("a new task set for the cloud runs nothing; one set for this Mac runs in its chosen directory, whatever chat was open before", async () => {
+    const app = await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    app.target = "agent:sb_1";              // a cloud chat was open before
+    app.newTask();
+    app.draft.where = "cloud"; app.draft.cwd = "/work/local";
+    svelte.flushSync();
+    type("!rm -rf build");
+    enter();
+    await flush(); svelte.flushSync();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+    expect(app.error).toContain("cloud");
+    app.error = "";
+    app.draft.where = "mac"; app.draft.agent = "agent:claude";
+    svelte.flushSync();
+    type("!ls");
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["ls", "/work/local"]);
+  });
+
+  it("a chat whose directory is not known here runs nothing (not in the home directory)", async () => {
+    const app = await setup();
+    app.chat = { key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", title: "t", updated: "" } as any; // no cwd
+    svelte.flushSync();
+    type("!rm -rf build");
+    enter();
+    await flush(); svelte.flushSync();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+    expect(textarea().value).toBe("!rm -rf build");
+    expect(app.error).toContain("not known");
+  });
+
+  it("a command typed while an earlier message was going is still a command when that message is acknowledged", async () => {
+    await setup();
+    let ack!: (m: any) => void;
+    fake.Node.SendTask.mockImplementation(() => new Promise(r => { ack = r; }));
+    fake.Node.Chats.mockResolvedValue({ items: [] });
+    type("an ordinary message");
+    enter();
+    await flush();
+    type("!echo next");
+    ack({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    await flush(); await flush(); svelte.flushSync();
+    expect(textarea().value).toBe("!echo next");
+    expect(document.querySelector(".comp.bang")).toBeTruthy();
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0][1]).toBe("echo next");
+  });
 });

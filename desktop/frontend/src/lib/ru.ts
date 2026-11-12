@@ -124,6 +124,7 @@ export const ru: Record<string, string> = {
   "This chat's files are in a cloud sandbox: a command would run on this Mac": "Файлы этого чата в облачной песочнице: команда выполнилась бы на этом Mac",
   "This chat's agent is on another node: a command would run on this Mac": "Агент этого чата на другом узле: команда выполнилась бы на этом Mac",
   "The app is on another node: a command would run on this Mac": "Приложение подключено к другому узлу: команда выполнилась бы на этом Mac",
+  "This chat's directory is not known here: nothing was run": "Директория этого чата здесь неизвестна: ничего не выполнено",
   "Remove": "Убрать",
   "Attach files": "Прикрепить файлы",
   "Model": "Модель",

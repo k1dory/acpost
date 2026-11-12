@@ -174,21 +174,34 @@ class App {
    * another node, the app on a node of another machine), where the same path here is another
    * directory, if any. */
   shellRefused(): string {
+    if (this.conn?.url && !this.conn.url.startsWith("unix://")) return t("The app is on another node: a command would run on this Mac");
+    // A new task: where the task is set to run (the chat's agent of before says nothing of it).
+    if (!this.chat && !this.thread) {
+      if (this.draft.where === "cloud") return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
+      return this.draft.agent.includes("@") ? t("This chat's agent is on another node: a command would run on this Mac") : "";
+    }
     const to = this.target;
     if (this.chat?.kind === "cloud" || to.startsWith("agent:sb_")) return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
-    if ((this.chat || this.thread) && to.includes("@")) return t("This chat's agent is on another node: a command would run on this Mac");
-    if (this.conn?.url && !this.conn.url.startsWith("unix://")) return t("The app is on another node: a command would run on this Mac");
+    if (to.includes("@")) return t("This chat's agent is on another node: a command would run on this Mac");
+    // A chat whose directory the app does not know (started elsewhere without one: it runs in its
+    // agent's own): not the home directory instead.
+    if (!this.chatCwd()) return t("This chat's directory is not known here: nothing was run");
     return "";
+  }
+  /** Where a command of the open conversation runs: the chat's directory; a new task's chosen one
+   * (the home directory when none is, as the task's setup shows). */
+  shellCwd(): string {
+    return this.chat || this.thread ? this.chatCwd() : this.draft.cwd || this.home;
   }
   /** Runs the person's command in the chat's directory; its output is shown in the chat. */
   async runShell(cmd: string) {
-    const owner = this.draftOf();
+    const owner = this.draftOf(), cwd = this.shellCwd(); // where it is run from, as it was when asked
     const run: ShellRun = { id: newId(), chat: owner.key, cmd, running: true, output: "", code: 0, ms: 0 };
     this.shells = [...this.shells, run];
     this.shellOwner.set(run.id, owner);
     const set = (p: Partial<ShellRun>) => { this.shells = this.shells.map(s => (s.id === run.id ? { ...s, ...p } : s)); };
     try {
-      const r: any = await Node.Shell(run.id, cmd, this.chatCwd() || (!this.chat && !this.thread ? this.draft.cwd : "") || "");
+      const r: any = await Node.Shell(run.id, cmd, cwd);
       set({ running: false, output: r?.output ?? "", code: r?.code ?? 0, ms: r?.ms ?? 0, cut: !!r?.cut, timedOut: !!r?.timed_out, stopped: !!r?.stopped });
     } catch (e) { set({ running: false, error: errText(e) }); }
   }
@@ -780,7 +793,9 @@ class App {
       // What was sent leaves the draft, what was typed meanwhile stays; the draft is the thread's now.
       // A draft edited into another task keeps all it holds: it is that task, sent text and all.
       if (sent && same) {
-        d.text = afterSent(d.text, sent.text);
+        // (Only when something of it went: text typed since, whole, stays as typed.)
+        const left = afterSent(d.text, sent.text);
+        if (left !== d.text) d.text = left;
         // Exactly the attachments it sent, by identity: the same file attached again meanwhile stays.
         const gone = new Set(sent.files.map(f => f.rid));
         d.files = d.files.filter(f => !gone.has(f.rid));

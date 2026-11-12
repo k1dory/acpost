@@ -83,6 +83,11 @@ func (n *Node) Shell(id, command, cwd string) (ShellResult, error) {
 	if u := os.Getenv("ACPOST_NODE"); u != "" && !strings.HasPrefix(u, "unix://") {
 		return ShellResult{}, errors.New("the app is on another node (ACPOST_NODE): a command here would run on this Mac, not where the chat's files are")
 	}
+	// The app names the directory (the chat's, a new task's): none named is not "the home
+	// directory", it is not known where the command was meant to run.
+	if cwd == "" {
+		return ShellResult{}, errors.New("no directory to run in: nothing was run")
+	}
 	return runShell(id, command, cwd, shellTimeout)
 }
 
