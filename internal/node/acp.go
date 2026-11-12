@@ -46,6 +46,10 @@ type acpAgent struct {
 	optAsk   sync.Mutex             // one asking the agent what it offers at a time
 	lastOpts *acpx.SessionState     // the latest session's options: what the agent offers (models, levels, modes)
 	commands []acp.AvailableCommand // the slash commands it said last
+
+	// product is what the agent said it is in its last initialize (its agentInfo): kept after its
+	// process idles out, so the app still knows which CLI it is.
+	product atomic.Pointer[string]
 }
 
 func (a *acpAgent) ownerOf(key string) int {
@@ -390,6 +394,7 @@ func (s *acpSlot) ensureProc(ctx context.Context) (*acpProc, error) {
 		return fail(fmt.Errorf("initialize: %w", procErr(p, err)))
 	}
 	p.init = init
+	a.learnProduct(init)
 	if m := a.cfg.AuthMethod; m != "" {
 		if _, err := p.conn.Authenticate(ictx, acp.AuthenticateRequest{MethodId: m}); err != nil {
 			return fail(&authError{fmt.Errorf("authenticate %s: %w", m, procErr(p, err))})

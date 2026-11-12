@@ -15,7 +15,7 @@ export type Msg = {
   created_at: string; updated_at: string; finished_at?: string; files?: { name: string; type: string; size: number; reply?: boolean }[];
 };
 export type Module = { id: string; name: string; url: string };
-export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
+export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean; product?: string };
 export type Chat = {
   key: string; kind: "thread" | "session" | "cloud"; agent?: string; agents?: string[]; parent?: string; title: string; cwd?: string; repo?: string;
   thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;

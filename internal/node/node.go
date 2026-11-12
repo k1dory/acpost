@@ -884,6 +884,7 @@ func (n *Node) Agents(ctx context.Context) []client.AgentInfo {
 		info.Queued, info.Running, _ = n.st.Counts(ctx, info.Address)
 		if d := n.acp[name]; d != nil {
 			info.Process = d.running()
+			info.Product = d.productName()
 		}
 		n.sbMu.Lock()
 		d := n.sandboxes[name]
