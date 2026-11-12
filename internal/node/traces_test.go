@@ -2,6 +2,7 @@ package node
 
 import (
 	"testing"
+	"time"
 
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/store"
@@ -111,7 +112,7 @@ func TestTracerClips(t *testing.T) {
 	if !kept || len([]rune(out[0].Title)) != traceText+1 || out[0].Command != "one" {
 		t.Fatalf("%+v", out)
 	}
-	if out, kept := tr.add([]client.TraceEvent{}, store.Event{Kind: "tool_call", Data: "not json"}); kept || len(out) != 0 {
+	if out, kept := tr.add(out, store.Event{Kind: "tool_call", Data: "not json"}); kept || len(out) != 1 {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -129,5 +130,26 @@ func TestTracesCutUnder(t *testing.T) {
 	got, err := n.Traces(ctx, me, root.ID, 0)
 	if err != nil || len(got) != 1 || !got[0].Cut || len(got[0].Messages) != 1+traceUnder {
 		t.Fatalf("%v cut=%v n=%d", err, got[0].Cut, len(got[0].Messages))
+	}
+}
+
+// A turn's first event is when it began, whatever it was: a plan first is kept as a mark with
+// nothing of it, so the turn is not shown waiting until its first call or text.
+func TestTraceKeepsFirstEventTime(t *testing.T) {
+	var tr tracer
+	t0 := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	var out []client.TraceEvent
+	for i, e := range []store.Event{
+		{Seq: 1, Time: t0.Add(time.Second), Kind: "plan", Data: `["pending: secret step"]`},
+		{Seq: 2, Time: t0.Add(5 * time.Second), Kind: "usage", Data: `{"input":1}`},
+		{Seq: 3, Time: t0.Add(9 * time.Second), Kind: "text", Data: `{"text":"hi"}`},
+	} {
+		out, _ = tr.add(out, e)
+		if i == 0 && (len(out) != 1 || out[0].Kind != "plan" || out[0].At != t0.Add(time.Second).UnixMilli() || out[0].Title != "") {
+			t.Fatalf("%+v", out)
+		}
+	}
+	if len(out) != 2 || out[1].Kind != "text" {
+		t.Fatalf("only the first event is kept whatever it is: %+v", out)
 	}
 }

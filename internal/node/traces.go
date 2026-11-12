@@ -115,6 +115,17 @@ type traced struct{ status, title, command string }
 
 // add appends what a trace needs of e to out (kept: an event was added, not one extended).
 func (tr *tracer) add(out []client.TraceEvent, e store.Event) ([]client.TraceEvent, bool) {
+	before := len(out)
+	out, kept := tr.mark(out, e)
+	if before == 0 && len(out) == 0 {
+		// The turn's first event is when its work began, whatever it was (a plan, usage, one not
+		// read): its time is kept, nothing of it.
+		return append(out, client.TraceEvent{Seq: e.Seq, At: e.Time.UnixMilli(), Kind: e.Kind}), true
+	}
+	return out, kept
+}
+
+func (tr *tracer) mark(out []client.TraceEvent, e store.Event) ([]client.TraceEvent, bool) {
 	at := e.Time.UnixMilli()
 	switch e.Kind {
 	case "text", "thought":
