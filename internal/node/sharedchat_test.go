@@ -245,3 +245,31 @@ func TestSharedChatTaskSessionsDirectory(t *testing.T) {
 		t.Fatalf("the agent called in runs in %q, the task's session in %q", got, work)
 	}
 }
+
+// Another agent joining a thread does not change whose session the chat is: the first agent's
+// (the app keeps the chat's draft and forks by it).
+func TestSharedChatKeepsItsSession(t *testing.T) {
+	n := sharedNode(t)
+	first := ask(t, n, SendRequest{To: "other", Body: "echo one"})
+	session := func() (string, string) {
+		chats, err := n.Chats(ctx, me)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range chats.Items {
+			if c.Thread == first.Thread {
+				return c.SessionAgent, c.Session
+			}
+		}
+		t.Fatal("the chat is not listed")
+		return "", ""
+	}
+	agent, sid := session()
+	if agent != "agent:other" || sid == "" {
+		t.Fatalf("the chat's session: %q of %q", sid, agent)
+	}
+	ask(t, n, SendRequest{To: "fake", Thread: first.Thread, Body: "echo two"}) // "fake" sorts before "other"
+	if a, s := session(); a != agent || s != sid {
+		t.Fatalf("after another agent joined: %q of %q, was %q of %q", s, a, sid, agent)
+	}
+}

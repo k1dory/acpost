@@ -63,7 +63,7 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 				}
 			}
 			if len(c.Agents) > 1 {
-				chat.Agents = c.Agents
+				chat.Agents = slices.Clone(c.Agents) // the store's order stays for what follows
 				sort.Strings(chat.Agents)
 			}
 			// The ACP sessions this thread runs: agent by agent, under the key its turns use.
