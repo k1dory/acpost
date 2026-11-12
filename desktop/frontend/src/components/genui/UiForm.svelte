@@ -4,26 +4,27 @@
   import { untrack } from "svelte";
   import { t } from "../../lib/i18n.svelte";
   import { formAnswer, type Form, type Field } from "../../lib/genui";
-  import { toDraft } from "./draft";
+  import { toDraft, inDraft } from "./draft";
   let { c, keep }: { c: Form; keep: Record<string, unknown> } = $props();
 
   const start = (f: Field) => f.value ?? (f.type === "checkbox" ? false : f.type === "select" ? f.options![0] : "");
   // As it was left: a mounted block's props do not change (Markdown.svelte mounts it anew).
   let values = $state<(string | number | boolean)[]>(untrack(() => (keep.values as (string | number | boolean)[] | undefined) ?? c.fields.map(start)));
-  let added = $state(untrack(() => !!keep.added));
+  // sent: the answers as they were put into the draft (replaced there by the next).
+  let sent = $state(untrack(() => (keep.sent as string | undefined) ?? ""));
   const id = "f" + Math.random().toString(36).slice(2, 8);
 
   function set(i: number, v: string | number | boolean) {
     values[i] = v;
     keep.values = $state.snapshot(values);
-    added = keep.added = false;
   }
+  const now = $derived(formAnswer(c, values, t("yes"), t("no")));
+  // What the draft has, read from it: answers deleted there can be added again.
+  const added = $derived(inDraft(sent));
   // In place of the answers added before, if the draft still has them.
   function answer() {
-    const text = formAnswer(c, values, t("yes"), t("no"));
-    toDraft(text, (keep.sent as string | undefined) ?? "");
-    keep.sent = text;
-    added = keep.added = true;
+    toDraft(now, sent);
+    sent = keep.sent = now;
   }
 </script>
 
@@ -46,7 +47,7 @@
     </div>
   {/each}
   <div class="foot">
-    <button type="button" class="btn primary" disabled={added} onclick={answer}>{c.submit ?? t("Add to message")}</button>
+    <button type="button" class="btn primary" disabled={inDraft(now)} onclick={answer}>{c.submit ?? t("Add to message")}</button>
     {#if added}<span class="muted">{t("Added to your message")}</span>{/if}
   </div>
 </div>

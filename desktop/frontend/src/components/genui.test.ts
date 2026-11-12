@@ -379,4 +379,33 @@ describe("review round 2", () => {
     await set(form, "wiki:repo:two");
     expect(q<HTMLInputElement>(".form input").value).toBe("web2");
   });
+
+  it("lets an answer deleted from the draft be added again, also after the message is shown again (P2)", async () => {
+    const ta = await composer();
+    const src = block({ type: "choices", question: "Which?", options: ["a", "b"] });
+    await show(src, "msg_D");
+    all(".opt")[0].click(); flushSync();
+    const add = () => q<HTMLButtonElement>(".ask .btn");
+    add().click(); flushSync(); await flush(); flushSync();
+    expect(ta.value).toBe("> Which?\n\na\n\n");
+    expect(add().disabled).toBe(true);
+    expect(document.querySelector(".ask .muted")).toBeTruthy();
+    typeIn(ta, ""); // the person deletes it
+    expect(add().disabled).toBe(false);
+    expect(document.querySelector(".ask .muted")).toBeNull();
+    await show(src, "msg_D"); // the message shown again
+    expect(add().disabled).toBe(false);
+    add().click(); flushSync(); await flush(); flushSync();
+    expect(ta.value).toBe("> Which?\n\na\n\n");
+    // A form the same way.
+    typeIn(ta, "");
+    await show(block({ type: "form", fields: [{ label: "Host" }] }), "msg_E");
+    fill("web1");
+    q<HTMLButtonElement>(".form .btn").click(); flushSync(); await flush(); flushSync();
+    expect(q<HTMLButtonElement>(".form .btn").disabled).toBe(true);
+    typeIn(ta, "something else");
+    expect(q<HTMLButtonElement>(".form .btn").disabled).toBe(false);
+    q<HTMLButtonElement>(".form .btn").click(); flushSync(); await flush(); flushSync();
+    expect(ta.value).toBe("something else\n- Host: web1\n\n");
+  });
 });

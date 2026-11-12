@@ -5,25 +5,25 @@
   import { untrack } from "svelte";
   import { t } from "../../lib/i18n.svelte";
   import { choiceAnswer, type Choices } from "../../lib/genui";
-  import { toDraft } from "./draft";
+  import { toDraft, inDraft } from "./draft";
   let { c, keep }: { c: Choices; keep: Record<string, unknown> } = $props();
 
   // As it was left: a mounted block's props do not change (Markdown.svelte mounts it anew).
   // sent: the answer as it was put into the draft (replaced there by the next).
   let picked = $state<string[]>(untrack(() => ((keep.picked as string[] | undefined) ?? []).filter(o => c.options.includes(o))));
-  let added = $state(untrack(() => !!keep.added));
+  let sent = $state(untrack(() => (keep.sent as string | undefined) ?? ""));
   function pick(o: string) {
     picked = c.multiple ? (picked.includes(o) ? picked.filter(x => x !== o) : [...picked, o]) : [o];
     keep.picked = $state.snapshot(picked);
-    added = keep.added = false;
   }
+  // The answer as picked now, in the order the agent gave the options (not the clicks').
+  const now = $derived(picked.length ? choiceAnswer(c, c.options.filter(o => picked.includes(o))) : "");
+  // What the draft has, read from it: an answer deleted there can be added again.
+  const added = $derived(inDraft(sent));
   function answer() {
-    if (!picked.length) return;
-    // In the order the agent gave them, not the order of the clicks.
-    const text = choiceAnswer(c, c.options.filter(o => picked.includes(o)));
-    toDraft(text, (keep.sent as string | undefined) ?? "");
-    keep.sent = text;
-    added = keep.added = true;
+    if (!now) return;
+    toDraft(now, sent);
+    sent = keep.sent = now;
   }
 </script>
 
@@ -37,7 +37,7 @@
     {/each}
   </div>
   <div class="foot">
-    <button type="button" class="btn primary" disabled={!picked.length || added} onclick={answer}>{t("Add to message")}</button>
+    <button type="button" class="btn primary" disabled={!now || inDraft(now)} onclick={answer}>{t("Add to message")}</button>
     {#if added}<span class="muted">{t("Added to your message")}</span>{/if}
   </div>
 </div>

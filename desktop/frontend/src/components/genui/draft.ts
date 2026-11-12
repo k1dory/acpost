@@ -9,3 +9,10 @@ export function toDraft(text: string, before = "") {
   else app.quote = (app.quote ? app.quote + "\n" : "") + text;
   if (app.view !== "chat" && app.view !== "ide") app.view = "chat";
 }
+
+/** Whether an answer is in the person's message being written (or on its way there): what was added
+ * and since deleted can be added again. */
+export function inDraft(text: string): boolean {
+  const s = text.trim();
+  return !!s && (app.draftOf().text.includes(s) || app.quote.includes(s));
+}
