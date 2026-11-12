@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
-  import { brandOf } from "./AgentMark.svelte";
+  import { markOf } from "./AgentMark.svelte";
   import type { Block } from "../lib/turn";
   import { app } from "../lib/state.svelte";
 
@@ -9,7 +9,7 @@
   let { agent, view, msg }: { agent: string; view?: { blocks: Block[]; tools: Map<string, any> }; msg: string } = $props();
   // Since the app first saw the turn running, kept across views.
   const since = $derived(app.seenRunning(msg));
-  const brand = $derived(brandOf(agent));
+  const brand = $derived(markOf(agent));
 
   const words: Record<string, string[]> = {
     claude: ["Thinking", "Thinking some more", "Pondering", "Mulling it over", "Working it out", "Connecting the dots", "Weighing options", "Almost there"],
@@ -30,7 +30,7 @@
       const t = view?.tools.get(last.id);
       if (t && t.status !== "completed" && t.status !== "failed" && t.title) return t.title;
     }
-    const list = words[brand];
+    const list = words[brand] ?? words[""];
     if (last?.t === "thought") return list[tick % 2 === 0 ? 0 : 1];
     return list[tick % list.length];
   });
