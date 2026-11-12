@@ -51,7 +51,7 @@
 </script>
 
 <div class="pair" class:focus={app.focus === m.id}>
-  <div class="user">
+  <div class="user" class:editing={editing !== null}>
     <div class="meta"><Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span><span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">{t("subagent")}</span>{/if}</div>
     {#if editing !== null}
       <textarea class="ubody edit" bind:value={editing} readonly={saving} rows="3"
@@ -116,7 +116,10 @@
   .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; flex-wrap: wrap; }
   .nm { font-weight: 600; }
   .user { justify-self: end; max-width: 85%; }
-  .edit { width: 100%; min-width: min(360px, 100%); resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
+  /* The editor is 360px wide where there is room (the bubble sizes itself to it), the column's
+     width where there is not. */
+  .user.editing { width: 360px; }
+  .edit { width: 100%; min-width: 0; resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
   .eacts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
   .user .meta { justify-content: flex-end; }
   .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }

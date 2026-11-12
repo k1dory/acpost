@@ -59,6 +59,6 @@
   .desc { font-size: 12.5px; margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .raw { margin: 0; font: 12px/1.5 var(--mono); background: var(--page); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
   .acts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
-  .acts .btn { max-width: 100%; min-width: 0; height: auto; min-height: 28px; padding: 4px 11px; justify-content: center; white-space: normal; text-align: center; overflow-wrap: anywhere; }
+  .acts .btn { max-width: 100%; min-width: 0; height: auto; min-height: 28px; padding: 3px 11px; justify-content: center; white-space: normal; text-align: center; overflow-wrap: anywhere; }
   .btn.ghost { justify-self: start; }
 </style>
