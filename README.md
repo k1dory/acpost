@@ -536,6 +536,7 @@ ends with `event: acpost-error` carrying the same envelope and `status` (event k
 | `POST /v1/terminals` · `GET /v1/terminals` · `GET /v1/terminals/{id}/output?from=` · `POST /v1/terminals/{id}/input` · `POST /v1/terminals/{id}/resize` · `DELETE /v1/terminals/{id}` | a shell on the node's machine (the node's user) |
 | `GET /v1/forge?agent=&dir=` · `GET /v1/forge/pulls?state=` · `POST /v1/forge/pulls` · `POST /v1/forge/merge` · `GET /v1/forge/checks?ref=` · `GET /v1/forge/log?job=` | the repository's forge: pull requests, CI, logs; an agent's open and merge wait for a person's approval |
 | `GET /v1/usage?from=&to=&by=&agent=` | usage summed by agent, model, day or session (the node's user) |
+| `GET /v1/traces?thread=&limit=` | where agents' time went: the most recently active conversations people started (20, at most 50), or one, with each turn's times and its events' timing (calls, permissions, text runs) without their content, and the turns of the agents they asked (the node's user) |
 | `POST /v1/messages/{id}/events` | (a joined node, to its hub) `{"lease":"…","after":N,"events":[{"kind","data"}]}`: the events of a message it holds, after its event N; answers `{"relayed":M}`, how many it has taken |
 | `POST /v1/messages/{id}/cancel` | |
 | `POST /v1/messages/{id}/disown` | (a joined node, to its hub) `{"from":"…@<node>","key":"…"}`: give up a send whose answer never came. `{"found":true,"message":{…}}` when the hub has it (under the id or the key), else `{"found":false}` and the id is refused for seven days (a 404 is a hub without disown) |
@@ -668,6 +669,12 @@ open bin/acpost.app
 The app talks to the node on `~/.local/state/acpost/acpost.sock`; when none answers it writes a
 default configuration (the `claude-agent-acp` and `codex-acp` it finds on `PATH`) and runs the node
 in its own process.
+
+**Modules.** A view of your own can be added beside "Agents" and "IDE" (Settings → Modules, or
+"Add a module…" in the view switcher): a name and an http(s) address — a tracker, a wiki, a
+dashboard, a tool served on this Mac (plain http only there; elsewhere https). Its page is shown in a native pane with the chat beside it,
+as the IDE is; it signs in as in a browser, and nothing of the app's (the node, its calls) is
+within its reach. Modules are kept in `modules.json` beside the node's configuration.
 
 **Everything works on the Mac alone.** The cloud is optional: with an
 [agent-sandbox](https://github.com/k1dory/cluster-agent-k8s) tenant (Kubernetes sandboxes for coding

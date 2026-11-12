@@ -14,7 +14,7 @@
     { kind: "Action", label: "Wiki", icon: "book", run: () => (app.view = "wiki") },
     { kind: "Action", label: "IDE (VS Code)", icon: "term", run: () => (app.view = "ide") },
     { kind: "Action", label: "Settings", icon: "sun", run: () => (app.view = "settings") },
-    { kind: "Action", label: "Usage", icon: "chart", run: () => (app.view = "usage") },
+    { kind: "Action", label: "Analytics", icon: "chart", run: () => (app.view = "usage") },
     { kind: "Action", label: "Terminal", icon: "term", run: () => { app.openTab("terminal"); } },
   ];
   const items = $derived.by(() => {

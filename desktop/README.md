@@ -1,7 +1,7 @@
 # acpost desktop
 
 The macOS app of acpost (Wails v3, Svelte 5): conversations with agents, what they do as they do
-it, approvals, changes, pull requests and CI, a terminal, usage. A client of the local node, as
+it, approvals, changes, pull requests and CI, a terminal, analytics. A client of the local node, as
 the `acpost` command is: it reads the same configuration (`ACPOST_CONFIG`) and talks to the
 node's socket (`ACPOST_NODE`/`ACPOST_TOKEN` for another node).
 
@@ -25,6 +25,15 @@ An agent is drawn with the mark of the CLI behind it (`frontend/src/lib/brand.ts
 said it is when its process last started (ACP's `agentInfo`), else its command's name, else the
 agent's own name. Claude Code, Codex, Gemini CLI, GitHub Copilot and Cursor have drawn marks; the
 other known CLIs show their initials on a tile in their hue.
+
+Analytics has three tabs. Usage is tokens and cost by agent, model, day or session. Traces is where
+agents' time went: the recent conversations with their active time, calls, errors and a bar of
+phases (waiting to start, the model, tools, waiting for approval, other agents); a turn opened is a
+timeline of its calls, permission waits and the messages it sent to other agents (each openable),
+filtered by name, zoomed with ⌘ or ctrl and the wheel, a span's input and output beside it. The
+node gives the timing (`GET /v1/traces`); the app reads a turn's events whole only when it is
+opened, and `frontend/src/lib/trace.ts` makes the spans and phases. Commands groups the calls by what
+they ran. A message's "Trace" opens its turn there.
 
 The IDE view is VS Code (the one installed on the Mac runs `serve-web`, pinned to `ideCommit` in
 `ide_ext.go`; its server, settings and extensions live in `~/Library/Application Support/acpost/vscode`)

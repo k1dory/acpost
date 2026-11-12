@@ -8,12 +8,13 @@
   import Logo from "./components/Logo.svelte";
   import Conversation from "./components/Conversation.svelte";
   import RightPanel from "./components/RightPanel.svelte";
-  import Usage from "./components/Usage.svelte";
+  import Analytics from "./components/Analytics.svelte";
   import Settings from "./components/Settings.svelte";
   import Board from "./components/Board.svelte";
   import Palette from "./components/Palette.svelte";
   import Wiki from "./components/Wiki.svelte";
   import IDE from "./components/IDE.svelte";
+  import ModuleView from "./components/ModuleView.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
 
   let splashMin = $state(false), splashMax = $state(false);
@@ -27,11 +28,12 @@
     document.documentElement.lang = i18n.lang;
     app.connect();
     const offPreview = on("preview:event", e => app.notePreview(e));
+    const offModule = on("module:event", e => app.noteModule(e));
     const offNav = on("app:navigate", (u: string) => route(u));
     Node.GuardNavigation().catch(() => {});
     const poll = setInterval(() => { if (!app.conn?.ok) app.connect(); else { app.loadAgents(); app.loadChats(); } }, 20000);
     const asking = setInterval(() => { if (app.conn?.ok) app.watchAsking(); }, 8000);
-    return () => { clearInterval(poll); clearInterval(asking); offPreview(); offNav(); };
+    return () => { clearInterval(poll); clearInterval(asking); offPreview(); offModule(); offNav(); };
   });
 
   // Links never take the app's own page away. A page of this Mac (localhost, 127.0.0.1) opens in the
@@ -124,7 +126,7 @@
       </div>
     </div>
   {:else if app.view === "usage"}
-    <Usage />
+    <Analytics />
   {:else if app.view === "settings"}
     <Settings />
   {:else if app.view === "board"}
@@ -134,8 +136,8 @@
   {:else}
     <!-- The chat, and in the IDE the same chat as a column on the right (one instance: a draft being
          typed stays), VS Code taking the rest of the window. -->
-    <div class="convwrap" class:ide-chat={app.view === "ide"}><Conversation /></div>
-    {#if app.view === "ide"}<IDE />{/if}
+    <div class="convwrap" class:ide-chat={app.beside}><Conversation /></div>
+    {#if app.view === "ide"}<IDE />{:else if app.module}{#key app.module.id}<ModuleView m={app.module} />{/key}{/if}
   {/if}
   {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
   {#if app.palette}<Palette />{/if}
