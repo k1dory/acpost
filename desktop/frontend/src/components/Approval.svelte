@@ -47,14 +47,18 @@
 </div>
 
 <style>
-  .ask { padding: 14px 16px; display: grid; gap: 10px; border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+  /* In a narrow window: the title and its text wrap, the state goes under them, the choices wrap
+     onto lines of their own and a long one breaks inside its button. */
+  .ask { padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
   .ask.done { border-color: var(--line); opacity: .85; }
-  .row { display: flex; gap: 12px; align-items: flex-start; }
+  .row { display: flex; gap: 8px 12px; align-items: flex-start; flex-wrap: wrap; }
+  .row .chip { flex: none; margin-left: auto; }
   .ic { color: var(--warn); padding-top: 2px; }
-  .t { flex: 1; min-width: 0; }
-  .title { font-weight: 600; }
-  .desc { font-size: 12.5px; margin-top: 2px; white-space: pre-wrap; }
+  .t { flex: 1 1 180px; min-width: 0; }
+  .title { font-weight: 600; overflow-wrap: anywhere; }
+  .desc { font-size: 12.5px; margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .raw { margin: 0; font: 12px/1.5 var(--mono); background: var(--page); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
-  .acts { display: flex; gap: 8px; justify-content: flex-end; }
+  .acts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .acts .btn { max-width: 100%; min-width: 0; height: auto; min-height: 28px; padding: 3px 11px; justify-content: center; white-space: normal; text-align: center; overflow-wrap: anywhere; }
   .btn.ghost { justify-self: start; }
 </style>
