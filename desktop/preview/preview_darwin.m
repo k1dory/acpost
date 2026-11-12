@@ -281,6 +281,70 @@ void apIDELoad(const char *url) {
 
 void apIDEReload(void) { dispatch_async(dispatch_get_main_queue(), ^{ if (apIDE) [apIDE reload]; }); }
 
+// ---- Modules: pages of the person's own choosing, beside the chat ----
+// Each module has a pane of its own, made when first shown and kept (its page stays as it was left
+// when another view is shown). A page like any in a browser: none of the app's own calls reach it
+// (no message handler, no script of the app's), its storage is WebKit's default store.
+static NSMutableDictionary<NSString *, WKWebView *> *apMods = nil;
+static NSMutableDictionary<NSString *, NSString *> *apModURL = nil; // the address each was opened at
+
+void apModShow(void *nswindow, const char *cid, const char *curl, double x, double y, double w, double h, int dark) {
+	NSString *mid = [NSString stringWithUTF8String:cid], *u = [NSString stringWithUTF8String:curl];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		NSWindow *win = (__bridge NSWindow *)nswindow;
+		NSView *host = win.contentView;
+		if (!host) return;
+		if (!apMods) { apMods = [NSMutableDictionary dictionary]; apModURL = [NSMutableDictionary dictionary]; }
+		WKWebView *v = apMods[mid];
+		BOOL made = NO;
+		if (!v) {
+			v = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:[WKWebViewConfiguration new]];
+			if ([v respondsToSelector:@selector(setInspectable:)]) [v setValue:@YES forKey:@"inspectable"];
+			v.allowsBackForwardNavigationGestures = YES;
+			apMods[mid] = v;
+			made = YES;
+		}
+		v.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+		for (NSString *k in apMods) if (apMods[k] != v) apMods[k].hidden = YES;
+		if (v.superview != host) {
+			[v removeFromSuperview];
+			[host addSubview:v positioned:NSWindowAbove relativeTo:nil];
+		}
+		CGFloat H = host.bounds.size.height;
+		v.frame = NSMakeRect(x, host.isFlipped ? y : H - y - h, w, h);
+		v.hidden = NO;
+		// Opened at its address once, and again when the address was changed (not each time shown).
+		if (u.length && ![apModURL[mid] isEqualToString:u]) {
+			NSURL *nu = [NSURL URLWithString:u];
+			if (nu) { apModURL[mid] = u; [v loadRequest:[NSURLRequest requestWithURL:nu]]; }
+		}
+		if (made) [win makeFirstResponder:v];
+	});
+}
+
+void apModHide(void) {
+	dispatch_async(dispatch_get_main_queue(), ^{ for (NSString *k in apMods) apMods[k].hidden = YES; });
+}
+
+// Back at the module's own address (wherever its page went since).
+void apModReload(const char *cid) {
+	NSString *mid = [NSString stringWithUTF8String:cid];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		WKWebView *v = apMods[mid];
+		NSURL *nu = apModURL[mid] ? [NSURL URLWithString:apModURL[mid]] : nil;
+		if (v && nu) [v loadRequest:[NSURLRequest requestWithURL:nu]];
+	});
+}
+
+void apModForget(const char *cid) {
+	NSString *mid = [NSString stringWithUTF8String:cid];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[apMods[mid] removeFromSuperview];
+		[apMods removeObjectForKey:mid];
+		[apModURL removeObjectForKey:mid];
+	});
+}
+
 // ---- A menu of the system's ----
 // Shown at x, y (window points from the top left of the content), over everything — the native
 // panes too, which an HTML menu would be under. Blocks until it closes; the item chosen, or -1.

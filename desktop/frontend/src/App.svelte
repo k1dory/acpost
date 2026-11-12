@@ -14,6 +14,7 @@
   import Palette from "./components/Palette.svelte";
   import Wiki from "./components/Wiki.svelte";
   import IDE from "./components/IDE.svelte";
+  import ModuleView from "./components/ModuleView.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
 
   let splashMin = $state(false), splashMax = $state(false);
@@ -134,8 +135,8 @@
   {:else}
     <!-- The chat, and in the IDE the same chat as a column on the right (one instance: a draft being
          typed stays), VS Code taking the rest of the window. -->
-    <div class="convwrap" class:ide-chat={app.view === "ide"}><Conversation /></div>
-    {#if app.view === "ide"}<IDE />{/if}
+    <div class="convwrap" class:ide-chat={app.beside}><Conversation /></div>
+    {#if app.view === "ide"}<IDE />{:else if app.module}{#key app.module.id}<ModuleView m={app.module} />{/key}{/if}
   {/if}
   {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
   {#if app.palette}<Palette />{/if}
