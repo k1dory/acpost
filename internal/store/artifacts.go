@@ -107,16 +107,22 @@ func artifactsSQL() string {
 		UNION ALL
 		-- A rename retires its source: from then on the old path is not there.
 		SELECT id, idx, repo, msg, agent, ts, src, 'D', srcwhole FROM chw WHERE status LIKE 'R%' AND srcwhole <> ''
-	), made(whole) AS (
-		-- Paths a turn created, and where a rename or a copy took them (a chain of them too).
-		SELECT whole FROM chw WHERE status = 'A'
+	), made(whole, ts, id, idx) AS (
+		-- When a turn made a path: a creation, and where a later rename or copy took what it made (a
+		-- chain of them too). Only forward in time, and only while the source was not deleted (or
+		-- renamed away) in between: a path used again later is another file.
+		SELECT whole, ts, id, idx FROM chw WHERE status = 'A'
 		UNION
-		SELECT r.whole FROM chw r JOIN made m ON r.srcwhole = m.whole WHERE r.status LIKE 'R%' OR r.status LIKE 'C%'
+		SELECT r.whole, r.ts, r.id, r.idx FROM chw r JOIN made m ON r.srcwhole = m.whole
+		WHERE (r.status LIKE 'R%' OR r.status LIKE 'C%') AND (r.ts, r.id, r.idx) > (m.ts, m.id, m.idx)
+			AND NOT EXISTS (SELECT 1 FROM chf d WHERE d.whole = m.whole AND d.status LIKE 'D%'
+				AND (d.ts, d.id, d.idx) > (m.ts, m.id, m.idx) AND (d.ts, d.id, d.idx) < (r.ts, r.id, r.idx))
 	), ranked AS (
 		-- A path's whole history first: its latest change is what it is now (a deletion, or a rename
-		-- away: gone), and whether a turn made it.
+		-- away: gone), and whether a turn made the file there now (made, and not deleted since).
 		SELECT chf.*, ROW_NUMBER() OVER (PARTITION BY whole ORDER BY ts DESC, id DESC, idx DESC) AS rn,
-			whole IN (SELECT whole FROM made) AS created
+			EXISTS (SELECT 1 FROM made m WHERE m.whole = chf.whole AND NOT EXISTS (SELECT 1 FROM chf d
+				WHERE d.whole = m.whole AND d.status LIKE 'D%' AND (d.ts, d.id, d.idx) > (m.ts, m.id, m.idx))) AS created
 		FROM chf
 	), docs AS (
 		SELECT * FROM ranked WHERE rn = 1 AND status NOT LIKE 'D%'
