@@ -13,6 +13,7 @@ export type Msg = {
   body?: string; reply?: string; error?: string; error_code?: string; hint?: string; meta?: Record<string, string>;
   created_at: string; updated_at: string; finished_at?: string; files?: { name: string; type: string; size: number; reply?: boolean }[];
 };
+export type Module = { id: string; name: string; url: string };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
 export type Chat = {
   key: string; kind: "thread" | "session" | "cloud"; agent?: string; agents?: string[]; title: string; cwd?: string; repo?: string;
@@ -106,7 +107,34 @@ class App {
     this.panel = on;
     try { localStorage.setItem("panel-open", on ? "1" : "0"); } catch {}
   }
-  view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide">("chat");
+  view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide" | `mod:${string}`>("chat");
+  /** The modules: views the person added (a web page beside the chat, as the IDE is). */
+  modules = $state<Module[]>([]);
+  /** The module shown, if one is. */
+  get module(): Module | null {
+    const v = this.view;
+    return v.startsWith("mod:") ? this.modules.find(m => "mod:" + m.id === v) ?? null : null;
+  }
+  /** The chat is a column beside something that takes the window (the IDE, a module): no sidebar,
+   * no right panel. */
+  get beside(): boolean { return this.view === "ide" || !!this.module; }
+  /** The section Settings opens at next ("": its first). */
+  settingsAt = $state("");
+  /** Why a module's page did not load (by module), until one does. */
+  moduleErr = $state<Record<string, string>>({});
+  noteModule(e: { id: string; kind: string; message?: string }) {
+    if (!e?.id) return;
+    const { [e.id]: _was, ...rest } = this.moduleErr;
+    this.moduleErr = e.kind === "load" ? { ...rest, [e.id]: e.message || t("The page did not load") } : rest;
+  }
+  /** The list as the app keeps it. Not read (a file that does not parse, no answer): the list
+   * shown stays, and why is said; a module is taken as removed only by a list that was read. */
+  async loadModules() {
+    let got: Module[];
+    try { got = ((await Node.Modules()) ?? []) as any; } catch (e) { this.error = errText(e); return; }
+    this.modules = got;
+    if (this.view.startsWith("mod:") && !this.module) this.view = "chat"; // the one shown was removed
+  }
   /** In the IDE: a file the agent just edited is shown there, as a diff (kept between launches). */
   ideFollow = $state(savedFollow());
   setIdeFollow(on: boolean) {
@@ -192,7 +220,7 @@ class App {
     } catch {}
     this.home = await Node.Home();
     if (!this.draft.cwd) this.draft.cwd = this.home;
-    await Promise.all([this.loadAgents(), this.loadChats(), this.loadCloudAgents(), this.loadPlaybooks(), this.watchAsking()]);
+    await Promise.all([this.loadAgents(), this.loadChats(), this.loadCloudAgents(), this.loadPlaybooks(), this.loadModules(), this.watchAsking()]);
     const local = this.localAgents();
     if (!local.some(a => a.address === this.draft.agent) && local[0]) this.draft.agent = local[0].address;
     this.loadOptions(this.draft.agent);
@@ -329,7 +357,7 @@ class App {
     this.turns = {};
     this.focus = "";
     this.thread = "";
-    if (this.view !== "ide") this.view = "chat"; // in the IDE, another chat opens beside it
+    if (!this.beside) this.view = "chat"; // in the IDE or a module, another chat opens beside it
   }
 
   /** A new task. */
