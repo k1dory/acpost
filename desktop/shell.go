@@ -37,9 +37,10 @@ type ShellResult struct {
 var shells = struct {
 	sync.Mutex
 	stop    map[string]context.CancelFunc
+	early   map[string]bool // stopped before they were known: not started when they come
 	running sync.WaitGroup
 	closed  bool // the app is quitting: nothing more is run
-}{stop: map[string]context.CancelFunc{}}
+}{stop: map[string]context.CancelFunc{}, early: map[string]bool{}}
 
 // stopShells ends every running command and waits for them: none outlives the app.
 func stopShells() {
@@ -106,6 +107,11 @@ func runShell(id, command, cwd string, timeout time.Duration) (ShellResult, erro
 		shells.Unlock()
 		return ShellResult{}, errors.New("the app is quitting")
 	}
+	if shells.early[id] { // Stop came before the run did: it does not start
+		delete(shells.early, id)
+		shells.Unlock()
+		return ShellResult{Code: -1, Stopped: true}, nil
+	}
 	shells.stop[id] = func() { stopped = true; cancel() }
 	shells.running.Add(1)
 	shells.Unlock()
@@ -150,6 +156,13 @@ func (n *Node) ShellStop(id string) {
 	stop := shells.stop[id]
 	if stop != nil {
 		stop()
+	} else if id != "" {
+		// Not known yet (its call is still on its way): remembered, so it does not start. A few
+		// are kept; a stop of a run already over is forgotten with them.
+		if len(shells.early) >= 64 {
+			clear(shells.early)
+		}
+		shells.early[id] = true
 	}
 	shells.Unlock()
 }

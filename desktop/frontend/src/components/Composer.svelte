@@ -5,6 +5,7 @@
   import TaskSetup from "./TaskSetup.svelte";
   import { bytes } from "../lib/names";
   import { pasteFiles, pasteName, freeName } from "../lib/paste";
+  import { asMessage } from "../lib/draft";
 
   // The text and files are the chat's draft, kept by the app (they outlive this composer: a new
   // task becoming a chat, the node going down and coming back).
@@ -87,7 +88,6 @@
   // The text and files leave the draft only once the node has them (app.submit).
   // "!git status" is a command of the person's own, run in the chat's directory and shown in the
   // chat; not a message (one that must start with "!" starts with a space).
-  const asMessage = (s: string) => (s.startsWith("!") ? " " + s : s);
   const bang = $derived(d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
   async function send() {
     if (bang) {

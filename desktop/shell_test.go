@@ -128,3 +128,21 @@ func TestShellsEndWithTheApp(t *testing.T) {
 		t.Fatal("a command ran while the app quits")
 	}
 }
+
+// Stop that comes before its run is known (the two calls travel apart) still stops it: nothing starts.
+func TestShellStopBeforeTheRun(t *testing.T) {
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "ran")
+	(&Node{}).ShellStop("early1")
+	r, err := runShell("early1", "touch "+mark, dir, time.Minute)
+	if err != nil || !r.Stopped || r.Code != -1 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("the command ran after it was stopped")
+	}
+	// Once: the next run of that name is a run.
+	if r, err := runShell("early1", "echo ok", dir, time.Minute); err != nil || r.Stopped || !strings.Contains(r.Output, "ok") {
+		t.Fatalf("%+v %v", r, err)
+	}
+}

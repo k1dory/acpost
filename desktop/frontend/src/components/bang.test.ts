@@ -155,4 +155,51 @@ describe("! in the composer", () => {
     await app.open({ key: "thread:T9", kind: "thread", thread: "T9", agent: "agent:claude", title: "", updated: "" } as any);
     expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo ok"]);
   });
+
+  it("a message given back into a draft where a command was typed makes it a message: nothing of it is run", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.newTask();
+    app.draft.agent = "agent:claude";
+    let fail!: (e: any) => void;
+    fake.Node.SendTask.mockImplementation(() => new Promise((_, rej) => { fail = rej; }));
+    const a = app.draftOf();
+    a.text = "printf from_playbook";
+    const going = app.submit(a);
+    await flush();
+    app.newTask();
+    app.draftOf().text = "!echo intended";
+    fail(new Error("down"));
+    expect(await going).toBe(false);
+    const text = app.draftOf().text;
+    expect(text).toContain("printf from_playbook");
+    expect(text.startsWith("!")).toBe(false);
+  });
+
+  it("a session whose draft moved to its thread shows and keeps its runs under that thread", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+    const T = { key: "thread:T1", kind: "thread" as const, thread: "T1", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+    fake.Node.Chats.mockResolvedValue({ items: [S] });
+    await app.loadChats();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    await app.open(S as any);
+    fake.Node.Shell.mockResolvedValue({ output: "one\n", code: 0, ms: 1 });
+    await app.runShell("echo one");
+    app.draftOf().text = "go on";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")); // taken by the node, the answer lost
+    expect(await app.submit(app.draftOf())).toBe(false);
+    fake.Node.Chats.mockResolvedValue({ items: [T] });              // the session is a thread now; the screen still shows the session
+    await app.loadChats();
+    expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo one"]);
+    await app.runShell("echo two");
+    fake.Node.Thread.mockResolvedValue([]);
+    await app.open(T as any);
+    expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo one", "echo two"]);
+  });
 });

@@ -3,7 +3,7 @@ import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
 import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
-import { afterSent, overLimits } from "./draft";
+import { afterSent, overLimits, asMessage } from "./draft";
 import { Turn, ownBody, type Ev } from "./turn";
 import { editsToReveal, localFiles, type Reveal } from "./ide";
 import { who } from "./format";
@@ -167,12 +167,14 @@ class App {
   /** The draft each run was made from: its card goes where that draft goes, whatever key the draft
    * has by then (a new task whose first message is still going is no longer "new"). */
   private shellOwner = new Map<string, ComposerDraft>();
-  shellsHere(): ShellRun[] { const k = this.draftKey(); return this.shells.filter(s => s.chat === k); }
+  /** (By the key its draft has now: a session whose draft moved to its thread shows that thread's.) */
+  shellsHere(): ShellRun[] { const k = this.draftOf().key; return this.shells.filter(s => s.chat === k); }
   /** Runs the person's command in the chat's directory; its output is shown in the chat. */
   async runShell(cmd: string) {
-    const run: ShellRun = { id: newId(), chat: this.draftKey(), cmd, running: true, output: "", code: 0, ms: 0 };
+    const owner = this.draftOf();
+    const run: ShellRun = { id: newId(), chat: owner.key, cmd, running: true, output: "", code: 0, ms: 0 };
     this.shells = [...this.shells, run];
-    this.shellOwner.set(run.id, this.draftOf(run.chat));
+    this.shellOwner.set(run.id, owner);
     const set = (p: Partial<ShellRun>) => { this.shells = this.shells.map(s => (s.id === run.id ? { ...s, ...p } : s)); };
     try {
       const r: any = await Node.Shell(run.id, cmd, this.chatCwd() || (!this.chat && !this.thread ? this.draft.cwd : "") || "");
@@ -588,7 +590,8 @@ class App {
     }
     const there = this.draftMap.get(to);
     if (there && there !== d) {
-      there.text = [there.text, d.text].filter(Boolean).join("\n");
+      // Two texts joined are not what the person typed as one: never a command (draft.ts asMessage).
+      there.text = there.text && d.text ? asMessage(there.text + "\n" + d.text) : there.text || d.text;
       mergeFiles(there, d); // a request given back keeps its files first
       if (!there.op.pending() && d.op.pending()) there.op = d.op; // whole: its key with its sandbox
       d.forward(there);

@@ -1,5 +1,12 @@
 // The composer's text once a message went: what was sent goes, what was typed meanwhile stays.
 
+/** Text put into a draft by something other than the person's typing (a quotation, a run's output,
+ * a playbook, another draft's text joined to it) is a message, never a command to run: one that
+ * would start with "!" starts with a space. */
+export function asMessage(s: string): string {
+  return s.startsWith("!") ? " " + s : s;
+}
+
 /** The text left in the composer after `sent` went, the composer now holding `now`. */
 export function afterSent(now: string, sent: string): string {
   if (now === sent) return "";
