@@ -5,7 +5,7 @@
   import { dur } from "../lib/format";
   import { latest } from "../lib/latest";
   import { analytics } from "../lib/analytics.svelte";
-  import { traceTurn, commandGroups, threadCut, type TThread, type CommandRow, type Span } from "../lib/trace";
+  import { traceTurn, commandGroups, threadCut, uniqueTurns, type TThread, type CommandRow, type Span } from "../lib/trace";
   import Dropdown from "./Dropdown.svelte";
   import Icon from "./Icon.svelte";
 
@@ -43,7 +43,7 @@
   const spans = $derived.by(() => {
     const now = Date.now();
     const out: Span[] = [];
-    for (const th of threads) for (const m of th.messages) out.push(...traceTurn(m, m.events ?? [], th.messages, now).spans);
+    for (const { msg, th } of uniqueTurns(threads)) out.push(...traceTurn(msg, msg.events ?? [], th.messages, now).spans);
     return out;
   });
   type Key = "key" | "runs" | "total" | "avg" | "max" | "failures";
