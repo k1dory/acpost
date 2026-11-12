@@ -77,6 +77,10 @@ func localPreview(path string) (Artifact, error) {
 		return Artifact{}, err
 	}
 	defer f.Close()
+	// What LocalFile would refuse to show is not shown on a card either.
+	if st.Size() > artifactMax {
+		return Artifact{}, errArtifact
+	}
 	b, err := io.ReadAll(io.LimitReader(f, previewText))
 	if err != nil {
 		return Artifact{}, errArtifact
