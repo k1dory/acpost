@@ -141,14 +141,16 @@ func (c *Client) SessionHistory(ctx context.Context, agent, id, cwd string) ([]s
 // Chat is one of the node's user's chats: an acpost thread, an ACP session of an agent of the
 // node (started anywhere), or a cloud sandbox.
 type Chat struct {
-	Key     string `json:"key"`  // thread:<id>, session:<agent>/<id>, cloud:<sandbox>
-	Kind    string `json:"kind"` // thread, session, cloud
-	Agent   string `json:"agent,omitempty"`
-	Title   string `json:"title"`
-	Cwd     string `json:"cwd,omitempty"`
-	Repo    string `json:"repo,omitempty"`
-	Thread  string `json:"thread,omitempty"`
-	Session string `json:"session,omitempty"` // the ACP session (a thread's, or the chat itself)
+	Key   string `json:"key"`  // thread:<id>, session:<agent>/<id>, cloud:<sandbox>
+	Kind  string `json:"kind"` // thread, session, cloud
+	Agent string `json:"agent,omitempty"`
+	// Agents: all a thread's messages went to, when more than one (a shared chat).
+	Agents  []string `json:"agents,omitempty"`
+	Title   string   `json:"title"`
+	Cwd     string   `json:"cwd,omitempty"`
+	Repo    string   `json:"repo,omitempty"`
+	Thread  string   `json:"thread,omitempty"`
+	Session string   `json:"session,omitempty"` // the ACP session (a thread's, or the chat itself)
 	// SessionAgent is the agent whose session Session is (a thread's agents differ).
 	SessionAgent string    `json:"session_agent,omitempty"`
 	Sandbox      string    `json:"sandbox,omitempty"`

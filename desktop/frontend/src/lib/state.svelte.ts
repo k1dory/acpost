@@ -15,7 +15,7 @@ export type Msg = {
 };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
 export type Chat = {
-  key: string; kind: "thread" | "session" | "cloud"; agent?: string; title: string; cwd?: string; repo?: string;
+  key: string; kind: "thread" | "session" | "cloud"; agent?: string; agents?: string[]; title: string; cwd?: string; repo?: string;
   thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;
   messages?: number; running?: number; queued?: number; failed?: number; folder?: string; cloud_agent?: string;
 };
@@ -369,7 +369,10 @@ class App {
       this.msgs = mergeMsgs(ms, this.msgs);
       for (const m of this.msgs) this.watch(m);
       this.focus = ms[ms.length - 1]?.id ?? "";
-      const to = ms.find(m => m.to.startsWith("agent:"))?.to;
+      // The next message goes to whoever was asked last (a chat of several agents); the person
+      // chooses another in the composer.
+      const asked = ms.filter(m => m.to.startsWith("agent:"));
+      const to = (asked.findLast(m => !m.depth) ?? asked[0])?.to;
       if (to) this.target = to;
       this.loadOptions(this.target);
     } catch (e) { this.error = errText(e); }
@@ -471,6 +474,38 @@ class App {
       }
       this.runningSince.delete(m.id);
     }
+  }
+
+  /** Who a message of the open chat can go to: the agents asked in it so far, then this Mac's
+   * other agents (called in, one works in the chat's directory and is told what was said without
+   * it). A conversation that is not a thread yet is its agent's alone (its session), and so is a
+   * cloud sandbox's (the work is in the sandbox). */
+  targets(): string[] {
+    const out: string[] = [];
+    const add = (a?: string) => { if (a?.startsWith("agent:") && !out.includes(a)) out.push(a); };
+    if (!this.thread) { add(this.target); return out; }
+    for (const m of this.msgs) if (!m.depth) add(m.to);
+    for (const a of this.chat?.thread === this.thread ? this.chat?.agents ?? [] : []) add(a);
+    add(this.target);
+    if (out.some(a => a.startsWith("agent:sb_"))) return out;
+    for (const a of this.localAgents()) add(a.address);
+    return out;
+  }
+  /** The open chat's next message goes to this agent (one of targets()). */
+  setTarget(a: string): boolean {
+    if (!this.targets().includes(a)) return false;
+    this.target = a;
+    this.loadOptions(a);
+    return true;
+  }
+  /** A message that starts by naming an agent of the chat ("@codex look at this"): the agent, and
+   * the message without the name. */
+  mention(text: string): { to: string; rest: string } | null {
+    const m = /^\s*@([^\s@]+)(?:\s+|$)/.exec(text);
+    if (!m) return null;
+    const name = m[1].toLowerCase();
+    const to = this.targets().find(a => who(a).name.toLowerCase() === name);
+    return to ? { to, rest: text.slice(m[0].length) } : null;
   }
 
   /** A setting chosen for an agent ("": its default). */

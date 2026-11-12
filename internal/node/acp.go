@@ -967,6 +967,12 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
+	// A chat shared with other agents: what they were asked and answered since this one was told.
+	said, saidMark, err := a.othersSaid(turnCtx, m)
+	if err != nil {
+		n.log.Debug("shared chat", "err", err) // the turn goes on without it
+	}
+	m.Body = said + m.Body
 	// Knowledge: in a new session's first prompt, for a message of this node's own user or agents.
 	fresh := p.fresh[sid]
 	if fresh && knowledgeSender(m) {
@@ -1060,6 +1066,7 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
+	a.toldOthers(m.Thread, saidMark) // the prompt went through: the session has it
 	switch resp.StopReason {
 	case acp.StopReasonEndTurn:
 		complete(store.Done, reply, Failure{})

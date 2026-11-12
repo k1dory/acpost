@@ -12,6 +12,7 @@
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
   import { errText } from "../lib/api";
+  import { who } from "../lib/format";
 
   let box = $state<HTMLDivElement>();
   let stick = true;
@@ -27,7 +28,10 @@
     for (let i = app.history.length - 1; i >= 0; i--) if (app.history[i].turn.usage) return app.history[i].turn.usage;
     return null;
   });
-  const source = $derived(app.chat?.kind === "cloud" ? t("Cloud") : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
+  const brand = (a: string) => a.includes("codex") ? "Codex" : a.includes("claude") ? "Claude Code" : who(a).name;
+  // A chat shared by several agents names them all.
+  const shared = $derived((app.msgs.length, app.thread ? app.targets().filter(a => app.msgs.some(m => !m.depth && m.to === a)) : []));
+  const source = $derived(shared.length > 1 ? shared.map(brand).join(" + ") : app.chat?.kind === "cloud" ? t("Cloud") : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => tilde(d, app.home);
 

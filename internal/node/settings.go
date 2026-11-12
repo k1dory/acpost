@@ -92,8 +92,15 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 	case r.Thread != "" && local && r.Session == "":
 		// The thread's directory, as its first message chose it: for the node's own user and
 		// agents, and for whoever started the thread (a client's own thread), not for anyone else.
-		if root, err := n.st.Get(ctx, r.Thread); err == nil && root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()) {
-			set(metaCwd, root.Meta[metaCwd])
+		// Another agent the node's own user or agents call into their thread (a shared chat) works
+		// in the same directory: the thread's, or its session's when it continues one.
+		if root, err := n.st.Get(ctx, r.Thread); err == nil {
+			switch {
+			case root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()):
+				set(metaCwd, root.Meta[metaCwd])
+			case root.To != "agent:"+to.Name && p.local() && localSender(root.From) && root.Origin == "":
+				set(metaCwd, cmpOr(root.Meta[metaCwd], root.Meta[metaSessionCwd]))
+			}
 		}
 	}
 	return nil

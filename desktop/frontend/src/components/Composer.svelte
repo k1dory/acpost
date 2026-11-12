@@ -5,13 +5,15 @@
   import TaskSetup from "./TaskSetup.svelte";
   import { bytes } from "../lib/names";
   import { pasteFiles, pasteName, freeName } from "../lib/paste";
+  import { who } from "../lib/format";
+  import Avatar from "./Avatar.svelte";
 
   // The text and files are the chat's draft, kept by the app (they outlive this composer: a new
   // task becoming a chat, the node going down and coming back).
   const d = $derived(app.draftOf(app.draftKey()));
   let ta: HTMLTextAreaElement;
   let picker: HTMLInputElement;
-  let pickerFor = $state<"" | "model" | "effort" | "mode">("");
+  let pickerFor = $state<"" | "model" | "effort" | "mode" | "agent">("");
   let slashSel = $state(0);
 
   const isNew = $derived(!app.chat && !app.thread);
@@ -23,6 +25,22 @@
   const effort = $derived(byCat("thought_level"));
   const mode = $derived(byCat("mode"));
   const cloud = $derived(isNew ? app.draft.where === "cloud" : agent.startsWith("agent:sb_"));
+
+  // A chat can be shared by several agents: who the next message goes to is chosen here (the chip,
+  // or "@name" at the start of the message).
+  const targets = $derived(isNew ? [] : (app.msgs.length, app.targets()));
+  const at = $derived.by(() => {
+    if (targets.length < 2) return [];
+    const m = /^@(\S*)$/.exec(d.text);
+    return m ? targets.filter(a => who(a).name.toLowerCase().startsWith(m[1].toLowerCase())) : [];
+  });
+  function takeAgent(a: string | undefined, clear = false) {
+    if (!a) return;
+    app.setTarget(a);
+    if (clear) d.text = "";
+    pickerFor = "";
+    ta?.focus();
+  }
 
   $effect(() => { if (agent) app.loadOptions(agent); });
   // Files handed over by another part of the app (the preview's problems): attached here.
@@ -84,10 +102,21 @@
 
   // The text and files leave the draft only once the node has them (app.submit).
   async function send() {
+    // "@codex look at this": the message goes to that agent of the chat, without the name.
+    const named = isNew ? null : app.mention(d.text);
+    if (named && app.setTarget(named.to)) {
+      d.text = named.rest;
+      if (!d.hasContent) { ta?.focus(); return; }
+    }
     await app.submit(d);
     ta?.focus();
   }
   function key(e: KeyboardEvent) {
+    if (at.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); slashSel = (slashSel + 1) % at.length; return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); slashSel = (slashSel - 1 + at.length) % at.length; return; }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); takeAgent(at[slashSel], true); return; }
+    }
     if (slash.length) {
       if (e.key === "ArrowDown") { e.preventDefault(); slashSel = (slashSel + 1) % slash.length; return; }
       if (e.key === "ArrowUp") { e.preventDefault(); slashSel = (slashSel - 1 + slash.length) % slash.length; return; }
@@ -118,7 +147,7 @@
     add(files, pasteName);
   }
   $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } d.text; });
-  $effect(() => { slash.length; slashSel = 0; });
+  $effect(() => { slash.length; at.length; slashSel = 0; });
 </script>
 
 <svelte:window
@@ -141,7 +170,25 @@
       {/each}
     </div>
   {/if}
-  {#if pickerFor}
+  {#if at.length}
+    <div class="menu card">
+      {#each at as a, i (a)}
+        <button class="mi who" class:sel={i === slashSel} onmouseenter={() => (slashSel = i)} onclick={() => takeAgent(a, true)}>
+          <Avatar addr={a} size={16} /><span>{who(a).name}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+  {#if pickerFor === "agent"}
+    <div class="menu card pick">
+      <div class="mh">{t("Who answers")}</div>
+      {#each targets as a (a)}
+        <button class="mi who" class:sel={a === agent} onclick={() => takeAgent(a)}>
+          <Avatar addr={a} size={16} /><span>{who(a).name}</span>{#if who(a).node}<span class="muted">@{who(a).node}</span>{/if}
+        </button>
+      {/each}
+    </div>
+  {:else if pickerFor}
     {@const o = pickerFor === "model" ? model : pickerFor === "effort" ? effort : mode}
     {#if o}
       <div class="menu card pick">
@@ -163,10 +210,11 @@
     </div>
   {/if}
   <textarea bind:this={ta} bind:value={d.text} onkeydown={key} rows="1"
-    placeholder={isNew ? t("/ for the model, effort and commands") : t("Reply…")}></textarea>
+    placeholder={isNew ? t("/ for the model, effort and commands") : targets.length > 1 ? t("Reply… (@ calls another agent)") : t("Reply…")}></textarea>
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />
+    {#if targets.length > 1}<button class="chip opt to" onclick={() => (pickerFor = pickerFor === "agent" ? "" : "agent")} title={t("Who answers: another agent can be called into this chat")}><Avatar addr={agent} size={14} /> {who(agent).name}</button>{/if}
     {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, "model")}</button>{/if}
     {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, "effort")}</button>{/if}
     {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, "mode")}</button>{/if}
@@ -199,4 +247,6 @@
   .mh { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; padding: 4px 10px 6px; }
   .mi { display: flex; gap: 12px; align-items: baseline; border: 0; background: transparent; text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; }
   .mi.sel, .mi:hover { background: var(--hover); }
+  .mi.who { align-items: center; gap: 8px; }
+  .to { display: inline-flex; align-items: center; gap: 5px; }
 </style>
