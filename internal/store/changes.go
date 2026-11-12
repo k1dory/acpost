@@ -16,7 +16,7 @@ type ChangedFile struct {
 	Path    string `json:"path"`
 	Status  string `json:"status"`         // A, M, D, R…
 	From    string `json:"from,omitempty"` // a rename's or copy's source path (rows recorded before it have none)
-	Added   int    `json:"added"`  // lines; -1 for a binary file
+	Added   int    `json:"added"`          // lines; -1 for a binary file
 	Removed int    `json:"removed"`
 }
 
