@@ -46,14 +46,7 @@ func (n *Node) Artifacts(ctx context.Context, p Principal, q store.ArtifactQuery
 		}
 		// The chat's directory: what a relative link in a reply's file is read from.
 		if a.Thread != "" {
-			cwd, ok := cwds[a.Thread]
-			if !ok {
-				if root, err := n.st.Get(ctx, a.Thread); err == nil {
-					cwd = taskCwd(root)
-				}
-				cwds[a.Thread] = cwd
-			}
-			a.Cwd = cwd
+			a.Cwd = n.artifactCwd(ctx, a, cwds)
 		}
 		switch a.Kind {
 		case "link":
@@ -72,6 +65,41 @@ func (n *Node) Artifacts(ctx context.Context, p Principal, q store.ArtifactQuery
 		items = []store.Artifact{}
 	}
 	return client.Artifacts{Items: items, Next: next}, nil
+}
+
+// artifactCwd is the directory of an artifact's chat: its own message's, else the thread's (its
+// root's, or, the root collected by retention, any message of it still kept). cwds caches the
+// threads'.
+func (n *Node) artifactCwd(ctx context.Context, a *store.Artifact, cwds map[string]string) string {
+	if m, err := n.st.Get(ctx, a.Msg); err == nil {
+		if cwd := taskCwd(m); cwd != "" {
+			return cwd
+		}
+	}
+	if cwd, ok := cwds[a.Thread]; ok {
+		return cwd
+	}
+	cwd := ""
+	if root, err := n.st.Get(ctx, a.Thread); err == nil {
+		cwd = taskCwd(root)
+	}
+	for after := ""; cwd == ""; {
+		page, next, err := n.st.List(ctx, store.Filter{Thread: a.Thread, After: after, Limit: 100})
+		if err != nil {
+			break
+		}
+		for _, m := range page {
+			if cwd = taskCwd(m); cwd != "" {
+				break
+			}
+		}
+		if next == "" || next == after {
+			break
+		}
+		after = next
+	}
+	cwds[a.Thread] = cwd
+	return cwd
 }
 
 // lookAt says whether an artifact's file is still there, and its size. Only its entry is read: a
