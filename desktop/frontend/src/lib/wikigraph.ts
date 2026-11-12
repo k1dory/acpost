@@ -94,7 +94,16 @@ export function wikiLinkExtension(resolve?: WikiResolve, state: MaskState = { ma
       const target = m?.[1].trim();
       if (!m || !target) return undefined;
       const label = m[2]?.trim() || undefined;
-      const tok: WikiLinkToken = { type: "wikilink", raw: m[0], target, label, tokens: label ? this.lexer.inlineTokens(label) : [] };
+      // The label is read by itself: what it holds (an opening <code>, an <a>) leaves the lexer as
+      // it was for the text after the link — never "inside raw HTML", where that text would pass
+      // unescaped.
+      let tokens: Token[] = [];
+      if (label) {
+        const st = this.lexer.state, was = { ...st };
+        st.inLink = true;
+        try { tokens = this.lexer.inlineTokens(label); } finally { Object.assign(st, was); }
+      }
+      const tok: WikiLinkToken = { type: "wikilink", raw: m[0], target, label, tokens };
       return tok;
     },
     renderer(token) {
@@ -142,7 +151,7 @@ export const tableScan = { chars: 0 };
 // A GFM delimiter row: dashes, colons, pipes and spaces, with a dash and a pipe or colon.
 const delimiterRow = /^[ \t]*[|:-][ \t|:-]*$/;
 // A line a table does not go on into: blank, or the start of another block.
-const tableEnds = /^[ \t]*$|^ {0,3}(?:#{1,6}(?:\s|$)|>|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$|[-*+][ \t]|\d{1,9}[.)][ \t]|<\/?[a-zA-Z!?])/;
+const tableEnds = /^[ \t]*$|^(?: {4}|\t)|^ {0,3}(?:#{1,6}(?:\s|$)|>|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$|[-*+][ \t]|\d{1,9}[.)][ \t]|<\/?[a-zA-Z!?])/;
 function wikiTable(state: MaskState) {
   return function (this: Tokenizer, src: string): Tokens.Table | false {
     const mask = state.mask;
@@ -157,7 +166,7 @@ function wikiTable(state: MaskState) {
     tableScan.chars += second.length;
     if (!second.includes("-") || !/[|:]/.test(second) || !delimiterRow.test(second)) return false;
     // The table's own lines, read one at a time: to the first blank line or the first line that
-    // begins another block (a heading, a quote, a fence, a rule, a list item, HTML), where a table
+    // begins another block (a heading, a quote, a fence, indented code, a rule, a list item, HTML), where a table
     // ends for marked too — never the rest of the body, however the tables are set apart.
     let end = nl2 < 0 ? src.length : nl2 + 1;
     while (end < src.length) {
