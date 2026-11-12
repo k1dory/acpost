@@ -107,13 +107,13 @@
   async function send() {
     // "@codex" and nothing else chooses who answers; with a message after it, the message goes to
     // that agent (app.submit).
-    const named = isNew ? null : app.mention(d.text);
+    const named = isNew || app.sentBefore(d) ? null : app.mention(d.text);
     if (named && !named.rest.trim() && !d.files.length && !d.reading.size) { takeAgent(named.to, true); return; }
     await app.submit(d);
     ta?.focus();
   }
   function key(e: KeyboardEvent) {
-    if (at.length) {
+    if (at.length && !app.sentBefore(d)) {
       if (e.key === "ArrowDown") { e.preventDefault(); slashSel = (slashSel + 1) % at.length; return; }
       if (e.key === "ArrowUp") { e.preventDefault(); slashSel = (slashSel - 1 + at.length) % at.length; return; }
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); takeAgent(at[slashSel], true); return; }

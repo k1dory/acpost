@@ -534,6 +534,12 @@ class App {
     this.loadOptions(a);
     return true;
   }
+  /** The draft is, unchanged, a message already sent whole whose answer was lost (it moved with
+   * its conversation into the thread made of it): sent again, it is that message as first made —
+   * nothing in it is read as naming an agent. */
+  sentBefore(d: ComposerDraft): boolean {
+    return !!d.sending?.moved && d.sending.task?.body === d.text.trim();
+  }
   /** A message that starts by naming an agent of the chat ("@codex look at this"): the agent, and
    * the message without the name. Only where there is another agent to choose: elsewhere the
    * text is the message, whole. */
@@ -680,8 +686,7 @@ class App {
     // was typed until the node has the message: sent again, it is the same message to the same agent.
     // (A message already sent whole from where there was no one else to name — a session that
     // became this thread, its answer lost — is that message again, as it was first made.)
-    const again = !!d.sending?.moved && d.sending.task?.body === sent.trim();
-    const named = at.thread && !again ? this.mention(sent) : null;
+    const named = at.thread && !this.sentBefore(d) ? this.mention(sent) : null;
     if (named) { at.target = named.to; at.named = true; at.settings[named.to] = this.settingsFor(named.to); }
     // Sent to the agent shown: that is who this thread's messages go to until the person chooses
     // another (opened again with this one unanswered, it is sent again to the same agent).
