@@ -533,4 +533,20 @@ describe("review round 3", () => {
     expect(geometry(q("div.chart")).W).toBe(560);
     expect(q("div.chart svg").classList.contains("wide")).toBe(false);
   });
+
+describe("review round 4: an answer whose last line ends with a space", () => {
+  it("is found whole, replaced in place and not added twice", async () => {
+    const { answerAt } = await import("./genui/draft");
+    const first = "> Deploy?\n- Env: prod\n- Notes: \n\n";
+    const draft = "hello\n" + first.replace(/\n+$/, "") + "\nbye";
+    const at = answerAt(draft, first);
+    expect(at).toBe(6);
+    expect(answerAt("hello\n> Deploy?\n- Env: prod\n- Notes: x\nbye", first)).toBe(-1);   // another answer
+    const next = "> Deploy?\n- Env: stage\n- Notes: \n\n";
+    const whole = (t: string) => t.replace(/^\n+|\n+$/g, "");
+    const replaced = draft.slice(0, at) + whole(next) + draft.slice(at + whole(first).length);
+    expect(replaced).toBe("hello\n> Deploy?\n- Env: stage\n- Notes: \nbye");
+    expect(answerAt(replaced, next)).toBe(6);
+  });
+});
 });

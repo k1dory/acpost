@@ -183,8 +183,12 @@ export function axisLabel(v: number, step: number, short = false): string {
   if (short) return expo(v, 3);
   if (!(step > 0) || !Number.isFinite(step)) return fmt(v);
   if (step < 1e-4 || Math.abs(v) >= 1e15) return expo(v, 3);
+  // As many decimals as the step needs (0.00025 has five); a step that needs more than eight is
+  // written short.
+  const exact = (d: number) => Math.abs(Math.round(step * 10 ** d) - step * 10 ** d) <= 1e-6 * step * 10 ** d;
   let d = 0;
-  while (d < 4 && Math.abs(Math.round(step * 10 ** d) - step * 10 ** d) > 1e-6 * step * 10 ** d) d++;
+  while (d < 8 && !exact(d)) d++;
+  if (!exact(d)) return expo(v, 3);
   return v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 

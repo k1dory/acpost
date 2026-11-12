@@ -159,4 +159,16 @@ describe("review round 2", () => {
     expect([5e-5, 1e-4].map(v => axisLabel(v, 5e-5))).toEqual(["5e-5", "1e-4"]);
     expect(axisLabel(1, 0)).toBe("1");
   });
+
+describe("review round 4", () => {
+  it("labels an axis with the decimals its step has, however many", async () => {
+    const { axisLabel, ticks } = await import("./genui");
+    const t = ticks(0, 0.0009);
+    const step = t[1] - t[0];
+    const labels = t.map(v => axisLabel(v, step));
+    expect(new Set(labels).size).toBe(labels.length);                 // no two ticks read alike
+    for (let i = 0; i < t.length; i++) expect(Number(labels[i].replace(/,/g, ""))).toBeCloseTo(t[i], 9); // each reads as its value
+    expect(axisLabel(0.00025, 0.00025)).toBe((0.00025).toLocaleString(undefined, { minimumFractionDigits: 5, maximumFractionDigits: 5 }));
+  });
+});
 });

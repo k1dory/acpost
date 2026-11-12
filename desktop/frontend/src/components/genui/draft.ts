@@ -2,8 +2,12 @@ import { app } from "../../lib/state.svelte";
 
 /** Where an answer is in a text: whole, its first line a line of the text from its start and its
  * last line one to its end ("Java" is not in "JavaScript", nor "1" in "10"); -1 when it is not. */
+/** An answer as it stands in a draft: without the newlines around it; the spaces of its own lines
+ * (a field left blank ends "- Notes: ") are part of it. */
+const whole = (text: string) => text.replace(/^\n+|\n+$/g, "");
+
 export function answerAt(hay: string, text: string): number {
-  const s = text.trim();
+  const s = whole(text);
   if (!s) return -1;
   for (let i = hay.indexOf(s); i >= 0; i = hay.indexOf(s, i + 1)) {
     const end = i + s.length;
@@ -19,7 +23,7 @@ export function answerAt(hay: string, text: string): number {
 export function toDraft(text: string, before = "") {
   const d = app.draftOf();
   const at = before ? answerAt(d.text, before) : -1;
-  if (at >= 0) d.text = d.text.slice(0, at) + text.trim() + d.text.slice(at + before.trim().length);
+  if (at >= 0) d.text = d.text.slice(0, at) + whole(text) + d.text.slice(at + whole(before).length);
   else app.quote = (app.quote ? app.quote + "\n" : "") + text;
   if (app.view !== "chat" && app.view !== "ide") app.view = "chat";
 }
