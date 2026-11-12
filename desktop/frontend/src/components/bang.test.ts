@@ -244,4 +244,22 @@ describe("! in the composer", () => {
     expect(fake.Node.Shell).toHaveBeenCalledTimes(1);
     expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
   });
+
+  it("Enter that accepts an input method's candidate neither runs nor sends; the next Enter runs once", async () => {
+    await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    type("!echo 日本");
+    for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+      textarea().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init } as any));
+      svelte.flushSync();
+    }
+    await flush();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(textarea().value).toBe("!echo 日本");
+    enter();
+    await flush();
+    expect(fake.Node.Shell).toHaveBeenCalledTimes(1);
+    expect(fake.Node.Shell.mock.calls[0][1]).toBe("echo 日本");
+  });
 });

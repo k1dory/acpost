@@ -103,6 +103,9 @@
     ta?.focus();
   }
   function key(e: KeyboardEvent) {
+    // Enter that takes an input method's candidate is part of typing, not a send (WebKit says it
+    // with keyCode 229 when the composition has just ended).
+    if (e.isComposing || e.keyCode === 229) return;
     if (slash.length) {
       if (e.key === "ArrowDown") { e.preventDefault(); slashSel = (slashSel + 1) % slash.length; return; }
       if (e.key === "ArrowUp") { e.preventDefault(); slashSel = (slashSel - 1 + slash.length) % slash.length; return; }
