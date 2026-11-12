@@ -154,7 +154,9 @@ class App {
     const r = this.shells.find(s => s.id === id);
     if (!r) return;
     const fence = "`".repeat(Math.max(3, ...[...(r.output.matchAll(/`+/g))].map(m => m[0].length + 1)));
-    this.quote = `$ ${r.cmd}\n${fence}\n${r.output.replace(/\s+$/, "")}\n${fence}\n` + (r.code ? `(exit ${r.code})\n` : "");
+    // One that did not run says why; one stopped or cut short says so.
+    const end = r.error ? `(not run: ${r.error})\n` : r.stopped ? "(stopped)\n" : r.timedOut ? "(ran too long, ended)\n" : r.code ? `(exit ${r.code})\n` : "";
+    this.quote = `$ ${r.cmd}\n` + (r.error && !r.output ? "" : `${fence}\n${r.output.replace(/\s+$/, "")}\n${fence}\n`) + end;
   }
   palette = $state(false); // ⌘K
   viewMenu = $state(false); // the title bar's view menu open
@@ -537,6 +539,9 @@ class App {
    * draft the thread has already keeps what it holds, and gets what was left of this one. */
   private moveDraft(d: ComposerDraft, to: string) {
     if (this.draftMap.get(to) === d) return;
+    // What was run from this conversation goes where it goes (a new task becoming a thread, a
+    // session becoming one): shown there, and stopped from there.
+    if (this.draftMap.get(d.key) === d) { const from = d.key; this.shells = this.shells.map(s => (s.chat === from ? { ...s, chat: to } : s)); }
     if (this.draftMap.get(d.key) === d) {
       this.draftMap.delete(d.key);
       if (d.key !== "new") this.draftAlias.set(d.key, to); // a new task's next draft is a new one

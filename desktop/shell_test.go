@@ -3,8 +3,11 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -15,8 +18,16 @@ func TestShellRunsInTheDirectory(t *testing.T) {
 	if err != nil || r.Code != 3 || !strings.Contains(r.Output, dir) || !strings.Contains(r.Output, "err") {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if r, err := runShell("", "echo ok", filepath.Join(dir, "none"), time.Minute); err != nil || !strings.Contains(r.Output, "ok") {
-		t.Fatalf("a directory that is not there: %+v %v", r, err)
+	// The chat's directory gone: nothing is run (not in the home directory instead).
+	mark := filepath.Join(dir, "ran")
+	if r, err := runShell("", "touch "+mark, filepath.Join(dir, "none"), time.Minute); err == nil {
+		t.Fatalf("a directory that is not there: %+v", r)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("the command ran")
+	}
+	if r, err := runShell("", "pwd", "", time.Minute); err != nil || strings.TrimSpace(r.Output) == "" {
+		t.Fatalf("no directory: %+v %v", r, err)
 	}
 	if _, err := runShell("", "  ", dir, time.Minute); err == nil {
 		t.Fatal("nothing was run")
@@ -61,5 +72,51 @@ func TestShellKeepsTheFirstOutput(t *testing.T) {
 	r, err := runShell("", "head -c 400000 /dev/zero | tr '\\0' x", "", time.Minute)
 	if err != nil || !r.Cut || len(r.Output) != shellOutput {
 		t.Fatalf("%d bytes, cut %v, %v", len(r.Output), r.Cut, err)
+	}
+}
+
+// What a command left running behind it ends when the command does.
+func TestShellLeavesNothingRunning(t *testing.T) {
+	r, err := runShell("", "sleep 600 >/dev/null 2>&1 & echo $!", "", time.Minute)
+	if err != nil || r.Code != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(r.Output))
+	if err != nil {
+		t.Fatalf("%q", r.Output)
+	}
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if syscall.Kill(pid, 0) == syscall.ESRCH {
+			return
+		}
+	}
+	t.Fatalf("the background child %d is still running", pid)
+}
+
+// Quitting ends what runs, and waits for it; nothing is run after.
+func TestShellsEndWithTheApp(t *testing.T) {
+	t.Cleanup(func() { shells.Lock(); shells.closed = false; shells.Unlock() })
+	done := make(chan ShellResult, 1)
+	go func() { r, _ := runShell("quit1", "sleep 600", "", time.Minute); done <- r }()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		shells.Lock()
+		_, on := shells.stop["quit1"]
+		shells.Unlock()
+		if on {
+			break
+		}
+	}
+	start := time.Now()
+	stopShells()
+	select {
+	case r := <-done:
+		if r.Code != -1 || time.Since(start) > 10*time.Second {
+			t.Fatalf("%+v in %v", r, time.Since(start))
+		}
+	default:
+		t.Fatal("stopShells returned before the command ended")
+	}
+	if _, err := runShell("", "echo late", "", time.Minute); err == nil {
+		t.Fatal("a command ran while the app quits")
 	}
 }

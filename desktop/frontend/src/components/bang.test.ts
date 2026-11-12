@@ -76,9 +76,34 @@ describe("! in the composer", () => {
     enter();
     await flush(); svelte.flushSync();
     expect(document.querySelector(".sh .out.err")!.textContent).toContain("no such file");
+    ([...document.querySelectorAll(".sh button")].find(b => b.textContent === "Add to message") as HTMLButtonElement).click();
+    svelte.flushSync();
+    expect(textarea().value).toBe("$ ls\n(not run: fork/exec /bin/zsh: no such file)\n");
+    type("");
     // Another chat does not show this one's runs.
     app.thread = "U"; app.chat = null;
     svelte.flushSync();
+    expect(app.shellsHere()).toHaveLength(0);
+  });
+
+  it("what was run in a new task is shown in the thread it becomes, and not in the next new task", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.newTask();
+    app.draft.agent = "agent:claude";
+    fake.Node.Shell.mockResolvedValue({ output: "ok\n", code: 0, ms: 5 });
+    await app.runShell("echo ok");
+    expect(app.shellsHere()).toHaveLength(1);
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T9", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    fake.Node.Chats.mockResolvedValue({ items: [] });
+    const d = app.draftOf();
+    d.text = "first message";
+    expect(await app.submit(d)).toBe(true);
+    expect(app.thread).toBe("T9");
+    expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo ok"]);
+    app.newTask();
     expect(app.shellsHere()).toHaveLength(0);
   });
 });

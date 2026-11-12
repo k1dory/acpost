@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -35,8 +36,21 @@ type ShellResult struct {
 
 var shells = struct {
 	sync.Mutex
-	stop map[string]context.CancelFunc
+	stop    map[string]context.CancelFunc
+	running sync.WaitGroup
+	closed  bool // the app is quitting: nothing more is run
 }{stop: map[string]context.CancelFunc{}}
+
+// stopShells ends every running command and waits for them: none outlives the app.
+func stopShells() {
+	shells.Lock()
+	shells.closed = true
+	for _, stop := range shells.stop {
+		stop()
+	}
+	shells.Unlock()
+	shells.running.Wait()
+}
 
 // capped keeps the first max bytes written to it.
 type capped struct {
@@ -70,8 +84,12 @@ func runShell(id, command, cwd string, timeout time.Duration) (ShellResult, erro
 	if strings.TrimSpace(command) == "" {
 		return ShellResult{}, errors.New("a command to run")
 	}
-	if st, err := os.Stat(cwd); cwd == "" || err != nil || !st.IsDir() {
+	// No directory: the home directory. One that is named and is not there (the chat's was removed
+	// or renamed) runs nothing: the command was meant for that place, not for another.
+	if cwd == "" {
 		cwd, _ = os.UserHomeDir()
+	} else if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
+		return ShellResult{}, fmt.Errorf("the chat's directory %s is not there: nothing was run", cwd)
 	}
 	sh := os.Getenv("SHELL")
 	if sh == "" {
@@ -80,12 +98,18 @@ func runShell(id, command, cwd string, timeout time.Duration) (ShellResult, erro
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	stopped := false
-	if id != "" {
-		shells.Lock()
-		shells.stop[id] = func() { stopped = true; cancel() }
-		shells.Unlock()
-		defer func() { shells.Lock(); delete(shells.stop, id); shells.Unlock() }()
+	if id == "" {
+		id = fmt.Sprintf("run-%p", &stopped) // every run is known, to be ended with the app
 	}
+	shells.Lock()
+	if shells.closed {
+		shells.Unlock()
+		return ShellResult{}, errors.New("the app is quitting")
+	}
+	shells.stop[id] = func() { stopped = true; cancel() }
+	shells.running.Add(1)
+	shells.Unlock()
+	defer func() { shells.Lock(); delete(shells.stop, id); shells.Unlock(); shells.running.Done() }()
 	out := &capped{max: shellOutput}
 	cmd := exec.CommandContext(ctx, sh, "-lc", command)
 	cmd.Dir = cwd
@@ -97,6 +121,11 @@ func runShell(id, command, cwd string, timeout time.Duration) (ShellResult, erro
 	cmd.WaitDelay = 2 * time.Second // what still holds its pipes does not hold the answer
 	start := time.Now()
 	err := cmd.Run()
+	// What it left running behind it ("sleep 600 &") ends with it: nothing of a run outlives its
+	// answer, its timeout and its Stop.
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	shells.Lock()
 	wasStopped := stopped
 	shells.Unlock()

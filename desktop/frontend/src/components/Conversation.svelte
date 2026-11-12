@@ -120,7 +120,8 @@
           <div class="big">{t("What should we work on?")}</div>
         </div>
         <Composer />
-        <ShellRuns />
+        <!-- Under the composer, in a box of their own that scrolls: the composer stays in reach. -->
+        <div class="runs scroll"><ShellRuns /></div>
       </div>
     </div>
   {:else}
@@ -163,6 +164,7 @@
   .foot { padding: 8px 32px 20px; }
   .center { flex: 1; min-height: 0; display: grid; align-content: center; padding: 0 32px 8vh; }
   .center .col { width: 100%; }
+  .center .runs { max-height: 34vh; overflow-y: auto; }
   .hello { padding: 0 0 22px; display: grid; gap: 6px; text-align: center; }
   .mark { display: flex; justify-content: center; margin-bottom: 6px; }
   .big { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
