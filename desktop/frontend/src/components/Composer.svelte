@@ -32,7 +32,7 @@
   const at = $derived.by(() => {
     if (targets.length < 2) return [];
     const m = /^@(\S*)$/.exec(d.text);
-    return m ? targets.filter(a => who(a).name.toLowerCase().startsWith(m[1].toLowerCase())) : [];
+    return m ? targets.filter(a => a.slice("agent:".length).toLowerCase().startsWith(m[1].toLowerCase())) : [];
   });
   function takeAgent(a: string | undefined, clear = false) {
     if (!a) return;
@@ -172,7 +172,7 @@
     <div class="menu card">
       {#each at as a, i (a)}
         <button class="mi who" class:sel={i === slashSel} onmouseenter={() => (slashSel = i)} onclick={() => takeAgent(a, true)}>
-          <Avatar addr={a} size={16} /><span>{who(a).name}</span>
+          <Avatar addr={a} size={16} /><span>{who(a).name}</span>{#if who(a).node}<span class="muted">@{who(a).node}</span>{/if}
         </button>
       {/each}
     </div>
@@ -212,7 +212,7 @@
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />
-    {#if targets.length > 1}<button class="chip opt to" onclick={() => (pickerFor = pickerFor === "agent" ? "" : "agent")} title={t("Who answers: another agent can be called into this chat")}><Avatar addr={agent} size={14} /> {who(agent).name}</button>{/if}
+    {#if targets.length > 1}<button class="chip opt to" onclick={() => (pickerFor = pickerFor === "agent" ? "" : "agent")} title={t("Who answers: another agent can be called into this chat")}><Avatar addr={agent} size={14} /> {who(agent).name}{#if who(agent).node}<span class="muted">@{who(agent).node}</span>{/if}</button>{/if}
     {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, "model")}</button>{/if}
     {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, "effort")}</button>{/if}
     {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, "mode")}</button>{/if}

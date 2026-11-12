@@ -508,10 +508,12 @@ class App {
   mention(text: string): { to: string; rest: string } | null {
     const all = this.targets();
     if (all.length < 2) return null;
-    const m = /^\s*@([^\s@]+)(?:\s+|$)/.exec(text);
+    // An agent of another node is named with its node ("@codex@peer"): a bare name is this
+    // node's, never a namesake elsewhere.
+    const m = /^\s*@([^\s@]+(?:@[^\s@]+)?)(?:\s+|$)/.exec(text);
     if (!m) return null;
     const name = m[1].toLowerCase();
-    const to = all.find(a => who(a).name.toLowerCase() === name);
+    const to = all.find(a => a.slice("agent:".length).toLowerCase() === name);
     return to ? { to, rest: text.slice(m[0].length) } : null;
   }
 
@@ -646,6 +648,9 @@ class App {
     // was typed until the node has the message: sent again, it is the same message to the same agent.
     const named = at.thread ? this.mention(sent) : null;
     if (named) { at.target = named.to; at.settings[named.to] = this.settingsFor(named.to); }
+    // Sent to the agent shown: that is who this thread's messages go to until the person chooses
+    // another (opened again with this one unanswered, it is sent again to the same agent).
+    else if (at.thread && at.target) this.chosen.set(at.thread, at.target);
     const body = (named ? named.rest : sent).trim();
     await owned.wait;
     const { files: sentFiles, refused } = owned.files();
@@ -760,7 +765,8 @@ class App {
       // Shown wherever its thread is open, now (if it is opened later, the node's list has it).
       if (this.thread === m.thread) {
         // Sent from this thread to an agent named in it ("@codex …"): that one answers next too.
-        if (thread === m.thread && to) { this.target = to; this.chosen.set(m.thread, to); }
+        // Unless the person chose another while it went.
+        if (thread === m.thread && to && this.target === at.was) { this.target = to; this.chosen.set(m.thread, to); }
         // Sent again after its answer was lost, the node gives the message it has: one, not two.
         if (this.msgs.some(x => x.id === m.id)) this.replace(m);
         else this.msgs = [...this.msgs, m];
@@ -779,7 +785,7 @@ class App {
     // The settings chosen then, for each agent it can go to: the new task's agent of this Mac, or
     // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
     return {
-      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target,
+      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target, was: this.target,
       key: d.key, limits: this.limits, // the draft's chat, and the node's limits, as they were
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
       settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,

@@ -970,7 +970,12 @@ func (s *acpSlot) handle(m store.Message) {
 	// A chat shared with other agents: what they were asked and answered since this one was told.
 	said, saidMark, err := a.othersSaid(turnCtx, m, string(sid))
 	if err != nil {
-		n.log.Debug("shared chat", "err", err) // the turn goes on without it
+		// Not read: the turn does not run without what it may be about (tried again, like any
+		// attempt that did not reach its prompt).
+		if !setupFailed("reading the chat's other turns", false) {
+			release(failf("agent_error", "the chat's other turns: %v", err))
+		}
+		return
 	}
 	m.Body = said + m.Body
 	// Knowledge: in a new session's first prompt, for a message of this node's own user or agents.
