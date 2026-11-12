@@ -198,8 +198,11 @@ class App {
     if (!this.chat && !this.thread) return this.draft.cwd || this.home;
     // The conversation's own directory: its first message's, else the chat's as the node lists it
     // (never a later message's of another participant).
+    // As the node lists the chat (where its session runs: a thread of a task may name another
+    // directory than the task's session is in); a thread not listed yet, its first message's.
+    const listed = this.chat && (!this.thread || this.chat.thread === this.thread) ? this.chat.cwd : "";
     const m = this.shellRoot();
-    return m?.meta?.acp_cwd || m?.meta?.acp_session_cwd || this.chat?.cwd || "";
+    return listed || m?.meta?.acp_session_cwd || m?.meta?.acp_cwd || "";
   }
   /** The open thread's first message (the one it is named after), when it is on screen. */
   private shellRoot(): Msg | undefined {

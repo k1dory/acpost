@@ -438,7 +438,13 @@ describe("! in the composer", () => {
     type("!pwd");
     enter();
     await flush();
-    expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/work/root"]);
+    expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/work/repo"]); // as the node lists the chat
+    // Not listed (no directory in the chat's entry): its first message's.
+    app.chat = { ...app.chat!, cwd: "" } as any;
+    type("!pwd");
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[1].slice(1)).toEqual(["pwd", "/work/root"]);
   });
 
   it("undo that brings back what the app put in the field does not make it the person's", async () => {
@@ -456,5 +462,16 @@ describe("! in the composer", () => {
     expect(fake.Node.Shell).not.toHaveBeenCalled();
     undo("!ls", "historyRedo");
     expect(document.querySelector(".comp.bang")).toBeNull();
+  });
+
+  it("runs where the node lists the chat (its session's directory), not where a later thread of the task asked", async () => {
+    const app = await setup();
+    app.chat = { key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", cwd: "/A", title: "t", updated: "" } as any;
+    app.msgs = [{ id: "T", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "done", meta: { acp_cwd: "/B" }, created_at: "", updated_at: "" }] as any;
+    fake.Node.Shell.mockResolvedValue({ output: "", code: 0, ms: 1 });
+    type("!pwd");
+    enter();
+    await flush();
+    expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/A"]);
   });
 });

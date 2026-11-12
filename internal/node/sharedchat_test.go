@@ -321,4 +321,14 @@ func TestSharedChatReusedTaskSessionKeepsItsDirectory(t *testing.T) {
 	if got := ask(t, n, SendRequest{To: "other", Thread: second.Thread, Body: "cwd"}).Reply; got != one {
 		t.Fatalf("the agent called in runs in %q, the task's session in %q", got, one)
 	}
+	// And the chat is listed in the directory its session runs in, not the one its thread named.
+	chats, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range chats.Items {
+		if c.Thread == second.Thread && c.Cwd != one {
+			t.Fatalf("the chat is listed in %q, its session runs in %q", c.Cwd, one)
+		}
+	}
 }

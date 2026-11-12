@@ -100,6 +100,14 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 					}
 				}
 				if sid != "" {
+					// The chat's directory is where its first agent's session runs, as recorded when
+					// the session was made: a thread of a task (session: task) may name another one,
+					// the session stays where it is — and so do its files.
+					if a == root.To {
+						if dir, _ := n.st.Session(ctx, a, sessionDir+sid); dir != "" {
+							chat.Cwd = dir
+						}
+					}
 					ours[name+"/"+sid] = true
 					if chat.Session == "" {
 						chat.Session, chat.SessionAgent = sid, a
