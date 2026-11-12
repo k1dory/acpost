@@ -22,19 +22,19 @@
   let feed = $state.raw<EventFeed | null>(null);
   let full = new Turn();
   let rev = $state(0);
-  let err = $state("");
   let loading = $state(true);
+  let readErr = $state(""); // the last read of its events failed
 
   $effect(() => {
     const at = id;
     const f = untrack(() => {
       const tn = new Turn();
-      full = tn; rev++; err = ""; loading = true; sel = "";
+      full = tn; rev++; readErr = ""; loading = true; sel = "";
       const f: EventFeed = new EventFeed(after => Node.Events(at, after) as any, fresh => { tn.add(fresh); if (feed === f) rev++; });
       feed = f;
       return f;
     });
-    f.sync().then(() => { if (feed === f) loading = false; }, e => { if (feed === f) { err = errText(e); loading = false; } });
+    drain(f, 1).then(() => { if (feed === f) loading = false; });
     const off = on("events:" + at, (b: any) => {
       if (b?.events?.length) f.live(b.events as Ev[]);
       if (b?.final) onchange();
@@ -54,9 +54,8 @@
     return () => { clearInterval(poll); drain(f); };
   });
 
-  // Read to the end, a few times if it fails (once the turn is over no poll comes after); a read that
-  // still fails is shown, and Refresh (or Retry) reads again.
-  let readErr = $state("");
+  // Every read to the end goes here — the first, the last once the turn is over (a few times if it
+  // fails: no poll comes after), Refresh and Retry: one that fails is shown, one that works clears it.
   async function drain(f: EventFeed, tries = 3) {
     for (let i = 0; ; i++) {
       try {
@@ -145,8 +144,7 @@
     {#if zoom > 1}<button class="btn sm" onclick={() => (zoom = 1)}>{t("Fit")}</button>{/if}
   </div>
 
-  {#if err}<div class="empty">{err}</div>{/if}
-  {#if readErr && !err}<div class="note warn rd">{t("The last events of this turn could not be read: what is shown may be short")} — {readErr}
+  {#if readErr}<div class="note warn rd">{t("This turn's events could not be read: what is shown may be short")} — {readErr}
     <button class="btn sm" onclick={() => feed && drain(feed, 1)}>{t("Retry")}</button></div>{/if}
   <div class="body" class:with={!!selected}>
     <div class="card tl scroll" bind:this={scroller} bind:clientWidth={cw}>
