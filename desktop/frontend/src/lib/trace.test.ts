@@ -187,3 +187,35 @@ describe("helpers", () => {
     expect(ticks(500).length).toBeLessThanOrEqual(7);
   });
 });
+
+describe("review round 1", () => {
+  it("a call ends when it first says so: the full events and the node's short form give the same timings", () => {
+    const full = marksOf([
+      ev(1, 1000, "tool_call", { id: "c", kind: "execute", status: "pending" }),
+      ev(2, 2000, "tool_call_update", { id: "c", status: "completed" }),
+      ev(3, 9000, "tool_call_update", { id: "c", status: "completed", output: "late output", exit_code: 0 }),
+    ]);
+    // What GET /v1/traces gives for the same events: a repeated status is left out, the exit code kept.
+    const compact: Mark[] = [
+      { seq: 1, at: T0 + 1000, kind: "tool_call", call: "c", tool: "execute", status: "pending" },
+      { seq: 2, at: T0 + 2000, kind: "tool_call_update", call: "c", status: "completed" },
+      { seq: 3, at: T0 + 9000, kind: "tool_call_update", call: "c", exit: 0 },
+    ];
+    const a = traceTurn(msg(), full, [], T0), b = traceTurn(msg(), compact, [], T0);
+    expect(a.spans.map(s => [s.start, s.end, s.state, s.exit])).toEqual([[T0 + 1000, T0 + 2000, "done", 0]]);
+    expect(b.spans.map(s => [s.start, s.end, s.state, s.exit])).toEqual(a.spans.map(s => [s.start, s.end, s.state, s.exit]));
+    expect(b.phases).toEqual(a.phases);
+    // A late non-zero exit code still fails it, without moving its end.
+    const late = traceTurn(msg(), [...compact.slice(0, 2), { seq: 3, at: T0 + 9000, kind: "tool_call_update", call: "c", exit: 2 }], [], T0);
+    expect(late.spans[0]).toMatchObject({ end: T0 + 2000, state: "failed" });
+  });
+
+  it("a turn whose events the node stopped keeping says so, and so does its conversation", () => {
+    const marks = marksOf([ev(1, 1000, "tool_call", { id: "c", status: "pending" }), ev(2, 2000, "truncated", "later events were not kept")]);
+    expect(traceTurn(msg(), marks, [], T0).truncated).toBe(true);
+    expect(traceTurn(msg(), marks.slice(0, 1), [], T0).truncated).toBe(false);
+    const th: TThread = { thread: "msg_a", title: "", updated_at: iso(0), messages: [msg({ events: marks })] };
+    expect(threadSum(th, T0).cut).toBe(true);
+    expect(threadSum({ ...th, messages: [msg({ events: marks.slice(0, 1) })] }, T0).cut).toBe(false);
+  });
+});

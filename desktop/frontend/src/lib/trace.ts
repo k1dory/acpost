@@ -51,6 +51,7 @@ export type TurnTrace = {
   calls: number;
   errors: number;
   active: number;        // from its first event to its end
+  truncated: boolean;    // the node kept no more of its events (limits.max_events_per_message)
 };
 
 const finals = new Set(["done", "failed", "cancelled", "expired"]);
@@ -138,7 +139,9 @@ export function traceTurn(m: Pick<TMsg, "id" | "state" | "created_at" | "updated
       if (x.title) s.label = x.title; // the latest says most ("Read a.go" after "Read")
       if (x.command) s.command = x.command;
       if (typeof x.exit === "number") s.exit = x.exit;
-      if (x.status === "completed" || x.status === "failed") {
+      // It ended when it first said so: an update after (late output, the same status again,
+      // which the node's short form leaves out) does not move its end; its exit code still counts.
+      if ((x.status === "completed" || x.status === "failed") && s.ended === undefined) {
         s.ended = x.at;
         s.state = x.status === "failed" ? "failed" : "done";
       }
@@ -181,7 +184,8 @@ export function traceTurn(m: Pick<TMsg, "id" | "state" | "created_at" | "updated
   const phases = phasesOf(start, first, end, spans);
   const calls = spans.filter(s => s.kind === "tool").length;
   const errors = spans.filter(s => s.kind === "tool" && s.state === "failed").length + (m.state === "failed" || m.state === "expired" ? 1 : 0);
-  return { id: m.id, start, first, end, running, spans, phases, calls, errors, active: first === null ? 0 : Math.max(0, end - first) };
+  return { id: m.id, start, first, end, running, spans, phases, calls, errors, active: first === null ? 0 : Math.max(0, end - first),
+    truncated: marks.some(x => x.kind === "truncated") };
 }
 
 // Where spans overlap, the time is the one a person would blame: waiting for them first, then
@@ -240,7 +244,8 @@ export function threadSum(th: TThread, now: number): ThreadSum {
     active += trace.active; calls += trace.calls; errors += trace.errors;
   }
   return { thread: th.thread, title: th.title, updated: ms(th.updated_at), turns: turns.length, active, calls, errors, phases,
-    running: turns.some(x => x.trace.running), cut: !!th.cut };
+    // A turn it asked may still run when its own are over: it is running until they all are.
+    running: th.messages.some(m => !isFinal(m.state)), cut: !!th.cut || turns.some(x => x.trace.truncated || x.msg.cut) };
 }
 
 export function sortSums(list: ThreadSum[], by: "recent" | "time"): ThreadSum[] {
