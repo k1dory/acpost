@@ -81,3 +81,43 @@ func TestTraceMessagesManyUnder(t *testing.T) {
 		t.Fatalf("room for all: %d %v", len(got), cut)
 	}
 }
+
+// Turns of the thread nested in each other (each asked by the one before) do not make what is
+// under them be walked again and use up the bound: three of them and 394 under the last (chains
+// of agents asking agents, 14 deep) give all 394, not cut; one more than the bound is cut.
+func TestTraceMessagesNestedOwn(t *testing.T) {
+	s := openTest(t, Options{})
+	root := mustInsert(t, s, msg("agent:a", "root"))
+	prev := root
+	for range 2 {
+		m := msg("agent:a", "nested")
+		m.Thread, m.Parent, m.Depth = root.ID, prev.ID, prev.Depth+1
+		prev = mustInsert(t, s, m)
+	}
+	for n := 0; n < 394; {
+		p := prev
+		for k := 0; k < 14 && n < 394; k, n = k+1, n+1 {
+			c := msg("agent:b", "child")
+			c.Parent, c.Depth = p.ID, p.Depth+1
+			p = mustInsert(t, s, c)
+		}
+	}
+	got, cut, err := s.TraceMessages(ctx, root.ID, 100, 400)
+	if err != nil || len(got) != 3+394 || cut {
+		t.Fatalf("%d %v %v", len(got), cut, err)
+	}
+	ids := map[string]bool{}
+	for _, m := range got {
+		if ids[m.ID] {
+			t.Fatalf("%s twice", m.ID)
+		}
+		ids[m.ID] = true
+	}
+	if got, cut, _ := s.TraceMessages(ctx, root.ID, 100, 393); len(got) != 3+393 || !cut {
+		t.Fatalf("over the bound: %d %v", len(got), cut)
+	}
+	// Older own turns left out do not stop the walk under those kept.
+	if got, cut, _ := s.TraceMessages(ctx, root.ID, 1, 400); len(got) != 1+394 || !cut {
+		t.Fatalf("own 1: %d %v", len(got), cut)
+	}
+}

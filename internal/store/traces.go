@@ -48,24 +48,41 @@ func (s *Store) TraceMessages(ctx context.Context, thread string, own, under int
 	if len(ids) == 0 {
 		return nil, false, nil
 	}
-	ownJSON, _ := json.Marshal(ids)
-	// One more than asked for says there were more. The walk itself is bounded too: a message of
-	// the thread under another of it is met twice (as its own and under), at most once each.
-	under1, err := s.strings(ctx, `WITH RECURSIVE
-			own(id) AS (SELECT value FROM json_each(?)),
-			d(id, depth) AS (
-				SELECT id, 0 FROM own
-				UNION SELECT m.id, d.depth + 1 FROM messages m JOIN d ON m.parent = d.id WHERE d.depth < 16
-				LIMIT ?
-			)
-		SELECT DISTINCT id FROM d WHERE id NOT IN (SELECT id FROM own) LIMIT ?`, string(ownJSON), 2*len(ids)+2*(under+1), under+1)
-	if err != nil {
-		return nil, false, err
+	// The messages under them, level by level, each once: a message has one parent, so it is met
+	// once, unless it is one of the thread's own (a turn of the thread asked by another of it).
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
 	}
-	if len(under1) > under {
-		cut = true
-		under1 = under1[:under]
+	var under1 []string
+	over := false
+	level := ids
+	for depth := 0; len(level) > 0 && !over; depth++ {
+		if depth == 16 {
+			over = true // deeper than a chain of messages goes (limits.max_depth)
+			break
+		}
+		lj, _ := json.Marshal(level)
+		kids, err := s.strings(ctx, `SELECT id FROM messages WHERE parent IN (SELECT value FROM json_each(?)) ORDER BY seq LIMIT ?`,
+			string(lj), under-len(under1)+1+len(ids))
+		if err != nil {
+			return nil, false, err
+		}
+		level = level[:0:0]
+		for _, k := range kids {
+			if seen[k] {
+				continue
+			}
+			if len(under1) == under {
+				over = true // one more than asked for
+				break
+			}
+			seen[k] = true
+			under1 = append(under1, k)
+			level = append(level, k)
+		}
 	}
+	cut = cut || over
 	all, _ := json.Marshal(append(ids, under1...))
 	rows, err := s.r.QueryContext(ctx, `SELECT `+cols+` FROM messages m WHERE m.id IN (SELECT value FROM json_each(?)) ORDER BY m.seq`, string(all))
 	if err != nil {
