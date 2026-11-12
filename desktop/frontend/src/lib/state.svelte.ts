@@ -189,7 +189,8 @@ class App {
     if (to.includes("@")) return t("This chat's agent is on another node: a command would run on this Mac");
     // A chat whose directory the app does not know (started elsewhere without one: it runs in its
     // agent's own): not the home directory instead.
-    if (!this.shellCwd()) return t("This chat's directory is not known here: nothing was run");
+    // (Known whole: "." or another path that depends on where the node runs is not a place here.)
+    if (!this.shellCwd().startsWith("/")) return t("This chat's directory is not known here: nothing was run");
     return "";
   }
   /** Where a command of the open conversation runs: the chat's directory; a new task's chosen one

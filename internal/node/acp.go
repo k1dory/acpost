@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -592,6 +593,11 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 			dir := cwd
 			if dir == "" {
 				dir = s.cwd()
+			}
+			// Whole: a configured "cwd: ." is the node's own directory, and means nothing to
+			// whoever reads the record from another one (the app).
+			if abs, err := filepath.Abs(dir); err == nil {
+				dir = abs
 			}
 			if err := n.st.PutSession(n.ctx, a.addr, sessionDir+string(sid), dir); err != nil {
 				n.log.Warn("record the session's directory", "agent", a.name, "err", err)

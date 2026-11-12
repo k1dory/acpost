@@ -162,6 +162,16 @@ func TestShellRefusedOnAnotherMachinesNode(t *testing.T) {
 	if r, err := (&Node{}).Shell("", "touch "+mark, ""); err == nil || !strings.Contains(err.Error(), "no directory") { // none named: not the home directory
 		t.Fatalf("%+v %v", r, err)
 	}
+	// A directory that is not a whole path ("." of a node run elsewhere) is not this app's "." either.
+	t.Chdir(dir)
+	for _, rel := range []string{".", "sub", "./x", "~/x"} {
+		if r, err := (&Node{}).Shell("", "touch "+mark, rel); err == nil {
+			t.Fatalf("%q: %+v", rel, r)
+		}
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("the command ran")
+	}
 	if r, err := (&Node{}).Shell("", "echo ok", dir); err != nil || !strings.Contains(r.Output, "ok") {
 		t.Fatalf("%+v %v", r, err)
 	}

@@ -79,7 +79,8 @@ func (c *capped) Write(p []byte) (int, error) {
 	return len(p), nil // all taken: the command is not stopped by a full pipe
 }
 
-// Shell runs command in cwd (the home directory when there is none) and gives what it printed
+// Shell runs command in cwd — the directory the app names, whole (an absolute path): none named,
+// or one that depends on where this app happens to run, runs nothing — and gives what it printed
 // and how it ended. id names the run for ShellStop.
 func (n *Node) Shell(id, command, cwd string) (ShellResult, error) {
 	// On a node of another machine (ACPOST_NODE, not a socket of this Mac) the chats' directories
@@ -91,6 +92,9 @@ func (n *Node) Shell(id, command, cwd string) (ShellResult, error) {
 	// directory", it is not known where the command was meant to run.
 	if cwd == "" {
 		return ShellResult{}, errors.New("no directory to run in: nothing was run")
+	}
+	if !filepath.IsAbs(cwd) {
+		return ShellResult{}, fmt.Errorf("the directory %q is not a whole path: nothing was run", cwd)
 	}
 	return runShell(id, command, cwd, shellTimeout)
 }

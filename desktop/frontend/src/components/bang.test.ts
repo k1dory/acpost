@@ -474,4 +474,19 @@ describe("! in the composer", () => {
     await flush();
     expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/A"]);
   });
+
+  it("a chat listed in a directory that is not a whole path runs nothing and keeps the draft", async () => {
+    const app = await setup();
+    for (const cwd of [".", "repo/sub", "./x"]) {
+      app.chat = { key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", cwd, title: "t", updated: "" } as any;
+      svelte.flushSync();
+      type("");
+      type("!pwd");
+      enter();
+      await flush(); svelte.flushSync();
+      expect(fake.Node.Shell).not.toHaveBeenCalled();
+      expect(textarea().value).toBe("!pwd");
+      app.error = "";
+    }
+  });
 });

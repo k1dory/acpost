@@ -659,7 +659,8 @@ export function SetChatTitle(chat: string, title: string): $CancellablePromise<v
 }
 
 /**
- * Shell runs command in cwd (the home directory when there is none) and gives what it printed
+ * Shell runs command in cwd — the directory the app names, whole (an absolute path): none named,
+ * or one that depends on where this app happens to run, runs nothing — and gives what it printed
  * and how it ended. id names the run for ShellStop.
  */
 export function Shell(id: string, command: string, cwd: string): $CancellablePromise<$models.ShellResult> {

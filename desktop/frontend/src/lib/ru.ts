@@ -159,7 +159,6 @@ export const ru: Record<string, string> = {
   "{n} of {m} rows": "{n} из {m} строк",
   "Sort by {col}": "Сортировать по «{col}»",
   "No rows": "Нет строк",
-  "Add to message": "Добавить в сообщение",
   "Added to your message": "Добавлено в ваше сообщение",
   "yes": "да",
   "no": "нет",
