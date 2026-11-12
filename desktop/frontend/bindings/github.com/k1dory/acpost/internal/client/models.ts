@@ -315,6 +315,12 @@ export class Chat {
      */
     "kind": string;
     "agent"?: string;
+
+    /**
+     * Parent is the chat (its key) an agent of which started this one: a thread whose first
+     * message an agent sent while it handled a message of that chat (a subagent's chat).
+     */
+    "parent"?: string;
     "title": string;
     "cwd"?: string;
     "repo"?: string;
