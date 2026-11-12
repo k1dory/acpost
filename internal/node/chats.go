@@ -56,6 +56,12 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 			root, rootErr := n.st.Get(ctx, c.Thread)
 			if rootErr == nil {
 				chat.Cwd = taskCwd(root)
+				// What an agent asked another while it handled a message: a chat under that one's.
+				if root.Parent != "" {
+					if up, err := n.st.Get(ctx, root.Parent); err == nil && up.Thread != "" && up.Thread != c.Thread {
+						chat.Parent = "thread:" + up.Thread
+					}
+				}
 			}
 			// The ACP sessions this thread runs: agent by agent, under the key its turns use.
 			inherit := ""
