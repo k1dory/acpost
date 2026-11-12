@@ -5,6 +5,7 @@
   import { dur, clock, who } from "../lib/format";
   import { analytics } from "../lib/analytics.svelte";
   import { Turn, type Ev } from "../lib/turn";
+  import { EventFeed } from "../lib/feed";
   import { marksOf, traceTurn, rows, shown, ticks, type TThread, type Row } from "../lib/trace";
   import PhaseBar from "./PhaseBar.svelte";
 
@@ -16,54 +17,41 @@
   let { thread, id, now, onchange }: { thread: TThread; id: string; now: number; onchange: () => void } = $props();
 
   const msg = $derived(thread.messages.find(m => m.id === id));
-  let raw: Ev[] = [];
+  // The shown turn's events (lib/feed.ts): one feed a turn, stopped when another is shown, so
+  // nothing asked for one turn lands in another's.
+  let feed = $state.raw<EventFeed | null>(null);
   let full = new Turn();
-  let last = 0;
   let rev = $state(0);
   let err = $state("");
   let loading = $state(true);
-  let gen = 0;
 
-  function take(evs: Ev[]) {
-    const fresh = evs.filter(e => e.seq > last).sort((a, b) => a.seq - b.seq);
-    if (!fresh.length) return;
-    raw.push(...fresh);
-    last = fresh[fresh.length - 1].seq;
-    full.add(fresh);
-    rev++;
-  }
-  async function readAll(my: number) {
-    for (;;) {
-      const from = last;
-      const evs = ((await Node.Events(id, from)) ?? []) as any as Ev[];
-      if (my !== gen) return;
-      take(evs);
-      if (!evs.length || last <= from) return;
-    }
-  }
   $effect(() => {
     const at = id;
-    const my = untrack(() => {
-      raw = []; full = new Turn(); last = 0; rev++; err = ""; loading = true; sel = "";
-      return ++gen;
+    const f = untrack(() => {
+      const tn = new Turn();
+      full = tn; rev++; err = ""; loading = true; sel = "";
+      const f: EventFeed = new EventFeed(after => Node.Events(at, after) as any, fresh => { tn.add(fresh); if (feed === f) rev++; });
+      feed = f;
+      return f;
     });
-    readAll(my).then(() => { if (my === gen) loading = false; }, e => { if (my === gen) { err = errText(e); loading = false; } });
+    f.sync().then(() => { if (feed === f) loading = false; }, e => { if (feed === f) { err = errText(e); loading = false; } });
     const off = on("events:" + at, (b: any) => {
-      if (my !== gen) return;
-      if (b?.events?.length) take(b.events as Ev[]);
+      if (b?.events?.length) f.live(b.events as Ev[]);
       if (b?.final) onchange();
     });
-    return () => { off(); gen++; };
+    return () => { off(); f.stop(); };
   });
 
-  const marks = $derived.by(() => { rev; return marksOf(raw); });
+  const marks = $derived.by(() => { rev; return feed ? marksOf(feed.raw) : []; });
   const trace = $derived(msg ? traceTurn(msg, marks, thread.messages, now) : null);
   const running = $derived(!!trace?.running);
+  // While the turn runs its events are asked for every two seconds; once it is over, they are read
+  // to their end (the turn's state may come before its last events).
   $effect(() => {
-    if (!running) return;
-    const my = gen;
-    const poll = setInterval(() => { Node.Events(id, last).then(evs => { if (my === gen) take((evs ?? []) as any); }, () => {}); }, 2000);
-    return () => clearInterval(poll);
+    const f = feed;
+    if (!f || !running) return;
+    const poll = setInterval(() => { f.sync().catch(() => {}); }, 2000);
+    return () => { clearInterval(poll); f.sync().catch(() => {}); };
   });
 
   // Filter, zoom.
@@ -124,6 +112,7 @@
       <span class:bad={trace.errors > 0}><span class="muted">{t("Errors")}</span> {trace.errors}</span>
     </div>
   </div>
+  {#if trace.truncated}<div class="note warn">{t("The node kept no more of this turn's events: calls after that are missing, and its sums are short")}</div>{/if}
   <div class="card ph"><PhaseBar phases={trace.phases} legend height={10} /></div>
 
   <div class="tools">
@@ -247,4 +236,5 @@
   .bad { color: var(--crit); }
   .small { font-size: 12px; }
   .note { font-size: 12px; padding: 10px 6px; }
+  .note.warn { color: var(--warn); }
 </style>

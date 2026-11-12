@@ -78,6 +78,8 @@ export const ru: Record<string, string> = {
   "No calls yet": "Вызовов пока нет",
   "Where this turn's time went": "Куда ушло время этого хода",
   "Trace": "Трасса",
+  "incomplete": "не полностью",
+  "The node kept no more of this turn's events: calls after that are missing, and its sums are short": "Узел не сохранил дальнейшие события этого хода: последующих вызовов нет, суммы неполные",
   "Settings": "Настройки",
   "Light": "Светлая",
   "Dark": "Тёмная",
