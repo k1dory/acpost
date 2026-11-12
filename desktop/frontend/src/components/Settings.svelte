@@ -11,7 +11,8 @@
 
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
 
-  let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "cloud" | "general">("git");
+  let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "cloud" | "general">((app.settingsAt || "git") as any);
+  app.settingsAt = "";
   type Note = { name: string; body: string; scope?: string; enabled: boolean; isNew?: boolean };
   let notes = $state<Note[] | null>(null);
   let note = $state<Note | null>(null);

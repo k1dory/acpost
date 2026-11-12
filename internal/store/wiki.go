@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -176,4 +177,45 @@ func (s *Store) DeleteWiki(ctx context.Context, repo string) error {
 		_, err = t.ExecContext(ctx, `DELETE FROM wiki_pages WHERE repo = ?`, repo)
 		return err
 	})
+}
+
+// WikiEntry is a page of any repository's wiki, for a view of them all.
+type WikiEntry struct {
+	Repo    string    `json:"repo"`
+	Slug    string    `json:"slug"`
+	Title   string    `json:"title"`
+	Parent  string    `json:"parent,omitempty"`
+	Body    string    `json:"body"`
+	Updated time.Time `json:"updated"` // its wiki's
+}
+
+// WikiEntries lists the pages of every wiki with their text, by repository and slug, after the
+// cursor (empty: from the start): up to limit pages and about maxBytes of text (at least one page
+// whatever its size). next is the cursor of the rest, empty when there is none.
+func (s *Store) WikiEntries(ctx context.Context, after string, limit, maxBytes int) (out []WikiEntry, next string, err error) {
+	repo, slug, _ := strings.Cut(after, "\x00")
+	rows, err := s.r.QueryContext(ctx, `SELECT p.repo, p.slug, p.title, p.parent, p.body, w.updated
+		FROM wiki_pages p JOIN wikis w ON w.repo = p.repo
+		WHERE p.repo > ? OR (p.repo = ? AND p.slug > ?) ORDER BY p.repo, p.slug LIMIT ?`, repo, repo, slug, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	out = []WikiEntry{}
+	size := 0
+	for rows.Next() {
+		if len(out) == limit || (len(out) > 0 && size >= maxBytes) {
+			last := out[len(out)-1]
+			return out, last.Repo + "\x00" + last.Slug, nil
+		}
+		var e WikiEntry
+		var upd int64
+		if err := rows.Scan(&e.Repo, &e.Slug, &e.Title, &e.Parent, &e.Body, &upd); err != nil {
+			return nil, "", err
+		}
+		e.Updated = fromMS(upd)
+		size += len(e.Body)
+		out = append(out, e)
+	}
+	return out, "", rows.Err()
 }

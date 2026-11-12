@@ -7,6 +7,8 @@
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
   import Markdown from "./Markdown.svelte";
+  import WikiExplorer from "./WikiExplorer.svelte";
+  import { buildGraph, linkify, linkTarget, type Item } from "../lib/wikigraph";
 
   // The wikis of repositories: an agent of this Mac reads a directory and writes its pages.
   type Wiki = { repo: string; agent: string; lang?: string; status: string; msg?: string; error?: string; updated: string; pages: number };
@@ -20,6 +22,14 @@
   let adding = $state(false);
   let newDir = $state("");
   let newAgent = $state("");
+  // How the wiki is seen: a repository's pages to read, or everything kept as a table or a graph.
+  type Mode = "pages" | "table" | "graph";
+  const savedMode = (): Mode => { try { const m = localStorage.getItem("wiki-mode"); return m === "table" || m === "graph" ? m : "pages"; } catch { return "pages"; } };
+  let mode = $state<Mode>(savedMode());
+  let focus = $state(""); // the item the explorer shows at the side
+  function setMode(m: Mode) { mode = m; try { localStorage.setItem("wiki-mode", m); } catch {} }
+  // The knowledge notes, which a page's [[links]] may name.
+  let notes = $state<any[]>([]);
 
   const cur = $derived(wikis?.find(w => w.repo === repo));
   const shown = $derived(pages.find(p => p.slug === page) ?? pages[0]);
@@ -29,22 +39,36 @@
   const tilde = (d: string) => tildeOf(d, app.home);
   const agentName = agentLabel;
 
-  // A page's text as shown: links between pages ([[slug]], [[slug|text]]) made links, a first
+  // This wiki's pages and the notes, linked: what a page's [[links]] go to.
+  const linked = $derived(buildGraph(pages.map(p => ({ ...p, repo })), notes));
+  // A page's text as shown: its [[links]] made links (to a page, a note, or marked broken), a first
   // heading that only repeats the title dropped.
   function prepared(p: Page): string {
-    let body = (p.body ?? "").replace(/^\s*#{1,6}\s+(.+)\n+/, (all, h) => (h.trim() === p.title.trim() ? "" : all));
-    return body.replace(/\[\[([a-z0-9-]+)(?:\|([^\]]+))?\]\]/g, (_, slug, label) => {
-      const to = pages.find(x => x.slug === slug);
-      return to ? `[${label ?? to.title}](#wiki:${slug})` : label ?? slug;
-    });
+    const body = (p.body ?? "").replace(/^\s*#{1,6}\s+(.+)\n+/, (all, h) => (h.trim() === p.title.trim() ? "" : all));
+    const it = linked.items.find(x => x.kind === "page" && x.key === p.slug);
+    return it ? linkify(body, it, linked) : body;
   }
+  // A link to a page of this wiki turns the page; to anything else, the explorer shows it.
   function follow(e: MouseEvent) {
     const a = (e.target as HTMLElement).closest("a");
     const h = a?.getAttribute("href") ?? "";
-    if (h.startsWith("#wiki:")) { e.preventDefault(); page = h.slice(6); (e.currentTarget as HTMLElement).closest(".main")?.scrollTo(0, 0); }
+    if (h.startsWith("#wiki-broken:")) { e.preventDefault(); return; }
+    const to = linked.byId.get(linkTarget(h));
+    if (!to) return;
+    e.preventDefault();
+    if (to.kind === "page" && to.repo === repo) { page = to.key; (e.currentTarget as HTMLElement).closest(".main")?.scrollTo(0, 0); }
+    else { focus = to.id; setMode("table"); }
+  }
+  // "Open" in the explorer: a page in its wiki, a note where knowledge is edited.
+  function openItem(it: Item) {
+    if (it.kind === "note") { app.settingsAt = "knowledge"; app.view = "settings"; return; }
+    setMode("pages");
+    if (repo !== it.repo || adding) pick(it.repo!);
+    page = it.key;
   }
 
   async function load() {
+    Node.Knowledge().then(k => { notes = (k ?? []) as any; }, () => {});
     try { wikis = ((await Node.Wikis()) ?? []) as any; } catch (e) { err = errText(e); wikis = []; }
     if (!repo && wikis?.length) pick(wikis[0].repo);
     else if (repo && cur?.status === "ready" && !pages.length) loadPages();
@@ -109,6 +133,7 @@
     app.view = "chat";
   }
   function startNew() {
+    setMode("pages");
     adding = true;
     newDir = app.draft.cwd || app.home;
     newAgent = app.localAgents()[0]?.address ?? "";
@@ -118,9 +143,17 @@
 <section class="wk">
   <header class="drag">
     <h1>{t("Wiki")}</h1>
+    <div class="seg nodrag">
+      <button class:on={mode === "pages"} onclick={() => setMode("pages")}>{t("Pages")}</button>
+      <button class:on={mode === "table"} onclick={() => setMode("table")}>{t("Table")}</button>
+      <button class:on={mode === "graph"} onclick={() => setMode("graph")}>{t("Graph")}</button>
+    </div>
     <span class="sp"></span>
     <button class="btn primary sm nodrag" onclick={startNew}><Icon name="plus" size={12} /> {t("New wiki")}</button>
   </header>
+  {#if mode !== "pages"}
+    <WikiExplorer {mode} bind:selected={focus} onopen={openItem} />
+  {:else}
   <div class="cols">
     <nav class="repos">
       {#each wikis ?? [] as w (w.repo)}
@@ -193,6 +226,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 </section>
 
 <style>
@@ -229,4 +263,5 @@
   .err { padding: 10px 12px; margin: 12px 20px; border-radius: 12px; background: var(--crit-bg); color: var(--crit); font-size: 12.5px; white-space: pre-line; }
   .form .err { margin: 0; justify-self: stretch; }
   .bad { color: var(--crit); }
+  .page :global(a[href^="#wiki-broken:"]) { color: var(--crit); text-decoration: underline dotted; cursor: default; }
 </style>

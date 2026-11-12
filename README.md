@@ -560,6 +560,7 @@ ends with `event: acpost-error` carrying the same envelope and `status` (event k
 | `POST /v1/handoff` | a thread or an agent's session (`thread` or `agent`+`session`, `cwd`, `note`) handed to a new cloud task of `cloud_agent`; 201 |
 | `GET/PUT /v1/backlog` · `DELETE /v1/backlog/{id}` · `POST /v1/backlog/{id}/start` | tasks put aside (`title`, `body`, `agent`, `cwd`); start sends one (`{"agent"}` optional), 201 with the message |
 | `GET/POST/DELETE /v1/wiki` · `GET /v1/wiki/pages?repo=` | repositories' wikis: list, have an agent write one (`{"repo","agent","lang"}`, 201 with its message), delete (`?repo=`), its pages |
+| `GET /v1/wiki/entries?after=&limit=` | every wiki's pages with their text, by repository and slug, a part at a time (at most 500 pages and about 2 MiB of text); `next` is the `after` of the rest, empty at the end |
 | `GET/PUT /v1/knowledge` · `DELETE /v1/knowledge/{name}` | the user's notes, given to an agent at the start of each new session (`name`, `body`, `scope`: a directory or everywhere, `enabled`) |
 | `GET/PUT /v1/schedules` · `DELETE /v1/schedules/{id}` · `POST /v1/schedules/{id}/run` | messages sent on a cron (`name`, `cron`, `agent`, `body`, `cwd`); run sends one now, 201 |
 | `GET /v1/playbooks` · `PUT/DELETE /v1/playbooks/{name}` | named prompts (`{"body"}`) |

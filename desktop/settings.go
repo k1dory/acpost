@@ -156,6 +156,14 @@ func (n *Node) WikiPages(repo string) ([]store.WikiPage, error) {
 	return call(n, func(ctx context.Context, c *client.Client) ([]store.WikiPage, error) { return c.WikiPages(ctx, repo) })
 }
 
+// AllWikis is every wiki's pages with their text, for the wiki's table and graph: up to 3000 pages
+// and 24 MiB of text (More says some were left out).
+func (n *Node) AllWikis() (client.AllWikis, error) {
+	return callLong(n, 60*time.Second, func(ctx context.Context, c *client.Client) (client.AllWikis, error) {
+		return c.AllWikiEntries(ctx, 3000, 24<<20)
+	})
+}
+
 // WriteWiki starts writing a directory's wiki: the task's thread.
 func (n *Node) WriteWiki(repo, agent, lang string) (string, error) {
 	m, err := callLong(n, 90*time.Second, func(ctx context.Context, c *client.Client) (store.Message, error) {

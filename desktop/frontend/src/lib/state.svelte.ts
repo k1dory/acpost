@@ -107,6 +107,8 @@ class App {
     try { localStorage.setItem("panel-open", on ? "1" : "0"); } catch {}
   }
   view = $state<"chat" | "usage" | "settings" | "board" | "wiki" | "ide">("chat");
+  /** The section Settings opens at when next shown ("" its first), as another view asks. */
+  settingsAt = $state("");
   /** In the IDE: a file the agent just edited is shown there, as a diff (kept between launches). */
   ideFollow = $state(savedFollow());
   setIdeFollow(on: boolean) {
