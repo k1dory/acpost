@@ -46,19 +46,38 @@ func TestTraceMessages(t *testing.T) {
 	n := mustInsert(t, s, next)
 	mustInsert(t, s, msg("agent:a", "another thread"))
 
-	got, err := s.TraceMessages(ctx, root.ID, 10, 10)
-	if err != nil || len(got) != 4 {
+	got, cut, err := s.TraceMessages(ctx, root.ID, 10, 10)
+	if err != nil || len(got) != 4 || cut {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if got[0].ID != root.ID || got[1].ID != c.ID || got[2].ID != g.ID || got[3].ID != n.ID || got[0].Body != "" || got[2].Parent != c.ID {
 		t.Fatalf("%+v", got)
 	}
 	// The last own message only: what was sent under the root is not.
-	if got, _ := s.TraceMessages(ctx, root.ID, 1, 10); len(got) != 1 || got[0].ID != n.ID {
+	if got, cut, _ := s.TraceMessages(ctx, root.ID, 1, 10); len(got) != 1 || got[0].ID != n.ID || !cut {
 		t.Fatalf("own 1: %+v", got)
 	}
 	// Under the root, one more at most.
-	if got, _ := s.TraceMessages(ctx, root.ID, 2, 1); len(got) != 3 {
+	if got, cut, _ := s.TraceMessages(ctx, root.ID, 2, 1); len(got) != 3 || !cut {
 		t.Fatalf("under 1: %+v", got)
+	}
+}
+
+// One turn that asked 600 agents: 400 of them are given, no more, and the answer says it is cut;
+// with room for all of them, it is not.
+func TestTraceMessagesManyUnder(t *testing.T) {
+	s := openTest(t, Options{})
+	root := mustInsert(t, s, msg("agent:a", "root"))
+	for range 600 {
+		c := msg("agent:b", "child")
+		c.Parent, c.Depth = root.ID, 1
+		mustInsert(t, s, c)
+	}
+	got, cut, err := s.TraceMessages(ctx, root.ID, 100, 400)
+	if err != nil || len(got) != 401 || !cut || got[0].ID != root.ID {
+		t.Fatalf("%d %v %v", len(got), cut, err)
+	}
+	if got, cut, _ := s.TraceMessages(ctx, root.ID, 100, 600); len(got) != 601 || cut {
+		t.Fatalf("room for all: %d %v", len(got), cut)
 	}
 }

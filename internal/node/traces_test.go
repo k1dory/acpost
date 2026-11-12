@@ -115,3 +115,19 @@ func TestTracerClips(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// A conversation whose turn asked more agents than an answer holds says so.
+func TestTracesCutUnder(t *testing.T) {
+	n := newNode(t, inboxCfg)
+	root, _, _ := n.Send(ctx, me, SendRequest{To: "bot", Body: "fan out"})
+	for range traceUnder + 200 {
+		c := &store.Message{ID: store.NewID(), From: "agent:bot", To: "agent:bot", Body: "c", Parent: root.ID, Depth: 1}
+		if _, _, err := n.st.Insert(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := n.Traces(ctx, me, root.ID, 0)
+	if err != nil || len(got) != 1 || !got[0].Cut || len(got[0].Messages) != 1+traceUnder {
+		t.Fatalf("%v cut=%v n=%d", err, got[0].Cut, len(got[0].Messages))
+	}
+}

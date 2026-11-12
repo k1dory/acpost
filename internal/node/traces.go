@@ -44,7 +44,7 @@ func (n *Node) Traces(ctx context.Context, p Principal, thread string, limit int
 	budget := traceBudget
 	out := make([]client.TraceThread, 0, len(threads))
 	for _, th := range threads {
-		msgs, err := n.st.TraceMessages(ctx, th, traceOwn, traceUnder)
+		msgs, cut, err := n.st.TraceMessages(ctx, th, traceOwn, traceUnder)
 		if err != nil {
 			return nil, errf("unavailable", "%v", err)
 		}
@@ -54,19 +54,15 @@ func (n *Node) Traces(ctx context.Context, p Principal, thread string, limit int
 			}
 			continue
 		}
-		t := client.TraceThread{Thread: th, Title: titles["thread:"+th], Messages: make([]client.TraceMessage, 0, len(msgs))}
+		t := client.TraceThread{Thread: th, Title: titles["thread:"+th], Messages: make([]client.TraceMessage, 0, len(msgs)), Cut: cut}
 		if t.Title == "" {
 			if root, err := n.st.Get(ctx, th); err == nil {
 				t.Title = clipLine(root.Body)
 			}
 		}
-		own := 0
 		for _, m := range msgs {
-			if m.Thread == th {
-				own++
-				if m.UpdatedAt.After(t.Updated) {
-					t.Updated = m.UpdatedAt
-				}
+			if m.Thread == th && m.UpdatedAt.After(t.Updated) {
+				t.Updated = m.UpdatedAt
 			}
 			evs, cut, err := n.traceEvents(ctx, m.ID, &budget)
 			if err != nil {
@@ -77,7 +73,6 @@ func (n *Node) Traces(ctx context.Context, p Principal, thread string, limit int
 				From: m.From, To: m.To, State: m.State, ErrorCode: m.ErrorCode,
 				Created: m.CreatedAt, Updated: m.UpdatedAt, Finished: m.FinishedAt, Events: evs, Cut: cut})
 		}
-		t.Cut = t.Cut || own >= traceOwn // older turns may not be here
 		out = append(out, t)
 	}
 	return out, nil
