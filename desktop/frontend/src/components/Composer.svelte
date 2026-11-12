@@ -235,7 +235,7 @@
       {/each}
     </div>
   {/if}
-  <textarea bind:this={ta} value={d.text} oninput={e => d.type(e.currentTarget.value, (e as InputEvent).inputType)} onkeydown={key} rows="1"
+  <textarea bind:this={ta} value={d.text} oninput={e => d.type(e.currentTarget.value, (e as unknown as InputEvent).inputType)} onkeydown={key} rows="1"
     placeholder={isNew ? t("/ for the model, effort and commands") : targets.length > 1 ? t("Reply… (@ calls another agent)") : t("Reply…")}></textarea>
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
