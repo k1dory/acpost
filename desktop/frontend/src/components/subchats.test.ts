@@ -35,7 +35,7 @@ describe("the sidebar's chats", () => {
     const Sidebar = (await import("./Sidebar.svelte")).default;
     mounted.push(svelte.mount(Sidebar, { target: document.body }));
     svelte.flushSync();
-    const kid = document.querySelector(".folder .kids .row.kid") as HTMLButtonElement;
+    const kid = document.querySelector(".folder .row.kid") as HTMLButtonElement;
     expect(kid.textContent).toContain("Team invites API");
     expect(kid.querySelector(".dot.running")).toBeTruthy();
     // Listed once: not also among the loose chats; one whose chat is not listed is a chat like any.
@@ -47,7 +47,7 @@ describe("the sidebar's chats", () => {
     const input = document.querySelector(".search input") as HTMLInputElement;
     input.value = "api"; input.dispatchEvent(new Event("input", { bubbles: true }));
     svelte.flushSync();
-    expect(document.querySelector(".kids")).toBeNull();
+    expect(document.querySelector(".row.kid")).toBeNull();
     expect([...document.querySelectorAll(".list .row .title")].map(e => e.textContent)).toEqual(["Team invites API"]);
   });
 
@@ -56,10 +56,29 @@ describe("the sidebar's chats", () => {
     const { app } = await import("../lib/state.svelte");
     app.conn = { ok: true };
     app.folders = [];
-    app.chats = Array.from({ length: 12 }, (_, i) => chat("T" + i, "chat " + i, i ? { parent: "thread:T" + (i - 1) } : {})) as any;
+    app.chats = Array.from({ length: 300 }, (_, i) => chat("T" + i, "chat " + i, i ? { parent: "thread:T" + (i - 1) } : {})) as any;
     const Sidebar = (await import("./Sidebar.svelte")).default;
     mounted.push(svelte.mount(Sidebar, { target: document.body }));
     svelte.flushSync();
     expect([...document.querySelectorAll(".list .row .title")].map(e => e.textContent)).toEqual(app.chats.map(c => c.title));
+  });
+
+  it("a subagent active now is seen at once, though its chat is older than the chats shown; it has no folder of its own to move to", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.conn = { ok: true };
+    app.folders = [{ id: "f1", name: "Work", chats: [] }] as any;
+    app.chats = [chat("K", "active kid", { parent: "thread:OLD", running: 1 }),
+      ...Array.from({ length: 130 }, (_, i) => chat("R" + i, "root " + i)), chat("OLD", "old parent")] as any;
+    const Sidebar = (await import("./Sidebar.svelte")).default;
+    mounted.push(svelte.mount(Sidebar, { target: document.body }));
+    svelte.flushSync();
+    const titles = [...document.querySelectorAll(".list .row .title")].map(e => e.textContent);
+    expect(titles.slice(0, 3)).toEqual(["old parent", "active kid", "root 0"]);
+    const kid = document.querySelector(".row.kid") as HTMLButtonElement;
+    kid.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    svelte.flushSync();
+    expect(document.querySelector(".ctx")!.textContent).toContain("Rename");
+    expect(document.querySelector(".ctx")!.textContent).not.toContain("Move to");
   });
 });

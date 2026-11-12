@@ -13,7 +13,8 @@
   let collapsed = $state<Record<string, boolean>>({});
   let naming = $state<string | null>(null); // "new" or a folder id being renamed
   let nameText = $state("");
-  let menu = $state<{ x: number; y: number; chat?: Chat; folder?: string } | null>(null);
+  // nested: a chat listed under another goes where that one is; it is not moved by itself.
+  let menu = $state<{ x: number; y: number; chat?: Chat; folder?: string; nested?: boolean } | null>(null);
   let dropOn = $state<string | null>(null);
   let moveAfter = $state<string | null>(null); // a chat to put in the folder being made
   let renaming = $state<string | null>(null);   // a chat being renamed
@@ -34,10 +35,12 @@
   // What an agent started from a chat (a subagent's, a teammate's chat) is listed under that chat,
   // wherever its own folder would be; one whose chat is not listed is a chat like any. A filter
   // lists what matches, flat.
+  // A branch is where its root is (its folder, or the loose chats), in the place of its most
+  // recently active chat.
   const tree = $derived(chatTree(app.chats, !!q));
-  const top = (c: Chat) => match(c) && !tree.nested.has(c.key);
-  const loose = $derived(app.chats.filter(c => !c.folder && top(c)));
-  const inFolder = (id: string) => app.chats.filter(c => c.folder === id && top(c));
+  const shownBranches = $derived(tree.branches.filter(b => match(b[0].chat)));
+  const loose = $derived(shownBranches.filter(b => !b[0].chat.folder));
+  const inFolder = (id: string) => shownBranches.filter(b => b[0].chat.folder === id);
 
   function dotOf(c: Chat) {
     if (c.kind === "cloud") return c.status === "running" ? "running" : "";
@@ -76,10 +79,10 @@
     if (e.key === "Enter") commitName();
     if (e.key === "Escape") naming = null;
   }
-  function onMenu(e: MouseEvent, chat?: Chat, folder?: string) {
+  function onMenu(e: MouseEvent, chat?: Chat, folder?: string, nested = false) {
     e.preventDefault();
     const k = screenScale(); // the app's zoom taken out: fixed positions are in the page's coordinates
-    menu = { x: Math.min(e.clientX / k, innerWidth / k - 230), y: Math.min(e.clientY / k, innerHeight / k - 260), chat, folder };
+    menu = { x: Math.min(e.clientX / k, innerWidth / k - 230), y: Math.min(e.clientY / k, innerHeight / k - 260), chat, folder, nested };
   }
   // Dragging a chat onto a folder (or back to the list) with the mouse — not the page's own
   // drag and drop, which the app's webview does not carry reliably. Starts after 5 px; the
@@ -133,21 +136,20 @@
 
 <svelte:window onclick={() => (menu = null)} />
 
-{#snippet branch(c: Chat, depth: number)}
-  {@render row(c, depth > 0)}
-  <!-- To any depth (the tree has no loops); past a few levels the rows stop moving right. -->
-  {#if tree.kids.get(c.key)?.length}
-    <div class="kids" class:flat={depth >= 4}>{#each tree.kids.get(c.key) ?? [] as k (k.key)}{@render branch(k, depth + 1)}{/each}</div>
-  {/if}
+<!-- A branch's rows, one after another (not one inside another: a chain is as long as the list);
+     past a few levels they stop moving right. -->
+{#snippet branch(rows: { chat: Chat; depth: number }[])}
+  {#each rows as r (r.chat.key)}{@render row(r.chat, r.depth)}{/each}
 {/snippet}
 
-{#snippet row(c: Chat, sub: boolean)}
+{#snippet row(c: Chat, depth: number)}
+  {@const sub = depth > 0}
   {#if renaming === c.key}
     <input class="input fname" bind:value={renameText} use:focusSelect onblur={commitRename}
       onkeydown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") renaming = null; }} />
   {:else if sub}
   <!-- A chat an agent started: who runs it, what it was asked, how it stands. -->
-  <button class="row kid" class:sel={isOpen(c) && app.view === "chat"} onclick={e => clickRow(e, c)} oncontextmenu={e => onMenu(e, c)} title={c.title}>
+  <button class="row kid" style="margin-left:{Math.min(depth, 5) * 13}px;width:calc(100% - {Math.min(depth, 5) * 13}px)" class:sel={isOpen(c) && app.view === "chat"} onclick={e => clickRow(e, c)} oncontextmenu={e => onMenu(e, c, undefined, true)} title={c.title}>
     <span class="srcic">{#if brandOf(c.cloud_agent || c.agent || "")}<AgentMark of={c.cloud_agent || c.agent || ""} size={12} busy={dotOf(c) === "running"} />{:else}<Icon name={source(c) === "cloud" ? "cloud" : "bot"} size={11} />{/if}</span>
     <span class="t"><span class="title">{c.title || t("Untitled")}</span></span>
     <span class="dot {dotOf(c)}"></span>
@@ -208,7 +210,7 @@
           </button>
         {/if}
         {#if !collapsed[f.id]}
-          {#each items as c (c.key)}{@render branch(c, 0)}{/each}
+          {#each items as b (b[0].chat.key)}{@render branch(b)}{/each}
           {#if !items.length}<div class="empty-f muted">{t("Drop chats here")}</div>{/if}
         {/if}
       </div>
@@ -220,7 +222,7 @@
       <span>{t("Chats")}</span>
       {#if app.loadingChats}<span class="spin"></span>{/if}
     </div>
-    {#each loose.slice(0, shown) as c (c.key)}{@render branch(c, 0)}{/each}
+    {#each loose.slice(0, shown) as b (b[0].chat.key)}{@render branch(b)}{/each}
     {#if loose.length > shown}
       <button class="btn ghost sm more" onclick={() => (shown += 200)}>{t("{n} more", { n: loose.length - shown })}</button>
     {/if}
@@ -248,12 +250,14 @@
       {#if menu.chat}
         {@const c = menu.chat}
         <button class="mi" onclick={() => { renaming = c.key; renameText = c.title; }}><Icon name="file" size={12} /> {t("Rename")}</button>
+        {#if !menu.nested}
         <div class="mh">{t("Move to")}</div>
         {#each app.folders as f (f.id)}
           <button class="mi" disabled={c.folder === f.id} onclick={() => app.moveChat(c.key, f.id)}><Icon name="book" size={12} /> {f.name}</button>
         {/each}
         <button class="mi" onclick={() => { moveAfter = c.key; startNew(); }}><Icon name="plus" size={12} /> {t("New folder…")}</button>
         {#if c.folder}<button class="mi" onclick={() => app.moveChat(c.key, "")}><Icon name="x" size={12} /> {t("Out of the folder")}</button>{/if}
+        {/if}
       {:else if menu.folder}
         {@const id = menu.folder}
         <button class="mi" onclick={() => { naming = id; nameText = app.folders.find(f => f.id === id)?.name ?? ""; }}>{t("Rename")}</button>
@@ -279,11 +283,8 @@
   .h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 8px 6px; letter-spacing: .02em; text-transform: uppercase; border-radius: 8px; }
   .drag-ghost { position: fixed; z-index: 90; pointer-events: none; padding: 6px 10px; font-size: 12.5px; font-weight: 500; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); }
   .row.lifted { opacity: .45; }
-  .kids { margin-left: 15px; padding-left: 6px; border-left: 1px solid var(--line); }
-  .folder .kids { margin-left: 25px; }
-  .kids.flat, .folder .kids.flat { margin-left: 0; padding-left: 0; border-left: 0; }
-  .folder .kids .row { padding-left: 8px; }
-  .row.kid { min-height: 28px; padding: 4px 8px; gap: 8px; }
+  .row.kid { min-height: 28px; padding: 4px 8px; gap: 8px; border-left: 1px solid var(--line); border-radius: 0 var(--r-row) var(--r-row) 0; }
+  .folder .row.kid { padding-left: 8px; }
   .row.kid .title { font-size: 12.5px; }
   .h.drop, .folder.drop { background: var(--accent-bg); }
   .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
