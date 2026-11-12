@@ -9,6 +9,9 @@ package store
 // every source file it touched; none in a hidden folder or node_modules. A file changed by many
 // turns is listed once, as its latest change left it: not at all when that deleted it; a JSON file
 // when some turn created it, whichever turn changed it last.
+//
+// The documents are read from a projection kept with the changes (artifactdocs.go); reply files
+// from their table. A filter matches both by one rule of case (fold).
 
 import (
 	"context"
@@ -85,27 +88,21 @@ func parseArtifactKey(s string) (artifactKey, error) {
 	return artifactKey{ts: v[0], src: int(v[1]), id: v[2], idx: v[3]}, nil
 }
 
-// replyFilesSQL lists the files of replies older than a cursor, matching a name or address.
+// replyFilesSQL lists the files of replies older than a cursor, whose name or address has the
+// (folded) match in it.
 const replyFilesSQL = `SELECT ts, id, name, type, size, uri, msg, thread, agent FROM (
 		SELECT CASE WHEN m.finished_at > 0 THEN m.finished_at ELSE m.created_at END AS ts, f.id AS id,
 			f.name AS name, f.type AS type, f.size AS size, f.uri AS uri, m.id AS msg, m.thread AS thread, m.recipient AS agent
 		FROM files f JOIN messages m ON m.seq = f.msg WHERE f.reply = 1
-	) WHERE (ts, 1, id, 0) < (?, ?, ?, ?) AND (? = '' OR name LIKE ? ESCAPE '\' OR (CASE WHEN uri <> '' THEN uri ELSE name END) LIKE ? ESCAPE '\')
+	) WHERE (ts, 1, id, 0) < (?, ?, ?, ?) AND (? = '' OR instr(acpost_fold(name), ?) > 0 OR instr(acpost_fold(uri), ?) > 0)
 	ORDER BY ts DESC, id DESC LIMIT ?`
 
-// changeRowsSQL is every file a turn's changes name, without the diffs: what the library reads
-// its documents from, oldest first.
-const changeRowsSQL = `SELECT tc.ts, tc.id, CAST(j.key AS INTEGER), tc.repo, tc.msg, tc.agent,
-		coalesce(json_extract(j.value, '$.path'), ''), coalesce(json_extract(j.value, '$.status'), ''), coalesce(json_extract(j.value, '$.from'), '')
-	FROM turn_changes tc, json_each(tc.files) j ORDER BY tc.ts, tc.id, j.key`
-
-// docState is a path as the turns' changes left it.
-type docState struct {
-	key          artifactKey
-	path, status string
-	msg, agent   string
-	made         bool // a turn made the file there now: created it, or renamed or copied there one it made
-}
+// docsSQL lists the documents on disk older than a cursor, whose path has the (folded) match in
+// it: an indexed read of the projection (artifactdocs.go).
+const docsSQL = `SELECT ts, change, idx, path, status, msg, thread, agent FROM artifact_docs
+	WHERE listed = 1 AND (ts < ? OR ts = ? AND (? = 1 OR (change, idx) < (?, ?)))
+		AND (? = '' OR instr(acpost_fold(path), ?) > 0)
+	ORDER BY ts DESC, change DESC, idx DESC LIMIT ?`
 
 // wholePath is a change's path whole: its directory and its path from there, unless that path is
 // whole already (a file outside the repository).
@@ -117,82 +114,21 @@ func wholePath(repo, p string) string {
 }
 
 // isDoc says whether a path as it is now is a document the library lists.
-func isDoc(d *docState) bool {
-	if strings.HasPrefix(d.status, "D") {
+func isDoc(path, status string, made bool) bool {
+	if strings.HasPrefix(status, "D") {
 		return false
 	}
-	slashed := "/" + strings.ReplaceAll(d.path, `\`, "/")
+	slashed := "/" + strings.ReplaceAll(path, `\`, "/")
 	if strings.Contains(slashed, "/.") || strings.Contains(slashed, "/node_modules/") {
 		return false
 	}
-	low := strings.ToLower(d.path)
+	low := strings.ToLower(path)
 	for _, e := range docExts {
 		if strings.HasSuffix(low, e) {
 			return true
 		}
 	}
-	return d.made && strings.HasSuffix(low, ".json")
-}
-
-// documents reads the turns' changes once and replays them in order: each path ends as its latest
-// change left it (deleted, or renamed away: gone), and what a turn made follows a rename or copy
-// only forward in time, from a file there at that moment. One pass, whatever the history holds.
-func (s *Store) documents(ctx context.Context) ([]*docState, error) {
-	rows, err := s.r.QueryContext(ctx, changeRowsSQL)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	state := map[string]*docState{}
-	at := func(w string) *docState {
-		d := state[w]
-		if d == nil {
-			d = &docState{path: w}
-			state[w] = d
-		}
-		return d
-	}
-	for rows.Next() {
-		var k artifactKey
-		var repo, msg, agent, p, status, from string
-		if err := rows.Scan(&k.ts, &k.id, &k.idx, &repo, &msg, &agent, &p, &status, &from); err != nil {
-			return nil, err
-		}
-		if p == "" {
-			continue
-		}
-		d := at(wholePath(repo, p))
-		made := d.made
-		switch {
-		case status == "A":
-			made = true
-		case strings.HasPrefix(status, "D"):
-			made = false
-		case (strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C")) && from != "":
-			src := at(wholePath(repo, from))
-			made = src.made
-			if strings.HasPrefix(status, "R") { // a rename retires its source
-				src.key, src.status, src.msg, src.agent, src.made = k, "D", msg, agent, false
-			}
-		}
-		d.key, d.status, d.msg, d.agent, d.made = k, status, msg, agent, made
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	var out []*docState
-	for _, d := range state {
-		if isDoc(d) {
-			out = append(out, d)
-		}
-	}
-	return out, nil
-}
-
-// likePattern is s to find anywhere, its wildcards taken as themselves.
-func likePattern(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return "%" + r.Replace(s) + "%"
+	return made && strings.HasSuffix(low, ".json")
 }
 
 func (a artifactKey) less(b artifactKey) bool {
@@ -228,9 +164,9 @@ func (s *Store) Artifacts(ctx context.Context, q ArtifactQuery) ([]Artifact, str
 	}
 	var all []item
 
-	// Reply files: the page's worth, at most.
-	pat := likePattern(match)
-	rows, err := s.r.QueryContext(ctx, replyFilesSQL, from.ts, from.src, from.id, from.idx, match, pat, pat, q.Limit+1)
+	// Each source, a page's worth at most; merged, the page.
+	m := fold(match)
+	rows, err := s.r.QueryContext(ctx, replyFilesSQL, from.ts, from.src, from.id, from.idx, m, m, m, q.Limit+1)
 	if err != nil {
 		return nil, "", err
 	}
@@ -251,23 +187,26 @@ func (s *Store) Artifacts(ctx context.Context, q ArtifactQuery) ([]Artifact, str
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
-
-	// Documents on disk: those older than the cursor, matching.
-	docs, err := s.documents(ctx)
+	rows, err = s.r.QueryContext(ctx, docsSQL, from.ts, from.ts, from.src, from.id, from.idx, m, m, q.Limit+1)
 	if err != nil {
 		return nil, "", err
 	}
-	low := strings.ToLower(match)
-	for _, d := range docs {
-		if !d.key.less(from) {
-			continue
+	for rows.Next() {
+		var a Artifact
+		var k artifactKey
+		var path string
+		if err := rows.Scan(&k.ts, &k.id, &k.idx, &path, &a.Status, &a.Msg, &a.Thread, &a.Agent); err != nil {
+			rows.Close()
+			return nil, "", err
 		}
-		p := filepath.Clean(filepath.FromSlash(d.path))
-		name := filepath.Base(p)
-		if low != "" && !strings.Contains(strings.ToLower(name), low) && !strings.Contains(strings.ToLower(d.path), low) {
-			continue
-		}
-		all = append(all, item{Artifact{Kind: "change", Name: name, Size: -1, Path: p, Status: d.status, Msg: d.msg, Agent: d.agent}, d.key})
+		a.Kind, a.Size = "change", -1
+		a.Path = filepath.Clean(filepath.FromSlash(path))
+		a.Name = filepath.Base(a.Path)
+		all = append(all, item{a, k})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
 	}
 	sort.Slice(all, func(i, j int) bool { return all[j].k.less(all[i].k) })
 
@@ -280,9 +219,6 @@ func (s *Store) Artifacts(ctx context.Context, q ArtifactQuery) ([]Artifact, str
 		it.a.At = fromMS(it.k.ts)
 		out = append(out, it.a)
 		keys = append(keys, it.k)
-	}
-	if err := s.threadsOf(ctx, out); err != nil {
-		return nil, "", err
 	}
 	next := ""
 	if len(out) > q.Limit {
@@ -333,42 +269,6 @@ func (s *Store) ReplyFileHead(ctx context.Context, id, name string, max int) (Fi
 		f.Data = []byte{}
 	}
 	return f, err
-}
-
-// threadsOf fills in the threads of the documents of a page, by their messages (one look for
-// the page).
-func (s *Store) threadsOf(ctx context.Context, as []Artifact) error {
-	var ids []any
-	for _, a := range as {
-		if a.Kind == "change" {
-			ids = append(ids, a.Msg)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	rows, err := s.r.QueryContext(ctx, "SELECT id, thread FROM messages WHERE id IN (?"+strings.Repeat(",?", len(ids)-1)+")", ids...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	thread := map[string]string{}
-	for rows.Next() {
-		var id, th string
-		if err := rows.Scan(&id, &th); err != nil {
-			return err
-		}
-		thread[id] = th
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for i := range as {
-		if as[i].Kind == "change" {
-			as[i].Thread = thread[as[i].Msg]
-		}
-	}
-	return nil
 }
 
 // dirSQL is a message's directory as its meta says it: the session's, else the one asked for.

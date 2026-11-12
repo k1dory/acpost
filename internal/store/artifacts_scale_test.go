@@ -49,7 +49,7 @@ func TestArtifactsScaleWithManyChangedSources(t *testing.T) {
 	if n := names(all); n != "change:final.json change:index.html change:guide.md" {
 		t.Fatalf("listed %s: the renamed report is not at its old path", n)
 	}
-	if took > 2*time.Second {
+	if took > 2*slow*time.Second { // CI runs -race: slow is 20 there
 		t.Fatalf("four pages took %v", took)
 	}
 	t.Logf("four pages of one over %d changed files: %v", len(made)+len(edited), took)

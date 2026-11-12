@@ -69,9 +69,19 @@ CREATE INDEX IF NOT EXISTS messages_parent ON messages (parent) WHERE parent != 
 func (s *Store) AddChanges(ctx context.Context, c TurnChanges) error {
 	files, _ := json.Marshal(c.Files)
 	return s.tx(ctx, func(t *sql.Tx) error {
-		_, err := t.ExecContext(ctx, `INSERT INTO turn_changes (msg, ts, start, agent, repo, branch, before, after, files, diff, cut)
+		res, err := t.ExecContext(ctx, `INSERT INTO turn_changes (msg, ts, start, agent, repo, branch, before, after, files, diff, cut)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?)`, c.Msg, ms(c.At), ms(c.Start), c.Agent, c.Repo, c.Branch, c.Before, c.After, string(files), c.Diff, c.Cut)
-		return err
+		if err != nil {
+			return err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		// The library's documents, in the same transaction (artifactdocs.go).
+		var thread string
+		_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", c.Msg).Scan(&thread)
+		return applyChanges(ctx, t, c, id, thread)
 	})
 }
 
