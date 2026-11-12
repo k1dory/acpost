@@ -671,7 +671,7 @@ in its own process.
 
 **Modules.** A view of your own can be added beside "Agents" and "IDE" (Settings → Modules, or
 "Add a module…" in the view switcher): a name and an http(s) address — a tracker, a wiki, a
-dashboard, a tool served on this Mac. Its page is shown in a native pane with the chat beside it,
+dashboard, a tool served on this Mac (plain http only there; elsewhere https). Its page is shown in a native pane with the chat beside it,
 as the IDE is; it signs in as in a browser, and nothing of the app's (the node, its calls) is
 within its reach. Modules are kept in `modules.json` beside the node's configuration.
 

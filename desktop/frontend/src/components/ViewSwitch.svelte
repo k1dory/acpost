@@ -46,6 +46,8 @@
   function go(v: V["view"]) {
     set(false);
     if (v === "settings") app.settingsAt = "modules";
+    // A module removed while the menu was open is not a view any more.
+    if (v.startsWith("mod:") && !app.modules.some(m => "mod:" + m.id === v)) return;
     app.view = v;
   }
 </script>

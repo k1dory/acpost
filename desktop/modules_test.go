@@ -69,6 +69,7 @@ func TestModulesRefused(t *testing.T) {
 		"a script":       {Name: "a", URL: "javascript://x/%0aalert(1)"},
 		"the app":        {Name: "a", URL: "wails://localhost/"},
 		"no host":        {Name: "a", URL: "https:///x"},
+		"http elsewhere": {Name: "a", URL: "http://tracker.example.com"},
 		"a password":     {Name: "a", URL: "https://me:secret@a.example"},
 		"a long address": {Name: "a", URL: "https://a.example/" + strings.Repeat("x", maxModuleURL)},
 	} {

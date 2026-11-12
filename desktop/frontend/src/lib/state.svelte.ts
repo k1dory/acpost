@@ -117,7 +117,7 @@ class App {
   }
   /** The chat is a column beside something that takes the window (the IDE, a module): no sidebar,
    * no right panel. */
-  get beside(): boolean { return this.view === "ide" || this.view.startsWith("mod:"); }
+  get beside(): boolean { return this.view === "ide" || !!this.module; }
   /** The section Settings opens at next ("": its first). */
   settingsAt = $state("");
   /** Why a module's page did not load (by module), until one does. */

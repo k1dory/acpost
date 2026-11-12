@@ -201,6 +201,25 @@ describe("modules", () => {
       expect(app.view).toBe("settings");
     });
 
+    it("a module removed while the system's menu was open is not opened", async () => {
+      const app = await setup();
+      fake.Node.Modules.mockResolvedValue([wiki]);
+      await app.loadModules();
+      let choose!: (i: number) => void;
+      fake.Node.Menu.mockImplementation(() => new Promise<number>(r => { choose = r; }));
+      const ViewSwitch = (await import("./ViewSwitch.svelte")).default;
+      mounted.push(svelte.mount(ViewSwitch, { target: document.body }));
+      svelte.flushSync();
+      (document.querySelector("button.trig") as HTMLButtonElement).click();
+      await flush();
+      app.modules = [];
+      svelte.flushSync();
+      choose(2);              // the module, as the menu showed it
+      await flush(); svelte.flushSync();
+      expect(app.view).toBe("chat");
+      expect(app.beside).toBe(false);
+    });
+
     it("a page that did not load is said, with a way to try again; one that loads clears it", async () => {
       const app = await setup();
       fake.Node.Modules.mockResolvedValue([wiki]);

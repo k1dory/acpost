@@ -118,6 +118,11 @@ func checkModule(m Module) (Module, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return m, errors.New("a module's address is an http or https one, such as https://wiki.example.com or http://localhost:3000")
 	}
+	// Plain http is for a tool served on this Mac: the system's transport security, which the app
+	// keeps as it is, refuses it to any other host (the page would be a blank pane).
+	if h := u.Hostname(); u.Scheme == "http" && h != "localhost" && h != "127.0.0.1" && h != "::1" {
+		return m, errors.New("a module on another machine is an https address; plain http is for this Mac (http://localhost:3000)")
+	}
 	if u.User != nil {
 		return m, errors.New("a module's address has no user or password in it: sign in on its page")
 	}
