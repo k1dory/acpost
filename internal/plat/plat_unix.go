@@ -73,7 +73,14 @@ func (g *Group) Stop() error {
 }
 
 // Kill ends the group at once (SIGKILL: also a stopped or stuck one).
-func (g *Group) Kill() error { return syscall.Kill(-g.pid, syscall.SIGKILL) }
+// A group whose processes have all ended but are not reaped yet is refused the signal on macOS
+// (EPERM, not ESRCH): there is nothing left to kill, which is what was asked.
+func (g *Group) Kill() error {
+	if err := syscall.Kill(-g.pid, syscall.SIGKILL); err != nil && err != syscall.EPERM {
+		return err
+	}
+	return nil
+}
 
 // Gone says whether nothing of the group is left.
 func (g *Group) Gone() bool { return syscall.Kill(-g.pid, 0) == syscall.ESRCH }

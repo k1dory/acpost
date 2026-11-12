@@ -581,6 +581,17 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 				n.log.Warn("mark session", "agent", a.name, "err", err)
 			}
 		}
+		// Where it was made: an agent called into its thread later works in the same directory
+		// (settings.go), whatever message of the thread or task that directory came with.
+		if key != "" {
+			dir := cwd
+			if dir == "" {
+				dir = s.cwd()
+			}
+			if err := n.st.PutSession(n.ctx, a.addr, sessionDir+string(sid), dir); err != nil {
+				n.log.Warn("record the session's directory", "agent", a.name, "err", err)
+			}
+		}
 		p.costBase[sid] = 0 // a new session: its cost starts here
 		p.fresh[sid] = true
 		// The session is the turn's before it is configured and published (the store, the agent's
@@ -967,6 +978,17 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
+	// A chat shared with other agents: what they were asked and answered since this one was told.
+	said, saidMark, err := a.othersSaid(turnCtx, m, string(sid))
+	if err != nil {
+		// Not read: the turn does not run without what it may be about (tried again, like any
+		// attempt that did not reach its prompt).
+		if !setupFailed("reading the chat's other turns", false) {
+			release(failf("agent_error", "the chat's other turns: %v", err))
+		}
+		return
+	}
+	m.Body = said + m.Body
 	// Knowledge: in a new session's first prompt, for a message of this node's own user or agents.
 	fresh := p.fresh[sid]
 	if fresh && knowledgeSender(m) {
@@ -1060,6 +1082,7 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
+	a.toldOthers(string(sid), m.Thread, saidMark) // the prompt went through: the session has it
 	switch resp.StopReason {
 	case acp.StopReasonEndTurn:
 		complete(store.Done, reply, Failure{})

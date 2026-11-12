@@ -645,6 +645,14 @@ notion of addresses or mailboxes, so acpost puts its own envelope around it: the
 | `acpost cancel` | `session/cancel` |
 | tool calls, plans, notices | events of the message (`show --events`) |
 
+**A thread of several agents.** A thread's messages can go to different agents (`send --thread ID
+--to agent:other`, or the agent chosen in the app's composer). Each agent keeps a session of its
+own for the thread, so at its next turn there it is told, before the message, what the others were
+asked and answered since that session was last told: the latest 30 exchanges, 32 KiB at most, and
+only what this node's own user and agents asked agents of this node. An `acp` agent of this node
+called into the user's thread works in the thread's directory (none chosen: the first agent's). Not told: an agent with `preamble: false` or `session: message`, a cloud
+sandbox, an agent of another node, and what a session said before it became a thread.
+
 The ACP client layer is [`github.com/k1dory/acpx`](https://github.com/k1dory/acpx) over
 `github.com/coder/acp-go-sdk`.
 
@@ -659,7 +667,8 @@ fits that RFD and can come once it settles.
 no Chromium) for the node: every chat in one list — acpost's threads and the Claude Code and Codex
 sessions started anywhere on the Mac — folders, a new task in a chosen agent and directory, the
 model and effort, the turn as it runs, approvals, changes, a terminal, pull requests and CI,
-usage. Also playbooks, scheduled tasks, knowledge (notes an agent gets at each new session), MCP
+usage. A chat can be shared by several agents: the composer says who answers, and `@codex …`
+calls another agent into the same chat. Also playbooks, scheduled tasks, knowledge (notes an agent gets at each new session), MCP
 servers and git accounts (secrets in the Keychain), forking a chat.
 
 ```sh
