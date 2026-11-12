@@ -92,8 +92,37 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 	case r.Thread != "" && local && r.Session == "":
 		// The thread's directory, as its first message chose it: for the node's own user and
 		// agents, and for whoever started the thread (a client's own thread), not for anyone else.
-		if root, err := n.st.Get(ctx, r.Thread); err == nil && root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()) {
-			set(metaCwd, root.Meta[metaCwd])
+		// Another agent the node's own user or agents call into their thread (a shared chat) works
+		// in the same directory: the thread's, or its session's when it continues one.
+		if root, err := n.st.Get(ctx, r.Thread); err == nil {
+			switch {
+			case root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()):
+				set(metaCwd, root.Meta[metaCwd])
+			case root.To != "agent:"+to.Name && p.local() && localExchange(root):
+				// Where the first agent's session of this thread runs, as the node recorded it when
+				// it made the session: of the thread, or of its task (session: task — a later
+				// thread of the task may name another directory, the session stays where it is).
+				dir := ""
+				first := n.agentCfg(strings.TrimPrefix(root.To, "agent:"))
+				acp := first != nil && first.Driver == "acp"
+				if acp {
+					if key := sessionKey(first.Session, root); key != "" && !strings.HasPrefix(key, "session:") {
+						if sid, err := n.st.Session(ctx, root.To, key); err == nil && sid != "" {
+							dir, _ = n.st.Session(ctx, root.To, sessionDir+sid)
+						}
+					}
+				}
+				// No record (a session made before records were kept, one continued from elsewhere):
+				// the directory the thread was started with, then the first agent's configured one
+				// (or the home directory).
+				dir = cmpOr(dir, cmpOr(root.Meta[metaCwd], root.Meta[metaSessionCwd]))
+				if dir == "" && acp {
+					if dir = first.Cwd; dir == "" {
+						dir, _ = os.UserHomeDir()
+					}
+				}
+				set(metaCwd, dir)
+			}
 		}
 	}
 	return nil

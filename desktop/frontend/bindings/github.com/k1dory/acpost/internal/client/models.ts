@@ -317,6 +317,11 @@ export class Chat {
     "agent"?: string;
 
     /**
+     * Agents: all a thread's messages went to, when more than one (a shared chat).
+     */
+    "agents"?: string[];
+
+    /**
      * Parent is the chat (its key) an agent of which started this one: a thread whose first
      * message an agent sent while it handled a message of that chat (a subagent's chat).
      */
@@ -375,7 +380,11 @@ export class Chat {
      * Creates a new Chat instance from a string or object.
      */
     static createFrom($$source: any = {}): Chat {
+        const $$createField3_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("agents" in $$parsedSource) {
+            $$parsedSource["agents"] = $$createField3_0($$parsedSource["agents"]);
+        }
         return new Chat($$parsedSource as Partial<Chat>);
     }
 }
@@ -404,9 +413,9 @@ export class Chats {
      * Creates a new Chats instance from a string or object.
      */
     static createFrom($$source: any = {}): Chats {
-        const $$createField0_0 = $$createType15;
-        const $$createField1_0 = $$createType17;
-        const $$createField2_0 = $$createType18;
+        const $$createField0_0 = $$createType16;
+        const $$createField1_0 = $$createType18;
+        const $$createField2_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("items" in $$parsedSource) {
             $$parsedSource["items"] = $$createField0_0($$parsedSource["items"]);
@@ -517,7 +526,7 @@ export class CloudAgentDef {
      * Creates a new CloudAgentDef instance from a string or object.
      */
     static createFrom($$source: any = {}): CloudAgentDef {
-        const $$createField6_0 = $$createType18;
+        const $$createField6_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("connections" in $$parsedSource) {
             $$parsedSource["connections"] = $$createField6_0($$parsedSource["connections"]);
@@ -571,7 +580,7 @@ export class CloudAgentSpec {
      * Creates a new CloudAgentSpec instance from a string or object.
      */
     static createFrom($$source: any = {}): CloudAgentSpec {
-        const $$createField6_0 = $$createType18;
+        const $$createField6_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("connections" in $$parsedSource) {
             $$parsedSource["connections"] = $$createField6_0($$parsedSource["connections"]);
@@ -621,7 +630,7 @@ export class CloudCatalogue {
         const $$createField1_0 = $$createType20;
         const $$createField2_0 = $$createType22;
         const $$createField3_0 = $$createType22;
-        const $$createField4_0 = $$createType18;
+        const $$createField4_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agents" in $$parsedSource) {
             $$parsedSource["agents"] = $$createField1_0($$parsedSource["agents"]);
@@ -917,7 +926,7 @@ export class CloudPlan {
      */
     static createFrom($$source: any = {}): CloudPlan {
         const $$createField5_0 = $$createType26;
-        const $$createField6_0 = $$createType18;
+        const $$createField6_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("diff" in $$parsedSource) {
             $$parsedSource["diff"] = $$createField5_0($$parsedSource["diff"]);
@@ -1074,8 +1083,8 @@ export class HandoffResult {
      * Creates a new HandoffResult instance from a string or object.
      */
     static createFrom($$source: any = {}): HandoffResult {
-        const $$createField0_0 = $$createType14;
-        const $$createField6_0 = $$createType18;
+        const $$createField0_0 = $$createType15;
+        const $$createField6_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("chat" in $$parsedSource) {
             $$parsedSource["chat"] = $$createField0_0($$parsedSource["chat"]);
@@ -1575,7 +1584,7 @@ export class UsageReport {
      */
     static createFrom($$source: any = {}): UsageReport {
         const $$createField14_0 = $$createType36;
-        const $$createField19_0 = $$createType18;
+        const $$createField19_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("uncosted" in $$parsedSource) {
             $$parsedSource["uncosted"] = $$createField14_0($$parsedSource["uncosted"]);
@@ -1602,11 +1611,11 @@ const $$createType10 = store$0.TurnChanges.createFrom;
 const $$createType11 = $Create.Array($$createType10);
 const $$createType12 = store$0.RepoDiff.createFrom;
 const $$createType13 = $Create.Array($$createType12);
-const $$createType14 = Chat.createFrom;
-const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = store$0.Folder.createFrom;
-const $$createType17 = $Create.Array($$createType16);
-const $$createType18 = $Create.Array($Create.Any);
+const $$createType14 = $Create.Array($Create.Any);
+const $$createType15 = Chat.createFrom;
+const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = store$0.Folder.createFrom;
+const $$createType18 = $Create.Array($$createType17);
 const $$createType19 = CloudAgentDef.createFrom;
 const $$createType20 = $Create.Array($$createType19);
 const $$createType21 = CloudItem.createFrom;
