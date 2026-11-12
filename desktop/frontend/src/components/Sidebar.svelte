@@ -2,6 +2,7 @@
   import { focusOnMount } from "../lib/actions";
   import { t } from "../lib/i18n.svelte";
   import { app, type Chat } from "../lib/state.svelte";
+  import { chatTree } from "../lib/chattree";
   import { ago, screenScale } from "../lib/format";
   import Icon from "./Icon.svelte";
   import AgentMark, { brandOf } from "./AgentMark.svelte";
@@ -30,8 +31,13 @@
   }
 
   const match = (c: Chat) => !q || [c.title, c.cwd, c.repo, c.agent].some(s => s?.toLowerCase().includes(q.toLowerCase()));
-  const loose = $derived(app.chats.filter(c => !c.folder && match(c)));
-  const inFolder = (id: string) => app.chats.filter(c => c.folder === id && match(c));
+  // What an agent started from a chat (a subagent's, a teammate's chat) is listed under that chat,
+  // wherever its own folder would be; one whose chat is not listed is a chat like any. A filter
+  // lists what matches, flat.
+  const tree = $derived(chatTree(app.chats, !!q));
+  const top = (c: Chat) => match(c) && !tree.nested.has(c.key);
+  const loose = $derived(app.chats.filter(c => !c.folder && top(c)));
+  const inFolder = (id: string) => app.chats.filter(c => c.folder === id && top(c));
 
   function dotOf(c: Chat) {
     if (c.kind === "cloud") return c.status === "running" ? "running" : "";
@@ -127,10 +133,24 @@
 
 <svelte:window onclick={() => (menu = null)} />
 
-{#snippet row(c: Chat)}
+{#snippet branch(c: Chat, depth: number)}
+  {@render row(c, depth > 0)}
+  {#if depth < 8 && tree.kids.get(c.key)?.length}
+    <div class="kids">{#each tree.kids.get(c.key) ?? [] as k (k.key)}{@render branch(k, depth + 1)}{/each}</div>
+  {/if}
+{/snippet}
+
+{#snippet row(c: Chat, sub: boolean)}
   {#if renaming === c.key}
     <input class="input fname" bind:value={renameText} use:focusSelect onblur={commitRename}
       onkeydown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") renaming = null; }} />
+  {:else if sub}
+  <!-- A chat an agent started: who runs it, what it was asked, how it stands. -->
+  <button class="row kid" class:sel={isOpen(c) && app.view === "chat"} onclick={e => clickRow(e, c)} oncontextmenu={e => onMenu(e, c)} title={c.title}>
+    <span class="srcic">{#if brandOf(c.cloud_agent || c.agent || "")}<AgentMark of={c.cloud_agent || c.agent || ""} size={12} busy={dotOf(c) === "running"} />{:else}<Icon name={source(c) === "cloud" ? "cloud" : "bot"} size={11} />{/if}</span>
+    <span class="t"><span class="title">{c.title || t("Untitled")}</span></span>
+    <span class="dot {dotOf(c)}"></span>
+  </button>
   {:else}
   <button class="row" class:sel={isOpen(c) && app.view === "chat"} class:lifted={dragging?.chat.key === c.key}
     onpointerdown={e => press(e, c)} onclick={e => clickRow(e, c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
@@ -187,7 +207,7 @@
           </button>
         {/if}
         {#if !collapsed[f.id]}
-          {#each items as c (c.key)}{@render row(c)}{/each}
+          {#each items as c (c.key)}{@render branch(c, 0)}{/each}
           {#if !items.length}<div class="empty-f muted">{t("Drop chats here")}</div>{/if}
         {/if}
       </div>
@@ -199,7 +219,7 @@
       <span>{t("Chats")}</span>
       {#if app.loadingChats}<span class="spin"></span>{/if}
     </div>
-    {#each loose.slice(0, shown) as c (c.key)}{@render row(c)}{/each}
+    {#each loose.slice(0, shown) as c (c.key)}{@render branch(c, 0)}{/each}
     {#if loose.length > shown}
       <button class="btn ghost sm more" onclick={() => (shown += 200)}>{t("{n} more", { n: loose.length - shown })}</button>
     {/if}
@@ -258,6 +278,11 @@
   .h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 8px 6px; letter-spacing: .02em; text-transform: uppercase; border-radius: 8px; }
   .drag-ghost { position: fixed; z-index: 90; pointer-events: none; padding: 6px 10px; font-size: 12.5px; font-weight: 500; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); }
   .row.lifted { opacity: .45; }
+  .kids { margin-left: 15px; padding-left: 6px; border-left: 1px solid var(--line); }
+  .folder .kids { margin-left: 25px; }
+  .folder .kids .row { padding-left: 8px; }
+  .row.kid { min-height: 28px; padding: 4px 8px; gap: 8px; }
+  .row.kid .title { font-size: 12.5px; }
   .h.drop, .folder.drop { background: var(--accent-bg); }
   .search .k { border: 0; background: var(--sel); color: var(--muted); font: 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; cursor: default; }
   .search .k:hover { color: var(--ink); }

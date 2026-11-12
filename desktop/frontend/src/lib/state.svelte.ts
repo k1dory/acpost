@@ -15,7 +15,7 @@ export type Msg = {
 };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
 export type Chat = {
-  key: string; kind: "thread" | "session" | "cloud"; agent?: string; title: string; cwd?: string; repo?: string;
+  key: string; kind: "thread" | "session" | "cloud"; agent?: string; parent?: string; title: string; cwd?: string; repo?: string;
   thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;
   messages?: number; running?: number; queued?: number; failed?: number; folder?: string; cloud_agent?: string;
 };
