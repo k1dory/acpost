@@ -440,4 +440,21 @@ describe("! in the composer", () => {
     await flush();
     expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["pwd", "/work/root"]);
   });
+
+  it("undo that brings back what the app put in the field does not make it the person's", async () => {
+    const app = await setup();
+    app.draftOf().text = " !printf from_playbook";            // a playbook, put in as a message
+    svelte.flushSync();
+    type("");                                                // select all, delete
+    const undo = (v: string, kind: string) => { textarea().value = v; textarea().dispatchEvent(new InputEvent("input", { bubbles: true, inputType: kind })); svelte.flushSync(); };
+    undo(" !printf from_playbook", "historyUndo");
+    type("!printf from_playbook");                           // the protective space removed
+    expect(document.querySelector(".comp.bang")).toBeNull();
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    enter();
+    await flush(); await flush();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+    undo("!ls", "historyRedo");
+    expect(document.querySelector(".comp.bang")).toBeNull();
+  });
 });

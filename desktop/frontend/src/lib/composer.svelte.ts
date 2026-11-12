@@ -178,8 +178,13 @@ export class ComposerDraft {
    * type into it after — until the field is empty again. A draft is a command to run ("!…") only
    * while it is theirs: nothing the app put there is ever run, edited or not. */
   own = $state(true);
-  /** The person's own input in the composer. */
-  type(v: string) { this.#text = v; if (v === "") this.own = true; }
+  /** The person's own input in the composer (kind: the input event's inputType). An undo or a
+   * redo brings back text as it was, whoever put it there: what it leaves is not theirs alone. */
+  type(v: string, kind = "") {
+    this.#text = v;
+    if (v === "") this.own = true;
+    else if (kind === "historyUndo" || kind === "historyRedo") this.own = false;
+  }
   /** Text carried whole from another draft, with whose it was (a draft moved, nothing joined). */
   put(v: string, own: boolean) { this.#text = v; this.own = own || v === ""; }
   /** The draft's files. Their names are unique whatever puts files here (an add, a paste, a file
