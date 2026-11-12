@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
@@ -27,6 +28,8 @@
 
   // Both lists asked together; an answer to an older refresh is dropped.
   let seq = 0;
+  // Gone (the view switched): no answer still out may touch the selection the next one now shows.
+  onDestroy(() => { seq++; });
   async function load() {
     const my = ++seq;
     loading = true; err = "";
