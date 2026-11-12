@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -56,12 +57,20 @@ func (n *Node) Chats(ctx context.Context, p Principal) (client.Chats, error) {
 			root, rootErr := n.st.Get(ctx, c.Thread)
 			if rootErr == nil {
 				chat.Cwd = taskCwd(root)
+				// A chat of several agents is its first one's (the list's order is the store's).
+				if slices.Contains(c.Agents, root.To) {
+					chat.Agent = root.To
+				}
 				// What an agent asked another while it handled a message: a chat under that one's.
 				if root.Parent != "" {
 					if up, err := n.st.Get(ctx, root.Parent); err == nil && up.Thread != "" && up.Thread != c.Thread {
 						chat.Parent = "thread:" + up.Thread
 					}
 				}
+			}
+			if len(c.Agents) > 1 {
+				chat.Agents = slices.Clone(c.Agents) // the store's order stays for what follows
+				sort.Strings(chat.Agents)
 			}
 			// The ACP sessions this thread runs: agent by agent, under the key its turns use.
 			inherit := ""

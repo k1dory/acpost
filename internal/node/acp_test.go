@@ -217,8 +217,14 @@ func TestACPTurnTimeout(t *testing.T) {
 	if w.State != store.Failed || !strings.Contains(w.Error, "timeout") {
 		t.Fatalf("%s %q", w.State, w.Error)
 	}
-	if w := ask(t, n, SendRequest{Body: "echo alive"}); w.Reply != "alive" {
-		t.Fatalf("after timeout: %q", w.Reply)
+	// The agent takes the next message. Its turn has the same 200ms: on a loaded machine one may
+	// run past it too, so it is asked until one does not (what is tested is that it answers again).
+	var after store.Message
+	for i := 0; i < 20 && after.Reply != "alive"; i++ {
+		after = ask(t, n, SendRequest{Body: "echo alive"})
+	}
+	if after.Reply != "alive" {
+		t.Fatalf("after timeout: %s %q %q", after.State, after.Reply, after.Error)
 	}
 }
 

@@ -147,6 +147,8 @@ type Chat struct {
 	Key   string `json:"key"`  // thread:<id>, session:<agent>/<id>, cloud:<sandbox>
 	Kind  string `json:"kind"` // thread, session, cloud
 	Agent string `json:"agent,omitempty"`
+	// Agents: all a thread's messages went to, when more than one (a shared chat).
+	Agents []string `json:"agents,omitempty"`
 	// Parent is the chat (its key) an agent of which started this one: a thread whose first
 	// message an agent sent while it handled a message of that chat (a subagent's chat).
 	Parent  string `json:"parent,omitempty"`

@@ -14,6 +14,7 @@
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
   import { errText } from "../lib/api";
+  import { who } from "../lib/format";
 
   let box = $state<HTMLDivElement>();
   let stick = true;
@@ -29,7 +30,10 @@
     for (let i = app.history.length - 1; i >= 0; i--) if (app.history[i].turn.usage) return app.history[i].turn.usage;
     return null;
   });
-  const source = $derived(app.chat?.kind === "cloud" ? t("Cloud") : brand(markOf(app.chat?.agent ?? app.target))?.title ?? "");
+  // An agent said as its product (Codex, Gemini CLI), else its name; a chat shared by several agents names them all.
+  const named = (a: string) => brand(markOf(a))?.title ?? who(a).name;
+  const shared = $derived((app.msgs.length, app.thread ? app.targets().filter(a => app.msgs.some(m => !m.depth && m.to === a && m.from.startsWith("user:") && !m.from.includes("@"))) : []));
+  const source = $derived(shared.length > 1 ? shared.map(named).join(" + ") : app.chat?.kind === "cloud" ? t("Cloud") : brand(markOf(app.chat?.agent ?? app.target))?.title ?? "");
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => tilde(d, app.home);
 
