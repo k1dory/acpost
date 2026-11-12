@@ -135,8 +135,9 @@
 
 {#snippet branch(c: Chat, depth: number)}
   {@render row(c, depth > 0)}
-  {#if depth < 8 && tree.kids.get(c.key)?.length}
-    <div class="kids">{#each tree.kids.get(c.key) ?? [] as k (k.key)}{@render branch(k, depth + 1)}{/each}</div>
+  <!-- To any depth (the tree has no loops); past a few levels the rows stop moving right. -->
+  {#if tree.kids.get(c.key)?.length}
+    <div class="kids" class:flat={depth >= 4}>{#each tree.kids.get(c.key) ?? [] as k (k.key)}{@render branch(k, depth + 1)}{/each}</div>
   {/if}
 {/snippet}
 
@@ -280,6 +281,7 @@
   .row.lifted { opacity: .45; }
   .kids { margin-left: 15px; padding-left: 6px; border-left: 1px solid var(--line); }
   .folder .kids { margin-left: 25px; }
+  .kids.flat, .folder .kids.flat { margin-left: 0; padding-left: 0; border-left: 0; }
   .folder .kids .row { padding-left: 8px; }
   .row.kid { min-height: 28px; padding: 4px 8px; gap: 8px; }
   .row.kid .title { font-size: 12.5px; }

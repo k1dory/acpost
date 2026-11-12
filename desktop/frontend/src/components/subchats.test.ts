@@ -50,4 +50,16 @@ describe("the sidebar's chats", () => {
     expect(document.querySelector(".kids")).toBeNull();
     expect([...document.querySelectorAll(".list .row .title")].map(e => e.textContent)).toEqual(["Team invites API"]);
   });
+
+  it("a chain deeper than the indentation goes: every chat is listed once", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.conn = { ok: true };
+    app.folders = [];
+    app.chats = Array.from({ length: 12 }, (_, i) => chat("T" + i, "chat " + i, i ? { parent: "thread:T" + (i - 1) } : {})) as any;
+    const Sidebar = (await import("./Sidebar.svelte")).default;
+    mounted.push(svelte.mount(Sidebar, { target: document.body }));
+    svelte.flushSync();
+    expect([...document.querySelectorAll(".list .row .title")].map(e => e.textContent)).toEqual(app.chats.map(c => c.title));
+  });
 });
