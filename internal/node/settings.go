@@ -99,21 +99,25 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 			case root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()):
 				set(metaCwd, root.Meta[metaCwd])
 			case root.To != "agent:"+to.Name && p.local() && localExchange(root):
-				dir := cmpOr(root.Meta[metaCwd], root.Meta[metaSessionCwd])
-				// No directory chosen: the thread's first agent runs in its configured one (or the
-				// home directory), and so does the one called in.
-				if first := n.agentCfg(strings.TrimPrefix(root.To, "agent:")); dir == "" && first != nil && first.Driver == "acp" {
-					// The directory the first agent's session of this thread (or of its task, session:
-					// task) was made in, as the node recorded it when it made the session.
+				// Where the first agent's session of this thread runs, as the node recorded it when
+				// it made the session: of the thread, or of its task (session: task — a later
+				// thread of the task may name another directory, the session stays where it is).
+				dir := ""
+				first := n.agentCfg(strings.TrimPrefix(root.To, "agent:"))
+				acp := first != nil && first.Driver == "acp"
+				if acp {
 					if key := sessionKey(first.Session, root); key != "" && !strings.HasPrefix(key, "session:") {
 						if sid, err := n.st.Session(ctx, root.To, key); err == nil && sid != "" {
 							dir, _ = n.st.Session(ctx, root.To, sessionDir+sid)
 						}
 					}
-					if dir == "" {
-						dir = first.Cwd
-					}
-					if dir == "" {
+				}
+				// No record (a session made before records were kept, one continued from elsewhere):
+				// the directory the thread was started with, then the first agent's configured one
+				// (or the home directory).
+				dir = cmpOr(dir, cmpOr(root.Meta[metaCwd], root.Meta[metaSessionCwd]))
+				if dir == "" && acp {
+					if dir = first.Cwd; dir == "" {
 						dir, _ = os.UserHomeDir()
 					}
 				}

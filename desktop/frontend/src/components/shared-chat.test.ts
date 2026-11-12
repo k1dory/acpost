@@ -339,6 +339,21 @@ describe("a chat shared by several agents", () => {
     expect(app.target).toBe("agent:claude");
   });
 
+  it("a message sent when there was no one else to name is that message again, though another agent is there by the retry", async () => {
+    const app = await setup([msg("m1", "agent:claude")], ["claude"]);
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost"));
+    type("@claude explain this");
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    app.agents = ["claude", "codex"].map(name => ({ name, address: "agent:" + name, driver: "acp", queued: 0, running: 0 })) as any;
+    svelte.flushSync();
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    const [first, again] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(first).toMatchObject({ to: "agent:claude", body: "@claude explain this" });
+    expect(again).toEqual(first);
+  });
+
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
     let app = await setup([msg("m1", "agent:claude")], ["claude"]);
     expect(chip()).toBeNull();

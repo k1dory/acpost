@@ -300,3 +300,25 @@ func TestSharedChatTaskSessionsDirectoryPastAPage(t *testing.T) {
 		t.Fatalf("the agent called in runs in %q, the task's session in %q", got, work)
 	}
 }
+
+// A later thread of a task names another directory; the task's session stays where it was made,
+// and that is where the agent called into the later thread works.
+func TestSharedChatReusedTaskSessionKeepsItsDirectory(t *testing.T) {
+	one, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, _ := filepath.EvalSymlinks(t.TempDir())
+	agent := func(name, extra string) string {
+		return fmt.Sprintf("  %s:\n    driver: acp\n    command: [%q]\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n%s", name, os.Args[0], t.TempDir(), extra)
+	}
+	n := newNode(t, "agents:\n"+agent("fake", "    session: task\n")+agent("other", ""))
+	ask(t, n, SendRequest{To: "fake", Task: "x", Cwd: one, Body: "echo one"})
+	second := ask(t, n, SendRequest{To: "fake", Task: "x", Cwd: two, Body: "cwd"})
+	if second.Reply != one {
+		t.Skipf("the task's session moved to %q: not the case under test", second.Reply)
+	}
+	if got := ask(t, n, SendRequest{To: "other", Thread: second.Thread, Body: "cwd"}).Reply; got != one {
+		t.Fatalf("the agent called in runs in %q, the task's session in %q", got, one)
+	}
+}

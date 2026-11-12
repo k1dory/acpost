@@ -541,7 +541,8 @@ class App {
    * its conversation into the thread made of it): sent again, it is that message as first made —
    * nothing in it is read as naming an agent. */
   sentBefore(d: ComposerDraft): boolean {
-    return !!d.sending?.moved && d.sending.task?.body === d.text.trim();
+    const s = d.sending;
+    return !!s && (s.typed === d.text || (!!s.moved && s.task?.body === d.text.trim()));
   }
   /** A message that starts by naming an agent of the chat ("@codex look at this"): the agent, and
    * the message without the name. Only where there is another agent to choose: elsewhere the
@@ -692,7 +693,9 @@ class App {
     // was typed until the node has the message: sent again, it is the same message to the same agent.
     // (A message already sent whole from where there was no one else to name — a session that
     // became this thread, its answer lost — is that message again, as it was first made.)
-    const named = at.thread && !this.sentBefore(d) ? this.mention(sent) : null;
+    // (Read as it was the first time, when it is that message again.)
+    const named = this.sentBefore(d) ? d.sending?.named ?? null : at.thread ? this.mention(sent) : null;
+    at.typed = sent; at.mention = named;
     if (named) { at.target = named.to; at.named = true; at.settings[named.to] = this.settingsFor(named.to); }
     // Sent to the agent shown: that is who this thread's messages go to until the person chooses
     // another (opened again with this one unanswered, it is sent again to the same agent).
@@ -783,7 +786,7 @@ class App {
         what = d.sending.what;
         to = task.to; // the agent it went to, shown as such once it is acknowledged
       }
-      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest };
+      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest, typed: at.typed, named: at.mention };
       const key = d.sending.key;
       task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;
@@ -839,6 +842,7 @@ class App {
     // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
     return {
       chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target, named: false, picks: this.picks(this.thread),
+      typed: undefined as string | undefined, mention: null as { to: string; rest: string } | null,
       key: d.key, limits: this.limits, // the draft's chat, and the node's limits, as they were
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
       settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,
