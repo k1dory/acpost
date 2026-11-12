@@ -26,6 +26,10 @@ void apIDELoad(const char *url);
 void apIDEReload(void);
 void apIDEAppearance(int dark);
 void apIDESetScripts(const char *start, const char *end);
+void apModShow(void *nswindow, const char *id, const char *url, double x, double y, double w, double h, int dark);
+void apModHide(void);
+void apModReload(const char *id);
+void apModForget(const char *id);
 int apPopup(void *nswindow, double x, double y, const char **titles, const char **keys, int n, int checked);
 
 */
@@ -148,6 +152,44 @@ func IDEReload() { C.apIDEReload() }
 // IDEHide hides it (VS Code stays loaded).
 func IDEHide() { C.apIDEHide() }
 
+// ModuleShow lays the pane of module id over window, opened at raw (http or https) when it is
+// not there already; the other modules' panes are hidden.
+func ModuleShow(window unsafe.Pointer, id, raw string, x, y, w, h float64, dark bool) error {
+	if window == nil {
+		return errors.New("a module needs the app's window (not the browser)")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errors.New("an http or https address")
+	}
+	d := 0
+	if dark {
+		d = 1
+	}
+	cid, cu := C.CString(id), C.CString(u.String())
+	C.apModShow(window, cid, cu, C.double(x), C.double(y), C.double(w), C.double(h), C.int(d))
+	C.free(unsafe.Pointer(cid))
+	C.free(unsafe.Pointer(cu))
+	return nil
+}
+
+// ModuleHide hides the modules' panes (their pages stay).
+func ModuleHide() { C.apModHide() }
+
+// ModuleReload opens module id at its own address again.
+func ModuleReload(id string) {
+	cid := C.CString(id)
+	C.apModReload(cid)
+	C.free(unsafe.Pointer(cid))
+}
+
+// ModuleForget drops module id's pane and its page.
+func ModuleForget(id string) {
+	cid := C.CString(id)
+	C.apModForget(cid)
+	C.free(unsafe.Pointer(cid))
+}
+
 // IDELoad opens an address in it: VS Code's, on this Mac only.
 func IDELoad(raw string) error {
 	u, err := url.Parse(raw)
@@ -182,6 +224,48 @@ func goNavigation(s *C.char) {
 	mu.Unlock()
 	if f != nil {
 		go f(u)
+	}
+}
+
+// ModuleEvent is what became of a module's page: Kind "nav" (a page loaded) or "load" (it did
+// not: Message says why).
+type ModuleEvent struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Message string `json:"message,omitempty"`
+}
+
+var (
+	moduleHandler func(ModuleEvent)
+	moduleEvents  = make(chan ModuleEvent, 64) // to the handler, in order (a load that failed after one that ended is told after it)
+)
+
+func init() {
+	go func() {
+		for e := range moduleEvents {
+			mu.Lock()
+			f := moduleHandler
+			mu.Unlock()
+			if f != nil {
+				f(e)
+			}
+		}
+	}()
+}
+
+// OnModuleEvent sets what is told of each (called off the main thread).
+func OnModuleEvent(f func(ModuleEvent)) {
+	mu.Lock()
+	moduleHandler = f
+	mu.Unlock()
+}
+
+//export goModuleEvent
+func goModuleEvent(id, kind, message *C.char) {
+	e := ModuleEvent{ID: C.GoString(id), Kind: C.GoString(kind), Message: C.GoString(message)}
+	select { // off the main thread, never blocking it
+	case moduleEvents <- e:
+	default:
 	}
 }
 

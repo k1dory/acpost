@@ -669,6 +669,12 @@ The app talks to the node on `~/.local/state/acpost/acpost.sock`; when none answ
 default configuration (the `claude-agent-acp` and `codex-acp` it finds on `PATH`) and runs the node
 in its own process.
 
+**Modules.** A view of your own can be added beside "Agents" and "IDE" (Settings → Modules, or
+"Add a module…" in the view switcher): a name and an http(s) address — a tracker, a wiki, a
+dashboard, a tool served on this Mac (plain http only there; elsewhere https). Its page is shown in a native pane with the chat beside it,
+as the IDE is; it signs in as in a browser, and nothing of the app's (the node, its calls) is
+within its reach. Modules are kept in `modules.json` beside the node's configuration.
+
 **Everything works on the Mac alone.** The cloud is optional: with an
 [agent-sandbox](https://github.com/k1dory/cluster-agent-k8s) tenant (Kubernetes sandboxes for coding
 agents) configured as `cloud:` above, the app also lists the tenant's sandboxes and can start a
