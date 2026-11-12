@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLinks, buildGraph, linkify, pageId } from "./wikigraph";
+import { parseLinks, buildGraph, renderWiki, pageId } from "./wikigraph";
 
 // Review round 2: code is where Markdown (marked, the app's renderer) says it is.
 describe("wiki links and Markdown's code", () => {
@@ -10,7 +10,10 @@ describe("wiki links and Markdown's code", () => {
     expect(targets(body)).toEqual(["a", "b", "c"]);
     const g = buildGraph([{ repo: "/r", slug: "p", title: "P", body }, ...["a", "b", "c"].map(s => ({ repo: "/r", slug: s, title: s.toUpperCase() }))], []);
     expect(g.out.get(pageId("/r", "p"))!.map(e => e.to)).toEqual(["a", "b", "c"].map(s => pageId("/r", s)));
-    expect(linkify(body, g.byId.get(pageId("/r", "p"))!, g)).toContain("```[[not]]```");
+    const p = g.byId.get(pageId("/r", "p"))!;
+    const html = renderWiki(body, t => g.resolve(p, t));
+    expect(html).toContain("<code>[[not]]</code>");
+    expect(html.match(/#wiki:/g)).toHaveLength(3);
   });
 
   it("follows fences: tilde fences, a backtick fence's info has no backtick, a closing fence as long", () => {

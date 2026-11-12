@@ -4,7 +4,7 @@
 // name); a note's is a note, then a page of the wiki of its directory. A page is also part of its
 // parent. A link to nothing is kept as broken, so it can be shown and fixed.
 
-import { Lexer } from "marked";
+import { Marked, type Token, type TokenizerAndRendererExtension } from "marked";
 
 export type Kind = "page" | "note";
 export type Item = {
@@ -45,88 +45,63 @@ export type NoteIn = { name: string; body?: string; scope?: string; enabled?: bo
 export const pageId = (repo: string, slug: string) => "page:" + repo + "#" + slug;
 export const noteId = (name: string) => "note:" + name;
 
-const linkRe = /\[\[([^[\]|\n]{1,200})(?:\|([^[\]\n]{0,200}))?\]\]/g;
+/** A [[link]] as marked reads it: its target, and its label's own inline tokens (code, emphasis). */
+export type WikiLinkToken = { type: "wikilink"; raw: string; target: string; label?: string; tokens: Token[] };
+/** What a target resolves to, for the renderer: an item (its id and title), or null (broken). */
+export type WikiResolve = (target: string) => { id: string; title: string } | null;
+
+const wikiRule = /^\[\[([^[\]|\n]{1,200})(?:\|([^[\]\n]{0,200}))?\]\]/;
+const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
- * Where a Markdown text has code — fenced and indented blocks, inline code spans — as [start, end)
- * offsets, found by marked's lexer (the one the app renders with), so the links the graph counts
- * are those the page shows. Text with \r\n is taken as with \n, as the lexer takes it.
+ * The wiki link as a marked inline extension: marked tokenizes it where it tokenizes text, so a
+ * [[link]] in a code block, a code span or HTML is never one, and the graph (parseLinks) and the
+ * page (Markdown with resolve) read a body the same way. The renderer makes an in-app link —
+ * #wiki:<id> to an item, #wiki-broken:<target> for one that names nothing.
  */
-export function codeRanges(text: string): [number, number][] {
-  const out: [number, number][] = [];
-  let tokens: unknown[];
-  try { tokens = lexer.lex(text); } catch { return out; } // text the lexer cannot read: no code found in it
-  // Each top-level token's raw is the next stretch of the text (they follow one another); a code
-  // token inside one is looked for within that stretch only, after the code found before it there.
-  let start = 0;
-  for (const top of tokens as { raw?: string }[]) {
-    const raw = top.raw ?? "";
-    const at = text.startsWith(raw, start) ? start : text.indexOf(raw, start);
-    if (at < 0) continue;
-    const span = { at, end: at + raw.length };
-    walk(top, span);
-    start = span.end;
-  }
-  return out;
-
-  // Tokens in the order they are in the text (blocks, then their inline tokens, list items, cells).
-  function walk(v: unknown, span: { at: number; end: number }) {
-    if (Array.isArray(v)) { for (const x of v) walk(x, span); return; }
-    if (!v || typeof v !== "object") return;
-    const tok = v as Record<string, unknown>;
-    if ((tok.type === "code" || tok.type === "codespan") && typeof tok.raw === "string") { mark(tok.raw, span); return; }
-    for (const k of Object.keys(tok)) if (k !== "raw" && typeof tok[k] === "object") walk(tok[k], span);
-  }
-  function mark(raw: string, span: { at: number; end: number }) {
-    const i = text.indexOf(raw, span.at);
-    if (i >= 0 && i + raw.length <= span.end) { out.push([i, i + raw.length]); span.at = i + raw.length; return; }
-    const r = prefixed(raw.replace(/\n$/, "").split("\n"), span);
-    if (r) { out.push(r); span.at = r[1]; }
-  }
-  // Code in a quote or a list item comes without the lines' markers ("> ", the item's indent): it
-  // is the first run of whole lines of the stretch, from where the search is, each ending with the
-  // code's line in turn.
-  function prefixed(lines: string[], span: { at: number; end: number }): [number, number] | null {
-    const starts: number[] = [];
-    for (let p = text.lastIndexOf("\n", span.at - 1) + 1; p < span.end; ) {
-      starts.push(p);
-      const nl = text.indexOf("\n", p);
-      p = nl < 0 ? text.length : nl + 1;
-    }
-    const lineAt = (k: number) => {
-      const nl = text.indexOf("\n", starts[k]);
-      return text.slice(starts[k], nl < 0 || nl > span.end ? span.end : nl);
-    };
-    for (let k = 0; k + lines.length <= starts.length; k++) {
-      if (!lines.every((l, j) => lineAt(k + j).endsWith(l))) continue;
-      const first = lineAt(k), lastEnd = starts[k + lines.length - 1] + lineAt(k + lines.length - 1).length;
-      const from = Math.max(starts[k] + first.length - lines[0].length, span.at);
-      if (from >= lastEnd && lines.join("")) continue;
-      return [from, lastEnd];
-    }
-    return null;
-  }
+export function wikiLinkExtension(resolve?: WikiResolve): TokenizerAndRendererExtension {
+  return {
+    name: "wikilink",
+    level: "inline",
+    start: (src: string) => src.indexOf("[["),
+    tokenizer(src: string) {
+      const m = wikiRule.exec(src);
+      const target = m?.[1].trim();
+      if (!m || !target) return undefined;
+      const label = m[2]?.trim() || undefined;
+      const tok: WikiLinkToken = { type: "wikilink", raw: m[0], target, label, tokens: label ? this.lexer.inlineTokens(label) : [] };
+      return tok;
+    },
+    renderer(token) {
+      const tok = token as unknown as WikiLinkToken;
+      const to = resolve?.(tok.target) ?? null;
+      const inner = tok.label ? this.parser.parseInline(tok.tokens) : escHtml(to ? to.title : tok.target);
+      const href = to ? "#wiki:" + encodeHref(to.id) : "#wiki-broken:" + encodeHref(tok.target);
+      return `<a href="${href}">${inner}</a>`;
+    },
+  };
 }
-const lexer = { lex: (s: string) => new Lexer({ gfm: true, breaks: true }).lex(s) };
 
-/** Each [[link]] of a text outside code (one whose [[ starts in code is code: a label may be). */
-function eachLink(text: string, fn: (m: RegExpExecArray) => void) {
-  const code = codeRanges(text);
-  const inCode = (i: number) => code.some(([a, b]) => i >= a && i < b);
-  linkRe.lastIndex = 0;
-  for (let m: RegExpExecArray | null; (m = linkRe.exec(text)); ) if (!inCode(m.index)) fn(m);
-}
-const lf = (s: string) => (s ?? "").replace(/\r\n?/g, "\n");
+// The options the app renders Markdown with (components/Markdown.svelte): the graph lexes alike.
+export const markdownOptions = { gfm: true, breaks: true } as const;
+const reader = new Marked(markdownOptions).use({ extensions: [wikiLinkExtension()] });
 
-/** The [[links]] of a body, in order, outside code. */
+/** The [[links]] of a body, in order, where Markdown has them (not in code or HTML). */
 export function parseLinks(body: string): Link[] {
   const found: Link[] = [];
-  eachLink(lf(body), m => {
-    const target = m[1].trim();
-    const label = m[2]?.trim();
-    if (target) found.push(label ? { target, label } : { target });
+  let tokens: Token[];
+  try { tokens = reader.lexer(body ?? ""); } catch { return found; } // text marked cannot read: no links
+  reader.walkTokens(tokens, t => {
+    if (t.type !== "wikilink") return;
+    const w = t as unknown as WikiLinkToken;
+    found.push(w.label ? { target: w.target, label: w.label } : { target: w.target });
   });
   return found;
+}
+
+/** A body as the app shows it, wiki links made links (resolve) — without the app's code blocks. */
+export function renderWiki(body: string, resolve: WikiResolve): string {
+  return new Marked(markdownOptions).use({ extensions: [wikiLinkExtension(resolve)] }).parse(body ?? "", { async: false }) as string;
 }
 
 /** The set, its edges, backlinks, broken links and the items on their own. */
@@ -195,28 +170,9 @@ export function buildGraph(pages: PageIn[], notes: NoteIn[]): Graph {
   return { items, byId, edges, out, in: into, broken, lonely, resolve };
 }
 
-// A link's destination, encoded whole: encodeURIComponent leaves ( ) ! ' * as they are, and a ")"
-// would end a Markdown destination early (a repository at /work/app)).
+// A link's destination, encoded whole: encodeURIComponent leaves ( ) ! ' * as they are; kept out,
+// they cannot end an address early or close the attribute.
 const encodeHref = (s: string) => encodeURIComponent(s).replace(/[()!'*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
-
-const escLabel = (s: string) => s.replace(/[\\[\]]/g, m => "\\" + m);
-
-/**
- * A body with its [[links]] made Markdown links the app routes: #wiki:<id> to an item, and
- * #wiki-broken:<target> for one that names nothing (shown marked, going nowhere).
- */
-export function linkify(body: string, from: Item, g: Graph): string {
-  const text = lf(body);
-  let out = "", at = 0;
-  eachLink(text, m => {
-    const target = m[1], label = m[2];
-    const to = g.resolve(from, target);
-    const shown = escLabel((label ?? "").trim() || (to ? to.title : target.trim()));
-    out += text.slice(at, m.index) + (to ? `[${shown}](#wiki:${encodeHref(to.id)})` : `[${shown}](#wiki-broken:${encodeHref(target.trim())})`);
-    at = m.index + m[0].length;
-  });
-  return out + text.slice(at);
-}
 
 /** The item an in-app link names (#wiki:<id>), or "" when it is no such link. */
 export function linkTarget(href: string): string {

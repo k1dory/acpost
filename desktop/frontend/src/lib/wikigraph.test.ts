@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLinks, buildGraph, linkify, linkTarget, neighbourhood, matches, pageId, noteId } from "./wikigraph";
+import { parseLinks, buildGraph, renderWiki, linkTarget, neighbourhood, matches, pageId, noteId } from "./wikigraph";
 
 const pages = [
   { repo: "/r", slug: "overview", title: "Overview", body: "See [[arch]] and [[arch|the design]], [[style]], [[nowhere]] and [[overview]]." },
@@ -53,17 +53,21 @@ describe("wiki links", () => {
 
   it("makes links the app routes, and marks broken ones", () => {
     const g = buildGraph(pages, notes);
-    const md = linkify(pages[0].body, g.byId.get(pageId("/r", "overview"))!, g);
-    expect(md).toContain(`[Architecture](#wiki:${encodeURIComponent(pageId("/r", "arch"))})`);
-    expect(md).toContain(`[the design](#wiki:`);
-    expect(md).toContain(`[nowhere](#wiki-broken:nowhere)`);
+    const over = g.byId.get(pageId("/r", "overview"))!;
+    const html = renderWiki(pages[0].body, t => g.resolve(over, t));
+    expect(html).toContain(`<a href="#wiki:${encodeURIComponent(pageId("/r", "arch"))}">Architecture</a>`);
+    expect(html).toContain(`">the design</a>`);
+    expect(html).toContain(`<a href="#wiki-broken:nowhere">nowhere</a>`);
     expect(linkTarget(`#wiki:${encodeURIComponent(pageId("/r", "arch"))}`)).toBe(pageId("/r", "arch"));
     expect(linkTarget("#wiki-broken:x")).toBe("");
     // Code stays code; brackets in a label do not break the link.
     const arch = g.byId.get(pageId("/r", "arch"))!;
-    expect(linkify(arch.body, arch, g)).toContain("```\n[[in-code]]\n```");
-    expect(linkify("[[overview|a [b]]]", arch, g)).not.toContain("#wiki:");
-    expect(linkify("[[overview|a]b]]", arch, g)).toBe("[[overview|a]b]]");
+    const r = (s: string) => renderWiki(s, t => g.resolve(arch, t));
+    expect(r(arch.body)).toContain("<code>[[in-code]]\n</code>");
+    expect(r(arch.body)).toContain("<code>[[inline]]</code>");
+    expect(r(arch.body).match(/#wiki:/g)).toHaveLength(1);
+    expect(r("[[overview|a [b]]]")).not.toContain("#wiki:");
+    expect(r("[[overview|a]b]]")).not.toContain("#wiki:");
   });
 
   it("finds an item's neighbours, and searches title, key and text", () => {

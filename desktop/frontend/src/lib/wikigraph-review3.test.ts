@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Lexer } from "marked";
-import { parseLinks, buildGraph, linkify, codeRanges, pageId } from "./wikigraph";
+import { parseLinks, buildGraph, renderWiki, pageId } from "./wikigraph";
 
 // Review round 3: a code token is matched to its own place in the text, not to an identical one
 // elsewhere — the same fenced block quoted, in a list item, and at the top, in either order.
@@ -26,20 +25,16 @@ describe("code ranges, each in its own place", () => {
       const g = buildGraph([{ repo: "/r", slug: "p", title: "P", body }, { repo: "/r", slug: "arch", title: "Arch" }, { repo: "/r", slug: "real", title: "Real" }], []);
       expect(g.out.get(pageId("/r", "p"))!.map(e => e.to)).toEqual(expected.map(s => pageId("/r", s)));
       // Every [[arch]] in code stays as written.
-      const md = linkify(body, g.byId.get(pageId("/r", "p"))!, g);
+      const p = g.byId.get(pageId("/r", "p"))!;
+      const md = renderWiki(body, t => g.resolve(p, t));
       expect(md.split("[[arch]]").length - 1).toBe(body.split("[[arch]]").length - 1 - (expected[0] === "arch" ? 1 : 0));
     });
   }
 
-  it("covers every code block's lines, and top-level raws are the text in order", () => {
+  it("renders both identical blocks as code, and no link for either", () => {
     const body = `${quoted}\n\n${block}`;
-    const r = codeRanges(body);
-    const covered = (needle: string, from: number) => { const i = body.indexOf(needle, from); return r.some(([a, b]) => i >= a && i < b); };
-    expect(covered("[[arch]]", 0)).toBe(true);
-    expect(covered("[[arch]]", body.indexOf("[[arch]]") + 1)).toBe(true);
-    for (const s of [body, `${listed}\n\n${block}`, "a\r\nb"]) {
-      const text = s.replace(/\r\n?/g, "\n");
-      expect(new Lexer({ gfm: true, breaks: true }).lex(text).map(t => t.raw).join("")).toBe(text);
-    }
+    const html = renderWiki(body, () => ({ id: "x", title: "X" }));
+    expect(html.match(/<code>\[\[arch\]\]/g)).toHaveLength(2);
+    expect(html).not.toContain("#wiki");
   });
 });

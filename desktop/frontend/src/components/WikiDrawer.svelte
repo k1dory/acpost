@@ -3,7 +3,7 @@
   import { app } from "../lib/state.svelte";
   import { tilde } from "../lib/names";
   import { ago } from "../lib/format";
-  import { linkify, linkTarget, neighbourhood, type Graph, type Item } from "../lib/wikigraph";
+  import { linkTarget, neighbourhood, type Graph, type Item } from "../lib/wikigraph";
   import Icon from "./Icon.svelte";
   import Markdown from "./Markdown.svelte";
   import WikiGraph from "./WikiGraph.svelte";
@@ -22,7 +22,7 @@
   const ins = $derived(graph.in.get(item.id) ?? []);
   const lost = $derived(graph.broken.filter(b => b.from === item.id));
   const near = $derived(neighbourhood(graph, item.id));
-  const text = $derived(linkify(item.body, item, graph));
+  const resolve = $derived((target: string) => graph.resolve(item, target));
   const where = (it: Item) => (it.kind === "page" ? tilde(it.repo ?? "", app.home) : it.scope ? tilde(it.scope, app.home) : t("everywhere"));
   const title = (id: string) => graph.byId.get(id)?.title ?? id;
 
@@ -51,7 +51,7 @@
     {#if item.updated}<div class="muted small">{t("Updated")} {ago(item.updated)}{#if item.kind === "note" && !item.enabled} · {t("off")}{/if}</div>{/if}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
     <article onclick={follow}>
-      {#if item.body.trim()}<Markdown {text} />{:else}<div class="muted">{t("No text")}</div>{/if}
+      {#if item.body.trim()}<Markdown text={item.body} wikiLink={resolve} />{:else}<div class="muted">{t("No text")}</div>{/if}
     </article>
 
     <h3>{t("Links out")} <span class="muted">{outs.length + lost.length}</span></h3>

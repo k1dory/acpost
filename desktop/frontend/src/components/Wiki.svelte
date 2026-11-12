@@ -8,7 +8,7 @@
   import Dropdown from "./Dropdown.svelte";
   import Markdown from "./Markdown.svelte";
   import WikiExplorer from "./WikiExplorer.svelte";
-  import { buildGraph, linkify, linkTarget, type Item } from "../lib/wikigraph";
+  import { buildGraph, linkTarget, type Item, type WikiResolve } from "../lib/wikigraph";
 
   // The wikis of repositories: an agent of this Mac reads a directory and writes its pages.
   type Wiki = { repo: string; agent: string; lang?: string; status: string; msg?: string; error?: string; updated: string; pages: number };
@@ -41,13 +41,15 @@
 
   // This wiki's pages and the notes, linked: what a page's [[links]] go to.
   const linked = $derived(buildGraph(pages.map(p => ({ ...p, repo })), notes));
-  // A page's text as shown: its [[links]] made links (to a page, a note, or marked broken), a first
-  // heading that only repeats the title dropped.
+  // A page's text as shown: a first heading that only repeats the title dropped; its [[links]] go to
+  // a page, a note, or are marked broken (as the Markdown is rendered).
   function prepared(p: Page): string {
-    const body = (p.body ?? "").replace(/^\s*#{1,6}\s+(.+)\n+/, (all, h) => (h.trim() === p.title.trim() ? "" : all));
-    const it = linked.items.find(x => x.kind === "page" && x.key === p.slug);
-    return it ? linkify(body, it, linked) : body;
+    return (p.body ?? "").replace(/^\s*#{1,6}\s+(.+)\n+/, (all, h) => (h.trim() === p.title.trim() ? "" : all));
   }
+  const resolveShown: WikiResolve = $derived.by(() => {
+    const it = shown && linked.items.find(x => x.kind === "page" && x.key === shown.slug);
+    return (target: string) => (it ? linked.resolve(it, target) : null);
+  });
   // A link to a page of this wiki turns the page; to anything else, the explorer shows it.
   function follow(e: MouseEvent) {
     const a = (e.target as HTMLElement).closest("a");
@@ -248,7 +250,7 @@
           <article class="page" onclick={follow}>
             {#if cur.status === "writing"}<div class="note muted"><span class="spin"></span> {t("Being written again; these are the pages before.")}</div>{/if}
             <h1 class="pt">{shown.title}</h1>
-            <Markdown text={prepared(shown)} />
+            <Markdown text={prepared(shown)} wikiLink={resolveShown} />
           </article>
         {/if}
       </div>

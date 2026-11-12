@@ -23,12 +23,13 @@ beforeEach(async () => {
 });
 afterEach(() => { for (const m of mounted) unmount(m); mounted = []; });
 
-// A body as the app shows it: linkified, then through the real Markdown component.
+// A body as the app shows it: through the real Markdown component, its links resolved.
 async function render(body: string, from: string, pages: any[]) {
-  const { buildGraph, linkify } = await import("../lib/wikigraph");
+  const { buildGraph } = await import("../lib/wikigraph");
   const g = buildGraph(pages, []);
   const Markdown = (await import("./Markdown.svelte")).default;
-  mounted.push(mount(Markdown, { target: document.body, props: { text: linkify(body, g.byId.get(from)!, g) } }));
+  const it = g.byId.get(from)!;
+  mounted.push(mount(Markdown, { target: document.body, props: { text: body, wikiLink: (t: string) => g.resolve(it, t) } }));
   flushSync();
   return g;
 }
