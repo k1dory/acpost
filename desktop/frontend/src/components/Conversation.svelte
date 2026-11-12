@@ -3,6 +3,8 @@
   import { headerIcon } from "../lib/ui";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
+  import { markOf } from "./AgentMark.svelte";
+  import { brand } from "../lib/brand";
   import { tick } from "svelte";
   import Logo from "./Logo.svelte";
   import Message from "./Message.svelte";
@@ -27,7 +29,7 @@
     for (let i = app.history.length - 1; i >= 0; i--) if (app.history[i].turn.usage) return app.history[i].turn.usage;
     return null;
   });
-  const source = $derived(app.chat?.kind === "cloud" ? t("Cloud") : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
+  const source = $derived(app.chat?.kind === "cloud" ? t("Cloud") : brand(markOf(app.chat?.agent ?? app.target))?.title ?? "");
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => tilde(d, app.home);
 

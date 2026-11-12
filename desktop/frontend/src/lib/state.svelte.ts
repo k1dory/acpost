@@ -13,7 +13,7 @@ export type Msg = {
   body?: string; reply?: string; error?: string; error_code?: string; hint?: string; meta?: Record<string, string>;
   created_at: string; updated_at: string; finished_at?: string; files?: { name: string; type: string; size: number; reply?: boolean }[];
 };
-export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
+export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean; product?: string };
 export type Chat = {
   key: string; kind: "thread" | "session" | "cloud"; agent?: string; title: string; cwd?: string; repo?: string;
   thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;

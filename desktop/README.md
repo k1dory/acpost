@@ -21,6 +21,11 @@ The bundle's identity (`dev.acpost.desktop`, the version) is set in `build/confi
 looking at the interface in a browser. Bindings in `frontend/bindings` are generated:
 `wails3 generate bindings -ts -d frontend/bindings ./`.
 
+An agent is drawn with the mark of the CLI behind it (`frontend/src/lib/brand.ts`): what the agent
+said it is when its process last started (ACP's `agentInfo`), else its command's name, else the
+agent's own name. Claude Code, Codex, Gemini CLI, GitHub Copilot and Cursor have drawn marks; the
+other known CLIs show their initials on a tile in their hue.
+
 The IDE view is VS Code (the one installed on the Mac runs `serve-web`, pinned to `ideCommit` in
 `ide_ext.go`; its server, settings and extensions live in `~/Library/Application Support/acpost/vscode`)
 dressed as the app by the extension in `ide/extension`: colour themes made from the app's tokens,

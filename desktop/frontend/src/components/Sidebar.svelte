@@ -4,7 +4,8 @@
   import { app, type Chat } from "../lib/state.svelte";
   import { ago, screenScale } from "../lib/format";
   import Icon from "./Icon.svelte";
-  import AgentMark, { brandOf } from "./AgentMark.svelte";
+  import AgentMark, { markOf } from "./AgentMark.svelte";
+  import { brand } from "../lib/brand";
   import ViewSwitch from "./ViewSwitch.svelte";
 
   let q = $state("");
@@ -43,7 +44,12 @@
   function source(c: Chat) {
     if (c.kind === "cloud") return "cloud";
     const a = c.agent ?? "";
-    return a.includes("codex") ? "codex" : a.includes("claude") ? "claude" : a.startsWith("agent:sb_") ? "cloud" : "bot";
+    return markOf(a) || (a.startsWith("agent:sb_") ? "cloud" : "bot");
+  }
+  // What the row says the chat runs on: the agent's product, a cloud agent's name.
+  function sourceName(c: Chat) {
+    const s = source(c);
+    return s === "cloud" ? c.cloud_agent || "Cloud" : brand(s)?.short ?? "";
   }
   function place(c: Chat) {
     const d = c.cwd || c.repo || "";
@@ -137,7 +143,7 @@
     <span class="dot {dotOf(c)}"></span>
     <span class="t">
       <span class="title">{c.title || t("Untitled")}</span>
-      <span class="sub muted"><span class="srcic">{#if brandOf(c.cloud_agent || c.agent || "")}<AgentMark of={c.cloud_agent || c.agent || ""} size={11} busy={dotOf(c) === "running"} />{:else}<Icon name={source(c) === "cloud" ? "cloud" : "bot"} size={10} />{/if}</span>{source(c) === "claude" ? "Claude" : source(c) === "codex" ? "Codex" : source(c) === "cloud" ? c.cloud_agent || "Cloud" : ""}{place(c) ? " · " + place(c) : ""}</span>
+      <span class="sub muted"><span class="srcic">{#if markOf(c.cloud_agent || c.agent || "")}<AgentMark of={c.cloud_agent || c.agent || ""} size={11} busy={dotOf(c) === "running"} />{:else}<Icon name={source(c) === "cloud" ? "cloud" : "bot"} size={10} />{/if}</span>{sourceName(c)}{place(c) ? " · " + place(c) : ""}</span>
     </span>
     <span class="when muted num">{ago(c.updated)}</span>
   </button>

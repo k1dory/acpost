@@ -1,15 +1,16 @@
 <script lang="ts">
   import { initials, hue, who } from "../lib/format";
-  import AgentMark, { brandOf } from "./AgentMark.svelte";
+  import AgentMark, { markOf } from "./AgentMark.svelte";
   let { addr, size = 22, busy = false, brand = "" }: { addr: string; size?: number; busy?: boolean; brand?: string } = $props();
   const w = $derived(who(addr));
   const h = $derived(hue(w.name));
-  // An agent that is Claude Code or Codex (by its name, or the brand given: a cloud agent's) shows its mark.
-  const mark = $derived(w.kind !== "user" ? brandOf(brand || w.name) : "");
+  // An agent whose CLI is known (by what the node says runs behind it, its name, or the brand given:
+  // a cloud agent's) shows its mark.
+  const mark = $derived(w.kind !== "user" ? markOf(brand || addr) : "");
 </script>
 
 {#if mark}
-  <span title={addr}><AgentMark of={mark} {size} {busy} /></span>
+  <span title={addr}><AgentMark of={brand || addr} {size} {busy} /></span>
 {:else}
   <span class="av" class:user={w.kind === "user"} style="--h:{h};width:{size}px;height:{size}px;font-size:{Math.round(size * 0.42)}px" title={addr}>
     {initials(w.name)}
