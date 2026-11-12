@@ -657,6 +657,11 @@ func (a *acpAgent) keepMade(ctx context.Context, sid string) {
 	if v, err := a.n.st.Session(ctx, a.addr, madeSession+sid); err == nil && v != "" {
 		_ = a.n.st.PutSession(ctx, a.addr, madeSession+sid, sid)
 	}
+	// And the directory it was made in, as long: a chat is listed, and a command of the person's
+	// run, where the session is (chats.go) — not where a later thread of its task asked.
+	if dir, err := a.n.st.Session(ctx, a.addr, sessionDir+sid); err == nil && dir != "" {
+		_ = a.n.st.PutSession(ctx, a.addr, sessionDir+sid, dir)
+	}
 }
 
 // openFreed opens a session that exists (openSession); when the agent says another of its

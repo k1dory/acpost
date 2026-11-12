@@ -681,10 +681,15 @@ The app talks to the node on `~/.local/state/acpost/acpost.sock`; when none answ
 default configuration (the `claude-agent-acp` and `codex-acp` it finds on `PATH`) and runs the node
 in its own process.
 
-**`!command`.** A message that starts with `!` and has no files attached is not sent: the rest is
-run in your login shell, in the chat's directory, and what it printed is shown in the chat (two
-minutes at most, the first 256 KiB of output; what it started ends with it, and with the app). A
-message that must start with `!` starts with a space; one with files is always a message. The agent sees it only when you put it into a message ("Add to message").
+**`!command`.** A message you typed that starts with `!` and has no files attached is not sent: the
+rest is run in your login shell, in the chat's directory, and what it printed is shown in the chat
+(two minutes at most, the first 256 KiB of output; what it started ends with it and with the app,
+but for a process the command itself detaches into a session of its own). Only what you typed
+since the field was last empty is run: text put there by anything else (a playbook, a quotation,
+an answer, an undo) is a message, edited or not, until you empty the field. Not run at all where
+the chat's files are not this Mac's (a cloud sandbox, an agent of another node) or its directory
+is not known. A message that must start with `!` starts with a space; one with files is always a
+message. The agent sees it only when you put it into a message ("Add to message").
 
 **Modules.** A view of your own can be added beside "Agents" and "IDE" (Settings → Modules, or
 "Add a module…" in the view switcher): a name and an http(s) address — a tracker, a wiki, a
