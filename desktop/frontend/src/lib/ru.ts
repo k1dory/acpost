@@ -79,6 +79,7 @@ export const ru: Record<string, string> = {
   "Where this turn's time went": "Куда ушло время этого хода",
   "Trace": "Трасса",
   "incomplete": "не полностью",
+  "The last events of this turn could not be read: what is shown may be short": "Последние события этого хода не прочитались: показанное может быть неполным",
   "The node kept no more of this turn's events: calls after that are missing, and its sums are short": "Узел не сохранил дальнейшие события этого хода: последующих вызовов нет, суммы неполные",
   "Settings": "Настройки",
   "Light": "Светлая",

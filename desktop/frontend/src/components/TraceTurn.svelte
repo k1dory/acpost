@@ -14,7 +14,7 @@
   // whole (the node's list has only their timing); a running turn's come as the chat's stream
   // brings them (the window gets them whoever follows the message) and are asked for every two
   // seconds besides.
-  let { thread, id, now, onchange }: { thread: TThread; id: string; now: number; onchange: () => void } = $props();
+  let { thread, id, now, reread = 0, onchange }: { thread: TThread; id: string; now: number; reread?: number; onchange: () => void } = $props();
 
   const msg = $derived(thread.messages.find(m => m.id === id));
   // The shown turn's events (lib/feed.ts): one feed a turn, stopped when another is shown, so
@@ -50,8 +50,30 @@
   $effect(() => {
     const f = feed;
     if (!f || !running) return;
-    const poll = setInterval(() => { f.sync().catch(() => {}); }, 2000);
-    return () => { clearInterval(poll); f.sync().catch(() => {}); };
+    const poll = setInterval(() => { f.sync().catch(() => {}); }, 2000); // the next poll is the retry
+    return () => { clearInterval(poll); drain(f); };
+  });
+
+  // Read to the end, a few times if it fails (once the turn is over no poll comes after); a read that
+  // still fails is shown, and Refresh (or Retry) reads again.
+  let readErr = $state("");
+  async function drain(f: EventFeed, tries = 3) {
+    for (let i = 0; ; i++) {
+      try {
+        await f.sync();
+        if (feed === f) readErr = "";
+        return;
+      } catch (e) {
+        if (feed !== f) return;
+        if (i + 1 >= tries) { readErr = errText(e); return; }
+        await new Promise(r => setTimeout(r, 500 * (i + 1)));
+      }
+    }
+  }
+  $effect(() => {
+    if (!reread) return;
+    const f = untrack(() => feed);
+    if (f) drain(f, 1);
   });
 
   // Filter, zoom.
@@ -124,6 +146,8 @@
   </div>
 
   {#if err}<div class="empty">{err}</div>{/if}
+  {#if readErr && !err}<div class="note warn rd">{t("The last events of this turn could not be read: what is shown may be short")} — {readErr}
+    <button class="btn sm" onclick={() => feed && drain(feed, 1)}>{t("Retry")}</button></div>{/if}
   <div class="body" class:with={!!selected}>
     <div class="card tl scroll" bind:this={scroller} bind:clientWidth={cw}>
       <div class="inner" style="width:{labelW + trackW}px">
