@@ -720,11 +720,21 @@ export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
 }
 
 /**
+ * Traces are where agents' time went: the most recently active conversations' turns (limit of
+ * them), or one conversation's, with their events' timing (internal/node/traces.go).
+ */
+export function Traces(thread: string, limit: number): $CancellablePromise<client$0.TraceThread[]> {
+    return $Call.ByID(3668876974, thread, limit).then(($result: any) => {
+        return $$createType46($result);
+    });
+}
+
+/**
  * Tree is what agents asked other agents under a message.
  */
 export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
     return $Call.ByID(3080916840, id).then(($result: any) => {
-        return $$createType46($result);
+        return $$createType48($result);
     });
 }
 
@@ -742,19 +752,19 @@ export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType48($result);
+        return $$createType50($result);
     });
 }
 
 export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
     return $Call.ByID(3522603132, repo).then(($result: any) => {
-        return $$createType50($result);
+        return $$createType52($result);
     });
 }
 
 export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
     return $Call.ByID(52380493).then(($result: any) => {
-        return $$createType52($result);
+        return $$createType54($result);
     });
 }
 
@@ -811,11 +821,13 @@ const $$createType41 = $Create.Array($$createType40);
 const $$createType42 = $Create.Array($Create.Any);
 const $$createType43 = $models.Connection.createFrom;
 const $$createType44 = $Create.Array($$createType8);
-const $$createType45 = client$0.TreeNode.createFrom;
+const $$createType45 = client$0.TraceThread.createFrom;
 const $$createType46 = $Create.Array($$createType45);
-const $$createType47 = client$0.UsageReport.createFrom;
+const $$createType47 = client$0.TreeNode.createFrom;
 const $$createType48 = $Create.Array($$createType47);
-const $$createType49 = store$0.WikiPage.createFrom;
+const $$createType49 = client$0.UsageReport.createFrom;
 const $$createType50 = $Create.Array($$createType49);
-const $$createType51 = store$0.Wiki.createFrom;
+const $$createType51 = store$0.WikiPage.createFrom;
 const $$createType52 = $Create.Array($$createType51);
+const $$createType53 = store$0.Wiki.createFrom;
+const $$createType54 = $Create.Array($$createType53);

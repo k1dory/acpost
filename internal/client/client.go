@@ -1148,6 +1148,66 @@ func (c *Client) Usage(ctx context.Context, f UsageFilter) ([]UsageReport, error
 	return out.Items, err
 }
 
+// TraceEvent is an event of a turn as a trace reads it: when it came and what it was of, without
+// what it carried (a call's output, the agent's text). A run of text or thinking is one, from At to
+// End; a call's updates that change nothing a trace shows are left out.
+type TraceEvent struct {
+	Seq     int64  `json:"seq"`
+	At      int64  `json:"at"`            // Unix milliseconds
+	End     int64  `json:"end,omitempty"` // a run's last chunk
+	Kind    string `json:"kind"`
+	Call    string `json:"call,omitempty"`    // the tool call it is of
+	Request string `json:"request,omitempty"` // the permission request it is of
+	Status  string `json:"status,omitempty"`
+	Tool    string `json:"tool,omitempty"`    // the call's kind (read, execute…)
+	Title   string `json:"title,omitempty"`   // its start
+	Command string `json:"command,omitempty"` // the shell command it ran, its start
+	Exit    *int   `json:"exit,omitempty"`
+}
+
+// TraceMessage is a turn's times and events, for a trace.
+type TraceMessage struct {
+	ID        string       `json:"id"`
+	Thread    string       `json:"thread"`
+	Parent    string       `json:"parent,omitempty"`
+	Depth     int          `json:"depth"`
+	From      string       `json:"from"`
+	To        string       `json:"to"`
+	State     store.State  `json:"state"`
+	ErrorCode string       `json:"error_code,omitempty"`
+	Created   time.Time    `json:"created_at"`
+	Updated   time.Time    `json:"updated_at"`
+	Finished  time.Time    `json:"finished_at,omitzero"`
+	Events    []TraceEvent `json:"events"`
+	Cut       bool         `json:"cut,omitempty"` // not all its events are here (the answer's bound)
+}
+
+// TraceThread is a conversation's turns for a trace: its own and those of the agents they asked.
+type TraceThread struct {
+	Thread   string         `json:"thread"`
+	Title    string         `json:"title"`
+	Updated  time.Time      `json:"updated_at"`
+	Messages []TraceMessage `json:"messages"`
+	Cut      bool           `json:"cut,omitempty"` // older turns, or some events, are not here
+}
+
+// Traces are the most recently active conversations' turns as traces read them (limit of them), or
+// one conversation's when thread is given.
+func (c *Client) Traces(ctx context.Context, thread string, limit int) ([]TraceThread, error) {
+	q := url.Values{}
+	if thread != "" {
+		q.Set("thread", thread)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out struct {
+		Items []TraceThread `json:"items"`
+	}
+	_, err := c.do(ctx, "GET", "/v1/traces", q, nil, &out, nil)
+	return out.Items, err
+}
+
 // Changes is what a message's turns changed (and its subagents' with tree): each turn's files and
 // diff, and each repository's diff over them all.
 type Changes struct {
