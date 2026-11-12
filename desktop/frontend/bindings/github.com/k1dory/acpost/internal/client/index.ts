@@ -29,6 +29,9 @@ export {
     OptionValue,
     Status,
     Terminal,
+    TraceEvent,
+    TraceMessage,
+    TraceThread,
     TreeNode,
     UsageReport
 } from "./models.js";

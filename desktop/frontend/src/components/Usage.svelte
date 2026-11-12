@@ -4,6 +4,10 @@
   import { tokens, money } from "../lib/format";
   import { latest } from "../lib/latest";
   import { usageTotal, costText } from "../lib/usage";
+  import type { Snippet } from "svelte";
+
+  // The title (and the Analytics view's tabs) the view puts in its header.
+  let { head }: { head?: Snippet } = $props();
 
   let days = $state(7);
   let by = $state<"agent" | "model" | "day" | "session">("agent");
@@ -27,7 +31,7 @@
 
 <section class="us scroll">
   <header class="drag">
-    <h1>{t("Usage")}</h1>
+    {#if head}{@render head()}{:else}<h1>{t("Usage")}</h1>{/if}
     <span class="sp"></span>
     <div class="seg nodrag">{#each [[1, "Today"], [7, "7 days"], [30, "30 days"], [0, "All"]] as [d, l]}<button class:on={days === d} onclick={() => (days = d as number)}>{t(l as string)}</button>{/each}</div>
     <div class="seg nodrag">{#each Object.keys(groups) as b}<button class:on={by === b} onclick={() => (by = b as any)}>{t(groups[b])}</button>{/each}</div>
