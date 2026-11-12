@@ -46,3 +46,12 @@ another machine's). The diff's left side is the file as it is with the edit take
 once, replaced by the old): an edit whose text the event cut, or that is no longer in the file, opens
 the file without a diff. The chat's header there has "New task" and "Another chat" (the palette),
 the sidebar being hidden.
+
+A reply can carry components besides Markdown and Mermaid: a ```` ```ui ```` block holds one JSON
+object `{"type": …}` (or an array of up to 8) that the chat draws in its place: `stats` tiles, a
+`chart` (bar, line, area or pie, drawn as SVG in the app's colours), a `table` the person sorts and
+filters, a `timeline`, a `kanban` board, a plan's `steps`, and `choices` or a `form` whose answers
+go into the message being written (never sent by themselves). The node tells an agent of them once a
+session (`readerNote`, `internal/node/knowledge.go`). A block is checked field by field against
+limits (`frontend/src/lib/genui.ts`); one that is not valid, or still being written, is shown as
+its code. Its text is only ever shown as text, and nothing in it is loaded or run.

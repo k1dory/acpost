@@ -4,6 +4,9 @@
   import { cleanHtml, cleanSvg } from "../lib/sanitize";
   import hljs from "highlight.js/lib/common";
   import { Clipboard } from "@wailsio/runtime";
+  import { mount, unmount, untrack } from "svelte";
+  import { parseUi, keepFor } from "../lib/genui";
+  import GenUi from "./genui/GenUi.svelte";
   let { text }: { text: string } = $props();
 
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -35,18 +38,20 @@
         const want = (lang ?? "").trim().split(/\s+/)[0].toLowerCase();
         // A diagram: drawn after (Mermaid, loaded when first needed), its text kept to show if it fails.
         if (want === "mermaid") return `<div class="mm"><pre><code>${esc(code)}</code></pre></div>`;
-        let out = "", name = want;
-        if (want && hljs.getLanguage(want)) out = hljs.highlight(code, { language: want, ignoreIllegals: true }).value;
+        // Components (```ui): drawn after, like a diagram; until the block is whole and valid, its code.
+        const ui = want === "ui";
+        let out = "", name = ui ? "json" : want;
+        if (name && hljs.getLanguage(name)) out = hljs.highlight(code, { language: name, ignoreIllegals: true }).value;
         else if (!want && code.length < 20000) {
           const r = hljs.highlightAuto(code);
           if (r.language && r.relevance >= 5) { out = r.value; name = r.language; }
         }
         if (!out) out = esc(code);
-        const label = name ? esc(hljs.getLanguage(name)?.name ?? name) : "text";
-        return `<div class="code"><div class="ch"><span class="lang">${label}</span><span class="cp" role="button" tabindex="0" title="${t("Copy")}" aria-label="${t("Copy")}">` +
+        const label = ui ? "ui" : name ? esc(hljs.getLanguage(name)?.name ?? name) : "text";
+        return (ui ? `<div class="uib">` : "") + `<div class="code"><div class="ch"><span class="lang">${label}</span><span class="cp" role="button" tabindex="0" title="${t("Copy")}" aria-label="${t("Copy")}">` +
           `<svg class="i-copy" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5V3.6c0-.6-.5-1.1-1.1-1.1H3.6c-.6 0-1.1.5-1.1 1.1v5.8c0 .6.5 1.1 1.1 1.1h1.9"/></svg>` +
           `<svg class="i-ok" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span></div>` +
-          `<pre><code class="hljs">${out}</code></pre></div>`;
+          `<pre><code class="hljs">${out}</code></pre></div>` + (ui ? `</div>` : "");
       },
     },
   });
@@ -78,6 +83,26 @@
         } catch (e) { console.warn("diagram not drawn:", (e as Error)?.message?.slice(0, 200)); /* the text stays */ }
       }
     })();
+  });
+
+  // Components: each ui block whose text is valid drawn in its place, its code hidden (a block not
+  // valid, or still being written, stays code). The page's HTML is new with each change of the text:
+  // they are mounted again, with what the person did to them kept (keepFor).
+  $effect(() => {
+    html;
+    const blocks = [...box.querySelectorAll<HTMLElement>(".uib")];
+    if (!blocks.length) return;
+    const made = untrack(() => blocks.flatMap((b, n) => {
+      const src = b.querySelector("code")?.textContent ?? "";
+      const p = parseUi(src);
+      if (!p.ok) return [];
+      const host = document.createElement("div");
+      b.append(host);
+      b.classList.add("drawn");
+      try { return [mount(GenUi, { target: host, props: { items: p.items, keep: keepFor(n, src) } })]; }
+      catch (e) { console.warn("ui block not drawn:", (e as Error)?.message?.slice(0, 200)); host.remove(); b.classList.remove("drawn"); return []; }
+    }));
+    return () => { for (const m of made) unmount(m); };
   });
 
   // Copy from the keyboard too (Enter or Space on it).
@@ -126,6 +151,7 @@
   .md :global(.mm.drawn) { border: 1px solid var(--line-soft); border-radius: 14px; padding: 14px; background: var(--page); overflow: auto; text-align: center; }
   .md :global(.mm.drawn svg) { max-width: 100%; height: auto; }
   .md :global(.mm pre) { border: 1px solid var(--line-soft); border-radius: 14px; }
+  .md :global(.uib.drawn > .code) { display: none; }
   .md :global(code.pl) { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .md :global(code.pl:hover) { color: var(--accent); }
   .md :global(a) { color: var(--accent); text-decoration: none; }

@@ -307,7 +307,10 @@ export function splitDiff(diff: string): { path: string; lines: { op: string; te
 // What the node puts before a message's text in a prompt (internal/node: acpSlot.prompt, readerNote,
 // knowledgeFor), to the letter: a test of the node's holds these to its own.
 const promptLines = "Your final answer in this turn is sent back to the sender as the reply. To ask another agent, run `acpost send --to agent:<name> --body \"…\" --wait`. To attach files to your reply, run `acpost attach FILE…`.\n\n";
-const readerNote = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks and Mermaid. When a flow, an architecture, a sequence of calls or a state machine is clearer as a picture, draw it in a ```mermaid block (flowchart TD/LR or sequenceDiagram; every label in double quotes, A[\"api (HTTP)\"] -->|\"calls\"| B[\"store\"]; no HTML; about 15 nodes at most). Do not draw what a sentence says as well.\n\n";
+export const readerNote = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks, Mermaid and ```ui components. When a flow, an architecture, a sequence of calls or a state machine is clearer as a picture, draw it in a ```mermaid block (flowchart TD/LR or sequenceDiagram; every label in double quotes, A[\"api (HTTP)\"] -->|\"calls\"| B[\"store\"]; no HTML; about 15 nodes at most). Do not draw what a sentence says as well. When data, a plan or a question for the user is clearer as a component than as prose, put one strict JSON object (or an array of up to 8) in a ```ui block, each with \"type\" and an optional \"title\": stats {items:[{label,value,delta?}]}; chart {kind:\"bar\"|\"line\"|\"area\"|\"pie\",labels:[…],series:[{name,values:[a number a label]}],unit?}; table {columns:[…],rows:[[…]]} (the user sorts and filters it); timeline {items:[{time,title,text?,status?}]}; kanban {columns:[{title,cards:[{title,text?,tag?}]}]}; steps {items:[{title,status:\"done\"|\"doing\"|\"todo\"|\"failed\"}]}; choices {question,options:[…],multiple?}; form {fields:[{label,type:\"text\"|\"number\"|\"select\"|\"checkbox\",options?}]}. What the user picks or fills in comes back in their next message. Plain text in every field, no HTML.\n\n";
+// The note sessions started before the app drew components were given: their prompts read back
+// lose it too.
+const readerNoteBefore = "[acpost] The user reads your answers in the acpost app, which renders Markdown, code blocks and Mermaid. When a flow, an architecture, a sequence of calls or a state machine is clearer as a picture, draw it in a ```mermaid block (flowchart TD/LR or sequenceDiagram; every label in double quotes, A[\"api (HTTP)\"] -->|\"calls\"| B[\"store\"]; no HTML; about 15 nodes at most). Do not draw what a sentence says as well.\n\n";
 const knowledgeHead = "[acpost] What the user keeps as knowledge for this work (follow it unless the task says otherwise):\n\n";
 const knowledgeEnd = "\n\n[acpost] The task:\n\n";
 const attachedFiles = /^\[acpost\] Attached files:\n(?:- [^\n]*\n)+\n/;
@@ -335,7 +338,7 @@ export function ownBody(text: string): string {
   const head = messageHead.exec(rest);
   if (!head || !rest.startsWith(promptLines, head[0].length)) return text;
   rest = rest.slice(head[0].length + promptLines.length);
-  if (rest.startsWith(readerNote)) rest = rest.slice(readerNote.length);
+  for (const n of [readerNote, readerNoteBefore]) if (rest.startsWith(n)) { rest = rest.slice(n.length); break; }
   if (rest.startsWith(knowledgeHead)) {
     const end = rest.indexOf(knowledgeEnd, knowledgeHead.length - 2);
     if (end >= 0) rest = rest.slice(end + knowledgeEnd.length);
