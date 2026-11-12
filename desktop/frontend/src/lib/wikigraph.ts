@@ -4,6 +4,8 @@
 // name); a note's is a note, then a page of the wiki of its directory. A page is also part of its
 // parent. A link to nothing is kept as broken, so it can be shown and fixed.
 
+import { Lexer } from "marked";
+
 export type Kind = "page" | "note";
 export type Item = {
   id: string;
@@ -44,42 +46,54 @@ export const pageId = (repo: string, slug: string) => "page:" + repo + "#" + slu
 export const noteId = (name: string) => "note:" + name;
 
 const linkRe = /\[\[([^[\]|\n]{1,200})(?:\|([^[\]\n]{0,200}))?\]\]/g;
-const fence = /^ {0,3}(`{3,}|~{3,})/;
-const inlineToken = /(\[\[[^[\]|\n]{1,200}(?:\|[^[\]\n]{0,200})?\]\])|(`+)[^`][\s\S]*?\2|([^`[]+|\[|`+)/g;
 
 /**
- * Applies fn to the parts of a Markdown text outside code (fenced blocks and inline code spans),
- * which are kept as they are: a [[link]] in code is code.
+ * Where a Markdown text has code — fenced and indented blocks, inline code spans — as [start, end)
+ * offsets, found by marked's lexer (the one the app renders with), so the links the graph counts
+ * are those the page shows. Text with \r\n is taken as with \n, as the lexer takes it.
  */
-export function outsideCode(text: string, fn: (s: string) => string): string {
-  const lines = text.split("\n");
-  let open = "";
-  const out: string[] = [];
-  for (const line of lines) {
-    const f = fence.exec(line);
-    if (open) {
-      if (f && f[1][0] === open[0] && f[1].length >= open.length && !line.slice(f[0].length).trim()) open = "";
-      out.push(line);
-      continue;
+export function codeRanges(text: string): [number, number][] {
+  const out: [number, number][] = [];
+  let at = 0;
+  const mark = (raw: string) => {
+    const i = text.indexOf(raw, at);
+    if (i >= 0) { out.push([i, i + raw.length]); at = i + raw.length; return; }
+    // Code inside a quote or a list item comes without the line's marker: found line by line.
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      const j = text.indexOf(line, at);
+      if (j >= 0) { out.push([j, j + line.length]); at = j + line.length; }
     }
-    if (f) { open = f[1]; out.push(line); continue; }
-    // Whole wiki links first (a label may be code: [[arch|`API`]]), then inline code (a run of
-    // backticks to the same run on the line), then the text between.
-    out.push(line.replace(inlineToken, (all, link, _tick, plain) => (link !== undefined || plain !== undefined ? fn(all) : all)));
-  }
-  return out.join("\n");
+  };
+  // Tokens in the order they are in the text (blocks, then their inline tokens, list items, cells).
+  const walk = (v: unknown) => {
+    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+    if (!v || typeof v !== "object") return;
+    const tok = v as Record<string, unknown>;
+    if ((tok.type === "code" || tok.type === "codespan") && typeof tok.raw === "string") { mark(tok.raw); return; }
+    for (const k of Object.keys(tok)) if (k !== "raw" && typeof tok[k] === "object") walk(tok[k]);
+  };
+  try { walk(lexer.lex(text)); } catch { /* text the lexer cannot read: no code found in it */ }
+  return out;
 }
+const lexer = { lex: (s: string) => new Lexer({ gfm: true, breaks: true }).lex(s) };
+
+/** Each [[link]] of a text outside code (one whose [[ starts in code is code: a label may be). */
+function eachLink(text: string, fn: (m: RegExpExecArray) => void) {
+  const code = codeRanges(text);
+  const inCode = (i: number) => code.some(([a, b]) => i >= a && i < b);
+  linkRe.lastIndex = 0;
+  for (let m: RegExpExecArray | null; (m = linkRe.exec(text)); ) if (!inCode(m.index)) fn(m);
+}
+const lf = (s: string) => (s ?? "").replace(/\r\n?/g, "\n");
 
 /** The [[links]] of a body, in order, outside code. */
 export function parseLinks(body: string): Link[] {
   const found: Link[] = [];
-  outsideCode(body ?? "", s => {
-    for (const m of s.matchAll(linkRe)) {
-      const target = m[1].trim();
-      const label = m[2]?.trim();
-      if (target) found.push(label ? { target, label } : { target });
-    }
-    return s;
+  eachLink(lf(body), m => {
+    const target = m[1].trim();
+    const label = m[2]?.trim();
+    if (target) found.push(label ? { target, label } : { target });
   });
   return found;
 }
@@ -161,11 +175,16 @@ const escLabel = (s: string) => s.replace(/[\\[\]]/g, m => "\\" + m);
  * #wiki-broken:<target> for one that names nothing (shown marked, going nowhere).
  */
 export function linkify(body: string, from: Item, g: Graph): string {
-  return outsideCode(body ?? "", s => s.replace(linkRe, (_all, target: string, label?: string) => {
+  const text = lf(body);
+  let out = "", at = 0;
+  eachLink(text, m => {
+    const target = m[1], label = m[2];
     const to = g.resolve(from, target);
-    const text = escLabel((label ?? "").trim() || (to ? to.title : target.trim()));
-    return to ? `[${text}](#wiki:${encodeHref(to.id)})` : `[${text}](#wiki-broken:${encodeHref(target.trim())})`;
-  }));
+    const shown = escLabel((label ?? "").trim() || (to ? to.title : target.trim()));
+    out += text.slice(at, m.index) + (to ? `[${shown}](#wiki:${encodeHref(to.id)})` : `[${shown}](#wiki-broken:${encodeHref(target.trim())})`);
+    at = m.index + m[0].length;
+  });
+  return out + text.slice(at);
 }
 
 /** The item an in-app link names (#wiki:<id>), or "" when it is no such link. */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLinks, buildGraph, linkify, linkTarget, neighbourhood, matches, pageId, noteId, outsideCode } from "./wikigraph";
+import { parseLinks, buildGraph, linkify, linkTarget, neighbourhood, matches, pageId, noteId } from "./wikigraph";
 
 const pages = [
   { repo: "/r", slug: "overview", title: "Overview", body: "See [[arch]] and [[arch|the design]], [[style]], [[nowhere]] and [[overview]]." },
@@ -23,7 +23,6 @@ describe("wiki links", () => {
     expect(parseLinks("````\n```\n[[no]]\n````\n[[yes]]")).toEqual([{ target: "yes" }]);
     // An unmatched backtick is text.
     expect(parseLinks("a ` [[yes]]")).toEqual([{ target: "yes" }]);
-    expect(outsideCode("x `y` z", s => s.toUpperCase())).toBe("X `y` Z");
   });
 
   it("resolves in the page's own wiki first, then notes by name; a note's in notes, then its directory's wiki", () => {
