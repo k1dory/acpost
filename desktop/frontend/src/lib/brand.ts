@@ -62,11 +62,18 @@ export type Listed = { name: string; address: string; node?: string; product?: s
 
 /** The brand of an agent by its address (agent:claude, agent:x@node: a local agent is listed without
  * its node, usage names it with) or of a brand's name (a cloud agent's): what the node says runs
- * behind it first, then the name itself. */
+ * behind it first, then the agent's own name — never its node's (agent:helper@claude-mac is no
+ * Claude). */
 export function agentBrand(of: string | undefined, agents: Listed[]): BrandId | "" {
   const s = of ?? "";
   const a = s ? agents.find(a => a.address === s || (!!a.node && !a.address.includes("@") && `${a.address}@${a.node}` === s)) : undefined;
-  return brandOf(a?.product, s);
+  return brandOf(a?.product, nameOf(s));
+}
+
+/** The agent's name in an address (agent:name@node → name); a plain name as it is. */
+function nameOf(s: string): string {
+  const rest = s.includes(":") ? s.slice(s.indexOf(":") + 1) : s;
+  return rest.split("@")[0];
 }
 
 /** All the brands, for a test or a list. */
