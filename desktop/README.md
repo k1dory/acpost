@@ -60,3 +60,12 @@ another machine's). The diff's left side is the file as it is with the edit take
 once, replaced by the old): an edit whose text the event cut, or that is no longer in the file, opens
 the file without a diff. The chat's header there has "New task" and "Another chat" (the palette),
 the sidebar being hidden.
+
+The Wiki view reads a repository's pages (Pages), or shows everything the agents keep at once —
+every repository's wiki pages and the knowledge notes — as a table (sorted by any column, filtered
+by kind, searched over titles and text) or a graph of their links (`lib/wikigraph.ts`: `[[target]]`
+and `[[target|label]]` resolve in the page's own wiki first, then to a note by name; a page is
+"part of" its parent; a link to nothing is listed as broken). The graph is SVG laid out by a small
+seeded force layout of our own (`lib/forcelayout.ts`): ⌘/ctrl and the wheel or a pinch zoom,
+dragging the background pans, a dragged node stays put. An item opens in a drawer with its text,
+its links, its backlinks and the graph around it; "Open" goes to the page, or a note to Settings.
