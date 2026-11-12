@@ -66,10 +66,15 @@
     if (web) { Browser.OpenURL(web); return; }
     opened = a;
   }
-  // Its chat: the one listed, or (older than the chats listed) the thread itself.
+  // Its chat: the one listed, or (older than the chats listed) the thread itself. Only the latest
+  // click opens one, and none once the library is gone: an answer that comes late changes nothing.
+  let opening = 0;
+  $effect(() => () => { opening++; });
   async function openChat(a: LibItem) {
     if (!a.thread) return;
+    const my = ++opening;
     await app.loadChats();
+    if (my !== opening) return;
     const key = "thread:" + a.thread;
     app.view = "chat";
     const listed = app.chats.find(c => c.key === key);

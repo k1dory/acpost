@@ -888,6 +888,9 @@ class App {
   artifact = $state<ArtifactRef | null>(null);
   openedArtifacts = $state<ArtifactRef[]>([]);
   openArtifact(ref: ArtifactRef) {
+    // An attachment of the open chat: its relative links lead from the chat's directory, whichever
+    // place opened it (a message, the panel).
+    if (ref.msg && !ref.base && this.msgs.some(m => m.id === ref.msg)) ref = { ...ref, base: this.chatCwd() };
     const a = normalizeRef(ref, this.home);
     const known = this.openedArtifacts.find(x => sameRef(x, a));
     if (!known) this.openedArtifacts = [...this.openedArtifacts, a];
