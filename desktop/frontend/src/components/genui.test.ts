@@ -258,26 +258,6 @@ describe("review round 1", () => {
     expect(q<HTMLInputElement>(".form input").value).toBe("");
   });
 
-  it("replaces a choice's earlier answer in the draft rather than adding a second (P2)", async () => {
-    const { app } = await import("../lib/state.svelte");
-    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
-    app.conn = { ok: true };
-    app.draft.agent = "agent:claude";
-    mounted.push(mount((await import("./Composer.svelte")).default, { target: document.body }));
-    flushSync();
-    await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }), "msg_C");
-    const add = () => q<HTMLButtonElement>(".ask .btn");
-    all(".opt")[1].click(); flushSync();
-    add().click(); flushSync(); await flush(); flushSync();
-    expect(add().disabled).toBe(true); // added, nothing changed since
-    const ta = q<HTMLTextAreaElement>("textarea");
-    ta.value = "first\n" + ta.value + "thanks"; ta.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
-    all(".opt")[0].click(); flushSync();
-    add().click(); flushSync(); await flush(); flushSync();
-    expect(ta.value).toBe("first\n> Which DB?\n\nPostgres\n\nthanks");
-    expect(fake.Node.SendTask).not.toHaveBeenCalled();
-  });
-
   it("keeps a component, its focus and its selection, as the reply streams on (P2)", async () => {
     const src = JSON.stringify({ type: "table", columns: ["host"], rows: [["a"], ["b"], ["c"], ["d"], ["e"], ["f"]] });
     const set = await streaming("Here:\n\n```ui\n" + src + "\n```\n");
@@ -452,38 +432,13 @@ describe("review round 3", () => {
     expect(answerAt("anything", "  \n")).toBe(-1);
   });
 
-  it("lets a shorter choice replace a longer one it begins (P2)", async () => {
-    const ta = await composer();
-    await show(block({ type: "choices", question: "Language?", options: ["JavaScript", "Java"] }), "msg_F");
-    const add = () => q<HTMLButtonElement>(".ask .btn");
-    all(".opt")[0].click(); flushSync();
-    add().click(); await settle();
-    expect(ta.value).toBe("> Language?\n\nJavaScript\n\n");
-    all(".opt")[1].click(); flushSync();
-    expect(add().disabled).toBe(false); // "Java" is not in the draft: "JavaScript" is
-    add().click(); await settle();
-    expect(ta.value).toBe("> Language?\n\nJava\n\n");
-  });
-
-  it("lets a form change 10 to 1 (P2)", async () => {
-    const ta = await composer();
-    await show(block({ type: "form", fields: [{ label: "n", type: "number", value: 10 }] }), "msg_G");
-    q<HTMLButtonElement>(".form .btn").click(); await settle();
-    expect(ta.value).toBe("- n: 10\n\n");
-    const i = q<HTMLInputElement>(".form input");
-    i.value = "1"; i.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
-    expect(q<HTMLButtonElement>(".form .btn").disabled).toBe(false);
-    q<HTMLButtonElement>(".form .btn").click(); await settle();
-    expect(ta.value).toBe("- n: 1\n\n");
-  });
-
-  // The plot's geometry as drawn: the left margin (the grid's start), its width, a category's band.
   const geometry = (chart: Element) => {
     const grid = chart.querySelector("line.grid")!;
     const L = +grid.getAttribute("x1")!, right = +grid.getAttribute("x2")!;
     const W = +chart.querySelector("svg")!.getAttribute("viewBox")!.split(" ")[2];
     return { L, right, W };
   };
+
 
   it("gives large axis labels room, short beyond what fits (P2)", async () => {
     await show(block([
@@ -534,41 +489,37 @@ describe("review round 3", () => {
     expect(q("div.chart svg").classList.contains("wide")).toBe(false);
   });
 
-describe("review round 4 and 5: answers in the draft", () => {
+describe("review rounds 4 to 6: answers in the draft", () => {
   async function fresh() {
     const { app } = await import("../lib/state.svelte");
     const draft = await import("./genui/draft");
     app.newTask();
+    app.quote = "";
     return { app, ...draft };
   }
-  it("an answer whose last line ends with a space is found whole and replaced in place, through toDraft", async () => {
-    const { app, toDraft, answerAt } = await fresh();
-    const first = "> Deploy?\n- Env: prod\n- Notes: \n\n";
-    app.draftOf().text = "hello\n" + first;
-    expect(answerAt(app.draftOf().text, first)).toBe(6);
-    const next = "> Deploy?\n- Env: stage\n- Notes: \n\n";
-    toDraft(next, first);
-    expect(app.draftOf().text).toBe("hello\n> Deploy?\n- Env: stage\n- Notes: \n\n");
-    expect(app.quote).toBe("");
-    expect(answerAt(app.draftOf().text, next)).toBe(6);
+  it("a new answer is added; the draft as it stands is never rewritten, whatever lines it holds", async () => {
+    const { app, toDraft } = await fresh();
+    // Another form's answer that ends with the very line an earlier answer of this form was.
+    const other = "- Env: prod\n- Host: a\n\n";
+    app.draftOf().text = other;
+    toDraft("- Host: b\n\n", "- Host: a\n\n");
+    expect(app.draftOf().text).toBe(other);          // untouched
+    expect(app.quote).toBe("- Host: b\n\n");         // on its way to the composer, after what is there
+    // The same with the earlier answer there as its own block, or there twice.
+    for (const draft of ["- Host: a\n\n", "- Host: a\n\n- Host: a\n\n", "x\n- Host: a\n- Port: 80\n\n"]) {
+      app.draftOf().text = draft; app.quote = "";
+      toDraft("- Host: c\n\n", "- Host: a\n\n");
+      expect(app.draftOf().text).toBe(draft);
+      expect(app.quote).toBe("- Host: c\n\n");
+    }
   });
-  it("one form's answer is never changed by another's: lines inside another block are not it", async () => {
-    const { app, toDraft, answerAt } = await fresh();
-    const a1 = "- Host: a\n- Port: 80\n\n", b1 = "- Host: b\n\n";
-    app.draftOf().text = a1 + b1;
-    const a2 = "- Host: b\n- Port: 80\n\n";
-    toDraft(a2, a1);                                    // A updated: now holds a line B's answer is
-    expect(app.draftOf().text).toBe(a2 + b1);
-    const b2 = "- Host: c\n\n";
-    toDraft(b2, b1);                                    // B updated: B's own block, not the line in A
-    expect(app.draftOf().text).toBe(a2 + b2);
-    expect(answerAt(app.draftOf().text, a2)).toBe(0);
-    // The same answer there twice: which one is not known, so neither is replaced (it is added).
-    app.draftOf().text = b1 + b1;
-    app.quote = "";
-    toDraft(b2, b1);
-    expect(app.draftOf().text).toBe(b1 + b1);
-    expect(app.quote).toBe(b2);
+  it("an answer is known to be in the draft only as its own block (the button's state)", async () => {
+    const { app, answerAt } = await fresh();
+    const first = "> Deploy?\n- Env: prod\n- Notes: \n\n";
+    expect(answerAt("hello\n" + first, first)).toBe(6);                 // a blank last field keeps its space
+    expect(answerAt("- Host: b\n- Port: 80\n\n", "- Host: b\n\n")).toBe(-1); // a line of another block
+    expect(answerAt("JavaScript\n\n", "Java\n\n")).toBe(-1);            // not a prefix
+    expect(app.quote).toBe("");
   });
 });
 });

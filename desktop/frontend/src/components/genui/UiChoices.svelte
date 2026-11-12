@@ -1,6 +1,6 @@
 <script lang="ts">
   // A question from a reply: the person picks (one option, or several), and "Add to message" puts
-  // the answer into their message being written, in place of the one added before. Nothing is sent
+  // the answer into their message being written, after what is there (one added before stays). Nothing is sent
   // from here.
   import { untrack } from "svelte";
   import { t } from "../../lib/i18n.svelte";

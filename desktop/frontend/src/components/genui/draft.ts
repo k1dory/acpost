@@ -23,15 +23,13 @@ export function answerAt(hay: string, text: string): number {
   return at;
 }
 
-/** An answer from a reply's question or form, put into the person's message being written: in
- * place of the answer given before (if the draft still has it whole, as it was put there), else
- * after what is there (the composer takes app.quote, as for ⌘L). Never sent from here: the person
- * sends it. */
-export function toDraft(text: string, before = "") {
-  const d = app.draftOf();
-  const at = before ? answerAt(d.text, before) : -1;
-  if (at >= 0) d.text = d.text.slice(0, at) + whole(text) + d.text.slice(at + whole(before).length);
-  else app.quote = (app.quote ? app.quote + "\n" : "") + text;
+/** An answer from a reply's question or form, put into the person's message being written: after
+ * what is there (the composer takes app.quote, as for ⌘L). An answer given before is left as it
+ * is — the person's draft is never rewritten from here: which lines of it are that answer cannot
+ * be told for certain from its text (two forms may write the same lines). Never sent from here:
+ * the person sends it. */
+export function toDraft(text: string, _before = "") {
+  app.quote = (app.quote ? app.quote + "\n" : "") + text;
   if (app.view !== "chat" && app.view !== "ide") app.view = "chat";
 }
 

@@ -21,7 +21,7 @@
   const now = $derived(formAnswer(c, values, t("yes"), t("no")));
   // What the draft has, read from it: answers deleted there can be added again.
   const added = $derived(inDraft(sent));
-  // In place of the answers added before, if the draft still has them.
+  // Added after what the draft holds; an answer added before stays as the person has it.
   function answer() {
     toDraft(now, sent);
     sent = keep.sent = now;
