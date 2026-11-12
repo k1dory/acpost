@@ -149,7 +149,10 @@ export class SendOp {
   /** The message being sent (all of it but its key) and its idempotency key: the same message
    * tried again has the same key, so the node runs it once even when its first answer was lost.
    * content is the message without where it goes; task, the request as it was made. */
-  sending: { what: string; key: string; content: string; task: any; dest: string; moved?: boolean } | null = null;
+  /** typed: the draft's text as it was when sent; named: the agent it named ("@codex …"), as it
+   * was read then (null: none). The same text sent again is read the same way, whoever can be
+   * named by then. */
+  sending: { what: string; key: string; content: string; task: any; dest: string; moved?: boolean; typed?: string; named?: { to: string; rest: string } | null } | null = null;
 
   /** Something was made or asked that a retry must reuse. */
   pending(): boolean { return !!(this.sending || this.sandbox || this.sandboxReq); }

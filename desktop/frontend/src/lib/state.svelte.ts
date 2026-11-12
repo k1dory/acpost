@@ -16,7 +16,7 @@ export type Msg = {
 export type Module = { id: string; name: string; url: string };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
 export type Chat = {
-  key: string; kind: "thread" | "session" | "cloud"; agent?: string; parent?: string; title: string; cwd?: string; repo?: string;
+  key: string; kind: "thread" | "session" | "cloud"; agent?: string; agents?: string[]; parent?: string; title: string; cwd?: string; repo?: string;
   thread?: string; session?: string; session_agent?: string; sandbox?: string; status?: string; updated: string;
   messages?: number; running?: number; queued?: number; failed?: number; folder?: string; cloud_agent?: string;
 };
@@ -164,6 +164,12 @@ class App {
   asking = $state<any[]>([]); // approvals waiting
   theme = $state<"light" | "dark" | "system">("light");
   target = $state<string>("");
+  /** Who the person chose to answer next in a thread (kept while the app runs, like its draft). */
+  private chosen = new Map<string, string>();
+  /** How many times the person chose in a thread: a send that answers after another choice (even
+   * one back to the same agent) does not change who answers. */
+  private picked = new Map<string, number>();
+  private picks(thread: string): number { return this.picked.get(thread) ?? 0; }
   draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "" });
   /** Each agent's settings (a Claude model is not a Codex one). */
   settings = $state<Record<string, Settings>>({});
@@ -397,7 +403,15 @@ class App {
       this.msgs = mergeMsgs(ms, this.msgs);
       for (const m of this.msgs) this.watch(m);
       this.focus = ms[ms.length - 1]?.id ?? "";
-      const to = ms.find(m => m.to.startsWith("agent:"))?.to;
+      // The next message goes to whoever was asked last (a chat of several agents); the person
+      // chooses another in the composer.
+      // Chosen here before (a draft left unsent keeps who it is for): that one. Only the person's
+      // own messages say it: what a client or another node put in the thread does not.
+      const asked = ms.filter(m => m.to.startsWith("agent:"));
+      // A message of this thread still unanswered for (its draft holds the request): its agent, the
+      // one it goes to when sent again.
+      const pending = this.draftMap.get("thread:" + thread)?.sending?.task?.to as string | undefined;
+      const to = this.chosen.get(thread) ?? pending ?? (asked.findLast(ownAsk) ?? asked[0])?.to;
       if (to) this.target = to;
       this.loadOptions(this.target);
     } catch (e) { this.error = errText(e); }
@@ -499,6 +513,54 @@ class App {
       }
       this.runningSince.delete(m.id);
     }
+  }
+
+  /** Who a message of the open chat can go to: the agents asked in it so far, then this Mac's
+   * other agents (called in, one works in the chat's directory and is told what was said without
+   * it). A conversation that is not a thread yet is its agent's alone (its session), and so is a
+   * cloud sandbox's (the work is in the sandbox). */
+  targets(): string[] {
+    const out: string[] = [];
+    const add = (a?: string) => { if (a?.startsWith("agent:") && !out.includes(a)) out.push(a); };
+    if (!this.thread) { add(this.target); return out; }
+    for (const m of this.msgs) if (ownAsk(m)) add(m.to);
+    add(this.target);
+    if (out.some(a => a.startsWith("agent:sb_"))) return out;
+    for (const a of this.localAgents()) add(a.address);
+    return out;
+  }
+  /** The open chat's next message goes to this agent (one of targets()). */
+  setTarget(a: string): boolean {
+    if (!this.targets().includes(a)) return false;
+    this.target = a;
+    if (this.thread) { this.chosen.set(this.thread, a); this.picked.set(this.thread, this.picks(this.thread) + 1); }
+    this.loadOptions(a);
+    return true;
+  }
+  /** The draft is, unchanged, a message already sent whole whose answer was lost (it moved with
+   * its conversation into the thread made of it): sent again, it is that message as first made —
+   * nothing in it is read as naming an agent. */
+  sentBefore(d: ComposerDraft): boolean {
+    const s = d.sending;
+    // (Compared as it is sent: without the space around it.)
+    return !!s && (s.typed?.trim() === d.text.trim() || (!!s.moved && s.task?.body === d.text.trim()));
+  }
+  /** A message that starts by naming an agent of the chat ("@codex look at this"): the agent, and
+   * the message without the name. Only where there is another agent to choose: elsewhere the
+   * text is the message, whole. */
+  mention(text: string): { to: string; rest: string } | null {
+    const all = this.targets();
+    if (all.length < 2) return null;
+    // An agent of another node is named with its node ("@codex@peer"): a bare name is this
+    // node's, never a namesake elsewhere.
+    const m = /^\s*@([^\s@]+(?:@[^\s@]+)?)(?:\s+|$)/.exec(text);
+    if (!m) return null;
+    // The name as written; another case only when one agent alone has it ("reviewer" and
+    // "Reviewer" are two agents).
+    const named = (a: string) => a.slice("agent:".length);
+    const loose = all.filter(a => named(a).toLowerCase() === m[1].toLowerCase());
+    const to = all.find(a => named(a) === m[1]) ?? (loose.length === 1 ? loose[0] : undefined);
+    return to ? { to, rest: text.slice(m[0].length) } : null;
   }
 
   /** A setting chosen for an agent ("": its default). */
@@ -622,13 +684,24 @@ class App {
    * (with the chat a new task becomes). True when sent. */
   async submit(d: ComposerDraft): Promise<boolean> {
     const sent = d.text;
-    const body = sent.trim();
     // Words, or files alone (a screenshot says it): nothing at all is not a message.
     if (!d.hasContent || d.busy) return false;
     d.busy = true;
     // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
     // are part of it: waited for, not left for the next message.
     const at = this.sendAt(d), lim = at.limits, owned = sendFiles(d, lim);
+    // "@codex look at this": to that agent of the chat, without the name. The draft stays as it
+    // was typed until the node has the message: sent again, it is the same message to the same agent.
+    // (A message already sent whole from where there was no one else to name — a session that
+    // became this thread, its answer lost — is that message again, as it was first made.)
+    // (Read as it was the first time, when it is that message again.)
+    const named = this.sentBefore(d) ? d.sending?.named ?? null : at.thread ? this.mention(sent) : null;
+    at.typed = sent; at.mention = named;
+    if (named) { at.target = named.to; at.named = true; at.settings[named.to] = this.settingsFor(named.to); }
+    // Sent to the agent shown: that is who this thread's messages go to until the person chooses
+    // another (opened again with this one unanswered, it is sent again to the same agent).
+    else if (at.thread && at.target) this.chosen.set(at.thread, at.target);
+    const body = (named ? named.rest : sent).trim();
     await owned.wait;
     const { files: sentFiles, refused } = owned.files();
     owned.done();
@@ -706,11 +779,18 @@ class App {
       if (d.epoch !== epoch) return false; // a new task meanwhile: this one is not it
       // Its draft moved to the thread the node made of it (its answer lost): the same message is
       // the request as it was first made, with its key — the node gives back what it has.
-      if (d.sending?.moved && d.sending.content === content) {
+      // Unless the person since chose another agent for it (the chip, "@name"): then it is a
+      // message to that one, in the thread, with a key of its own.
+      const other = (at.named || this.picks(thread || into) > 0) && d.sending?.task?.to !== to;
+      if (d.sending?.moved && d.sending.content === content && !other) {
         task = { ...d.sending.task };
         what = d.sending.what;
+        to = task.to; // the agent it went to, shown as such once it is acknowledged
       }
-      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest };
+      if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest, typed: at.typed, named: at.mention };
+      // The same request from text typed a little differently (a space gone): its key stays, and
+      // this text is what the next unchanged retry is.
+      else if (!d.sending.moved || at.typed !== undefined) { d.sending.typed = at.typed; d.sending.named = at.mention; }
       const key = d.sending.key;
       task.idem = key;
       const m = (await Node.SendTask(task)) as any as Msg;
@@ -734,12 +814,19 @@ class App {
       if (here) {
         this.thread = m.thread;
         this.target = to;
+        if (thread) this.chosen.set(m.thread, to);
         // A thread that was there before this message (the draft had moved to it): its earlier
         // turns are shown and followed too, not just this one.
         if (into) await this.openThread(m.thread);
       }
+      // Who it went to answers next in its thread (an agent named in it, "@codex …"), open or
+      // not by now, unless the person chose another while it went.
+      if (thread && thread === m.thread && to && this.picks(thread) === at.picks) this.chosen.set(thread, to);
       // Shown wherever its thread is open, now (if it is opened later, the node's list has it).
       if (this.thread === m.thread) {
+        // Sent from this thread to an agent named in it ("@codex …"): that one answers next too.
+        // Unless the person chose another while it went.
+        if (thread === m.thread && to && this.picks(thread) === at.picks) this.target = to;
         // Sent again after its answer was lost, the node gives the message it has: one, not two.
         if (this.msgs.some(x => x.id === m.id)) this.replace(m);
         else this.msgs = [...this.msgs, m];
@@ -758,7 +845,8 @@ class App {
     // The settings chosen then, for each agent it can go to: the new task's agent of this Mac, or
     // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
     return {
-      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target,
+      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target, named: false, picks: this.picks(this.thread),
+      typed: undefined as string | undefined, mention: null as { to: string; rest: string } | null,
       key: d.key, limits: this.limits, // the draft's chat, and the node's limits, as they were
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
       settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,
@@ -960,6 +1048,12 @@ class App {
 }
 
 /** Which chat a handoff is of: its thread, or its session. */
+/** A message the person of this node sent an agent (not what an agent asked another, nor what a
+ * client or another node put in the thread). */
+function ownAsk(m: Msg): boolean {
+  return !m.depth && m.from.startsWith("user:") && !m.from.includes("@") && m.to.startsWith("agent:");
+}
+
 function handoffFrom(thread: string, agent: string, session: string) {
   return thread ? "thread:" + thread : `session:${agent}/${session}`;
 }
