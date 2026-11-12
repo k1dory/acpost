@@ -32,7 +32,10 @@
   const at = $derived.by(() => {
     if (targets.length < 2) return [];
     const m = /^@(\S*)$/.exec(d.text);
-    return m ? targets.filter(a => a.slice("agent:".length).toLowerCase().startsWith(m[1].toLowerCase())) : [];
+    if (!m) return [];
+    // The one named exactly first (Enter takes it): "@codex" is this node's, not codex@peer.
+    const q = m[1].toLowerCase(), name = (a: string) => a.slice("agent:".length).toLowerCase();
+    return targets.filter(a => name(a).startsWith(q)).sort((a, b) => Number(name(b) === q) - Number(name(a) === q));
   });
   function takeAgent(a: string | undefined, clear = false) {
     if (!a) return;

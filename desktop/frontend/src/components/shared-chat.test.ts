@@ -176,6 +176,27 @@ describe("a chat shared by several agents", () => {
     expect(app.mention("@codex@peer review")).toEqual({ to: "agent:codex@peer", rest: "review" });
     type("@co");
     expect([...document.querySelectorAll(".menu .mi.who")].map(i => i.textContent!.trim())).toEqual(["codex@peer", "codex"]);
+    type("@codex");
+    press("Enter"); // the one named exactly
+    expect(app.target).toBe("agent:codex");
+  });
+
+  it("an agent named in a message answers next in that thread, though its answer came with the thread closed", async () => {
+    const app = await setup([msg("m1", "agent:claude")]);
+    type("plain");
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    let ack!: () => void;
+    fake.Node.SendTask.mockImplementationOnce((t: any) => new Promise(r => { ack = () => r(msg("m8", t.to, { state: "queued" })); }));
+    type("@codex review");
+    press("Enter");
+    await flush();
+    app.newTask();
+    ack();
+    await flush(); await flush();
+    fake.Node.Thread.mockResolvedValue([msg("m1", "agent:claude"), msg("m9", "agent:claude"), msg("m8", "agent:codex")]);
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", title: "t", updated: "" } as any);
+    expect(app.target).toBe("agent:codex");
   });
 
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
