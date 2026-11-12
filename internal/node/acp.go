@@ -968,7 +968,7 @@ func (s *acpSlot) handle(m store.Message) {
 		return
 	}
 	// A chat shared with other agents: what they were asked and answered since this one was told.
-	said, saidMark, err := a.othersSaid(turnCtx, m)
+	said, saidMark, err := a.othersSaid(turnCtx, m, string(sid))
 	if err != nil {
 		n.log.Debug("shared chat", "err", err) // the turn goes on without it
 	}
@@ -1066,7 +1066,7 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		return
 	}
-	a.toldOthers(m.Thread, saidMark) // the prompt went through: the session has it
+	a.toldOthers(string(sid), m.Thread, saidMark) // the prompt went through: the session has it
 	switch resp.StopReason {
 	case acp.StopReasonEndTurn:
 		complete(store.Done, reply, Failure{})

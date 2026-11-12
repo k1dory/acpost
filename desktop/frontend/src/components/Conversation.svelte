@@ -30,7 +30,7 @@
   });
   const brand = (a: string) => a.includes("codex") ? "Codex" : a.includes("claude") ? "Claude Code" : who(a).name;
   // A chat shared by several agents names them all.
-  const shared = $derived((app.msgs.length, app.thread ? app.targets().filter(a => app.msgs.some(m => !m.depth && m.to === a)) : []));
+  const shared = $derived((app.msgs.length, app.thread ? app.targets().filter(a => app.msgs.some(m => !m.depth && m.to === a && m.from.startsWith("user:") && !m.from.includes("@"))) : []));
   const source = $derived(shared.length > 1 ? shared.map(brand).join(" + ") : app.chat?.kind === "cloud" ? t("Cloud") : (app.chat?.agent ?? app.target).includes("codex") ? "Codex" : (app.chat?.agent ?? app.target).includes("claude") ? "Claude Code" : "");
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => tilde(d, app.home);

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -38,17 +39,20 @@ type sharedMark struct {
 
 // othersSaid is what the thread's other agents were asked and answered since this agent was last
 // told, as text to go before m's body ("" when nothing), and the mark to keep once the agent has
-// it (toldOthers). Only for a thread of this node's own user and agents, and only their messages:
-// what a token client or another node put in a thread of the same name is not handed to an agent
-// as the conversation. An agent without the preamble (its prompts are the bodies, whole) and one
-// that keeps no session between messages are told nothing.
-func (a *acpAgent) othersSaid(ctx context.Context, m store.Message) (string, *sharedMark, error) {
+// it (toldOthers). The mark is the session's (sid): a turn of another session of the agent in the
+// thread (another task's, one made anew) was not told what this one was, and turns of one session
+// never run at once. Only for a thread of this node's own user and agents, and only what they
+// asked agents of this node: what a token client or another node put in a thread of the same
+// name, and what an agent of another node answered, is not handed to an agent as the
+// conversation. An agent without the preamble (its prompts are the bodies, whole) and one that
+// keeps no session between messages are told nothing.
+func (a *acpAgent) othersSaid(ctx context.Context, m store.Message, sid string) (string, *sharedMark, error) {
 	if m.Thread == "" || !knowledgeSender(m) || !a.cfg.PreambleOn() || a.cfg.Session == "message" {
 		return "", nil, nil
 	}
 	st := a.n.st
 	var mark sharedMark
-	if raw, err := st.Session(ctx, a.addr, sharedSeen+m.Thread); err != nil {
+	if raw, err := st.Session(ctx, a.addr, sharedKey(sid, m.Thread)); err != nil {
 		return "", nil, err
 	} else if raw != "" {
 		_ = json.Unmarshal([]byte(raw), &mark) // unreadable: as if never told (told again, not lost)
@@ -62,8 +66,10 @@ func (a *acpAgent) othersSaid(ctx context.Context, m store.Message) (string, *sh
 			return "", nil, err
 		}
 		for _, x := range page {
-			if x.ID == m.ID || x.To == a.addr || x.From == a.addr || x.State != store.Done || !localSender(x.From) {
-				continue // its own turns it has; what it asked another itself, it was answered
+			// Its own turns it has. What it asked another itself is told too: sent without waiting,
+			// the answer never reached it.
+			if x.ID == m.ID || x.To == a.addr || x.State != store.Done || !localExchange(x) {
+				continue
 			}
 			fin := x.FinishedAt.UnixMilli()
 			if _, told := mark.IDs[x.ID]; told || fin < floor {
@@ -100,8 +106,11 @@ func (a *acpAgent) othersSaid(ctx context.Context, m store.Message) (string, *sh
 	total := 0
 	for i := len(news) - 1; i >= 0 && len(parts) < sharedMaxTurns; i-- {
 		x, err := st.Get(ctx, news[i].ID)
-		if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
 			continue // gone meanwhile (retention)
+		}
+		if err != nil {
+			return "", nil, err // not read: not marked as told
 		}
 		part := fmt.Sprintf("[%s asked %s]\n%s\n[%s answered]\n%s\n", x.From, x.To, clipText(x.Body, sharedMaxBody), x.To, clipText(x.Reply, sharedMaxReply))
 		if total+len(part) > sharedMaxTotal && len(parts) > 0 {
@@ -128,16 +137,29 @@ func (a *acpAgent) othersSaid(ctx context.Context, m store.Message) (string, *sh
 }
 
 // toldOthers keeps the mark of what the agent was told of a thread: after its prompt went through.
-func (a *acpAgent) toldOthers(thread string, mark *sharedMark) {
+func (a *acpAgent) toldOthers(sid, thread string, mark *sharedMark) {
 	if mark == nil {
 		return
 	}
 	raw, _ := json.Marshal(mark)
 	ctx, done := context.WithTimeout(a.n.ctx, 5*time.Second)
 	defer done()
-	if err := a.n.st.PutSession(ctx, a.addr, sharedSeen+thread, string(raw)); err != nil {
+	if err := a.n.st.PutSession(ctx, a.addr, sharedKey(sid, thread), string(raw)); err != nil {
 		a.n.log.Debug("shared chat mark", "err", err)
 	}
+}
+
+// sharedKey is the store's key of a session's mark for a thread (the session's id length-prefixed:
+// no id spells another's key).
+func sharedKey(sid, thread string) string {
+	return fmt.Sprintf("%s%d:%s|%s", sharedSeen, len(sid), sid, thread)
+}
+
+// localExchange: a message this node's own user or one of its agents sent here to an agent of
+// this node (a cloud sandbox of the user's is one), not forwarded from or to anywhere.
+func localExchange(x store.Message) bool {
+	to, err := ParseAddress(x.To)
+	return err == nil && to.Kind == "agent" && to.Node == "" && x.Origin == "" && localSender(x.From)
 }
 
 // clipText is s within max bytes, cut at a character, the cut said; "(no text)" for none.

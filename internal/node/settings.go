@@ -98,8 +98,16 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 			switch {
 			case root.To == "agent:"+to.Name && (p.local() || root.From == p.Address()):
 				set(metaCwd, root.Meta[metaCwd])
-			case root.To != "agent:"+to.Name && p.local() && localSender(root.From) && root.Origin == "":
-				set(metaCwd, cmpOr(root.Meta[metaCwd], root.Meta[metaSessionCwd]))
+			case root.To != "agent:"+to.Name && p.local() && localExchange(root):
+				dir := cmpOr(root.Meta[metaCwd], root.Meta[metaSessionCwd])
+				// No directory chosen: the thread's first agent runs in its configured one (or the
+				// home directory), and so does the one called in.
+				if first := n.agentCfg(strings.TrimPrefix(root.To, "agent:")); dir == "" && first != nil && first.Driver == "acp" {
+					if dir = first.Cwd; dir == "" {
+						dir, _ = os.UserHomeDir()
+					}
+				}
+				set(metaCwd, dir)
 			}
 		}
 	}

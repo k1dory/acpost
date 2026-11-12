@@ -102,12 +102,10 @@
 
   // The text and files leave the draft only once the node has them (app.submit).
   async function send() {
-    // "@codex look at this": the message goes to that agent of the chat, without the name.
+    // "@codex" and nothing else chooses who answers; with a message after it, the message goes to
+    // that agent (app.submit).
     const named = isNew ? null : app.mention(d.text);
-    if (named && app.setTarget(named.to)) {
-      d.text = named.rest;
-      if (!d.hasContent) { ta?.focus(); return; }
-    }
+    if (named && !named.rest.trim() && !d.files.length && !d.reading.size) { takeAgent(named.to, true); return; }
     await app.submit(d);
     ta?.focus();
   }

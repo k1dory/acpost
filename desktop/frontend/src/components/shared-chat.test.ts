@@ -96,6 +96,50 @@ describe("a chat shared by several agents", () => {
     expect(fake.Node.SendTask.mock.calls[0][0]).toMatchObject({ to: "agent:codex", body: "@nobody hello" });
   });
 
+  it("what a client or another node put in the thread does not choose who the person's next message goes to", async () => {
+    const app = await setup([msg("m1", "agent:claude"), msg("m2", "agent:spy@peer", { from: "client:ci" }), msg("m3", "agent:spy@peer", { from: "user:x@peer" })]);
+    expect(app.target).toBe("agent:claude");
+    expect(app.targets()).toEqual(["agent:claude", "agent:codex"]);
+  });
+
+  it("a message with @name whose answer was lost is sent again as the same message: same agent, body and key", async () => {
+    await setup([msg("m1", "agent:claude")]);
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("lost"));
+    type("@codex @claude is the reviewer");
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    expect(textarea().value).toBe("@codex @claude is the reviewer"); // as typed until the node has it
+    press("Enter");
+    await flush(); await flush(); svelte.flushSync();
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(a).toMatchObject({ to: "agent:codex", body: "@claude is the reviewer" });
+    expect(b).toEqual(a);
+    expect(a.idem).toBeTruthy();
+    expect(textarea().value).toBe("");
+  });
+
+  it("who was chosen stays with the chat's unsent draft when the chat is left and opened again", async () => {
+    const app = await setup([msg("m1", "agent:claude")]);
+    app.setTarget("agent:codex");
+    type("not sent yet");
+    app.newTask();
+    await app.open({ key: "thread:T", kind: "thread", thread: "T", agent: "agent:claude", title: "t", updated: "" } as any);
+    svelte.flushSync();
+    expect(app.target).toBe("agent:codex");
+    expect(app.draftOf(app.draftKey()).text).toBe("not sent yet");
+  });
+
+  it("with no other agent to choose, @name is the message's own text", async () => {
+    await setup([msg("m1", "agent:claude")], ["claude"]);
+    type("@claude");
+    press("Enter");
+    await flush(); await flush();
+    type("@claude please explain");
+    press("Enter");
+    await flush(); await flush();
+    expect(fake.Node.SendTask.mock.calls.map(c => c[0].body)).toEqual(["@claude", "@claude please explain"]);
+  });
+
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
     let app = await setup([msg("m1", "agent:claude")], ["claude"]);
     expect(chip()).toBeNull();

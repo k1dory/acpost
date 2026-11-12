@@ -136,6 +136,8 @@ class App {
   asking = $state<any[]>([]); // approvals waiting
   theme = $state<"light" | "dark" | "system">("light");
   target = $state<string>("");
+  /** Who the person chose to answer next in a thread (kept while the app runs, like its draft). */
+  private chosen = new Map<string, string>();
   draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "" });
   /** Each agent's settings (a Claude model is not a Codex one). */
   settings = $state<Record<string, Settings>>({});
@@ -371,8 +373,10 @@ class App {
       this.focus = ms[ms.length - 1]?.id ?? "";
       // The next message goes to whoever was asked last (a chat of several agents); the person
       // chooses another in the composer.
+      // Chosen here before (a draft left unsent keeps who it is for): that one. Only the person's
+      // own messages say it: what a client or another node put in the thread does not.
       const asked = ms.filter(m => m.to.startsWith("agent:"));
-      const to = (asked.findLast(m => !m.depth) ?? asked[0])?.to;
+      const to = this.chosen.get(thread) ?? (asked.findLast(ownAsk) ?? asked[0])?.to;
       if (to) this.target = to;
       this.loadOptions(this.target);
     } catch (e) { this.error = errText(e); }
@@ -484,8 +488,7 @@ class App {
     const out: string[] = [];
     const add = (a?: string) => { if (a?.startsWith("agent:") && !out.includes(a)) out.push(a); };
     if (!this.thread) { add(this.target); return out; }
-    for (const m of this.msgs) if (!m.depth) add(m.to);
-    for (const a of this.chat?.thread === this.thread ? this.chat?.agents ?? [] : []) add(a);
+    for (const m of this.msgs) if (ownAsk(m)) add(m.to);
     add(this.target);
     if (out.some(a => a.startsWith("agent:sb_"))) return out;
     for (const a of this.localAgents()) add(a.address);
@@ -495,16 +498,20 @@ class App {
   setTarget(a: string): boolean {
     if (!this.targets().includes(a)) return false;
     this.target = a;
+    if (this.thread) this.chosen.set(this.thread, a);
     this.loadOptions(a);
     return true;
   }
   /** A message that starts by naming an agent of the chat ("@codex look at this"): the agent, and
-   * the message without the name. */
+   * the message without the name. Only where there is another agent to choose: elsewhere the
+   * text is the message, whole. */
   mention(text: string): { to: string; rest: string } | null {
+    const all = this.targets();
+    if (all.length < 2) return null;
     const m = /^\s*@([^\s@]+)(?:\s+|$)/.exec(text);
     if (!m) return null;
     const name = m[1].toLowerCase();
-    const to = this.targets().find(a => who(a).name.toLowerCase() === name);
+    const to = all.find(a => who(a).name.toLowerCase() === name);
     return to ? { to, rest: text.slice(m[0].length) } : null;
   }
 
@@ -629,13 +636,17 @@ class App {
    * (with the chat a new task becomes). True when sent. */
   async submit(d: ComposerDraft): Promise<boolean> {
     const sent = d.text;
-    const body = sent.trim();
     // Words, or files alone (a screenshot says it): nothing at all is not a message.
     if (!d.hasContent || d.busy) return false;
     d.busy = true;
     // Where it goes is as it was when sent; files still being read (a paste, then Enter at once)
     // are part of it: waited for, not left for the next message.
     const at = this.sendAt(d), lim = at.limits, owned = sendFiles(d, lim);
+    // "@codex look at this": to that agent of the chat, without the name. The draft stays as it
+    // was typed until the node has the message: sent again, it is the same message to the same agent.
+    const named = at.thread ? this.mention(sent) : null;
+    if (named) { at.target = named.to; at.settings[named.to] = this.settingsFor(named.to); }
+    const body = (named ? named.rest : sent).trim();
     await owned.wait;
     const { files: sentFiles, refused } = owned.files();
     owned.done();
@@ -741,12 +752,15 @@ class App {
       if (here) {
         this.thread = m.thread;
         this.target = to;
+        if (thread) this.chosen.set(m.thread, to);
         // A thread that was there before this message (the draft had moved to it): its earlier
         // turns are shown and followed too, not just this one.
         if (into) await this.openThread(m.thread);
       }
       // Shown wherever its thread is open, now (if it is opened later, the node's list has it).
       if (this.thread === m.thread) {
+        // Sent from this thread to an agent named in it ("@codex …"): that one answers next too.
+        if (thread === m.thread && to) { this.target = to; this.chosen.set(m.thread, to); }
         // Sent again after its answer was lost, the node gives the message it has: one, not two.
         if (this.msgs.some(x => x.id === m.id)) this.replace(m);
         else this.msgs = [...this.msgs, m];
@@ -967,6 +981,12 @@ class App {
 }
 
 /** Which chat a handoff is of: its thread, or its session. */
+/** A message the person of this node sent an agent (not what an agent asked another, nor what a
+ * client or another node put in the thread). */
+function ownAsk(m: Msg): boolean {
+  return !m.depth && m.from.startsWith("user:") && !m.from.includes("@") && m.to.startsWith("agent:");
+}
+
 function handoffFrom(thread: string, agent: string, session: string) {
   return thread ? "thread:" + thread : `session:${agent}/${session}`;
 }

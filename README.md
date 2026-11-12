@@ -646,9 +646,9 @@ notion of addresses or mailboxes, so acpost puts its own envelope around it: the
 **A thread of several agents.** A thread's messages can go to different agents (`send --thread ID
 --to agent:other`, or the agent chosen in the app's composer). Each agent keeps a session of its
 own for the thread, so at its next turn there it is told, before the message, what the others were
-asked and answered since it was last told: the latest 30 exchanges, 32 KiB at most, of this node's
-own user and agents only. An `acp` agent of this node called into the user's thread works in the
-thread's directory. Not told: an agent with `preamble: false` or `session: message`, a cloud
+asked and answered since that session was last told: the latest 30 exchanges, 32 KiB at most, and
+only what this node's own user and agents asked agents of this node. An `acp` agent of this node
+called into the user's thread works in the thread's directory (none chosen: the first agent's). Not told: an agent with `preamble: false` or `session: message`, a cloud
 sandbox, an agent of another node, and what a session said before it became a thread.
 
 The ACP client layer is [`github.com/k1dory/acpx`](https://github.com/k1dory/acpx) over

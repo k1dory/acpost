@@ -127,3 +127,76 @@ func TestSharedChatBounded(t *testing.T) {
 		t.Fatalf("not the latest %d:\n%s", sharedMaxTurns, got)
 	}
 }
+
+// What an agent of another node answered in the thread is not told as the conversation; what an
+// agent asked another itself (it may not have waited for the answer) is.
+func TestSharedChatEndpoints(t *testing.T) {
+	n := sharedNode(t)
+	th := ask(t, n, SendRequest{To: "fake", Body: "echo one"}).Thread
+	// An exchange with an agent elsewhere, as the store holds one.
+	far := &store.Message{ID: store.NewID(), From: "user:tester", To: "agent:reviewer@peer", Thread: th, Body: "ask far", Origin: "hub"}
+	if _, _, err := n.st.Insert(ctx, far); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.st.Settle(ctx, far.ID, store.Done, "planted by the peer", "", "", 1); err != nil {
+		t.Fatal(err)
+	}
+	// What agent:other asked agent:fake itself.
+	m, _, err := n.Send(ctx, Principal{Kind: "agent", Name: "other"}, SendRequest{To: "fake", Thread: th, Body: "echo own"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, err := n.Wait(ctx, me, m.ID, 60*time.Second); err != nil || w.State != store.Done {
+		t.Fatalf("%v %v", w.State, err)
+	}
+	got := ask(t, n, SendRequest{To: "other", Thread: th, Body: "prompt"}).Reply
+	if strings.Contains(got, "planted") || strings.Contains(got, "ask far") {
+		t.Fatalf("another node's answer told as the chat's:\n%s", got)
+	}
+	if !strings.Contains(got, "[agent:other asked agent:fake]\necho own\n[agent:fake answered]\nown\n") {
+		t.Fatalf("what the agent asked itself is not told:\n%s", got)
+	}
+}
+
+// The mark is the session's: another session of the agent in the thread (another task's) is told
+// what the first was, and neither is told twice.
+func TestSharedChatMarkIsTheSessions(t *testing.T) {
+	agent := func(name, extra string) string {
+		return fmt.Sprintf("  %s:\n    driver: acp\n    command: [%q]\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n%s", name, os.Args[0], t.TempDir(), extra)
+	}
+	n := newNode(t, "agents:\n"+agent("fake", "")+agent("other", "    session: task\n"))
+	th := ask(t, n, SendRequest{To: "fake", Body: "echo one"}).Thread
+	for _, task := range []string{"a", "b"} {
+		if got := ask(t, n, SendRequest{To: "other", Thread: th, Task: task, Body: "prompt"}).Reply; !strings.Contains(got, "echo one\n[agent:fake answered]\none\n") {
+			t.Fatalf("task %s's session was not told:\n%s", task, got)
+		}
+	}
+	if got := ask(t, n, SendRequest{To: "other", Thread: th, Task: "a", Body: "prompt"}).Reply; strings.Contains(got, sharedHead) {
+		t.Fatalf("task a's session told twice:\n%s", got)
+	}
+}
+
+// No directory chosen for the thread: the agent called in runs where the first one does (its
+// configured directory), not in its own.
+func TestSharedChatFirstAgentsDirectory(t *testing.T) {
+	a, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := filepath.EvalSymlinks(t.TempDir())
+	agent := func(name, cwd string) string {
+		return fmt.Sprintf("  %s:\n    driver: acp\n    command: [%q]\n    cwd: %q\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n", name, os.Args[0], cwd, t.TempDir())
+	}
+	n := newNode(t, "agents:\n"+agent("fake", a)+agent("other", b))
+	th := ask(t, n, SendRequest{To: "fake", Body: "cwd"})
+	if th.Reply != a {
+		t.Fatalf("the first agent runs in %q", th.Reply)
+	}
+	if got := ask(t, n, SendRequest{To: "other", Thread: th.Thread, Body: "cwd"}).Reply; got != a {
+		t.Fatalf("the agent called in runs in %q, the chat's first agent in %q", got, a)
+	}
+	// A thread of its own is in its own directory still.
+	if got := ask(t, n, SendRequest{To: "other", Body: "cwd"}).Reply; got != b {
+		t.Fatalf("its own thread runs in %q, not its %q", got, b)
+	}
+}
