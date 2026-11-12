@@ -67,13 +67,29 @@
     if (it.kind === "note") { app.settingsAt = "knowledge"; app.view = "settings"; return; }
     setMode("pages");
     repo = it.repo!; page = it.key; pages = []; err = ""; adding = false;
-    try { wikis = ((await Node.Wikis()) ?? []) as any; } catch (e) { err = errText(e); }
+    await listWikis();
     await Promise.all([loadNotes(), loadPages()]);
   }
 
+  // The list of wikis: only the answer to the latest request is taken (the first load, a poll and
+  // an Open may cross), failed or not; false when this one was overtaken, and nothing follows it.
+  let wikisSeq = 0;
+  async function listWikis(): Promise<boolean> {
+    const my = ++wikisSeq;
+    try {
+      const got = ((await Node.Wikis()) ?? []) as any;
+      if (my !== wikisSeq) return false;
+      wikis = got;
+    } catch (e) {
+      if (my !== wikisSeq) return false;
+      err = errText(e);
+      wikis ??= [];
+    }
+    return true;
+  }
   async function load() {
     loadNotes();
-    try { wikis = ((await Node.Wikis()) ?? []) as any; } catch (e) { err = errText(e); wikis = []; }
+    if (!(await listWikis())) return;
     if (!repo && wikis?.length) pick(wikis[0].repo);
     else if (repo && cur?.status === "ready" && !pages.length) loadPages();
   }
