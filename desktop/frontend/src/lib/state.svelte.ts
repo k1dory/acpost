@@ -138,6 +138,10 @@ class App {
   target = $state<string>("");
   /** Who the person chose to answer next in a thread (kept while the app runs, like its draft). */
   private chosen = new Map<string, string>();
+  /** How many times the person chose in a thread: a send that answers after another choice (even
+   * one back to the same agent) does not change who answers. */
+  private picked = new Map<string, number>();
+  private picks(thread: string): number { return this.picked.get(thread) ?? 0; }
   draft = $state<Draft>({ where: "mac", agent: "agent:claude", cloudAgent: "", cwd: "", repo: "" });
   /** Each agent's settings (a Claude model is not a Codex one). */
   settings = $state<Record<string, Settings>>({});
@@ -498,7 +502,7 @@ class App {
   setTarget(a: string): boolean {
     if (!this.targets().includes(a)) return false;
     this.target = a;
-    if (this.thread) this.chosen.set(this.thread, a);
+    if (this.thread) { this.chosen.set(this.thread, a); this.picked.set(this.thread, this.picks(this.thread) + 1); }
     this.loadOptions(a);
     return true;
   }
@@ -650,7 +654,7 @@ class App {
     if (named) { at.target = named.to; at.settings[named.to] = this.settingsFor(named.to); }
     // Sent to the agent shown: that is who this thread's messages go to until the person chooses
     // another (opened again with this one unanswered, it is sent again to the same agent).
-    else if (at.thread && at.target) { this.chosen.set(at.thread, at.target); at.pick = at.target; }
+    else if (at.thread && at.target) this.chosen.set(at.thread, at.target);
     const body = (named ? named.rest : sent).trim();
     await owned.wait;
     const { files: sentFiles, refused } = owned.files();
@@ -764,12 +768,12 @@ class App {
       }
       // Who it went to answers next in its thread (an agent named in it, "@codex …"), open or
       // not by now, unless the person chose another while it went.
-      if (thread && thread === m.thread && to && this.chosen.get(thread) === at.pick) this.chosen.set(thread, to);
+      if (thread && thread === m.thread && to && this.picks(thread) === at.picks) this.chosen.set(thread, to);
       // Shown wherever its thread is open, now (if it is opened later, the node's list has it).
       if (this.thread === m.thread) {
         // Sent from this thread to an agent named in it ("@codex …"): that one answers next too.
         // Unless the person chose another while it went.
-        if (thread === m.thread && to && this.target === at.was) this.target = to;
+        if (thread === m.thread && to && this.picks(thread) === at.picks) this.target = to;
         // Sent again after its answer was lost, the node gives the message it has: one, not two.
         if (this.msgs.some(x => x.id === m.id)) this.replace(m);
         else this.msgs = [...this.msgs, m];
@@ -788,7 +792,7 @@ class App {
     // The settings chosen then, for each agent it can go to: the new task's agent of this Mac, or
     // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
     return {
-      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target, was: this.target, pick: this.chosen.get(this.thread),
+      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target, picks: this.picks(this.thread),
       key: d.key, limits: this.limits, // the draft's chat, and the node's limits, as they were
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
       settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,

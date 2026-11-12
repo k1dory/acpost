@@ -200,3 +200,25 @@ func TestSharedChatFirstAgentsDirectory(t *testing.T) {
 		t.Fatalf("its own thread runs in %q, not its %q", got, b)
 	}
 }
+
+// A thread of a task whose session an earlier thread started in a chosen directory (session:
+// task): the agent called in runs in that directory, not in the first agent's configured one.
+func TestSharedChatTaskSessionsDirectory(t *testing.T) {
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf, _ := filepath.EvalSymlinks(t.TempDir())
+	agent := func(name, extra string) string {
+		return fmt.Sprintf("  %s:\n    driver: acp\n    command: [%q]\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n%s", name, os.Args[0], t.TempDir(), extra)
+	}
+	n := newNode(t, "agents:\n"+agent("fake", fmt.Sprintf("    session: task\n    cwd: %q\n", conf))+agent("other", ""))
+	ask(t, n, SendRequest{To: "fake", Task: "x", Cwd: work, Body: "echo one"})
+	second := ask(t, n, SendRequest{To: "fake", Task: "x", Body: "cwd"})
+	if second.Reply != work {
+		t.Fatalf("the task's session runs in %q", second.Reply)
+	}
+	if got := ask(t, n, SendRequest{To: "other", Thread: second.Thread, Body: "cwd"}).Reply; got != work {
+		t.Fatalf("the agent called in runs in %q, the task's session in %q", got, work)
+	}
+}

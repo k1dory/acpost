@@ -170,6 +170,20 @@ describe("a chat shared by several agents", () => {
     expect(app.target).toBe("agent:codex");
   });
 
+  it("a choice made while a message with @name went stands, even one back to the agent chosen before", async () => {
+    const app = await setup([msg("m1", "agent:claude")]);
+    let ack!: () => void;
+    fake.Node.SendTask.mockImplementationOnce((t: any) => new Promise(r => { ack = () => r(msg("m8", t.to, { state: "queued" })); }));
+    type("@codex review");
+    press("Enter");
+    await flush();
+    app.setTarget("agent:codex");
+    app.setTarget("agent:claude");
+    ack();
+    await flush(); await flush();
+    expect(app.target).toBe("agent:claude");
+  });
+
   it("a bare @name is this node's agent, never a namesake of another node (named with its node)", async () => {
     const app = await setup([msg("m1", "agent:codex@peer"), msg("m2", "agent:claude")]);
     expect(app.mention("@codex review")).toEqual({ to: "agent:codex", rest: "review" });

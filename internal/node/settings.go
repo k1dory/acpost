@@ -103,7 +103,17 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 				// No directory chosen: the thread's first agent runs in its configured one (or the
 				// home directory), and so does the one called in.
 				if first := n.agentCfg(strings.TrimPrefix(root.To, "agent:")); dir == "" && first != nil && first.Driver == "acp" {
-					if dir = first.Cwd; dir == "" {
+					// A thread of a task whose session an earlier thread started (session: task):
+					// that session's directory, chosen by the task's first message.
+					if root.Task != "" && strings.HasPrefix(sessionKey(first.Session, root), "task:") {
+						if ms, _, err := n.st.List(ctx, store.Filter{To: root.To, Task: root.Task, Limit: 1}); err == nil && len(ms) == 1 && localExchange(ms[0]) {
+							dir = taskCwd(ms[0])
+						}
+					}
+					if dir == "" {
+						dir = first.Cwd
+					}
+					if dir == "" {
 						dir, _ = os.UserHomeDir()
 					}
 				}
