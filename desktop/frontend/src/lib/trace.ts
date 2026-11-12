@@ -245,7 +245,13 @@ export function threadSum(th: TThread, now: number): ThreadSum {
   }
   return { thread: th.thread, title: th.title, updated: ms(th.updated_at), turns: turns.length, active, calls, errors, phases,
     // A turn it asked may still run when its own are over: it is running until they all are.
-    running: th.messages.some(m => !isFinal(m.state)), cut: !!th.cut || turns.some(x => x.trace.truncated || x.msg.cut) };
+    running: th.messages.some(m => !isFinal(m.state)), cut: threadCut(th) };
+}
+
+/** Whether what a conversation's numbers count is short: the node left turns or events out, or
+ * kept no more of a turn's events — any turn it holds, its own or one it asked. */
+export function threadCut(th: TThread): boolean {
+  return !!th.cut || th.messages.some(m => m.cut || (m.events ?? []).some(e => e.kind === "truncated"));
 }
 
 export function sortSums(list: ThreadSum[], by: "recent" | "time"): ThreadSum[] {

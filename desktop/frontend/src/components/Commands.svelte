@@ -5,7 +5,7 @@
   import { dur } from "../lib/format";
   import { latest } from "../lib/latest";
   import { analytics } from "../lib/analytics.svelte";
-  import { traceTurn, commandGroups, threadSum, type TThread, type CommandRow, type Span } from "../lib/trace";
+  import { traceTurn, commandGroups, threadCut, type TThread, type CommandRow, type Span } from "../lib/trace";
   import Dropdown from "./Dropdown.svelte";
   import Icon from "./Icon.svelte";
 
@@ -39,7 +39,7 @@
   $effect(() => { scope; untrack(load); });
 
   const threads = $derived(scope ? (one?.thread === scope ? [one] : []) : recent);
-  const cut = $derived(threads.some(th => threadSum(th, Date.now()).cut));
+  const cut = $derived(threads.some(threadCut));
   const spans = $derived.by(() => {
     const now = Date.now();
     const out: Span[] = [];

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { marksOf, traceTurn, phasesOf, threadSum, sortSums, rows, commandKey, commandGroups, clip, shown, ticks, type Mark, type TMsg, type TThread, type Span } from "./trace";
+import { marksOf, traceTurn, phasesOf, threadSum, threadCut, sortSums, rows, commandKey, commandGroups, clip, shown, ticks, type Mark, type TMsg, type TThread, type Span } from "./trace";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
 const iso = (dt: number) => new Date(T0 + dt).toISOString();
@@ -217,5 +217,18 @@ describe("review round 1", () => {
     const th: TThread = { thread: "msg_a", title: "", updated_at: iso(0), messages: [msg({ events: marks })] };
     expect(threadSum(th, T0).cut).toBe(true);
     expect(threadSum({ ...th, messages: [msg({ events: marks.slice(0, 1) })] }, T0).cut).toBe(false);
+  });
+});
+
+describe("review round 2", () => {
+  it("a conversation is cut when any turn it holds was, its own or one it asked", () => {
+    const own = msg();
+    const helper = msg({ id: "msg_h", thread: "msg_h", parent: "msg_a", depth: 1, events: [{ seq: 1, at: T0, kind: "truncated" }] });
+    const th: TThread = { thread: "msg_a", title: "", updated_at: iso(0), messages: [own, helper] };
+    expect(threadCut(th)).toBe(true);
+    expect(threadSum(th, T0).cut).toBe(true);
+    expect(threadCut({ ...th, messages: [own, { ...helper, events: [] }] })).toBe(false);
+    expect(threadCut({ ...th, messages: [own, { ...helper, events: [], cut: true }] })).toBe(true);
+    expect(threadCut({ ...th, messages: [own], cut: true })).toBe(true);
   });
 });
