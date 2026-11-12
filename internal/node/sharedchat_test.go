@@ -213,6 +213,13 @@ func TestSharedChatTaskSessionsDirectory(t *testing.T) {
 		return fmt.Sprintf("  %s:\n    driver: acp\n    command: [%q]\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n%s", name, os.Args[0], t.TempDir(), extra)
 	}
 	n := newNode(t, "agents:\n"+agent("fake", fmt.Sprintf("    session: task\n    cwd: %q\n", conf))+agent("other", ""))
+	// A client's message of the same task label, earlier: a session of its own, not this one.
+	ci := Principal{Kind: "client", Name: "ci", Token: &config.Token{SendTo: []string{"*"}}}
+	if m, _, err := n.Send(ctx, ci, SendRequest{To: "fake", Task: "x", Body: "echo theirs"}); err != nil {
+		t.Fatal(err)
+	} else if w, err := n.Wait(ctx, ci, m.ID, 60*time.Second); err != nil || w.State != store.Done {
+		t.Fatalf("%v %v", w.State, err)
+	}
 	ask(t, n, SendRequest{To: "fake", Task: "x", Cwd: work, Body: "echo one"})
 	second := ask(t, n, SendRequest{To: "fake", Task: "x", Body: "cwd"})
 	if second.Reply != work {
