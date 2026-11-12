@@ -137,12 +137,31 @@ export function renderLabel(tokens: Token[]): string {
  */
 const linkPipe = /\[\[([^[\]|\n]*[^[\]|\n\\])\|((?:[^[\]\n]|\[[^[\]\n]*\]){0,200})\]\]/g;
 const stockTable = Tokenizer.prototype.table;
+// The work the table tokenizer does: the characters it reads, counted for a test of its bound.
+export const tableScan = { chars: 0 };
+// A GFM delimiter row: dashes, colons, pipes and spaces, with a dash and a pipe or colon.
+const delimiterRow = /^[ \t]*[|:-][ \t|:-]*$/;
 function wikiTable(state: MaskState) {
   return function (this: Tokenizer, src: string): Tokens.Table | false {
     const mask = state.mask;
     if (!mask) return false; // no mask for this body: marked's own table, as it is
-    const masked = src.replace(linkPipe, (_all, target: string, label: string) => `[[${target}${mask}${label}]]`);
-    if (masked === src) return false; // no wiki link: marked's own, as it is
+    // Marked asks at every block: only one whose second line is a delimiter row can be a table, and
+    // finding that out reads its first two lines, never the rest of the body.
+    const nl = src.indexOf("\n");
+    tableScan.chars += nl < 0 ? src.length : nl + 1;
+    if (nl < 0) return false;
+    const nl2 = src.indexOf("\n", nl + 1);
+    const second = src.slice(nl + 1, nl2 < 0 ? src.length : nl2);
+    tableScan.chars += second.length;
+    if (!second.includes("-") || !/[|:]/.test(second) || !delimiterRow.test(second)) return false;
+    // The table's own lines: to the first blank line (where a table ends) or the end.
+    const blank = /\n[ \t]*(?:\n|$)/g;
+    blank.lastIndex = nl2 < 0 ? src.length : nl2;
+    const end = blank.exec(src)?.index ?? src.length;
+    const block = src.slice(0, end < src.length ? end + 1 : end);
+    tableScan.chars += block.length;
+    const masked = block.replace(linkPipe, (_all, target: string, label: string) => `[[${target}${mask}${label}]]`);
+    if (masked === block) return false; // no wiki link: marked's own, as it is
     const tok = stockTable.call(this, masked);
     if (!tok) return false;
     tok.raw = src.slice(0, tok.raw.length); // the mask is one character for one: the same length
@@ -167,6 +186,21 @@ function restoreIn(table: Token, mask: string) {
 }
 
 /**
+ * Each token of a tree, in document order — a token before its own: inline tokens, list items,
+ * table cells, a wiki link's label.
+ */
+function eachToken(tokens: Token[], fn: (t: Token) => void) {
+  const visit = (v: unknown) => {
+    if (Array.isArray(v)) { for (const x of v) visit(x); return; }
+    if (!v || typeof v !== "object") return;
+    const o = v as Record<string, unknown>;
+    if (typeof o.type === "string") fn(o as Token);
+    for (const k of ["header", "rows", "items", "tokens"]) if (o[k]) visit(o[k]);
+  };
+  visit(tokens);
+}
+
+/**
  * The wiki's Markdown for marked: the link, and tables that keep it in one cell. Its mask is the
  * instance's own and is chosen at each parse (preprocess) and dropped after it (postprocess): a
  * parse never sees another body's.
@@ -175,9 +209,11 @@ export function wikiMarkdown(resolve?: WikiResolve, state: MaskState = { mask: "
   return {
     extensions: [wikiLinkExtension(resolve, state)],
     tokenizer: { table: wikiTable(state) },
-    walkTokens: t => { if (t.type === "table") restoreIn(t, state.mask); },
     hooks: {
       preprocess: (body: string) => { state.mask = pickMask(body); return body; },
+      // Not walkTokens: marked gathers its callbacks' results into an array copied at each token,
+      // which is quadratic in the body (20,000 paragraphs: seconds); this walk is linear.
+      processAllTokens: tokens => { eachToken(tokens, t => { if (t.type === "table") restoreIn(t, state.mask); }); return tokens; },
       postprocess: (html: string) => { state.mask = ""; return html; },
     },
   };
@@ -197,7 +233,7 @@ export function parseLinks(body: string): Link[] {
   try { tokens = reader.lexer(text); } catch { readerState.mask = ""; return found; } // text marked cannot read: no links
   const mask = readerState.mask;
   readerState.mask = "";
-  reader.walkTokens(tokens, t => {
+  eachToken(tokens, t => {
     if (t.type === "table") restoreIn(t, mask);
     if (t.type !== "wikilink") return;
     const w = t as unknown as WikiLinkToken;
