@@ -110,7 +110,8 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 					if key := sessionKey(first.Session, root); root.Task != "" && strings.HasPrefix(key, "task:") {
 						if ms, _, err := n.st.List(ctx, store.Filter{To: root.To, Task: root.Task}); err == nil {
 							for _, x := range ms {
-								if localExchange(x) && sessionKey(first.Session, x) == key {
+								// (One that ran: a message taken back while queued made no session.)
+								if localExchange(x) && x.Attempts > 0 && sessionKey(first.Session, x) == key {
 									dir = taskCwd(x)
 									break
 								}

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,8 +123,15 @@ func (a *acpAgent) othersSaid(ctx context.Context, m store.Message, sid string) 
 	if len(parts) == 0 {
 		return "", &next, nil
 	}
+	// The node's two lines carry a mark made now, after everything between and after them was
+	// written: no message and no answer told here spells the closing line (a session read back
+	// shows the person's message from there on, desktop/frontend/src/lib/turn.ts ownBody).
+	var nonce [4]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", nil, err
+	}
 	var b strings.Builder
-	b.WriteString("[acpost] This chat is shared with other agents: you see only your own turns of it. Since your last turn here")
+	fmt.Fprintf(&b, "[acpost #%x] This chat is shared with other agents: you see only your own turns of it. Since your last turn here", nonce)
 	if left := len(news) - len(parts); left > 0 {
 		fmt.Fprintf(&b, " (%d earlier exchanges are left out)", left)
 	}
@@ -132,7 +140,7 @@ func (a *acpAgent) othersSaid(ctx context.Context, m store.Message, sid string) 
 		b.WriteString(parts[i])
 		b.WriteString("\n")
 	}
-	b.WriteString("[acpost] That is what the others said. The message to you:\n\n")
+	fmt.Fprintf(&b, "[acpost #%x] That is what the others said. The message to you:\n\n", nonce)
 	return b.String(), &next, nil
 }
 

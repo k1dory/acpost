@@ -329,8 +329,7 @@ export function attachedName(line: string): string {
  * (the files it lists, whose message it is and how to answer, the note on where the answer is
  * read, the person's knowledge). A session read back (History) has its prompts whole. Only the
  * node's own lines, whole and where it puts them, are taken off: any other text is as it is. */
-const sharedHead = "[acpost] This chat is shared with other agents: you see only your own turns of it. Since your last turn here";
-const sharedEnd = "\n[acpost] That is what the others said. The message to you:\n\n";
+const sharedHead = /^\[acpost #([0-9a-f]{8})\] This chat is shared with other agents: you see only your own turns of it\. Since your last turn here/;
 
 export function ownBody(text: string): string {
   const files = attachedFiles.exec(text);
@@ -344,10 +343,13 @@ export function ownBody(text: string): string {
     if (end >= 0) rest = rest.slice(end + knowledgeEnd.length);
   }
   // What the chat's other agents said, told before the message (a shared chat): up to the node's
-  // closing line, its last (an answer told there may quote one).
-  if (rest.startsWith(sharedHead)) {
-    const end = rest.lastIndexOf(sharedEnd);
-    if (end >= 0) rest = rest.slice(end + sharedEnd.length);
+  // closing line, which carries the mark of its opening one (made after the message was written:
+  // nothing told there, and nothing in the message, spells it).
+  const shared = sharedHead.exec(rest);
+  if (shared) {
+    const close = `\n[acpost #${shared[1]}] That is what the others said. The message to you:\n\n`;
+    const end = rest.indexOf(close);
+    if (end >= 0) rest = rest.slice(end + close.length);
   }
   // The files that went with it are named (a message of a screenshot alone has no other text):
   // their content is not replayed.

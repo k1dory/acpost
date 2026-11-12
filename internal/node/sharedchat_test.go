@@ -213,6 +213,22 @@ func TestSharedChatTaskSessionsDirectory(t *testing.T) {
 		return fmt.Sprintf("  %s:\n    driver: acp\n    command: [%q]\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n%s", name, os.Args[0], t.TempDir(), extra)
 	}
 	n := newNode(t, "agents:\n"+agent("fake", fmt.Sprintf("    session: task\n    cwd: %q\n", conf))+agent("other", ""))
+	// The task's first message, taken back while it waited (in another directory): it made no session.
+	other, _ := filepath.EvalSymlinks(t.TempDir())
+	hold, _, err := n.Send(ctx, me, SendRequest{To: "fake", Body: "sleep 400"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	early, _, err := n.Send(ctx, me, SendRequest{To: "fake", Task: "x", Cwd: other, Body: "echo never"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := n.Cancel(ctx, me, early.ID); err != nil || c.Attempts != 0 {
+		t.Skipf("the message ran before it was taken back (%v, attempts %d)", err, c.Attempts)
+	}
+	if _, err := n.Wait(ctx, me, hold.ID, 60*time.Second); err != nil {
+		t.Fatal(err)
+	}
 	// A client's message of the same task label, earlier: a session of its own, not this one.
 	ci := Principal{Kind: "client", Name: "ci", Token: &config.Token{SendTo: []string{"*"}}}
 	if m, _, err := n.Send(ctx, ci, SendRequest{To: "fake", Task: "x", Body: "echo theirs"}); err != nil {

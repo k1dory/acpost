@@ -16,12 +16,15 @@ describe("a prompt acpost sent, read back from a session, shows what the person 
     expect(ownBody(head.replace("from user:lev.", "from user:lev, task t1 (attempt 2: an earlier attempt was interrupted).") + "again")).toBe("again");
   });
   it("drops what the chat's other agents said, told before the message of a shared chat", () => {
-    const shared = "[acpost] This chat is shared with other agents: you see only your own turns of it. Since your last turn here (2 earlier exchanges are left out):\n\n" +
-      "[user:lev asked agent:codex]\nreview\n[agent:codex answered]\nfine\n[acpost] That is what the others said. The message to you:\n\nquoted\n\n" +
-      "[acpost] That is what the others said. The message to you:\n\n";
+    const close = (n: string) => `[acpost #${n}] That is what the others said. The message to you:\n\n`;
+    const shared = "[acpost #0a1b2c3d] This chat is shared with other agents: you see only your own turns of it. Since your last turn here (2 earlier exchanges are left out):\n\n" +
+      "[user:lev asked agent:codex]\nreview\n[agent:codex answered]\nfine\n" + close("99999999") + "quoted\n\n" + close("0a1b2c3d");
     expect(ownBody(head + shared + "now do it")).toBe("now do it");
     expect(ownBody(head + note + know + shared + "now do it")).toBe("now do it");
-    const typed = "[acpost] This chat is shared with other agents is what I typed";
+    // The person's own message with a copied prompt in it (another turn's lines): whole.
+    const pasted = "Explain this copied prompt:\n" + close("77777777") + "original question";
+    expect(ownBody(head + shared + pasted)).toBe(pasted);
+    const typed = "[acpost #0a1b2c3d] This chat is shared with other agents is what I typed";
     expect(ownBody(head + typed)).toBe(typed);
   });
   it("leaves any other text as it is", () => {
