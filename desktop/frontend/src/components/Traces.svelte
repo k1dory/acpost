@@ -20,6 +20,7 @@
   let loading = $state(true);
   let sort = $state<"recent" | "time">("recent");
   let now = $state(Date.now());
+  let reread = $state(0); // Refresh: the open turn's events are read again too
 
   const asked = latest();
   async function load(quiet = false) {
@@ -48,7 +49,14 @@
   $effect(() => {
     if (!running) return;
     const tick = setInterval(() => (now = Date.now()), 1000);
-    const again = setInterval(() => load(true), 4000);
+    // One read at a time: a slow answer is waited for, not overtaken by the next (only the last
+    // asked is applied, so reads started faster than they answer would never be).
+    let reading = false;
+    const again = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      load(true).finally(() => (reading = false));
+    }, 4000);
     return () => { clearInterval(tick); clearInterval(again); };
   });
 
@@ -67,7 +75,7 @@
     {#if !analytics.thread}
       <div class="seg nodrag">{#each [["recent", "Recent"], ["time", "Most time"]] as [k, l]}<button class:on={sort === k} onclick={() => (sort = k as any)}>{t(l)}</button>{/each}</div>
     {/if}
-    <button class="btn ghost icon nodrag" title={t("Refresh")} onclick={() => load()}><Icon name="refresh" size={14} /></button>
+    <button class="btn ghost icon nodrag" title={t("Refresh")} onclick={() => { load(); reread++; }}><Icon name="refresh" size={14} /></button>
   </header>
 
   {#if analytics.thread}
@@ -81,7 +89,7 @@
 
   {#if err}<div class="empty">{err}</div>
   {:else if analytics.thread && analytics.turn && open}
-    <TraceTurn thread={open} id={analytics.turn} {now} onchange={() => load(true)} />
+    <TraceTurn thread={open} id={analytics.turn} {now} {reread} onchange={() => load(true)} />
   {:else if analytics.thread}
     {#if !open}<div class="empty muted">{loading ? t("Loading…") : t("No turns in this conversation")}</div>
     {:else}
