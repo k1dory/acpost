@@ -61,28 +61,37 @@
   }
   // "Open" in the explorer: a page in its wiki, a note where knowledge is edited.
   // The explorer's set may be newer than this view's: the list of wikis and the repository's pages
-  // are read again (a wiki written again, or one made since), the page asked for kept.
+  // are read again (a wiki written again, or one made since), the page asked for kept; the notes
+  // too, which its links may name.
   async function openItem(it: Item) {
     if (it.kind === "note") { app.settingsAt = "knowledge"; app.view = "settings"; return; }
     setMode("pages");
     repo = it.repo!; page = it.key; pages = []; err = ""; adding = false;
     try { wikis = ((await Node.Wikis()) ?? []) as any; } catch (e) { err = errText(e); }
-    await loadPages();
+    await Promise.all([loadNotes(), loadPages()]);
   }
 
   async function load() {
-    Node.Knowledge().then(k => { notes = (k ?? []) as any; }, () => {});
+    loadNotes();
     try { wikis = ((await Node.Wikis()) ?? []) as any; } catch (e) { err = errText(e); wikis = []; }
     if (!repo && wikis?.length) pick(wikis[0].repo);
     else if (repo && cur?.status === "ready" && !pages.length) loadPages();
   }
-  // Pages for the repository shown: an answer for another (asked before a switch) is dropped.
+  // The notes, newest asked last kept (one asked before may answer after).
+  let notesSeq = 0;
+  async function loadNotes() {
+    const my = ++notesSeq;
+    try { const k = ((await Node.Knowledge()) ?? []) as any; if (my === notesSeq) notes = k; } catch {}
+  }
+  // Pages for the repository shown: only the answer to the latest request is taken (one asked
+  // before, for another repository or the same, may answer after it), failed or not.
+  let pagesSeq = 0;
   async function loadPages() {
-    const want = repo;
+    const want = repo, my = ++pagesSeq;
     try {
       const got = ((await Node.WikiPages(want)) ?? []) as any;
-      if (want === repo) pages = got;
-    } catch (e) { if (want === repo) { err = errText(e); pages = []; } }
+      if (my === pagesSeq && want === repo) pages = got;
+    } catch (e) { if (my === pagesSeq && want === repo) { err = errText(e); pages = []; } }
   }
   function pick(r: string) { repo = r; page = ""; pages = []; err = ""; adding = false; loadPages(); }
   $effect(() => { load(); });
