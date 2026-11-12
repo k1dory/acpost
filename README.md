@@ -669,6 +669,10 @@ The app talks to the node on `~/.local/state/acpost/acpost.sock`; when none answ
 default configuration (the `claude-agent-acp` and `codex-acp` it finds on `PATH`) and runs the node
 in its own process.
 
+**`!command`.** A message that starts with `!` is not sent: the rest is run in your login shell,
+in the chat's directory, and what it printed is shown in the chat (two minutes at most, the first
+256 KiB of output). The agent sees it only when you put it into a message ("Add to message").
+
 **Everything works on the Mac alone.** The cloud is optional: with an
 [agent-sandbox](https://github.com/k1dory/cluster-agent-k8s) tenant (Kubernetes sandboxes for coding
 agents) configured as `cloud:` above, the app also lists the tenant's sandboxes and can start a

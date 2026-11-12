@@ -11,6 +11,7 @@ export {
     CloudCatalog,
     CloudConnected,
     Connection,
+    ShellResult,
     Task,
     Upload
 } from "./models.js";

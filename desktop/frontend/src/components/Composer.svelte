@@ -83,7 +83,18 @@
   const stopMode = $derived(running && !d.hasContent);
 
   // The text and files leave the draft only once the node has them (app.submit).
+  // "!git status" is a command of the person's own, run in the chat's directory and shown in the
+  // chat; not a message (one that must start with "!" starts with a space).
+  const bang = $derived(d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
   async function send() {
+    if (bang) {
+      const cmd = d.text.slice(1).trim();
+      if (!cmd) return;
+      d.text = "";
+      ta?.focus();
+      app.runShell(cmd);
+      return;
+    }
     await app.submit(d);
     ta?.focus();
   }
@@ -131,7 +142,7 @@
 {#if isNew}<TaskSetup />{/if}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="card comp" ondragover={e => e.preventDefault()} ondrop={e => { e.preventDefault(); add(e.dataTransfer?.files ?? null); }} onpaste={paste}>
+<div class="card comp" class:bang ondragover={e => e.preventDefault()} ondrop={e => { e.preventDefault(); add(e.dataTransfer?.files ?? null); }} onpaste={paste}>
   {#if slash.length}
     <div class="menu card">
       {#each slash as it, i (it.name)}
@@ -182,6 +193,8 @@
 </div>
 
 <style>
+  .comp.bang { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .comp.bang textarea { font-family: var(--mono); }
   .comp { position: relative; padding: 10px 10px 8px 14px; border-radius: var(--r-panel); }
   textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; padding: 4px 2px 8px; font-size: 13.5px; line-height: 1.5; max-height: 240px; user-select: text; cursor: text; }
   .bar { display: flex; align-items: center; gap: 6px; }

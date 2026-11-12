@@ -602,6 +602,23 @@ export function SetChatTitle(chat: string, title: string): $CancellablePromise<v
 }
 
 /**
+ * Shell runs command in cwd (the home directory when there is none) and gives what it printed
+ * and how it ended. id names the run for ShellStop.
+ */
+export function Shell(id: string, command: string, cwd: string): $CancellablePromise<$models.ShellResult> {
+    return $Call.ByID(2077317842, id, command, cwd).then(($result: any) => {
+        return $$createType40($result);
+    });
+}
+
+/**
+ * ShellStop ends a running command (and what it started).
+ */
+export function ShellStop(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1315346186, id);
+}
+
+/**
  * StartBacklogItem gives a backlog item to an agent: the thread it starts.
  */
 export function StartBacklogItem(id: string, agent: string): $CancellablePromise<string> {
@@ -613,7 +630,7 @@ export function StartBacklogItem(id: string, agent: string): $CancellablePromise
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType40($result);
+        return $$createType41($result);
     });
 }
 
@@ -647,7 +664,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType41($result);
+        return $$createType42($result);
     });
 }
 
@@ -656,7 +673,7 @@ export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
  */
 export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
     return $Call.ByID(3080916840, id).then(($result: any) => {
-        return $$createType43($result);
+        return $$createType44($result);
     });
 }
 
@@ -674,19 +691,19 @@ export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType45($result);
+        return $$createType46($result);
     });
 }
 
 export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
     return $Call.ByID(3522603132, repo).then(($result: any) => {
-        return $$createType47($result);
+        return $$createType48($result);
     });
 }
 
 export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
     return $Call.ByID(52380493).then(($result: any) => {
-        return $$createType49($result);
+        return $$createType50($result);
     });
 }
 
@@ -738,13 +755,14 @@ const $$createType36 = $Create.Array($$createType35);
 const $$createType37 = store$0.Schedule.createFrom;
 const $$createType38 = $Create.Array($$createType37);
 const $$createType39 = $Create.Array($Create.Any);
-const $$createType40 = $models.Connection.createFrom;
-const $$createType41 = $Create.Array($$createType6);
-const $$createType42 = client$0.TreeNode.createFrom;
-const $$createType43 = $Create.Array($$createType42);
-const $$createType44 = client$0.UsageReport.createFrom;
-const $$createType45 = $Create.Array($$createType44);
-const $$createType46 = store$0.WikiPage.createFrom;
-const $$createType47 = $Create.Array($$createType46);
-const $$createType48 = store$0.Wiki.createFrom;
-const $$createType49 = $Create.Array($$createType48);
+const $$createType40 = $models.ShellResult.createFrom;
+const $$createType41 = $models.Connection.createFrom;
+const $$createType42 = $Create.Array($$createType6);
+const $$createType43 = client$0.TreeNode.createFrom;
+const $$createType44 = $Create.Array($$createType43);
+const $$createType45 = client$0.UsageReport.createFrom;
+const $$createType46 = $Create.Array($$createType45);
+const $$createType47 = store$0.WikiPage.createFrom;
+const $$createType48 = $Create.Array($$createType47);
+const $$createType49 = store$0.Wiki.createFrom;
+const $$createType50 = $Create.Array($$createType49);

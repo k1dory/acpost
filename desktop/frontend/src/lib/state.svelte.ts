@@ -13,6 +13,8 @@ export type Msg = {
   body?: string; reply?: string; error?: string; error_code?: string; hint?: string; meta?: Record<string, string>;
   created_at: string; updated_at: string; finished_at?: string; files?: { name: string; type: string; size: number; reply?: boolean }[];
 };
+export type ShellRun = { id: string; chat: string; cmd: string; running: boolean; output: string; code: number; ms: number;
+  cut?: boolean; timedOut?: boolean; stopped?: boolean; error?: string };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean };
 export type Chat = {
   key: string; kind: "thread" | "session" | "cloud"; agent?: string; title: string; cwd?: string; repo?: string;
@@ -131,6 +133,29 @@ class App {
   private revealing: Promise<unknown> = Promise.resolve();
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
+  /** What the person ran from the composer ("!command"), by the chat it was run in (kept while the
+   * app runs). */
+  shells = $state<ShellRun[]>([]);
+  shellsHere(): ShellRun[] { const k = this.draftKey(); return this.shells.filter(s => s.chat === k); }
+  /** Runs the person's command in the chat's directory; its output is shown in the chat. */
+  async runShell(cmd: string) {
+    const run: ShellRun = { id: newId(), chat: this.draftKey(), cmd, running: true, output: "", code: 0, ms: 0 };
+    this.shells = [...this.shells, run];
+    const set = (p: Partial<ShellRun>) => { this.shells = this.shells.map(s => (s.id === run.id ? { ...s, ...p } : s)); };
+    try {
+      const r: any = await Node.Shell(run.id, cmd, this.chatCwd() || (!this.chat && !this.thread ? this.draft.cwd : "") || "");
+      set({ running: false, output: r?.output ?? "", code: r?.code ?? 0, ms: r?.ms ?? 0, cut: !!r?.cut, timedOut: !!r?.timed_out, stopped: !!r?.stopped });
+    } catch (e) { set({ running: false, error: errText(e) }); }
+  }
+  stopShell(id: string) { Node.ShellStop(id).catch(() => {}); }
+  dropShell(id: string) { this.shells = this.shells.filter(s => s.id !== id); }
+  /** The command and what it printed, into the composer: the agent is told only this way. */
+  quoteShell(id: string) {
+    const r = this.shells.find(s => s.id === id);
+    if (!r) return;
+    const fence = "`".repeat(Math.max(3, ...[...(r.output.matchAll(/`+/g))].map(m => m[0].length + 1)));
+    this.quote = `$ ${r.cmd}\n${fence}\n${r.output.replace(/\s+$/, "")}\n${fence}\n` + (r.code ? `(exit ${r.code})\n` : "");
+  }
   palette = $state(false); // ⌘K
   viewMenu = $state(false); // the title bar's view menu open
   asking = $state<any[]>([]); // approvals waiting

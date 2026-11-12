@@ -8,6 +8,7 @@
   import Message from "./Message.svelte";
   import History from "./History.svelte";
   import Composer from "./Composer.svelte";
+  import ShellRuns from "./ShellRuns.svelte";
   import ContextMeter from "./ContextMeter.svelte";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
@@ -58,7 +59,7 @@
     } catch (e) { handErr = errText(e); }
     sending = false;
   }
-  $effect(() => { app.rev; app.msgs.length; app.history.length; if (stick) tick().then(() => box && (box.scrollTop = box.scrollHeight)); });
+  $effect(() => { app.rev; app.msgs.length; app.history.length; app.shells; if (stick) tick().then(() => box && (box.scrollTop = box.scrollHeight)); });
 </script>
 
 <svelte:window onclick={e => { if (handing && !(e.target as HTMLElement).closest(".hand, .menu")) handing = false; }} />
@@ -119,6 +120,7 @@
           <div class="big">{t("What should we work on?")}</div>
         </div>
         <Composer />
+        <ShellRuns />
       </div>
     </div>
   {:else}
@@ -126,6 +128,7 @@
       <div class="col">
         {#if app.chat && app.chat.kind !== "thread"}<History />{/if}
         {#each app.msgs as m (m.id)}<Message {m} />{/each}
+        <ShellRuns />
       </div>
     </div>
     <div class="foot"><div class="col"><Composer /></div></div>
