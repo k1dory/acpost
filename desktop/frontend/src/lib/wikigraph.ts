@@ -50,10 +50,32 @@ export type WikiLinkToken = { type: "wikilink"; raw: string; target: string; lab
 /** What a target resolves to, for the renderer: an item (its id and title), or null (broken). */
 export type WikiResolve = (target: string) => { id: string; title: string } | null;
 
-// Between target and label: a pipe, an escaped one (\|, as a table row needs it), or the mask a
-// table row's link pipe is given while the row is split into cells (wikiTable).
-const MASK = "";
-const wikiRule = /^\[\[([^[\]|\n]{1,200}?)(?:(?:\\?\||)((?:[^[\]\n]|\[[^[\]\n]*\]){0,200}))?\]\]/;
+// Between target and label: a pipe, an escaped one (\|, as a table row needs it), or — while one
+// parse lexes a table — the mask that parse gave the link's pipe (wikiTable). The mask is a
+// private-use character the body does not hold, chosen for each parse (pickMask): one the author
+// wrote is never a separator, nor turned into anything.
+type MaskState = { mask: string };
+const labelPart = "((?:[^[\\]\\n]|\\[[^[\\]\\n]*\\]){0,200})";
+const rules = new Map<string, RegExp>();
+function wikiRuleFor(mask: string): RegExp {
+  let r = rules.get(mask);
+  if (!r) {
+    const sep = mask ? `(?:\\\\?\\||${mask})` : "\\\\?\\|";
+    r = new RegExp(`^\\[\\[([^[\\]|\\n${mask}]{1,200}?)(?:${sep}${labelPart})?\\]\\]`);
+    rules.set(mask, r);
+  }
+  return r;
+}
+/** A private-use character the body does not hold: the mask for its parse ("" when all are used). */
+export function pickMask(body: string): string {
+  // U+E000 upwards; a body holding every one of the 6400 has no mask, and its tables are read as
+  // marked reads them (a labelled link's pipe splits its cell).
+  for (let c = 0xe000; c <= 0xf8ff; c++) {
+    const ch = String.fromCharCode(c);
+    if (!body.includes(ch)) return ch;
+  }
+  return "";
+}
 const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
@@ -62,13 +84,13 @@ const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").re
  * page (Markdown with resolve) read a body the same way. The renderer makes an in-app link —
  * #wiki:<id> to an item, #wiki-broken:<target> for one that names nothing.
  */
-export function wikiLinkExtension(resolve?: WikiResolve): TokenizerAndRendererExtension {
+export function wikiLinkExtension(resolve?: WikiResolve, state: MaskState = { mask: "" }): TokenizerAndRendererExtension {
   return {
     name: "wikilink",
     level: "inline",
     start: (src: string) => src.indexOf("[["),
     tokenizer(src: string) {
-      const m = wikiRule.exec(src);
+      const m = wikiRuleFor(state.mask).exec(src);
       const target = m?.[1].trim();
       if (!m || !target) return undefined;
       const label = m[2]?.trim() || undefined;
@@ -108,44 +130,75 @@ export function renderLabel(tokens: Token[]): string {
  * GFM tables, with wiki links in their cells: a row is split into cells at every unescaped pipe
  * before any inline syntax is read, so [[a|b]] would be cut in two. Marked's own table tokenizer is
  * given the text with each wiki link's pipe masked (a link's [[ anywhere on a row, its label code
- * or not), and the mask is turned back into the pipe in what it makes (restorePipes). A fence is
+ * or not), and the mask is turned back into the pipe in what it makes (restoreIn). A fence is
  * never a table, so a table shown as code is left as it is; tables in quotes and lists come here
  * too. A code span in a cell that holds [[a|b]] is masked as well: it stays one cell (not GFM's
  * split), its text whole.
  */
-const linkPipe = /\[\[([^[\]|\n]*[^[\]|\n\\])\|((?:[^[\]\n]|\[[^[\]\n]*\]){0,200})\]\]/g;
+const linkPipe = /\[\[([^[\]|\n]*[^[\]|\n\\])\|((?:[^[\]\n]|\[[^[\]\n]*\]){0,200})\]\]/g;
 const stockTable = Tokenizer.prototype.table;
-function wikiTable(this: Tokenizer, src: string): Tokens.Table | false {
-  const masked = src.replace(linkPipe, (_all, target: string, label: string) => `[[${target}${MASK}${label}]]`);
-  if (masked === src) return false; // no wiki link: marked's own, as it is
-  const tok = stockTable.call(this, masked);
-  if (!tok) return false;
-  tok.raw = src.slice(0, tok.raw.length); // the mask is one character for one: the same length
-  return tok;
+function wikiTable(state: MaskState) {
+  return function (this: Tokenizer, src: string): Tokens.Table | false {
+    const mask = state.mask;
+    if (!mask) return false; // no mask for this body: marked's own table, as it is
+    const masked = src.replace(linkPipe, (_all, target: string, label: string) => `[[${target}${mask}${label}]]`);
+    if (masked === src) return false; // no wiki link: marked's own, as it is
+    const tok = stockTable.call(this, masked);
+    if (!tok) return false;
+    tok.raw = src.slice(0, tok.raw.length); // the mask is one character for one: the same length
+    return tok;
+  };
 }
-// The mask, wherever it could stay in a token (a code span's text, a text that is no link).
-function restorePipes(t: Token) {
-  const tok = t as Token & { text?: string };
-  if (typeof tok.text === "string" && tok.text.includes(MASK)) tok.text = tok.text.replaceAll(MASK, "|");
-  if (tok.raw.includes(MASK)) tok.raw = tok.raw.replaceAll(MASK, "|");
+// The mask, put back as the pipe it stands for: within a table only (its cells and their tokens),
+// and only this parse's mask — which the body does not hold, so nothing the author wrote changes.
+function restoreIn(table: Token, mask: string) {
+  if (!mask) return;
+  const fix = (v: unknown) => {
+    if (Array.isArray(v)) { for (const x of v) fix(x); return; }
+    if (!v || typeof v !== "object") return;
+    const o = v as Record<string, unknown>;
+    for (const k of Object.keys(o)) {
+      const x = o[k];
+      if (typeof x === "string") { if (x.includes(mask)) o[k] = x.replaceAll(mask, "|"); }
+      else if (typeof x === "object") fix(x);
+    }
+  };
+  fix(table);
 }
 
-/** The wiki's Markdown for marked: the link, and tables that keep it in one cell. */
-export function wikiMarkdown(resolve?: WikiResolve): MarkedExtension {
-  return { extensions: [wikiLinkExtension(resolve)], tokenizer: { table: wikiTable }, walkTokens: restorePipes };
+/**
+ * The wiki's Markdown for marked: the link, and tables that keep it in one cell. Its mask is the
+ * instance's own and is chosen at each parse (preprocess) and dropped after it (postprocess): a
+ * parse never sees another body's.
+ */
+export function wikiMarkdown(resolve?: WikiResolve, state: MaskState = { mask: "" }): MarkedExtension {
+  return {
+    extensions: [wikiLinkExtension(resolve, state)],
+    tokenizer: { table: wikiTable(state) },
+    walkTokens: t => { if (t.type === "table") restoreIn(t, state.mask); },
+    hooks: {
+      preprocess: (body: string) => { state.mask = pickMask(body); return body; },
+      postprocess: (html: string) => { state.mask = ""; return html; },
+    },
+  };
 }
 
 // The options the app renders Markdown with (components/Markdown.svelte): the graph lexes alike.
 export const markdownOptions = { gfm: true, breaks: true } as const;
-const reader = new Marked(markdownOptions).use(wikiMarkdown());
+const readerState: MaskState = { mask: "" };
+const reader = new Marked(markdownOptions).use(wikiMarkdown(undefined, readerState));
 
 /** The [[links]] of a body, in order, where Markdown has them (not in code or HTML). */
 export function parseLinks(body: string): Link[] {
   const found: Link[] = [];
   let tokens: Token[];
-  try { tokens = reader.lexer(body ?? ""); } catch { return found; } // text marked cannot read: no links
+  const text = body ?? "";
+  readerState.mask = pickMask(text); // this parse's (lexer() runs no hooks)
+  try { tokens = reader.lexer(text); } catch { readerState.mask = ""; return found; } // text marked cannot read: no links
+  const mask = readerState.mask;
+  readerState.mask = "";
   reader.walkTokens(tokens, t => {
-    restorePipes(t);
+    if (t.type === "table") restoreIn(t, mask);
     if (t.type !== "wikilink") return;
     const w = t as unknown as WikiLinkToken;
     found.push(w.label ? { target: w.target, label: w.label } : { target: w.target });

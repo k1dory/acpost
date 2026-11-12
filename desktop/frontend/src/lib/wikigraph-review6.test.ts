@@ -47,6 +47,6 @@ describe("wiki links in tables, by marked's table tokenizer", () => {
 
   it("puts every masked pipe back: the table's raw, text that is no link", () => {
     const { html } = both("| a | b |\n|---|---|\n| [[ |x]] | y |");
-    expect(html).not.toContain("");
+    expect(html).not.toContain("\uE000");
   });
 });
