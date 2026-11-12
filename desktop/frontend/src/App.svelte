@@ -8,7 +8,7 @@
   import Logo from "./components/Logo.svelte";
   import Conversation from "./components/Conversation.svelte";
   import RightPanel from "./components/RightPanel.svelte";
-  import Usage from "./components/Usage.svelte";
+  import Analytics from "./components/Analytics.svelte";
   import Settings from "./components/Settings.svelte";
   import Board from "./components/Board.svelte";
   import Palette from "./components/Palette.svelte";
@@ -124,7 +124,7 @@
       </div>
     </div>
   {:else if app.view === "usage"}
-    <Usage />
+    <Analytics />
   {:else if app.view === "settings"}
     <Settings />
   {:else if app.view === "board"}
