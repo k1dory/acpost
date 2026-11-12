@@ -271,10 +271,10 @@ describe("review round 1", () => {
     add().click(); flushSync(); await flush(); flushSync();
     expect(add().disabled).toBe(true); // added, nothing changed since
     const ta = q<HTMLTextAreaElement>("textarea");
-    ta.value = "first, " + ta.value + "thanks"; ta.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+    ta.value = "first\n" + ta.value + "thanks"; ta.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
     all(".opt")[0].click(); flushSync();
     add().click(); flushSync(); await flush(); flushSync();
-    expect(ta.value).toBe("first, > Which DB?\n\nPostgres\n\nthanks");
+    expect(ta.value).toBe("first\n> Which DB?\n\nPostgres\n\nthanks");
     expect(fake.Node.SendTask).not.toHaveBeenCalled();
   });
 
@@ -427,5 +427,53 @@ describe("review round 2", () => {
     expect(texts("tbody td")).toEqual(["0.000123", "123,457", "-0.0042", "100,000,000,000,000", "12.5"]);
     expect(texts(".tile .value")).toEqual(["0.00042", "987,654,321"]);
     expect(q(".tile .delta").textContent).toBe("-1e-5");
+  });
+});
+
+describe("review round 3", () => {
+  async function composer() {
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.draft.agent = "agent:claude";
+    mounted.push(mount((await import("./Composer.svelte")).default, { target: document.body }));
+    flushSync();
+    return q<HTMLTextAreaElement>("textarea");
+  }
+  const settle = async () => { flushSync(); await flush(); flushSync(); };
+
+  it("finds an answer in the draft only whole (P2)", async () => {
+    const { answerAt } = await import("./genui/draft");
+    expect(answerAt("> Q\n\nJavaScript\n\n", "> Q\n\nJava\n\n")).toBe(-1);
+    expect(answerAt("> Q\n\nJava\n\n", "> Q\n\nJava\n\n")).toBe(0);
+    expect(answerAt("mine\n> Q\n\nJava", "> Q\n\nJava\n\n")).toBe(5);
+    expect(answerAt("x> Q\n\nJava", "> Q\n\nJava")).toBe(-1);
+    expect(answerAt("- n: 10", "- n: 1")).toBe(-1);
+    expect(answerAt("anything", "  \n")).toBe(-1);
+  });
+
+  it("lets a shorter choice replace a longer one it begins (P2)", async () => {
+    const ta = await composer();
+    await show(block({ type: "choices", question: "Language?", options: ["JavaScript", "Java"] }), "msg_F");
+    const add = () => q<HTMLButtonElement>(".ask .btn");
+    all(".opt")[0].click(); flushSync();
+    add().click(); await settle();
+    expect(ta.value).toBe("> Language?\n\nJavaScript\n\n");
+    all(".opt")[1].click(); flushSync();
+    expect(add().disabled).toBe(false); // "Java" is not in the draft: "JavaScript" is
+    add().click(); await settle();
+    expect(ta.value).toBe("> Language?\n\nJava\n\n");
+  });
+
+  it("lets a form change 10 to 1 (P2)", async () => {
+    const ta = await composer();
+    await show(block({ type: "form", fields: [{ label: "n", type: "number", value: 10 }] }), "msg_G");
+    q<HTMLButtonElement>(".form .btn").click(); await settle();
+    expect(ta.value).toBe("- n: 10\n\n");
+    const i = q<HTMLInputElement>(".form input");
+    i.value = "1"; i.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+    expect(q<HTMLButtonElement>(".form .btn").disabled).toBe(false);
+    q<HTMLButtonElement>(".form .btn").click(); await settle();
+    expect(ta.value).toBe("- n: 1\n\n");
   });
 });
