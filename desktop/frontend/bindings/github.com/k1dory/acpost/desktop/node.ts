@@ -239,6 +239,13 @@ export function DeleteMCPServer(name: string): $CancellablePromise<void> {
     return $Call.ByID(3232873566, name);
 }
 
+/**
+ * DeleteModule removes a module, and its pane with its page.
+ */
+export function DeleteModule(id: string): $CancellablePromise<void> {
+    return $Call.ByID(3866200823, id);
+}
+
 export function DeleteNote(name: string): $CancellablePromise<void> {
     return $Call.ByID(2462025307, name);
 }
@@ -436,6 +443,37 @@ export function MessageFile(id: string, name: string): $CancellablePromise<$mode
     });
 }
 
+/**
+ * ModuleHide hides the modules' panes; their pages stay as they are.
+ */
+export function ModuleHide(): $CancellablePromise<void> {
+    return $Call.ByID(2706948872);
+}
+
+/**
+ * ModuleReload opens module id at its own address again.
+ */
+export function ModuleReload(id: string): $CancellablePromise<void> {
+    return $Call.ByID(894521773, id);
+}
+
+/**
+ * ModuleShow lays module id's pane over the box at x, y, w × h (window points), opened at the
+ * address kept for it (the interface names the module, never an address).
+ */
+export function ModuleShow(id: string, x: number, y: number, w: number, h: number, dark: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3372272129, id, x, y, w, h, dark);
+}
+
+/**
+ * Modules lists them, in the order they were added.
+ */
+export function Modules(): $CancellablePromise<$models.Module[]> {
+    return $Call.ByID(3595550369).then(($result: any) => {
+        return $$createType33($result);
+    });
+}
+
 export function MoveChat(chat: string, folder: string): $CancellablePromise<void> {
     return $Call.ByID(2746657731, chat, folder);
 }
@@ -467,7 +505,7 @@ export function OpenLocal(path: string, base: string): $CancellablePromise<void>
  */
 export function OpenTerminal(agent: string, cols: number, rows: number): $CancellablePromise<client$0.Terminal> {
     return $Call.ByID(2110126032, agent, cols, rows).then(($result: any) => {
-        return $$createType32($result);
+        return $$createType34($result);
     });
 }
 
@@ -476,7 +514,7 @@ export function OpenTerminal(agent: string, cols: number, rows: number): $Cancel
  */
 export function Options(agent: string): $CancellablePromise<client$0.AgentOptions> {
     return $Call.ByID(3215550814, agent).then(($result: any) => {
-        return $$createType33($result);
+        return $$createType35($result);
     });
 }
 
@@ -489,7 +527,7 @@ export function PickDirectory(start: string): $CancellablePromise<string> {
 
 export function Playbooks(): $CancellablePromise<store$0.Playbook[]> {
     return $Call.ByID(3511904892).then(($result: any) => {
-        return $$createType35($result);
+        return $$createType37($result);
     });
 }
 
@@ -527,7 +565,7 @@ export function PreviewShow(x: number, y: number, w: number, h: number): $Cancel
  */
 export function Pulls(agent: string, state: string): $CancellablePromise<forge$0.Pull[]> {
     return $Call.ByID(2911689412, agent, state).then(($result: any) => {
-        return $$createType37($result);
+        return $$createType39($result);
     });
 }
 
@@ -545,6 +583,15 @@ export function PutMCPServer(m: store$0.MCPServer, secrets: { [_ in string]?: st
     return $Call.ByID(2386249428, m, secrets);
 }
 
+/**
+ * PutModule adds a module (no id) or changes one: the module as kept.
+ */
+export function PutModule(m: $models.Module): $CancellablePromise<$models.Module> {
+    return $Call.ByID(2214729257, m).then(($result: any) => {
+        return $$createType32($result);
+    });
+}
+
 export function PutNote(k: store$0.Note): $CancellablePromise<void> {
     return $Call.ByID(758765673, k);
 }
@@ -555,7 +602,7 @@ export function PutPlaybook(name: string, body: string): $CancellablePromise<voi
 
 export function PutSchedule(sc: store$0.Schedule): $CancellablePromise<store$0.Schedule> {
     return $Call.ByID(2968062976, sc).then(($result: any) => {
-        return $$createType38($result);
+        return $$createType40($result);
     });
 }
 
@@ -576,7 +623,7 @@ export function SaveArtifact(name: string, data: string): $CancellablePromise<st
 
 export function Schedules(): $CancellablePromise<store$0.Schedule[]> {
     return $Call.ByID(1407160058).then(($result: any) => {
-        return $$createType39($result);
+        return $$createType41($result);
     });
 }
 
@@ -585,7 +632,7 @@ export function Schedules(): $CancellablePromise<store$0.Schedule[]> {
  */
 export function SearchDirs(q: string): $CancellablePromise<string[]> {
     return $Call.ByID(3291189440, q).then(($result: any) => {
-        return $$createType40($result);
+        return $$createType42($result);
     });
 }
 
@@ -623,7 +670,7 @@ export function StartBacklogItem(id: string, agent: string): $CancellablePromise
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType41($result);
+        return $$createType43($result);
     });
 }
 
@@ -657,7 +704,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType42($result);
+        return $$createType44($result);
     });
 }
 
@@ -666,7 +713,7 @@ export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
  */
 export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
     return $Call.ByID(3080916840, id).then(($result: any) => {
-        return $$createType44($result);
+        return $$createType46($result);
     });
 }
 
@@ -684,19 +731,19 @@ export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType46($result);
+        return $$createType48($result);
     });
 }
 
 export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
     return $Call.ByID(3522603132, repo).then(($result: any) => {
-        return $$createType48($result);
+        return $$createType50($result);
     });
 }
 
 export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
     return $Call.ByID(52380493).then(($result: any) => {
-        return $$createType50($result);
+        return $$createType52($result);
     });
 }
 
@@ -740,22 +787,24 @@ const $$createType28 = $Create.Array($$createType27);
 const $$createType29 = $models.Artifact.createFrom;
 const $$createType30 = store$0.MCPServer.createFrom;
 const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = client$0.Terminal.createFrom;
-const $$createType33 = client$0.AgentOptions.createFrom;
-const $$createType34 = store$0.Playbook.createFrom;
-const $$createType35 = $Create.Array($$createType34);
-const $$createType36 = forge$0.Pull.createFrom;
+const $$createType32 = $models.Module.createFrom;
+const $$createType33 = $Create.Array($$createType32);
+const $$createType34 = client$0.Terminal.createFrom;
+const $$createType35 = client$0.AgentOptions.createFrom;
+const $$createType36 = store$0.Playbook.createFrom;
 const $$createType37 = $Create.Array($$createType36);
-const $$createType38 = store$0.Schedule.createFrom;
+const $$createType38 = forge$0.Pull.createFrom;
 const $$createType39 = $Create.Array($$createType38);
-const $$createType40 = $Create.Array($Create.Any);
-const $$createType41 = $models.Connection.createFrom;
-const $$createType42 = $Create.Array($$createType7);
-const $$createType43 = client$0.TreeNode.createFrom;
-const $$createType44 = $Create.Array($$createType43);
-const $$createType45 = client$0.UsageReport.createFrom;
+const $$createType40 = store$0.Schedule.createFrom;
+const $$createType41 = $Create.Array($$createType40);
+const $$createType42 = $Create.Array($Create.Any);
+const $$createType43 = $models.Connection.createFrom;
+const $$createType44 = $Create.Array($$createType7);
+const $$createType45 = client$0.TreeNode.createFrom;
 const $$createType46 = $Create.Array($$createType45);
-const $$createType47 = store$0.WikiPage.createFrom;
+const $$createType47 = client$0.UsageReport.createFrom;
 const $$createType48 = $Create.Array($$createType47);
-const $$createType49 = store$0.Wiki.createFrom;
+const $$createType49 = store$0.WikiPage.createFrom;
 const $$createType50 = $Create.Array($$createType49);
+const $$createType51 = store$0.Wiki.createFrom;
+const $$createType52 = $Create.Array($$createType51);

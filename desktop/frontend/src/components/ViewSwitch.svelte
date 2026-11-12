@@ -8,13 +8,18 @@
 
   // The view switcher in the window's title bar (beside the traffic lights): the app's own
   // layout, or the IDE (VS Code with the chat beside it).
-  type V = { view: "chat" | "ide"; label: string; icon: string; key: string };
-  const views: V[] = [
+  // Then the modules the person added (a page beside the chat), and where one is added.
+  type V = { view: typeof app.view; label: string; icon: string; key: string; own?: boolean };
+  const views = $derived<V[]>([
     { view: "chat", label: "Agents view", icon: "chat", key: "" },
     { view: "ide", label: "IDE view", icon: "term", key: "⇧⌘I" },
-  ];
+    ...app.modules.map(m => ({ view: `mod:${m.id}` as const, label: m.name, icon: "panel", key: "", own: true })),
+    { view: "settings", label: "Add a module…", icon: "plus", key: "" },
+  ]);
+  // A module's name is the person's: shown as it is.
+  const name = (v: V) => (v.own ? v.label : t(v.label));
   let root: HTMLDivElement;
-  const cur = $derived(app.view === "ide" ? views[1] : views[0]);
+  const cur = $derived(views.find(v => v.view === app.view && v.view !== "settings") ?? views[0]);
   // Open here (two of these are mounted: the sidebar's, hidden in the IDE, and the IDE's own); the
   // app is told, so the native IDE view hides while the menu is over it.
   let open = $state(false);
@@ -32,11 +37,19 @@
     const z = app.textSize, k = screenScale();
     const f = Math.abs(k - z) < 0.01 ? 1 : z;
     let i = -2;
-    try { i = await Node.Menu(r.left * f, (r.bottom + 4) * f, views.map(v => t(v.label)), views.map(v => (v.key ? "I" : "")), views.indexOf(cur)); } catch {}
+    // The entries as the menu shows them: what is chosen is one of these, whatever the list is by then.
+    const list = views;
+    try { i = await Node.Menu(r.left * f, (r.bottom + 4) * f, list.map(name), list.map(v => (v.key ? "I" : "")), list.indexOf(cur)); } catch {}
     if (i === -2) set(true);
-    else if (i >= 0) go(views[i].view);
+    else if (i >= 0 && list[i]) go(list[i].view);
   }
-  function go(v: V["view"]) { set(false); app.view = v; }
+  function go(v: V["view"]) {
+    set(false);
+    if (v === "settings") app.settingsAt = "modules";
+    // A module removed while the menu was open is not a view any more.
+    if (v.startsWith("mod:") && !app.modules.some(m => "mod:" + m.id === v)) return;
+    app.view = v;
+  }
 </script>
 
 <svelte:window onclick={e => { if (open && !root.contains(e.target as Node)) set(false); }}
@@ -44,15 +57,15 @@
 
 <div class="vs nodrag" bind:this={root}>
   <button class="trig" class:on={open} bind:this={btn} onclick={pop}>
-    <span>{t(cur.label)}</span>
+    <span>{name(cur)}</span>
     <span class="chev"><Icon name="chev" size={9} /></span>
   </button>
   {#if open}
     <div class="menu card">
       {#each views as v (v.view)}
-        <button class="mi" class:sel={v.view === cur.view} onclick={() => go(v.view)}>
+        <button class="mi" class:sel={v === cur} onclick={() => go(v.view)}>
           <Icon name={v.icon} size={13} />
-          <span class="l">{t(v.label)}</span>
+          <span class="l">{name(v)}</span>
           {#if v.key}<kbd>{v.key}</kbd>{/if}
         </button>
       {/each}

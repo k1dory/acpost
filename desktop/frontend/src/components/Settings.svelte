@@ -11,9 +11,22 @@
 
   type Account = { host: string; kind?: string; version?: string; authed: boolean; login?: string; error?: string };
 
-  let section = $state<"git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "cloud" | "general">("git");
-  // A section another view asked for (the wiki's "Open" on a note): shown, then forgotten.
-  $effect(() => { if (app.settingsAt) { section = app.settingsAt as any; app.settingsAt = ""; } });
+  type Section = "git" | "mcp" | "playbooks" | "knowledge" | "schedules" | "agents" | "cloud" | "modules" | "general";
+  // Opened at a section when asked for one (the view switcher's "Add a module…"), once.
+  let section = $state<Section>("git");
+  $effect(() => { if (app.settingsAt) { section = app.settingsAt as Section; app.settingsAt = ""; err = ""; } });
+  // Modules: pages the person adds as views of the app, beside the chat.
+  let mod = $state<{ id: string; name: string; url: string } | null>(null);
+  async function saveModule() {
+    if (!mod || busy) return;
+    busy = true; err = "";
+    try { await Node.PutModule(mod as any); mod = null; await app.loadModules(); } catch (e) { err = errText(e); }
+    busy = false;
+  }
+  async function deleteModule(id: string) {
+    err = "";
+    try { await Node.DeleteModule(id); mod = null; await app.loadModules(); } catch (e) { err = errText(e); }
+  }
   type Note = { name: string; body: string; scope?: string; enabled: boolean; isNew?: boolean };
   let notes = $state<Note[] | null>(null);
   let note = $state<Note | null>(null);
@@ -142,7 +155,7 @@
   <header class="drag"><h1>{t("Settings")}</h1></header>
   <div class="cols">
     <nav class="nav">
-      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["knowledge", "Knowledge", "brain"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["cloud", "Cloud", "cloud"], ["general", "General", "sun"]] as [k, l, ic]}
+      {#each [["git", "Git accounts", "pr"], ["mcp", "MCP servers", "term"], ["playbooks", "Playbooks", "book"], ["knowledge", "Knowledge", "brain"], ["schedules", "Schedules", "clock"], ["agents", "Agents", "bot"], ["cloud", "Cloud", "cloud"], ["modules", "Modules", "panel"], ["general", "General", "sun"]] as [k, l, ic]}
         <button class:on={section === k} onclick={() => { section = k as any; err = ""; }}><Icon name={ic} size={14} /> {t(l)}</button>
       {/each}
     </nav>
@@ -369,6 +382,35 @@
 
       {:else if section === "cloud"}
         <Cloud />
+
+      {:else if section === "modules"}
+        <h2>{t("Modules")}</h2>
+        <p class="muted">{t("A module is a web page shown as a view of the app, with the chat beside it, as the IDE is: a tracker, a wiki, a dashboard, a tool served on this Mac. It is chosen where Agents and IDE are, at the top left.")}</p>
+        {#if !mod}
+          <div class="card panel"><div class="inner">
+            {#each app.modules as m (m.id)}
+              <div class="row">
+                <Icon name="panel" size={14} />
+                <div class="t"><b>{m.name}</b><span class="muted small one mono">{m.url}</span></div>
+                <button class="btn ghost sm" onclick={() => (app.view = `mod:${m.id}`)}>{t("Open")}</button>
+                <button class="btn ghost sm" onclick={() => (mod = { ...m })}>{t("Edit")}</button>
+              </div>
+            {:else}<div class="row muted">{t("No modules yet")}</div>{/each}
+          </div></div>
+          <div class="acts left"><button class="btn primary" onclick={() => (mod = { id: "", name: "", url: "" })}><Icon name="plus" size={13} /> {t("New module")}</button></div>
+        {:else}
+          <div class="form card">
+            <input class="input" placeholder={t("Name: Wiki, Tracker, Grafana")} bind:value={mod.name} maxlength="40" />
+            <input class="input mono" placeholder={t("Address: https://wiki.example.com or http://localhost:3000")} bind:value={mod.url} onkeydown={e => { if (e.key === "Enter") saveModule(); }} />
+            <p class="muted small">{t("The page signs in as in a browser and keeps its session. Some sites refuse to be shown inside another app.")}</p>
+            <div class="acts">
+              {#if mod.id}<button class="btn ghost danger" onclick={() => deleteModule(mod!.id)}>{t("Delete")}</button>{/if}
+              <span class="sp"></span>
+              <button class="btn" onclick={() => (mod = null)}>{t("Cancel")}</button>
+              <button class="btn primary" disabled={busy || !mod.name.trim() || !mod.url.trim()} onclick={saveModule}>{t("Save")}</button>
+            </div>
+          </div>
+        {/if}
 
       {:else}
         <h2>{t("General")}</h2>
