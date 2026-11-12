@@ -83,23 +83,24 @@
   }
 
   // Components: each ui block whose text is valid drawn in its place, its code hidden (a block not
-  // valid, or still being written, stays code). One drawn before, at the same place with the same
-  // text, is the same: kept, moved into its block if the block is new, never mounted again.
+  // valid, or still being written, stays code). One drawn before, of the same scope, at the same
+  // place with the same text, is the same: kept, moved into its block if the block is new, never
+  // mounted again. Another scope's (this Markdown given another page's text) is another block.
   type Live = { inst: ReturnType<typeof mount>; host: HTMLElement };
   const live = new Map<string, Live>();
   const own = new Map<string, Record<string, unknown>>(); // without a scope: this text's, while shown
-  function keep(n: number, src: string) {
-    if (scope) return keepFor(scope, n, src);
+  function keep(sc: string, n: number, src: string) {
+    if (sc) return keepFor(sc, n, src);
     const key = n + "\u0000" + src;
     let k = own.get(key);
     if (!k) own.set(key, k = {});
     return k;
   }
-  function drawUi() {
+  function drawUi(sc: string) {
     const used = new Set<string>();
     [...box.querySelectorAll<HTMLElement>(".uib")].forEach((b, n) => {
       const src = b.querySelector("code")?.textContent ?? "";
-      const key = n + "\u0000" + src;
+      const key = sc + "\u0000" + n + "\u0000" + src;
       const have = live.get(key);
       if (have) {
         used.add(key);
@@ -113,7 +114,7 @@
       b.append(host);
       b.classList.add("drawn");
       try {
-        live.set(key, { inst: mount(GenUi, { target: host, props: { items: p.items, keep: keep(n, src) } }), host });
+        live.set(key, { inst: mount(GenUi, { target: host, props: { items: p.items, keep: keep(sc, n, src) } }), host });
         used.add(key);
       } catch (e) { console.warn("ui block not drawn:", (e as Error)?.message?.slice(0, 200)); host.remove(); b.classList.remove("drawn"); }
     });
@@ -136,13 +137,13 @@
   }
 
   $effect(() => {
-    const h = html;
+    const h = html, sc = scope;
     untrack(() => {
       const f = focused();
       patch(h);
       // Out of the page now: its block's node was new (a browser takes the focus off it).
       const moved = f && !f.el.isConnected;
-      drawUi();
+      drawUi(sc);
       if (moved) refocus(f);
     });
   });

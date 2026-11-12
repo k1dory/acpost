@@ -343,3 +343,40 @@ describe("review round 1", () => {
     expect(q(".gu .tile .label").textContent).toBe("Users");
   });
 });
+
+describe("review round 2", () => {
+  const harness = async (text: string, scope: string) => {
+    const Streaming = (await import("../test/Streaming.svelte")).default;
+    const r = mount(Streaming, { target: document.body, props: { text, scope } }) as unknown as { set(t: string, sc?: string): void };
+    mounted.push(r);
+    flushSync(); await flush(); flushSync();
+    return async (t: string, sc?: string) => { r.set(t, sc); flushSync(); await flush(); flushSync(); };
+  };
+  const fill = (v: string) => { const i = q<HTMLInputElement>(".form input"); i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); flushSync(); };
+  async function composer() {
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.draft.agent = "agent:claude";
+    mounted.push(mount((await import("./Composer.svelte")).default, { target: document.body }));
+    flushSync();
+    return q<HTMLTextAreaElement>("textarea");
+  }
+  const typeIn = (ta: HTMLTextAreaElement, v: string) => { ta.value = v; ta.dispatchEvent(new Event("input", { bubbles: true })); flushSync(); };
+
+  it("gives one Markdown's pages with the same block a state each, as a wiki shows page after page (P2)", async () => {
+    const form = block({ type: "form", fields: [{ label: "Host" }] });
+    const set = await harness(form, "wiki:repo:one");
+    fill("web1");
+    const first = q<HTMLInputElement>(".form input");
+    await set(form, "wiki:repo:two"); // the same text, another page
+    expect(q<HTMLInputElement>(".form input")).not.toBe(first);
+    expect(q<HTMLInputElement>(".form input").value).toBe("");
+    expect(all(".gu")).toHaveLength(1);
+    fill("web2");
+    await set(form, "wiki:repo:one"); // back: as it was left there
+    expect(q<HTMLInputElement>(".form input").value).toBe("web1");
+    await set(form, "wiki:repo:two");
+    expect(q<HTMLInputElement>(".form input").value).toBe("web2");
+  });
+});
