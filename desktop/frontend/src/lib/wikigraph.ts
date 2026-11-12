@@ -45,6 +45,7 @@ export const noteId = (name: string) => "note:" + name;
 
 const linkRe = /\[\[([^[\]|\n]{1,200})(?:\|([^[\]\n]{0,200}))?\]\]/g;
 const fence = /^ {0,3}(`{3,}|~{3,})/;
+const inlineToken = /(\[\[[^[\]|\n]{1,200}(?:\|[^[\]\n]{0,200})?\]\])|(`+)[^`][\s\S]*?\2|([^`[]+|\[|`+)/g;
 
 /**
  * Applies fn to the parts of a Markdown text outside code (fenced blocks and inline code spans),
@@ -62,8 +63,9 @@ export function outsideCode(text: string, fn: (s: string) => string): string {
       continue;
     }
     if (f) { open = f[1]; out.push(line); continue; }
-    // Inline code: a run of backticks to the same run on the line.
-    out.push(line.replace(/(`+)[^`][\s\S]*?\1|([^`]+|`+)/g, (all, _tick, plain) => (plain !== undefined && !all.startsWith("`") ? fn(plain) : all)));
+    // Whole wiki links first (a label may be code: [[arch|`API`]]), then inline code (a run of
+    // backticks to the same run on the line), then the text between.
+    out.push(line.replace(inlineToken, (all, link, _tick, plain) => (link !== undefined || plain !== undefined ? fn(all) : all)));
   }
   return out.join("\n");
 }
@@ -148,6 +150,10 @@ export function buildGraph(pages: PageIn[], notes: NoteIn[]): Graph {
   return { items, byId, edges, out, in: into, broken, lonely, resolve };
 }
 
+// A link's destination, encoded whole: encodeURIComponent leaves ( ) ! ' * as they are, and a ")"
+// would end a Markdown destination early (a repository at /work/app)).
+const encodeHref = (s: string) => encodeURIComponent(s).replace(/[()!'*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+
 const escLabel = (s: string) => s.replace(/[\\[\]]/g, m => "\\" + m);
 
 /**
@@ -158,7 +164,7 @@ export function linkify(body: string, from: Item, g: Graph): string {
   return outsideCode(body ?? "", s => s.replace(linkRe, (_all, target: string, label?: string) => {
     const to = g.resolve(from, target);
     const text = escLabel((label ?? "").trim() || (to ? to.title : target.trim()));
-    return to ? `[${text}](#wiki:${encodeURIComponent(to.id)})` : `[${text}](#wiki-broken:${encodeURIComponent(target.trim())})`;
+    return to ? `[${text}](#wiki:${encodeHref(to.id)})` : `[${text}](#wiki-broken:${encodeHref(target.trim())})`;
   }));
 }
 
