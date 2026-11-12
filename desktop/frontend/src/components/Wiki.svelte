@@ -60,11 +60,14 @@
     else { focus = to.id; setMode("table"); }
   }
   // "Open" in the explorer: a page in its wiki, a note where knowledge is edited.
-  function openItem(it: Item) {
+  // The explorer's set may be newer than this view's: the list of wikis and the repository's pages
+  // are read again (a wiki written again, or one made since), the page asked for kept.
+  async function openItem(it: Item) {
     if (it.kind === "note") { app.settingsAt = "knowledge"; app.view = "settings"; return; }
     setMode("pages");
-    if (repo !== it.repo || adding) pick(it.repo!);
-    page = it.key;
+    repo = it.repo!; page = it.key; pages = []; err = ""; adding = false;
+    try { wikis = ((await Node.Wikis()) ?? []) as any; } catch (e) { err = errText(e); }
+    await loadPages();
   }
 
   async function load() {
