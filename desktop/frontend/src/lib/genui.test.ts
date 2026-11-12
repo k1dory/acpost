@@ -92,3 +92,25 @@ describe("what the components compute in the page", () => {
     expect(keepFor(0, "{ }")).not.toBe(a);
   });
 });
+
+describe("review round 1", () => {
+  it("refuses numbers a chart cannot scale, and draws an axis of a few ticks for any it takes (P1)", () => {
+    const chart = (values: number[]) => ({ type: "chart", kind: "bar", labels: values.map((_, i) => "l" + i), series: [{ name: "x", values }] });
+    expect(why(chart([1.7e308]))).toMatch(/beyond/);
+    expect(why(chart([-1.7e308]))).toMatch(/beyond/);
+    expect(why(chart([1, 1e15 + 1e3]))).toMatch(/beyond/);
+    expect(why({ type: "stats", items: [{ label: "a", value: 1e300 }] })).toMatch(/beyond/);
+    expect(ok(chart([5e-324]))).toHaveLength(1);
+    expect(ok(chart([5e-324, 1e15, -1e15, 0]))).toHaveLength(1);
+    // The scale for any finite numbers at all: a few ticks, every one finite (no loop to run away).
+    const extremes = [0, 1, -1, 5e-324, -5e-324, 1e-300, 1e15, -1e15, 1.7e308, -1.7e308, Number.MAX_VALUE, -Number.MAX_VALUE];
+    for (const lo of extremes) for (const hi of extremes) {
+      const tk = ticks(Math.min(lo, hi), Math.max(lo, hi));
+      expect(tk.length, `${lo}..${hi}`).toBeGreaterThanOrEqual(2);
+      expect(tk.length, `${lo}..${hi}`).toBeLessThanOrEqual(11);
+      expect(tk.every(Number.isFinite), `${lo}..${hi}: ${tk}`).toBe(true);
+      expect(tk[tk.length - 1] > tk[0], `${lo}..${hi}`).toBe(true);
+    }
+  });
+
+});

@@ -11,7 +11,12 @@
   const all = $derived(c.series.flatMap(s => s.values));
   const scale = $derived(ticks(Math.min(...all), Math.max(...all)));
   const lo = $derived(scale[0]), hi = $derived(scale[scale.length - 1]);
-  const y = (v: number) => T + ph - ((v - lo) / (hi - lo)) * ph;
+  // A place on the plot for any value: one the scale cannot place (never for a checked block) sits on
+  // its floor rather than giving the drawing NaN.
+  const y = (v: number) => {
+    const at = T + ph - ((v - lo) / (hi - lo)) * ph;
+    return Number.isFinite(at) ? at : T + ph;
+  };
   // A category's band (bars) or point (lines): the middle of its share of the width.
   const band = $derived(pw / n);
   const x = (i: number) => L + band * i + band / 2;

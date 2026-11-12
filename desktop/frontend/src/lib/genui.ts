@@ -20,7 +20,7 @@ export type Ui = Stats | Chart | Table | Timeline | Kanban | Steps | Choices | F
 
 /** The limits a block is held to: what a reply can sensibly show, and what stays quick to draw. */
 export const caps = {
-  source: 50_000, components: 8, title: 120, label: 80, text: 500, cell: 300,
+  source: 50_000, components: 8, number: 1e15, title: 120, label: 80, text: 500, cell: 300,
   stats: 12, labels: 60, series: 8, columns: 12, rows: 500, items: 50, kanbanColumns: 8, cards: 40,
   options: 12, fields: 10, selectOptions: 30,
 };
@@ -41,8 +41,11 @@ function str(v: unknown, where: string, max: number): string {
 function optStr(v: unknown, where: string, max: number): string | undefined {
   return v === undefined ? undefined : str(v, where, max);
 }
+// A number a chart can scale: JSON reads 1e400 as Infinity, and one near the largest double has
+// no room above it for an axis.
 function num(v: unknown, where: string): number {
   if (typeof v !== "number" || !Number.isFinite(v)) fail(where, "not a number");
+  if (Math.abs(v as number) > caps.number) fail(where, `beyond ±${caps.number}`);
   return v as number;
 }
 function strOrNum(v: unknown, where: string, max: number): string | number {
@@ -162,16 +165,18 @@ export function fmt(n: number): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 2 : 1 });
 }
 
-/** The scale of a chart's value axis: from min (or 0) to max (or 0), in about four round steps. */
+/** The scale of a chart's value axis: from min (or 0) to max (or 0), in about four round steps;
+ * at most 11 ticks whatever the numbers (a span too small for round steps has its two ends). */
 export function ticks(min: number, max: number): number[] {
-  let lo = Math.min(0, min), hi = Math.max(0, max);
-  if (lo === hi) hi = lo + 1;
+  const lo = Math.min(0, min), hi = Math.max(0, max) > lo ? Math.max(0, max) : lo + 1;
   const raw = (hi - lo) / 4, mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw)!;
-  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
-  const out: number[] = [];
-  for (let v = lo; v <= hi + step / 2; v += step) out.push(Math.round(v / step) * step);
-  return out;
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+  if (step && Number.isFinite(step) && step > 0) {
+    const a = Math.floor(lo / step), b = Math.ceil(hi / step);
+    if (Number.isFinite(a * step) && Number.isFinite(b * step) && b - a >= 1 && b - a <= 10)
+      return Array.from({ length: b - a + 1 }, (_, i) => (a + i) * step);
+  }
+  return [lo, hi];
 }
 
 /** A table's rows ordered by a column: numbers as numbers, text as the person reads it; empty
