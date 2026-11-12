@@ -1,4 +1,5 @@
 import type { ArtifactRef } from "./state.svelte";
+import { normalizeRef } from "./artifactref";
 
 /** An artifact of the library, as the node lists it: a file a reply carries (file), a reply's link
  * (link), or a document a turn created or edited on disk (change). */
@@ -34,10 +35,10 @@ export function cardKind(a: LibItem): "image" | "text" | "" {
 }
 
 /** What the viewer opens for an item: a reply's file, or a file of this Mac; null for a web link.
- * Its base is where its relative links lead from: a file's own directory, else its chat's. */
+ * A reply's file reads its relative links from its chat's directory; a file of this Mac from its own. */
 export function refOf(a: LibItem): ArtifactRef | null {
   if (a.kind === "file") return { msg: a.msg, name: a.name, base: a.cwd ?? "" };
-  if (a.path) return { name: a.name, path: a.path, base: a.path.slice(0, a.path.lastIndexOf("/")) || "/" };
+  if (a.path) return normalizeRef({ name: a.name, path: a.path });
   return null;
 }
 

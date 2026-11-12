@@ -111,14 +111,14 @@ describe("the library, review round 1", () => {
     const link = document.querySelector(".av .md-wrap a") as HTMLAnchorElement;
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     flushSync();
-    expect(app.artifact).toEqual({ name: "table.csv", path: "data/table.csv", base: "/project-b" });
+    expect(app.artifact).toEqual({ name: "table.csv", path: "/project-b/data/table.csv", base: "" });
     app.view = "artifacts";
     await settle();
     (document.querySelector(".lc .hit") as HTMLButtonElement).click();
     await settle();
     (document.querySelector(".av .md-wrap code.pl") as HTMLElement).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     flushSync();
-    expect(app.artifact).toEqual({ name: "more.md", path: "notes/more.md", base: "/project-b" });
+    expect(app.artifact).toEqual({ name: "more.md", path: "/project-b/notes/more.md", base: "" });
   });
 
   it("asks for previews again on refresh: a changed file anew, a failed one again", async () => {

@@ -3,13 +3,14 @@
   import { app, type ArtifactRef } from "../lib/state.svelte";
   import Icon from "./Icon.svelte";
   import ArtifactView from "./ArtifactView.svelte";
+  import { refKey, sameRef } from "../lib/artifactref";
 
   // Artifacts: the files the agents handed back in this chat (attached to their replies) and the
   // files of this Mac a reply linked to, the one picked shown by ArtifactView.
   const attached = $derived(app.msgs.flatMap(m => (m.files ?? []).filter(f => f.reply).map(f => ({ msg: m.id, name: f.name }) as ArtifactRef)));
   const all = $derived.by(() => {
     const out = [...attached];
-    for (const a of app.openedArtifacts) if (!out.some(x => x.msg === a.msg && x.name === a.name && x.path === a.path && x.base === a.base)) out.push(a);
+    for (const a of app.openedArtifacts) if (!out.some(x => sameRef(x, a))) out.push(a);
     return out;
   });
   const cur = $derived(app.artifact ?? all[0] ?? null);
@@ -21,8 +22,8 @@
     <div class="empty">{t("Files the agents hand back, and files of this Mac a reply links to, show here.")}</div>
   {:else}
     <div class="list">
-      {#each all as a (a.msg + "|" + a.name + "|" + (a.path ?? ""))}
-        <button class="it" class:on={cur === a || (cur?.msg === a.msg && cur?.name === a.name && cur?.path === a.path)} onclick={() => (app.artifact = a)} title={a.path ?? a.name}>
+      {#each all as a (refKey(a))}
+        <button class="it" class:on={sameRef(cur, a)} onclick={() => (app.artifact = a)} title={a.path ?? a.name}>
           <Icon name="file" size={12} /><span>{label(a).split("/").pop()}</span>
         </button>
       {/each}

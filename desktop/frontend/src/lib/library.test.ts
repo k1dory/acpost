@@ -18,8 +18,8 @@ describe("the library's items", () => {
   it("open as a reply's file, a file of this Mac, or a web page", () => {
     expect(refOf(item({ name: "a.md" }))).toEqual({ msg: "m1", name: "a.md", base: "" });
     expect(refOf(item({ name: "a.md", cwd: "/p" }))).toEqual({ msg: "m1", name: "a.md", base: "/p" });
-    expect(refOf(item({ kind: "change", name: "r.md", path: "/w/r.md" }))).toEqual({ name: "r.md", path: "/w/r.md", base: "/w" });
-    expect(refOf(item({ kind: "link", name: "r.md", uri: "file:///w/r.md", path: "/w/r.md" }))).toEqual({ name: "r.md", path: "/w/r.md", base: "/w" });
+    expect(refOf(item({ kind: "change", name: "r.md", path: "/w/r.md" }))).toEqual({ name: "r.md", path: "/w/r.md", base: "" });
+    expect(refOf(item({ kind: "link", name: "r.md", uri: "file:///w/r.md", path: "/w/r.md" }))).toEqual({ name: "r.md", path: "/w/r.md", base: "" });
     const web = item({ kind: "link", name: "site", uri: "https://example.com/" });
     expect(refOf(web)).toBeNull();
     expect(webLink(web)).toBe("https://example.com/");

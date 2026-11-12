@@ -7,6 +7,7 @@ import { afterSent, overLimits } from "./draft";
 import { Turn, ownBody, type Ev } from "./turn";
 import { editsToReveal, localFiles, type Reveal } from "./ide";
 import { who } from "./format";
+import { normalizeRef, sameRef } from "./artifactref";
 
 export type Msg = {
   id: string; from: string; to: string; thread: string; parent?: string; depth: number; state: string;
@@ -886,10 +887,11 @@ class App {
   /** The artifact shown, and those opened in this chat. */
   artifact = $state<ArtifactRef | null>(null);
   openedArtifacts = $state<ArtifactRef[]>([]);
-  openArtifact(a: ArtifactRef) {
-    const same = (x: ArtifactRef) => x.msg === a.msg && x.name === a.name && x.path === a.path && x.base === a.base;
-    if (!this.openedArtifacts.some(same)) this.openedArtifacts = [...this.openedArtifacts, a];
-    this.artifact = a;
+  openArtifact(ref: ArtifactRef) {
+    const a = normalizeRef(ref);
+    const known = this.openedArtifacts.find(x => sameRef(x, a));
+    if (!known) this.openedArtifacts = [...this.openedArtifacts, a];
+    this.artifact = known ?? a;
     if (this.view !== "chat") this.view = "chat";
     this.openTab("artifacts");
   }
