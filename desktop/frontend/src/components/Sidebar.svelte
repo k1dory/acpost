@@ -144,7 +144,7 @@
   {/if}
 {/snippet}
 
-<aside class="side" class:gone={app.view === "ide"}>
+<aside class="side" class:gone={app.beside}>
   <div class="top drag"><ViewSwitch /></div>
   <div class="pad">
     <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> {t("New task")} <kbd>⌘N</kbd></button>

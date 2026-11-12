@@ -64,7 +64,7 @@
 <svelte:window onclick={e => { if (handing && !(e.target as HTMLElement).closest(".hand, .menu")) handing = false; }} />
 
 <section class="conv">
-  <header class="drag" class:beside={app.view === "ide"}>
+  <header class="drag" class:beside={app.beside}>
     <div class="t">
       <!-- A new task has its heading in the middle ("What should we work on?"): none up here. -->
       {#if app.chat || app.thread}<div class="title">{title}</div>{/if}
@@ -79,7 +79,7 @@
     </div>
     <span class="sp"></span>
     <!-- Beside the IDE the sidebar is hidden: another chat and a new task are had from here. -->
-    {#if app.view === "ide"}
+    {#if app.beside}
       <button class="btn ghost icon nodrag" title={t("New task")} aria-label={t("New task")} onclick={() => app.newTask()}><Icon name="plus" size={headerIcon} /></button>
       <button class="btn ghost icon nodrag" title={t("Another chat (⌘K)")} aria-label={t("Another chat (⌘K)")} onclick={() => (app.palette = true)}><Icon name="chat" size={headerIcon} /></button>
     {/if}
@@ -104,7 +104,7 @@
       </div>
     {/if}
     <!-- Beside the IDE there is no right panel to open, and the column is too narrow for more. -->
-    {#if app.view !== "ide"}
+    {#if !app.beside}
     {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost icon nodrag" title={t("Fork: the conversation so far, in a new chat")} aria-label={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={headerIcon} /></button>{/if}
     <button class="btn ghost icon nodrag" title={t("Right panel (⌘\\)")} aria-label={t("Right panel (⌘\\)")} onclick={() => (app.setPanel(!app.panel))}><Icon name="panel" size={headerIcon} /></button>
     {/if}
