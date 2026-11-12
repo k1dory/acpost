@@ -6,8 +6,9 @@ package store
 //
 // Of a turn's changes only documents a person looks at are listed — pages, Markdown, pictures,
 // PDFs, tables (docExts), and JSON the turn created (an edited one is mostly configuration) — not
-// every source file it touched; none deleted, none in a hidden folder or node_modules. A file
-// changed by many turns is listed once, at its latest change.
+// every source file it touched; none in a hidden folder or node_modules. A file changed by many
+// turns is listed once, as its latest change left it: not at all when that deleted it; a JSON file
+// when some turn created it, whichever turn changed it last.
 
 import (
 	"context"
@@ -95,10 +96,17 @@ func artifactsSQL() string {
 		FROM turn_changes tc, json_each(tc.files) j
 	), chf AS (
 		SELECT ch.*, CASE WHEN path LIKE '/%' OR path LIKE '\%' OR path LIKE '_:%' THEN path ELSE repo || '/' || path END AS whole
-		FROM ch WHERE status NOT LIKE 'D%' AND path <> '' AND (` + strings.Join(ext, " OR ") + ` OR (status = 'A' AND lower(path) LIKE '%.json'))
+		FROM ch WHERE path <> ''
+	), ranked AS (
+		-- A path's whole history first: its latest change is what it is now (a deletion: gone), and
+		-- whether any turn created it.
+		SELECT chf.*, ROW_NUMBER() OVER (PARTITION BY whole ORDER BY ts DESC, id DESC, idx DESC) AS rn,
+			max(status = 'A') OVER (PARTITION BY whole) AS created
+		FROM chf
 	), docs AS (
-		SELECT chf.*, ROW_NUMBER() OVER (PARTITION BY whole ORDER BY ts DESC, id DESC, idx DESC) AS rn FROM chf
-		WHERE '/' || replace(whole, '\', '/') NOT LIKE '%/.%' AND '/' || replace(whole, '\', '/') NOT LIKE '%/node_modules/%'
+		SELECT * FROM ranked WHERE rn = 1 AND status NOT LIKE 'D%'
+			AND (` + strings.Join(ext, " OR ") + ` OR (created = 1 AND lower(path) LIKE '%.json'))
+			AND '/' || replace(whole, '\', '/') NOT LIKE '%/.%' AND '/' || replace(whole, '\', '/') NOT LIKE '%/node_modules/%'
 	), items AS (
 		SELECT CASE WHEN m.finished_at > 0 THEN m.finished_at ELSE m.created_at END AS ts, 1 AS src, f.id AS id, 0 AS idx,
 			f.name AS name, f.type AS type, f.size AS size, f.uri AS uri, '' AS whole, '' AS status,
@@ -106,7 +114,7 @@ func artifactsSQL() string {
 		FROM files f JOIN messages m ON m.seq = f.msg WHERE f.reply = 1
 		UNION ALL
 		SELECT d.ts, 0, d.id, d.idx, '', '', -1, '', d.whole, d.status, d.msg, coalesce(m.thread, ''), d.agent, d.whole
-		FROM docs d LEFT JOIN messages m ON m.id = d.msg WHERE d.rn = 1
+		FROM docs d LEFT JOIN messages m ON m.id = d.msg
 	)
 	SELECT ts, src, id, idx, name, type, size, uri, whole, status, msg, thread, agent FROM items
 	WHERE (ts, src, id, idx) < (?, ?, ?, ?) AND (? = '' OR name LIKE ? ESCAPE '\' OR addr LIKE ? ESCAPE '\')
