@@ -43,8 +43,11 @@
   const localHost = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0|[a-z0-9-]+\.localhost)$/i;
   function links(e: MouseEvent) {
     const el = e.target as HTMLElement | null;
+    // A link in an artifact leads from the artifact's directory (the library shows any chat's),
+    // else from the open chat's.
+    const base = (el?.closest?.("[data-artifact-base]") as HTMLElement | null)?.dataset.artifactBase || app.chatCwd();
     const code = el?.closest?.("code.pl") as HTMLElement | null;
-    if (code) { e.preventDefault(); app.openArtifact({ name: code.textContent!.split("/").pop()!, path: code.textContent!, base: app.chatCwd() }); return; }
+    if (code) { e.preventDefault(); app.openArtifact({ name: code.textContent!.split("/").pop()!, path: code.textContent!, base }); return; }
     const a = el?.closest?.("a") as Element | null; // an SVG link too (xlink:href)
     if (!a) return;
     const href = a.getAttribute("href") ?? a.getAttribute("xlink:href") ?? "";
@@ -52,16 +55,16 @@
     if (href.startsWith("#artifact:")) {
       e.preventDefault();
       const path = decodeURIComponent(href.slice(10));
-      app.openArtifact({ name: path.split("/").pop() || path, path, base: app.chatCwd() });
+      app.openArtifact({ name: path.split("/").pop() || path, path, base });
       return;
     }
     if (href.startsWith("#")) return;
     e.preventDefault();
-    route(href);
+    route(href, base);
   }
   // Where an address opens: a page of this Mac in the preview, the web in the browser, a file as
   // an artifact. Also what the app's page was kept from going to (app:navigate).
-  function route(href: string) {
+  function route(href: string, base = app.chatCwd()) {
     let u: URL;
     try { u = new URL(href, "file:///"); } catch { return; }
     if (u.protocol === "http:" || u.protocol === "https:") {
@@ -69,7 +72,7 @@
       else Browser.OpenURL(u.href);
     } else if (u.protocol === "file:") {
       const path = decodeURIComponent(href.startsWith("file:") ? u.pathname : href);
-      app.openArtifact({ name: path.split("/").pop() || path, path, base: app.chatCwd() });
+      app.openArtifact({ name: path.split("/").pop() || path, path, base });
     } else if (u.protocol === "mailto:") Browser.OpenURL(u.href);
   }
 

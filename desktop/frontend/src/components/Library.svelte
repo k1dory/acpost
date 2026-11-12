@@ -19,21 +19,28 @@
   let more = $state(false);
   let opened = $state<LibItem | null>(null);
   let gen = 0;
+  // Bumped by Refresh: the cards ask for their previews again.
+  let stamp = $state(0);
+  // A first page is being asked for: no page after the old one's cursor meanwhile.
+  let reloading = $state(false);
 
-  // A first page (again): what an older filter asked for, answered late, is dropped.
+  // A first page (again): what an older filter asked for, answered late, is dropped. The old
+  // cursor goes at once: a page after it would land right after the new first page.
   async function load() {
     const my = ++gen;
-    err = "";
+    err = ""; next = ""; more = false; reloading = true;
     try {
       const r = (await Node.Artifacts(q.trim(), "", pageSize)) as any;
       if (my !== gen) return;
       items = r?.items ?? [];
       next = r?.next ?? "";
     } catch (e) { if (my === gen) { err = errText(e); items ??= []; } }
+    finally { if (my === gen) reloading = false; }
   }
-  // The page after: asked once the end of the list comes near.
+  function refresh() { stamp++; load(); }
+  // The page after: asked once the end of the list comes near, never while a first page is.
   async function loadMore() {
-    if (!next || more) return;
+    if (!next || more || reloading) return;
     const my = gen, from = next;
     more = true;
     try {
@@ -43,7 +50,7 @@
       items = [...(items ?? []), ...((r?.items ?? []) as LibItem[]).filter(a => !seen.has(itemKey(a)))];
       next = r?.next ?? "";
     } catch (e) { if (my === gen) err = errText(e); }
-    finally { more = false; }
+    finally { if (my === gen) more = false; }
   }
   // Typing filters once it pauses.
   let first = true;
@@ -59,11 +66,14 @@
     if (web) { Browser.OpenURL(web); return; }
     opened = a;
   }
+  // Its chat: the one listed, or (older than the chats listed) the thread itself.
   async function openChat(a: LibItem) {
     if (!a.thread) return;
     await app.loadChats();
+    const key = "thread:" + a.thread;
     app.view = "chat";
-    app.openKey("thread:" + a.thread);
+    const listed = app.chats.find(c => c.key === key);
+    app.open(listed ?? { key, kind: "thread", thread: a.thread, title: a.title ?? "", agent: a.agent, cwd: a.cwd, updated: a.at });
   }
 </script>
 
@@ -81,7 +91,7 @@
         <Icon name="search" size={13} />
         <input placeholder={t("Filter by name or address")} bind:value={q} />
       </label>
-      <button class="btn ghost sm nodrag" onclick={load} title={t("Refresh")} aria-label={t("Refresh")}><Icon name="refresh" size={13} /></button>
+      <button class="btn ghost sm nodrag" onclick={refresh} title={t("Refresh")} aria-label={t("Refresh")}><Icon name="refresh" size={13} /></button>
     {/if}
   </header>
   {#if opened}
@@ -103,7 +113,7 @@
       {:else}
         <div class="grid">
           {#each items as a (itemKey(a))}
-            <LibraryCard item={a} onopen={open} onchat={openChat} />
+            <LibraryCard item={a} {stamp} onopen={open} onchat={openChat} />
           {/each}
         </div>
         {#if next}<div class="tail" use:inView={v => { if (v) loadMore(); }}>{#if more}<span class="spin"></span>{/if}</div>{/if}

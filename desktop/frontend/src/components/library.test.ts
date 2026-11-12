@@ -115,7 +115,7 @@ describe("the artifacts library", () => {
 
     (cards()[1].querySelector(".hit") as HTMLButtonElement).click();
     flushSync(); await flush(); flushSync();
-    expect(fake.Node.LocalFile).toHaveBeenCalledWith("/w/report.md", "");
+    expect(fake.Node.LocalFile).toHaveBeenCalledWith("/w/report.md", "/w");
     expect(document.querySelector(".av .md-wrap")?.textContent).toContain("Report");
 
     fake.Node.Chats.mockResolvedValue({ items: [{ key: "thread:T2", kind: "thread", thread: "T2", title: "Write it", updated: now }] });

@@ -33,6 +33,7 @@ type Artifact struct {
 	Msg    string    `json:"msg"`
 	Thread string    `json:"thread,omitempty"`
 	Title  string    `json:"title,omitempty"` // the chat's
+	Cwd    string    `json:"cwd,omitempty"`   // the chat's directory (filled by the node)
 	Agent  string    `json:"agent,omitempty"`
 	At     time.Time `json:"at"`
 	Gone   bool      `json:"gone,omitempty"` // the file is no longer there (filled by the node)

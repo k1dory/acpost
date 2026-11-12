@@ -69,7 +69,7 @@
   }
 </script>
 
-<div class="av">
+<div class="av" data-artifact-base={cur?.base || undefined}>
   <div class="bar">
     <b class="nm" title={art?.path ?? art?.name}>{art?.name ?? cur?.name}</b>
     {#if art}<span class="muted small">{art.type.split(";")[0]} · {bytes(art.size)}</span>{/if}

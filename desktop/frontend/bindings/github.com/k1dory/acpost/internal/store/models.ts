@@ -50,6 +50,11 @@ export class Artifact {
      * the chat's
      */
     "title"?: string;
+
+    /**
+     * the chat's directory (filled by the node)
+     */
+    "cwd"?: string;
     "agent"?: string;
     "at": string;
 

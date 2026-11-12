@@ -13,6 +13,7 @@ export type LibItem = {
   msg: string;
   thread?: string;
   title?: string;
+  cwd?: string; // the chat's directory
   agent?: string;
   at: string;
   gone?: boolean;
@@ -32,10 +33,11 @@ export function cardKind(a: LibItem): "image" | "text" | "" {
   return "";
 }
 
-/** What the viewer opens for an item: a reply's file, or a file of this Mac; null for a web link. */
+/** What the viewer opens for an item: a reply's file, or a file of this Mac; null for a web link.
+ * Its base is where its relative links lead from: a file's own directory, else its chat's. */
 export function refOf(a: LibItem): ArtifactRef | null {
-  if (a.kind === "file") return { msg: a.msg, name: a.name };
-  if (a.path) return { name: a.name, path: a.path };
+  if (a.kind === "file") return { msg: a.msg, name: a.name, base: a.cwd ?? "" };
+  if (a.path) return { name: a.name, path: a.path, base: a.path.slice(0, a.path.lastIndexOf("/")) || "/" };
   return null;
 }
 

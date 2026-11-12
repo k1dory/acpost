@@ -10,18 +10,23 @@
 
   // A card of the library: a little of the file (asked for once the card comes near the screen,
   // never before), its name, its chat, its agent, how long ago.
-  let { item, onopen, onchat }: { item: LibItem; onopen: (a: LibItem) => void; onchat: (a: LibItem) => void } = $props();
+  let { item, stamp = 0, onopen, onchat }: { item: LibItem; stamp?: number; onopen: (a: LibItem) => void; onchat: (a: LibItem) => void } = $props();
 
   const kind = $derived(cardKind(item));
   let shown = $state<{ type: string; data: string } | null>(null);
-  let asked = false;
-  function near(v: boolean) {
-    if (!v || asked || !kind) return;
-    asked = true;
+  // What the preview shown was asked for: a refresh (stamp), or the file changing (its size, its
+  // time), asks again — once the card is near the screen; a preview that failed, too.
+  const want = $derived(`${stamp}|${item.size}|${item.at}|${item.path ?? ""}`);
+  let visible = false, askedFor = "";
+  function ask(w: string) {
+    if (!visible || !kind || askedFor === w) return;
+    askedFor = w;
     Node.ArtifactPreview(item.kind === "file" ? item.msg : "", item.name, item.kind === "file" ? "" : item.path ?? "")
-      .then((r: any) => { if (r?.data) shown = { type: (r.type ?? "").split(";")[0], data: r.data }; })
-      .catch(() => {}); // the card keeps its icon
+      .then((r: any) => { if (askedFor === w) shown = r?.data ? { type: (r.type ?? "").split(";")[0], data: r.data } : null; })
+      .catch(() => { if (askedFor === w) shown = null; }); // the card shows its icon
   }
+  function near(v: boolean) { visible = v; if (v) ask(want); }
+  $effect(() => { ask(want); });
   const text = $derived(shown && kind === "text" ? firstLines(new TextDecoder().decode(unb64(shown.data))) : "");
   const where = $derived(webLink(item) || item.path || "");
 </script>

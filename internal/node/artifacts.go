@@ -38,10 +38,22 @@ func (n *Node) Artifacts(ctx context.Context, p Principal, q store.ArtifactQuery
 		return client.Artifacts{}, errf("unavailable", "%v", err)
 	}
 	titles, _ := n.st.ChatTitles(ctx)
+	cwds := map[string]string{}
 	for i := range items {
 		a := &items[i]
 		if t := titles["thread:"+a.Thread]; t != "" {
 			a.Title = t
+		}
+		// The chat's directory: what a relative link in a reply's file is read from.
+		if a.Thread != "" {
+			cwd, ok := cwds[a.Thread]
+			if !ok {
+				if root, err := n.st.Get(ctx, a.Thread); err == nil {
+					cwd = taskCwd(root)
+				}
+				cwds[a.Thread] = cwd
+			}
+			a.Cwd = cwd
 		}
 		switch a.Kind {
 		case "link":
