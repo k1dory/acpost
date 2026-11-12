@@ -4,6 +4,8 @@
   import { app, type Chat } from "../lib/state.svelte";
   import { ago, who } from "../lib/format";
   import Icon from "./Icon.svelte";
+  import AgentMark, { markOf } from "./AgentMark.svelte";
+  import { brand } from "../lib/brand";
   import Dropdown from "./Dropdown.svelte";
   import { Node, errText } from "../lib/api";
   import { newBacklogDraft } from "../lib/records";
@@ -64,7 +66,8 @@
   ]);
   function agentName(c: Chat) {
     const a = c.agent ?? "";
-    return a.includes("codex") ? "Codex" : a.includes("claude") ? "Claude Code" : c.kind === "cloud" ? c.cloud_agent || "Cloud" : who(a).name;
+    const b = markOf(a);
+    return b ? brand(b)!.title : c.kind === "cloud" ? c.cloud_agent || "Cloud" : who(a).name;
   }
   function place(c: Chat) {
     const d = c.cwd || c.repo || "";
@@ -104,7 +107,7 @@
             <button class="tt plain" onclick={() => startAdd(it)} title={t("Edit")}>{it.title}</button>
             {#if it.body}<div class="bd muted">{it.body}</div>{/if}
             <div class="meta muted">
-              {#if it.agent}<span><Icon name="bot" size={11} /> {agentLabel(it.agent)}</span>{/if}
+              {#if it.agent}<span>{#if markOf(it.agent)}<AgentMark of={it.agent} size={11} />{:else}<Icon name="bot" size={11} />{/if} {agentLabel(it.agent)}</span>{/if}
               {#if it.cwd}<span class="mono">{tilde(it.cwd).split("/").filter(Boolean).pop()}</span>{/if}
               <span class="sp"></span>
               <button class="icon-btn" onclick={() => remove(it)} title={t("Delete")} aria-label={t("Delete")}><Icon name="x" size={11} /></button>
@@ -124,7 +127,7 @@
             <button class="card item" onclick={() => app.open(c)}>
               <div class="tt">{c.title || t("Untitled")}</div>
               <div class="meta muted">
-                <span><Icon name={c.kind === "cloud" ? "cloud" : "bot"} size={11} /> {agentName(c)}</span>
+                <span>{#if c.kind !== "cloud" && markOf(c.agent)}<AgentMark of={c.agent ?? ""} size={11} />{:else}<Icon name={c.kind === "cloud" ? "cloud" : "bot"} size={11} />{/if} {agentName(c)}</span>
                 {#if place(c)}<span class="mono">{place(c)}</span>{/if}
                 <span class="sp"></span>
                 {#if col.key === "wait"}<span class="chip ask">{t("{n} to approve", { n: asksByThread.get(c.key) ?? 0 })}</span>{/if}
