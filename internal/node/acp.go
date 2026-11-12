@@ -581,6 +581,17 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 				n.log.Warn("mark session", "agent", a.name, "err", err)
 			}
 		}
+		// Where it was made: an agent called into its thread later works in the same directory
+		// (settings.go), whatever message of the thread or task that directory came with.
+		if key != "" {
+			dir := cwd
+			if dir == "" {
+				dir = s.cwd()
+			}
+			if err := n.st.PutSession(n.ctx, a.addr, sessionDir+string(sid), dir); err != nil {
+				n.log.Warn("record the session's directory", "agent", a.name, "err", err)
+			}
+		}
 		p.costBase[sid] = 0 // a new session: its cost starts here
 		p.fresh[sid] = true
 		// The session is the turn's before it is configured and published (the store, the agent's

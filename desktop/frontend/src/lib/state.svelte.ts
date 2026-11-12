@@ -408,7 +408,10 @@ class App {
       // Chosen here before (a draft left unsent keeps who it is for): that one. Only the person's
       // own messages say it: what a client or another node put in the thread does not.
       const asked = ms.filter(m => m.to.startsWith("agent:"));
-      const to = this.chosen.get(thread) ?? (asked.findLast(ownAsk) ?? asked[0])?.to;
+      // A message of this thread still unanswered for (its draft holds the request): its agent, the
+      // one it goes to when sent again.
+      const pending = this.draftMap.get("thread:" + thread)?.sending?.task?.to as string | undefined;
+      const to = this.chosen.get(thread) ?? pending ?? (asked.findLast(ownAsk) ?? asked[0])?.to;
       if (to) this.target = to;
       this.loadOptions(this.target);
     } catch (e) { this.error = errText(e); }
@@ -778,6 +781,7 @@ class App {
       if (d.sending?.moved && d.sending.content === content && !other) {
         task = { ...d.sending.task };
         what = d.sending.what;
+        to = task.to; // the agent it went to, shown as such once it is acknowledged
       }
       if (d.sending?.what !== what) d.sending = { what, key: newId(), content, task: { ...task }, dest };
       const key = d.sending.key;

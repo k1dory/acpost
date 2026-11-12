@@ -21,6 +21,9 @@ const (
 	// sharedSeen is the store's session key (a namespace of its own, like made:) under which an
 	// agent's mark for a thread is kept; it goes with the sessions unused past retention.
 	sharedSeen = "seen:"
+	// sessionDir is the store's session key under which the directory a session was made in is
+	// kept (by session id), for an agent called into the session's thread later.
+	sessionDir = "dir:"
 	// sharedMargin: a message's finish time is taken before its transaction commits, so one that
 	// finished a moment before the mark may show up after it. Those are looked at again, and the
 	// ones told are remembered by id for this long.
