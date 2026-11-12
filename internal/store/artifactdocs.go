@@ -173,7 +173,7 @@ func applyChanges(ctx context.Context, t *sql.Tx, c docTurn, thread string) erro
 		return err
 	}
 	if later > 0 {
-		return rebuildDocs(ctx, t, touched)
+		return rebuildDocs(ctx, t, touched, c.change)
 	}
 	for i, f := range c.files {
 		if touches(f) {
@@ -218,15 +218,29 @@ func changesInOrder(ctx context.Context, q interface {
 
 // rebuildDocs makes the rows of these paths again from the stored history, in order: the paths,
 // and every path a rename links to them (a rename is read with both its ends). It reads the whole
-// history twice — acceptable on this rare path (a turn recorded after a later one), never taken
-// by a turn in order. A change already collected by retention is not in the history: a path
-// rebuilt here may lose what only that change said.
-func rebuildDocs(ctx context.Context, t *sql.Tx, seeds map[string]bool) error {
-	// The renames, to close the set over them.
+// history twice — acceptable on this rare path (a turn recorded after a later one, late), never
+// taken by a turn in order.
+//
+// What retention collected is not in the history, only in the rows. So the paths' state before
+// their surviving history (a baseline) is inferred: the surviving history without the late turn,
+// replayed from nothing made, must give what the rows say; where a row says made and that replay
+// does not, a creation was collected — of that path, or, when its surviving history begins with
+// a rename into it, of the rename's source. The rows are then the replay of all of it from that
+// baseline.
+func rebuildDocs(ctx context.Context, t *sql.Tx, seeds map[string]bool, late int64) error {
+	type event struct {
+		c docTurn
+		i int
+	}
 	var links [][2]string
+	var events []event
 	err := changesInOrder(ctx, t, func(c docTurn) error {
-		for _, f := range c.files {
-			if f.Path != "" && isRename(f) {
+		for i, f := range c.files {
+			if !touches(f) {
+				continue
+			}
+			events = append(events, event{c, i})
+			if isRename(f) {
 				links = append(links, [2]string{wholePath(c.repo, f.Path), wholePath(c.repo, f.From)})
 			}
 		}
@@ -247,26 +261,118 @@ func rebuildDocs(ctx context.Context, t *sql.Tx, seeds map[string]bool) error {
 			}
 		}
 	}
+	var mine []event
+	for _, e := range events {
+		f := e.c.files[e.i]
+		if set[wholePath(e.c.repo, f.Path)] || isRename(f) && set[wholePath(e.c.repo, f.From)] {
+			mine = append(mine, e)
+		}
+	}
+	old := map[string]*docRow{}
 	for p := range set {
-		if _, err := t.ExecContext(ctx, "DELETE FROM artifact_docs WHERE path = ?", p); err != nil {
+		if old[p], err = getDoc(ctx, t, p); err != nil {
 			return err
 		}
 	}
-	return changesInOrder(ctx, t, func(c docTurn) error {
-		var thread string
-		for i, f := range c.files {
-			if !touches(f) || !set[wholePath(c.repo, f.Path)] && !(isRename(f) && set[wholePath(c.repo, f.From)]) {
+
+	// The replay, in memory: what applyFile does to rows, to a map.
+	type state struct {
+		made, row bool // row: the projection would have a row for it
+		status    string
+		ev        event
+		touched   bool
+	}
+	replay := func(base map[string]bool, skip int64) map[string]*state {
+		st := map[string]*state{}
+		at := func(p string) *state {
+			if st[p] == nil {
+				st[p] = &state{made: base[p], row: old[p] != nil}
+			}
+			return st[p]
+		}
+		now := func(x *state) bool {
+			return x.row && x.made && !strings.HasPrefix(x.status, "D") || !x.touched && x.made
+		}
+		for _, e := range mine {
+			if e.c.change == skip {
 				continue
 			}
-			if thread == "" {
-				_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", c.msg).Scan(&thread)
+			f := e.c.files[e.i]
+			w := wholePath(e.c.repo, f.Path)
+			d := at(w)
+			made := now(d)
+			switch {
+			case f.Status == "A":
+				made = true
+			case strings.HasPrefix(f.Status, "D"):
+				made = false
+			case isRename(f):
+				src := at(wholePath(e.c.repo, f.From))
+				made = now(src)
+				if strings.HasPrefix(f.Status, "R") && (src.row || src.touched && docKept(f.From)) {
+					src.made, src.status, src.ev, src.touched, src.row = false, "D", e, true, true
+				}
 			}
-			if err := applyFile(ctx, t, c, i, thread); err != nil {
-				return err
+			if docKept(f.Path) {
+				d.made, d.status, d.ev, d.touched, d.row = made, f.Status, e, true, true
 			}
 		}
-		return nil
-	})
+		return st
+	}
+	// Where a path's surviving history begins with a rename into it: its source.
+	beganFrom := map[string]string{}
+	seen := map[string]bool{}
+	for _, e := range mine {
+		f := e.c.files[e.i]
+		w := wholePath(e.c.repo, f.Path)
+		if !seen[w] {
+			seen[w] = true
+			if isRename(f) {
+				beganFrom[w] = wholePath(e.c.repo, f.From)
+			}
+		}
+		if isRename(f) {
+			seen[wholePath(e.c.repo, f.From)] = true
+		}
+	}
+	base := map[string]bool{}
+	for range len(set) + 1 {
+		got, grew := replay(base, late), false
+		for p := range set {
+			o, g := old[p], got[p]
+			if !o.madeNow() || g != nil && g.touched && g.made && !strings.HasPrefix(g.status, "D") {
+				continue
+			}
+			if g == nil || !g.touched {
+				continue // nothing of it survives: its row stays
+			}
+			q := p
+			for beganFrom[q] != "" && !base[q] {
+				q = beganFrom[q]
+			}
+			if !base[q] {
+				base[q], grew = true, true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+	for p, x := range replay(base, 0) {
+		if !set[p] || !x.touched {
+			continue
+		}
+		if !docKept(p) {
+			continue // only the kept types have rows
+		}
+		var thread string
+		_ = t.QueryRowContext(ctx, "SELECT thread FROM messages WHERE id = ?", x.ev.c.msg).Scan(&thread)
+		k := artifactKey{ts: x.ev.c.ts, id: x.ev.c.change, idx: int64(x.ev.i)}
+		if err := putDoc(ctx, t, p, k, x.ev.c, thread, x.status, x.made); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // docsBatchSQL is a batch of the stored changes after a key, in order: a range of turn_changes_ts.
