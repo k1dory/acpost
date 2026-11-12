@@ -41,6 +41,7 @@ func Handler(n *node.Node, local bool, maxRequest int64) http.Handler {
 	mux.HandleFunc("GET /v1/messages/{id}/events", s.auth(s.events))
 	mux.HandleFunc("POST /v1/messages/{id}/events", s.auth(s.relayEvents))
 	mux.HandleFunc("GET /v1/usage", s.auth(s.usage))
+	mux.HandleFunc("GET /v1/traces", s.auth(s.traces))
 	mux.HandleFunc("GET /v1/messages/{id}/changes", s.auth(s.changes))
 	mux.HandleFunc("GET /v1/conversations", s.auth(s.conversations))
 	mux.HandleFunc("POST /v1/messages/{id}/permission", s.auth(s.answer))
@@ -413,6 +414,21 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request, p node.Principal)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *server) traces(w http.ResponseWriter, r *http.Request, p node.Principal) {
+	q := r.URL.Query()
+	limit := 0
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeErr(w, &node.Error{Code: "invalid", Message: "limit: a number from 1"})
+			return
+		}
+		limit = n
+	}
+	out, err := s.n.Traces(r.Context(), p, q.Get("thread"), limit)
+	items(w, out, err)
 }
 
 func (s *server) relayEvents(w http.ResponseWriter, r *http.Request, p node.Principal) {

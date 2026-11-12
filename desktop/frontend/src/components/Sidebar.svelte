@@ -236,7 +236,7 @@
   </nav>
 
   <div class="foot">
-    <button class="row" class:sel={app.view === "usage"} onclick={() => (app.view = "usage")}><span class="ic"><Icon name="chart" size={14} /></span><span class="t"><span class="title">{t("Usage")}</span></span></button>
+    <button class="row" class:sel={app.view === "usage"} onclick={() => (app.view = "usage")}><span class="ic"><Icon name="chart" size={14} /></span><span class="t"><span class="title">{t("Analytics")}</span></span></button>
     <button class="row" class:sel={app.view === "settings"} onclick={() => (app.view = "settings")}><span class="ic"><Icon name="sun" size={14} /></span><span class="t"><span class="title">{t("Settings")}</span></span><kbd>⌘,</kbd></button>
     <div class="theme">
       <div class="seg">
