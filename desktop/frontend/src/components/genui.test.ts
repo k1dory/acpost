@@ -408,4 +408,24 @@ describe("review round 2", () => {
     q<HTMLButtonElement>(".form .btn").click(); flushSync(); await flush(); flushSync();
     expect(ta.value).toBe("something else\n- Host: web1\n\n");
   });
+
+  it("shows small, large, negative and mixed numbers with their digits in charts, tables and stats (P2)", async () => {
+    await show(block([
+      { type: "chart", kind: "bar", labels: ["one", "two"], series: [{ name: "x", values: [0.0001, 0.0002] }] },
+      { type: "chart", kind: "line", labels: ["a", "b"], series: [{ name: "x", values: [-0.5, 0.75] }] },
+      { type: "table", columns: ["v"], rows: [[0.000123], [123456.789], [-0.0042], [1e14], [12.5]] },
+      { type: "stats", items: [{ label: "p", value: 0.00042, delta: -0.00001 }, { label: "q", value: 987654321 }] },
+    ]));
+    const [small, mixed] = all("div.chart");
+    const axis = (c: HTMLElement) => [...c.querySelectorAll("text.ax")].map(e => e.textContent!).filter(s => !/^[a-z]+$/.test(s));
+    expect(axis(small)).toEqual(["0", "5e-5", "1e-4", "1.5e-4", "2e-4"]);
+    expect(new Set(axis(small)).size).toBe(axis(small).length); // no two labels alike
+    small.querySelectorAll("rect.bar")[0].dispatchEvent(new Event("mouseenter"));
+    flushSync();
+    expect(small.querySelector(".tip")!.textContent).toBe("one: 0.0001");
+    expect(axis(mixed)).toEqual(["-0.5", "0", "0.5", "1.0"]); // a step of 0.5: one decimal each
+    expect(texts("tbody td")).toEqual(["0.000123", "123,457", "-0.0042", "100,000,000,000,000", "12.5"]);
+    expect(texts(".tile .value")).toEqual(["0.00042", "987,654,321"]);
+    expect(q(".tile .delta").textContent).toBe("-1e-5");
+  });
 });

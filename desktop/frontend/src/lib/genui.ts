@@ -160,9 +160,30 @@ export function parseUi(src: string): Parsed {
   }
 }
 
-/** A number as a reply shows it: grouped, with no more decimals than it needs. */
+// A number in scientific notation with up to `digits` decimals, none it does not need: 1.5e-4.
+const expo = (n: number, digits: number) => n.toExponential(digits).replace(/\.?0+e/, "e").replace("e+", "e");
+
+/** A number as a reply shows it: its whole part grouped, six significant digits in all (a small one
+ * keeps them: 0.000123, not 0), scientific beyond what that reads well (below 1e-4, from 1e15). */
 export function fmt(n: number): string {
-  return n.toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 2 : 1 });
+  const a = Math.abs(n);
+  if (a === 0 || !Number.isFinite(n)) return String(n === 0 ? 0 : n);
+  if (a < 1e-4 || a >= 1e15) return expo(n, 5);
+  if (a < 1) return n.toLocaleString(undefined, { maximumSignificantDigits: 6 });
+  const whole = Math.floor(Math.log10(a)) + 1;
+  return n.toLocaleString(undefined, { maximumFractionDigits: Math.max(0, 6 - whole) });
+}
+
+/** A label of a chart's axis: as many decimals as its step has (0.25 → 0.00, 0.25, 0.50), every
+ * label alike; scientific for a step below 1e-4. */
+export function axisLabel(v: number, step: number): string {
+  if (v === 0) return "0";
+  step = Math.abs(step);
+  if (!(step > 0) || !Number.isFinite(step)) return fmt(v);
+  if (step < 1e-4 || Math.abs(v) >= 1e15) return expo(v, 3);
+  let d = 0;
+  while (d < 4 && Math.abs(Math.round(step * 10 ** d) - step * 10 ** d) > 1e-6 * step * 10 ** d) d++;
+  return v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
 /** The scale of a chart's value axis: from min (or 0) to max (or 0), in about four round steps;

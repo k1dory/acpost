@@ -148,3 +148,15 @@ describe("review round 1", () => {
   });
 
 });
+
+describe("review round 2", () => {
+  it("formats numbers with their significant digits (P2)", async () => {
+    const { fmt, axisLabel } = await import("./genui");
+    expect([0, 0.0001, 0.000123456789, -0.0042, 1.5, 12.5, 1234.5678, 123456.789, 1e14, 1e15, -2.5e-7, 5e-324].map(fmt))
+      .toEqual(["0", "0.0001", "0.000123457", "-0.0042", "1.5", "12.5", "1,234.57", "123,457", "100,000,000,000,000", "1e15", "-2.5e-7", "4.94066e-324"]);
+    expect([0, 0.25, 0.5].map(v => axisLabel(v, 0.25))).toEqual(["0", "0.25", "0.50"]);
+    expect([0, 20, 40].map(v => axisLabel(v, 20))).toEqual(["0", "20", "40"]);
+    expect([5e-5, 1e-4].map(v => axisLabel(v, 5e-5))).toEqual(["5e-5", "1e-4"]);
+    expect(axisLabel(1, 0)).toBe("1");
+  });
+});

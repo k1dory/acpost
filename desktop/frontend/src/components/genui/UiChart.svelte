@@ -2,7 +2,7 @@
   // A chart from a reply: drawn here as SVG (no library), coloured by the app's theme; a value is
   // shown on hover.
   import { t } from "../../lib/i18n.svelte";
-  import { fmt, ticks, type Chart } from "../../lib/genui";
+  import { fmt, axisLabel, ticks, type Chart } from "../../lib/genui";
   let { c }: { c: Chart } = $props();
 
   const W = 560, H = 220, L = 48, R = 12, T = 10, B = 34;
@@ -31,7 +31,7 @@
     const i = hover.i;
     if (c.kind === "pie") {
       const v = c.series[0].values[i], sum = c.series[0].values.reduce((a, b) => a + b, 0);
-      return `${c.labels[i]}: ${fmt(v)}${unit} (${fmt((v / sum) * 100)}%)`;
+      return `${c.labels[i]}: ${fmt(v)}${unit} (${fmt(Math.round((v / sum) * 1000) / 10)}%)`;
     }
     const of = hover.s === undefined ? c.series.map((_, k) => k) : [hover.s];
     return c.labels[i] + ": " + of.map(k => (many ? c.series[k].name + " " : "") + fmt(c.series[k].values[i]) + unit).join(", ");
@@ -72,7 +72,7 @@
     {:else}
       {#each scale as v}
         <line class="grid" x1={L} x2={W - R} y1={y(v)} y2={y(v)} />
-        <text class="ax" x={L - 6} y={y(v) + 3.5} text-anchor="end">{fmt(v)}</text>
+        <text class="ax" x={L - 6} y={y(v) + 3.5} text-anchor="end">{axisLabel(v, scale[1] - scale[0])}</text>
       {/each}
       <line class="axis" x1={L} x2={W - R} y1={zero} y2={zero} />
       {#each c.labels as l, i}
