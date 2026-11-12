@@ -81,4 +81,28 @@ describe("the sidebar's chats", () => {
     expect(document.querySelector(".ctx")!.textContent).toContain("Rename");
     expect(document.querySelector(".ctx")!.textContent).not.toContain("Move to");
   });
+
+  it("found by the filter, a chat that came from another is still not moved to a folder on its own", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.conn = { ok: true };
+    app.folders = [{ id: "f1", name: "Work", chats: ["thread:A"] }, { id: "f2", name: "Elsewhere", chats: [] }] as any;
+    app.chats = [chat("A", "parent", { folder: "f1" }), chat("B", "the kid", { parent: "thread:A" }), chat("C", "kindred")] as any;
+    const Sidebar = (await import("./Sidebar.svelte")).default;
+    mounted.push(svelte.mount(Sidebar, { target: document.body }));
+    svelte.flushSync();
+    const input = document.querySelector(".search input") as HTMLInputElement;
+    input.value = "ki"; input.dispatchEvent(new Event("input", { bubbles: true }));
+    svelte.flushSync();
+    const rows = [...document.querySelectorAll(".list button.row")] as HTMLButtonElement[];
+    const kid = rows.find(r => r.textContent!.includes("the kid"))!, own = rows.find(r => r.textContent!.includes("kindred"))!;
+    kid.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    svelte.flushSync();
+    expect(document.querySelector(".ctx")!.textContent).not.toContain("Move to");
+    document.body.click();
+    svelte.flushSync();
+    own.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    svelte.flushSync();
+    expect(document.querySelector(".ctx")!.textContent).toContain("Move to");
+  });
 });

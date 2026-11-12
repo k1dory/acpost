@@ -38,6 +38,9 @@
   // A branch is where its root is (its folder, or the loose chats), in the place of its most
   // recently active chat.
   const tree = $derived(chatTree(app.chats, !!q));
+  // A chat that came from another goes where that one is, filtered or not: it is not dragged to a
+  // folder, nor moved by the menu, on its own.
+  const under = $derived(q ? chatTree(app.chats).nested : tree.nested);
   const shownBranches = $derived(tree.branches.filter(b => match(b[0].chat)));
   const loose = $derived(shownBranches.filter(b => !b[0].chat.folder));
   const inFolder = (id: string) => shownBranches.filter(b => b[0].chat.folder === id);
@@ -156,7 +159,7 @@
   </button>
   {:else}
   <button class="row" class:sel={isOpen(c) && app.view === "chat"} class:lifted={dragging?.chat.key === c.key}
-    onpointerdown={e => press(e, c)} onclick={e => clickRow(e, c)} oncontextmenu={e => onMenu(e, c)} title={c.cwd || c.repo || c.title}>
+    onpointerdown={e => { if (!under.has(c.key)) press(e, c); }} onclick={e => clickRow(e, c)} oncontextmenu={e => onMenu(e, c, undefined, under.has(c.key))} title={c.cwd || c.repo || c.title}>
     <span class="dot {dotOf(c)}"></span>
     <span class="t">
       <span class="title">{c.title || t("Untitled")}</span>
