@@ -141,6 +141,8 @@ const stockTable = Tokenizer.prototype.table;
 export const tableScan = { chars: 0 };
 // A GFM delimiter row: dashes, colons, pipes and spaces, with a dash and a pipe or colon.
 const delimiterRow = /^[ \t]*[|:-][ \t|:-]*$/;
+// A line a table does not go on into: blank, or the start of another block.
+const tableEnds = /^[ \t]*$|^ {0,3}(?:#{1,6}(?:\s|$)|>|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}$|[-*+][ \t]|\d{1,9}[.)][ \t]|<\/?[a-zA-Z!?])/;
 function wikiTable(state: MaskState) {
   return function (this: Tokenizer, src: string): Tokens.Table | false {
     const mask = state.mask;
@@ -154,11 +156,18 @@ function wikiTable(state: MaskState) {
     const second = src.slice(nl + 1, nl2 < 0 ? src.length : nl2);
     tableScan.chars += second.length;
     if (!second.includes("-") || !/[|:]/.test(second) || !delimiterRow.test(second)) return false;
-    // The table's own lines: to the first blank line (where a table ends) or the end.
-    const blank = /\n[ \t]*(?:\n|$)/g;
-    blank.lastIndex = nl2 < 0 ? src.length : nl2;
-    const end = blank.exec(src)?.index ?? src.length;
-    const block = src.slice(0, end < src.length ? end + 1 : end);
+    // The table's own lines, read one at a time: to the first blank line or the first line that
+    // begins another block (a heading, a quote, a fence, a rule, a list item, HTML), where a table
+    // ends for marked too — never the rest of the body, however the tables are set apart.
+    let end = nl2 < 0 ? src.length : nl2 + 1;
+    while (end < src.length) {
+      const stop = src.indexOf("\n", end);
+      const line = src.slice(end, stop < 0 ? src.length : stop);
+      tableScan.chars += line.length + 1;
+      if (tableEnds.test(line)) break;
+      end = stop < 0 ? src.length : stop + 1;
+    }
+    const block = src.slice(0, end);
     tableScan.chars += block.length;
     const masked = block.replace(linkPipe, (_all, target: string, label: string) => `[[${target}${mask}${label}]]`);
     if (masked === block) return false; // no wiki link: marked's own, as it is
