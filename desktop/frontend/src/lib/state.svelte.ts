@@ -651,7 +651,7 @@ class App {
     // "@codex look at this": to that agent of the chat, without the name. The draft stays as it
     // was typed until the node has the message: sent again, it is the same message to the same agent.
     const named = at.thread ? this.mention(sent) : null;
-    if (named) { at.target = named.to; at.settings[named.to] = this.settingsFor(named.to); }
+    if (named) { at.target = named.to; at.named = true; at.settings[named.to] = this.settingsFor(named.to); }
     // Sent to the agent shown: that is who this thread's messages go to until the person chooses
     // another (opened again with this one unanswered, it is sent again to the same agent).
     else if (at.thread && at.target) this.chosen.set(at.thread, at.target);
@@ -733,7 +733,10 @@ class App {
       if (d.epoch !== epoch) return false; // a new task meanwhile: this one is not it
       // Its draft moved to the thread the node made of it (its answer lost): the same message is
       // the request as it was first made, with its key — the node gives back what it has.
-      if (d.sending?.moved && d.sending.content === content) {
+      // Unless the person since chose another agent for it (the chip, "@name"): then it is a
+      // message to that one, in the thread, with a key of its own.
+      const other = (at.named || this.picks(thread || into) > 0) && d.sending?.task?.to !== to;
+      if (d.sending?.moved && d.sending.content === content && !other) {
         task = { ...d.sending.task };
         what = d.sending.what;
       }
@@ -792,7 +795,7 @@ class App {
     // The settings chosen then, for each agent it can go to: the new task's agent of this Mac, or
     // the chat's (a cloud task's sandbox is known later, and has no settings of this Mac's).
     return {
-      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target, picks: this.picks(this.thread),
+      chat: this.chat, thread: this.thread, draft: { ...this.draft }, epoch: d.epoch, target: this.target, named: false, picks: this.picks(this.thread),
       key: d.key, limits: this.limits, // the draft's chat, and the node's limits, as they were
       dest: d.key === "new" ? this.destNow() : "", // where this new task goes, as it was sent
       settings: Object.fromEntries([this.draft.agent, this.target].filter(Boolean).map(a => [a, this.settingsFor(a)])) as Record<string, Partial<Settings>>,

@@ -213,6 +213,36 @@ describe("a chat shared by several agents", () => {
     expect(app.target).toBe("agent:codex");
   });
 
+  for (const how of ["the chip", "@name"]) {
+    it(`a session's message whose answer was lost, sent again to another agent chosen by ${how}, is a message to that one`, async () => {
+      svelte = await import("svelte");
+      const { app } = await import("../lib/state.svelte");
+      app.agents = ["claude", "codex"].map(name => ({ name, address: "agent:" + name, driver: "acp", queued: 0, running: 0 }));
+      app.conn = { ok: true };
+      const S = { key: "session:claude/s1", kind: "session" as const, agent: "agent:claude", session: "s1", title: "", updated: "" };
+      const T = { key: "thread:T", kind: "thread" as const, thread: "T", agent: "agent:claude", session: "s1", session_agent: "agent:claude", title: "", updated: "" };
+      fake.Node.Chats.mockResolvedValue({ items: [S] });
+      await app.loadChats();
+      fake.Node.SessionHistory.mockResolvedValue([]);
+      await app.open(S as any);
+      app.draftOf().text = "go on";
+      fake.Node.SendTask.mockRejectedValueOnce(new Error("timeout")); // the node took it; the answer was lost
+      expect(await app.submit(app.draftOf())).toBe(false);
+      fake.Node.Chats.mockResolvedValue({ items: [T] });              // the session is a thread now
+      await app.loadChats();
+      fake.Node.Thread.mockResolvedValue([msg("m1", "agent:claude")]);
+      await app.open(T as any);
+      if (how === "the chip") app.setTarget("agent:codex");
+      else app.draftOf().text = "@codex go on";
+      expect(await app.submit(app.draftOf())).toBe(true);
+      const [first, again] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+      expect(first).toMatchObject({ to: "agent:claude", session: "s1", body: "go on" });
+      expect(again).toMatchObject({ to: "agent:codex", thread: "T", body: "go on" });
+      expect(again.session).toBeUndefined();
+      expect(again.idem).not.toBe(first.idem);
+    });
+  }
+
   it("a chat with one agent to choose from has no chip; a cloud sandbox's chat takes no agent of this Mac", async () => {
     let app = await setup([msg("m1", "agent:claude")], ["claude"]);
     expect(chip()).toBeNull();
