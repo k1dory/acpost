@@ -5,7 +5,7 @@
   import { dur, ago, clock, who } from "../lib/format";
   import { latest } from "../lib/latest";
   import { analytics } from "../lib/analytics.svelte";
-  import { threadSum, threadTurns, sortSums, addPhases, type TThread } from "../lib/trace";
+  import { threadSum, threadTurns, sortSums, addPhases, isFinal, type TThread } from "../lib/trace";
   import PhaseBar from "./PhaseBar.svelte";
   import TraceTurn from "./TraceTurn.svelte";
   import Icon from "./Icon.svelte";
@@ -41,7 +41,9 @@
   const sums = $derived(sortSums(list.map(th => threadSum(th, now)), sort));
   const all = $derived(sums.reduce((a, s) => addPhases(a, s.phases), { queue: 0, model: 0, tools: 0, approval: 0, agents: 0 }));
   const turns = $derived(open ? threadTurns(open, now) : []);
-  const running = $derived(analytics.thread ? turns.some(x => x.trace.running) : sums.some(s => s.running));
+  // What runs (a turn, or one it asked) is read again.
+  const running = $derived(analytics.thread ? !!open?.messages.some(m => !isFinal(m.state)) : sums.some(s => s.running));
+  const openCut = $derived(open ? threadSum(open, now).cut : false);
   // What runs is read again every few seconds, and its clock moves each second.
   $effect(() => {
     if (!running) return;
@@ -100,7 +102,7 @@
           </tbody>
         </table>
       </div></div>
-      {#if open.cut}<div class="note muted">{t("Older turns or some events are not shown")}</div>{/if}
+      {#if openCut}<div class="note muted">{t("Older turns or some events are not shown")}</div>{/if}
     {/if}
   {:else}
     <div class="card panel"><div class="inner">
@@ -109,7 +111,7 @@
         <tbody>
           {#each sums as s (s.thread)}
             <tr class="click" onclick={() => openThread(s.thread)}>
-              <td class="key" title={s.title}>{s.title || t("Untitled")}{#if s.running}<span class="chip warn">{t("running")}</span>{/if}</td>
+              <td class="key" title={s.title}>{s.title || t("Untitled")}{#if s.running}<span class="chip warn">{t("running")}</span>{/if}{#if s.cut}<span class="chip" title={t("Older turns or some events are not shown")}>{t("incomplete")}</span>{/if}</td>
               <td class="r num">{s.turns}</td>
               <td class="r num">{dur(s.active) || "—"}</td>
               <td class="r num">{s.calls}</td>
