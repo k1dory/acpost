@@ -250,7 +250,7 @@
           <article class="page" onclick={follow}>
             {#if cur.status === "writing"}<div class="note muted"><span class="spin"></span> {t("Being written again; these are the pages before.")}</div>{/if}
             <h1 class="pt">{shown.title}</h1>
-            <Markdown text={prepared(shown)} wikiLink={resolveShown} />
+            <Markdown text={prepared(shown)} scope={"wiki:" + (cur?.repo ?? repo) + ":" + shown.slug} wikiLink={resolveShown} />
           </article>
         {/if}
       </div>

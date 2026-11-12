@@ -4,6 +4,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 let mount: typeof import("svelte").mount, unmount: typeof import("svelte").unmount, flushSync: typeof import("svelte").flushSync;
 
+// (Markdown draws ui blocks too, which know the app's state: its node is not asked for anything here.)
+vi.mock("../lib/api", async () => {
+  const errors = await import("../lib/errors");
+  const b = await import("../lib/base64");
+  const Node = new Proxy({}, { get: () => vi.fn(async () => undefined) });
+  return { ...errors, ...b, Node, on: () => () => {} };
+});
 vi.mock("@wailsio/runtime", () => ({ Clipboard: { SetText: vi.fn() }, Browser: { OpenURL: vi.fn() }, Events: { On: () => () => {} } }));
 
 let mounted: any[] = [];

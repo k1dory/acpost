@@ -95,7 +95,7 @@
     <Subtasks msg={m.id} running={m.state === "running"} />
 
     {#if replyDiffers || (done && !streamed && m.reply)}
-      <Markdown text={m.reply ?? ""} />
+      <Markdown text={m.reply ?? ""} scope={m.id + ":reply"} />
     {/if}
     {#if !done && !streamed && !(turn?.blocks.length)}
       <div class="wait"><span class="sk" style="width:60%"></span><span class="sk" style="width:40%"></span></div>
