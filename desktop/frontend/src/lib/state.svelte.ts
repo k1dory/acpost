@@ -164,11 +164,15 @@ class App {
   /** What the person ran from the composer ("!command"), by the chat it was run in (kept while the
    * app runs). */
   shells = $state<ShellRun[]>([]);
+  /** The draft each run was made from: its card goes where that draft goes, whatever key the draft
+   * has by then (a new task whose first message is still going is no longer "new"). */
+  private shellOwner = new Map<string, ComposerDraft>();
   shellsHere(): ShellRun[] { const k = this.draftKey(); return this.shells.filter(s => s.chat === k); }
   /** Runs the person's command in the chat's directory; its output is shown in the chat. */
   async runShell(cmd: string) {
     const run: ShellRun = { id: newId(), chat: this.draftKey(), cmd, running: true, output: "", code: 0, ms: 0 };
     this.shells = [...this.shells, run];
+    this.shellOwner.set(run.id, this.draftOf(run.chat));
     const set = (p: Partial<ShellRun>) => { this.shells = this.shells.map(s => (s.id === run.id ? { ...s, ...p } : s)); };
     try {
       const r: any = await Node.Shell(run.id, cmd, this.chatCwd() || (!this.chat && !this.thread ? this.draft.cwd : "") || "");
@@ -176,7 +180,12 @@ class App {
     } catch (e) { set({ running: false, error: errText(e) }); }
   }
   stopShell(id: string) { Node.ShellStop(id).catch(() => {}); }
-  dropShell(id: string) { this.shells = this.shells.filter(s => s.id !== id); }
+  dropShell(id: string) { this.shells = this.shells.filter(s => s.id !== id); this.shellOwner.delete(id); }
+  /** The runs made from draft d are shown in chat `to` (owner: the draft they belong to from now). */
+  private moveShells(d: ComposerDraft, to: string, owner = d) {
+    this.shells = this.shells.map(s => (this.shellOwner.get(s.id) === d ? { ...s, chat: to } : s));
+    if (owner !== d) for (const [id, o] of this.shellOwner) if (o === d) this.shellOwner.set(id, owner);
+  }
   /** The command and what it printed, into the composer: the agent is told only this way. */
   quoteShell(id: string) {
     const r = this.shells.find(s => s.id === id);
@@ -388,6 +397,9 @@ class App {
     // What was typed carries over, unless it is what is being sent.
     const old = this.draftMap.get("new"), d = new ComposerDraft("new");
     if (old && !old.busy) { d.text = old.text; d.files = old.files; old.forward(d); }
+    // What was run from the task before: with its text, in this one; a task whose first message is
+    // still going keeps its runs to itself (shown in its thread once it is one).
+    if (old) this.moveShells(old, old.busy ? "sending:" + newId() : "new", old.busy ? old : d);
     this.draftMap.set("new", d);
     this.drafts++;
     this.chat = null;
@@ -569,7 +581,7 @@ class App {
     if (this.draftMap.get(to) === d) return;
     // What was run from this conversation goes where it goes (a new task becoming a thread, a
     // session becoming one): shown there, and stopped from there.
-    if (this.draftMap.get(d.key) === d) { const from = d.key; this.shells = this.shells.map(s => (s.chat === from ? { ...s, chat: to } : s)); }
+    this.moveShells(d, to, this.draftMap.get(to) ?? d);
     if (this.draftMap.get(d.key) === d) {
       this.draftMap.delete(d.key);
       if (d.key !== "new") this.draftAlias.set(d.key, to); // a new task's next draft is a new one

@@ -106,4 +106,53 @@ describe("! in the composer", () => {
     app.newTask();
     expect(app.shellsHere()).toHaveLength(0);
   });
+
+  it("a run's output put into a draft that was a command makes it a message: Enter sends, nothing is run", async () => {
+    const app = await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "`touch /tmp/x`\n", code: 0, ms: 1 });
+    type("!echo first");
+    enter();
+    await flush(); svelte.flushSync();
+    fake.Node.Shell.mockClear();
+    type("!echo intended");
+    ([...document.querySelectorAll(".sh button")].find(b => b.textContent === "Add to message") as HTMLButtonElement).click();
+    svelte.flushSync();
+    expect(textarea().value.startsWith(" !echo intended\n$ echo first")).toBe(true);
+    expect(document.querySelector(".comp.bang")).toBeNull();
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    enter();
+    await flush(); await flush();
+    expect(fake.Node.Shell).not.toHaveBeenCalled();
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+    // A quotation into an empty draft that starts with "!" is a message too.
+    app.quote = "!not a command";
+    svelte.flushSync();
+    expect(textarea().value).toBe(" !not a command");
+  });
+
+  it("a new task's runs stay with it while its first message goes, though another new task is started", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.newTask();
+    app.draft.agent = "agent:claude";
+    fake.Node.Shell.mockResolvedValue({ output: "ok\n", code: 0, ms: 5 });
+    await app.runShell("echo ok");
+    let ack!: (m: any) => void;
+    fake.Node.SendTask.mockImplementation(() => new Promise(r => { ack = r; }));
+    fake.Node.Chats.mockResolvedValue({ items: [] });
+    fake.Node.Thread.mockResolvedValue([]);
+    const d = app.draftOf();
+    d.text = "first message";
+    const going = app.submit(d);
+    await flush();
+    app.newTask();                       // before the node answered
+    expect(app.shellsHere()).toHaveLength(0);
+    ack({ id: "m1", from: "user:me", to: "agent:claude", thread: "T9", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    expect(await going).toBe(true);
+    expect(app.shellsHere()).toHaveLength(0);
+    await app.open({ key: "thread:T9", kind: "thread", thread: "T9", agent: "agent:claude", title: "", updated: "" } as any);
+    expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo ok"]);
+  });
 });

@@ -108,13 +108,21 @@ func TestShellsEndWithTheApp(t *testing.T) {
 	}
 	start := time.Now()
 	stopShells()
+	// stopShells waited for the run itself (its process ended, its entry gone); its answer reaches
+	// the caller a moment after.
+	shells.Lock()
+	_, still := shells.stop["quit1"]
+	shells.Unlock()
+	if still || time.Since(start) > 10*time.Second {
+		t.Fatalf("stopShells returned with the run still on (%v) after %v", still, time.Since(start))
+	}
 	select {
 	case r := <-done:
-		if r.Code != -1 || time.Since(start) > 10*time.Second {
-			t.Fatalf("%+v in %v", r, time.Since(start))
+		if r.Code != -1 {
+			t.Fatalf("%+v", r)
 		}
-	default:
-		t.Fatal("stopShells returned before the command ended")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the command's answer never came")
 	}
 	if _, err := runShell("", "echo late", "", time.Minute); err == nil {
 		t.Fatal("a command ran while the app quits")

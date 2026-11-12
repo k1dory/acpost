@@ -35,7 +35,9 @@
   });
   // ⌘L and playbooks put text here.
   $effect(() => {
-    if (app.quote) { d.text = (d.text ? d.text + "\n" : "") + app.quote; app.quote = ""; requestAnimationFrame(() => ta?.focus()); }
+    // What is put here by something else (a quotation, a run's output, a playbook) is never a
+    // command to run: a draft that would start with "!" starts with a space, a message.
+    if (app.quote) { d.text = asMessage((d.text ? d.text + "\n" : "") + app.quote); app.quote = ""; requestAnimationFrame(() => ta?.focus()); }
   });
 
   // The slash menu: the settings, then the agent's own commands.
@@ -73,7 +75,7 @@
     const it = slash[i];
     if (!it) return;
     if (it.pick) { d.text = ""; pickerFor = it.pick; return; }
-    if ((it as any).playbook) { d.text = (it as any).playbook; ta?.focus(); return; }
+    if ((it as any).playbook) { d.text = asMessage((it as any).playbook); ta?.focus(); return; }
     d.text = "/" + it.name + " ";
     ta?.focus();
   }
@@ -85,6 +87,7 @@
   // The text and files leave the draft only once the node has them (app.submit).
   // "!git status" is a command of the person's own, run in the chat's directory and shown in the
   // chat; not a message (one that must start with "!" starts with a space).
+  const asMessage = (s: string) => (s.startsWith("!") ? " " + s : s);
   const bang = $derived(d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
   async function send() {
     if (bang) {
