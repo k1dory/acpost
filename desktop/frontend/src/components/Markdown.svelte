@@ -5,7 +5,7 @@
   import { cleanHtml, cleanSvg } from "../lib/sanitize";
   import hljs from "highlight.js/lib/common";
   import { Clipboard } from "@wailsio/runtime";
-  import { wikiLinkExtension, markdownOptions, type WikiResolve } from "../lib/wikigraph";
+  import { wikiMarkdown, markdownOptions, type WikiResolve } from "../lib/wikigraph";
   // wikiLink: the text is a wiki's, its [[links]] resolved by it (the wiki's reader and drawer).
   let { text, wikiLink }: { text: string; wikiLink?: WikiResolve } = $props();
 
@@ -15,7 +15,7 @@
   const md = new Marked(markdownOptions);
   // The resolver read as it is when the text is rendered (a prop: it may change).
   // Whether it is a wiki's is fixed when the component is made (the chat's Markdown has no [[links]]).
-  if (untrack(() => wikiLink)) md.use({ extensions: [wikiLinkExtension(target => wikiLink?.(target) ?? null)] });
+  if (untrack(() => wikiLink)) md.use(wikiMarkdown(target => wikiLink?.(target) ?? null));
   // A file path written as code (`src/app.ts`, `/tmp/report.html`): clickable, opens as an artifact.
   const filePath = /^(~\/|\/|\.{1,2}\/)?[\w@.+-]+(\/[\w@.+-]+)*\.[A-Za-z0-9]{1,8}$/;
   md.use({

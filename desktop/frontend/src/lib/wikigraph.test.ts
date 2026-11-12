@@ -66,7 +66,8 @@ describe("wiki links", () => {
     expect(r(arch.body)).toContain("<code>[[in-code]]\n</code>");
     expect(r(arch.body)).toContain("<code>[[inline]]</code>");
     expect(r(arch.body).match(/#wiki:/g)).toHaveLength(1);
-    expect(r("[[overview|a [b]]]")).not.toContain("#wiki:");
+    // A label may hold brackets one deep (round 5: so a Markdown link in it is read, as text).
+    expect(r("[[overview|a [b]]]")).toContain(">a [b]</a>");
     expect(r("[[overview|a]b]]")).not.toContain("#wiki:");
   });
 
