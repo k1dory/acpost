@@ -1215,6 +1215,189 @@ export class Terminal {
 }
 
 /**
+ * TraceEvent is an event of a turn as a trace reads it: when it came and what it was of, without
+ * what it carried (a call's output, the agent's text). A run of text or thinking is one, from At to
+ * End; a call's updates that change nothing a trace shows are left out.
+ */
+export class TraceEvent {
+    "seq": number;
+
+    /**
+     * Unix milliseconds
+     */
+    "at": number;
+
+    /**
+     * a run's last chunk
+     */
+    "end"?: number;
+    "kind": string;
+
+    /**
+     * the tool call it is of
+     */
+    "call"?: string;
+
+    /**
+     * the permission request it is of
+     */
+    "request"?: string;
+    "status"?: string;
+
+    /**
+     * the call's kind (read, execute…)
+     */
+    "tool"?: string;
+
+    /**
+     * its start
+     */
+    "title"?: string;
+
+    /**
+     * the shell command it ran, its start
+     */
+    "command"?: string;
+    "exit"?: number | null;
+
+    /** Creates a new TraceEvent instance. */
+    constructor($$source: Partial<TraceEvent> = {}) {
+        if (!("seq" in $$source)) {
+            this["seq"] = 0;
+        }
+        if (!("at" in $$source)) {
+            this["at"] = 0;
+        }
+        if (!("kind" in $$source)) {
+            this["kind"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TraceEvent instance from a string or object.
+     */
+    static createFrom($$source: any = {}): TraceEvent {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TraceEvent($$parsedSource as Partial<TraceEvent>);
+    }
+}
+
+/**
+ * TraceMessage is a turn's times and events, for a trace.
+ */
+export class TraceMessage {
+    "id": string;
+    "thread": string;
+    "parent"?: string;
+    "depth": number;
+    "from": string;
+    "to": string;
+    "state": store$0.State;
+    "error_code"?: string;
+    "created_at": string;
+    "updated_at": string;
+    "finished_at"?: string;
+    "events": TraceEvent[];
+
+    /**
+     * not all its events are here (the answer's bound)
+     */
+    "cut"?: boolean;
+
+    /** Creates a new TraceMessage instance. */
+    constructor($$source: Partial<TraceMessage> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("thread" in $$source)) {
+            this["thread"] = "";
+        }
+        if (!("depth" in $$source)) {
+            this["depth"] = 0;
+        }
+        if (!("from" in $$source)) {
+            this["from"] = "";
+        }
+        if (!("to" in $$source)) {
+            this["to"] = "";
+        }
+        if (!("state" in $$source)) {
+            this["state"] = store$0.State.$zero;
+        }
+        if (!("created_at" in $$source)) {
+            this["created_at"] = "0001-01-01T00:00:00.000Z";
+        }
+        if (!("updated_at" in $$source)) {
+            this["updated_at"] = "0001-01-01T00:00:00.000Z";
+        }
+        if (!("events" in $$source)) {
+            this["events"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TraceMessage instance from a string or object.
+     */
+    static createFrom($$source: any = {}): TraceMessage {
+        const $$createField11_0 = $$createType30;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("events" in $$parsedSource) {
+            $$parsedSource["events"] = $$createField11_0($$parsedSource["events"]);
+        }
+        return new TraceMessage($$parsedSource as Partial<TraceMessage>);
+    }
+}
+
+/**
+ * TraceThread is a conversation's turns for a trace: its own and those of the agents they asked.
+ */
+export class TraceThread {
+    "thread": string;
+    "title": string;
+    "updated_at": string;
+    "messages": TraceMessage[];
+
+    /**
+     * older turns, or some events, are not here
+     */
+    "cut"?: boolean;
+
+    /** Creates a new TraceThread instance. */
+    constructor($$source: Partial<TraceThread> = {}) {
+        if (!("thread" in $$source)) {
+            this["thread"] = "";
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("updated_at" in $$source)) {
+            this["updated_at"] = "0001-01-01T00:00:00.000Z";
+        }
+        if (!("messages" in $$source)) {
+            this["messages"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TraceThread instance from a string or object.
+     */
+    static createFrom($$source: any = {}): TraceThread {
+        const $$createField3_0 = $$createType32;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("messages" in $$parsedSource) {
+            $$parsedSource["messages"] = $$createField3_0($$parsedSource["messages"]);
+        }
+        return new TraceThread($$parsedSource as Partial<TraceThread>);
+    }
+}
+
+/**
  * TreeNode is a message an agent sent while working on another.
  */
 export class TreeNode {
@@ -1371,7 +1554,7 @@ export class UsageReport {
      * Creates a new UsageReport instance from a string or object.
      */
     static createFrom($$source: any = {}): UsageReport {
-        const $$createField14_0 = $$createType30;
+        const $$createField14_0 = $$createType34;
         const $$createField19_0 = $$createType12;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("uncosted" in $$parsedSource) {
@@ -1414,5 +1597,9 @@ const $$createType25 = forge$0.Repo.createFrom;
 const $$createType26 = forge$0.Server.createFrom;
 const $$createType27 = Limits.createFrom;
 const $$createType28 = $Create.Nullable($$createType27);
-const $$createType29 = store$0.ModelTokens.createFrom;
-const $$createType30 = $Create.Map($Create.Any, $$createType29);
+const $$createType29 = TraceEvent.createFrom;
+const $$createType30 = $Create.Array($$createType29);
+const $$createType31 = TraceMessage.createFrom;
+const $$createType32 = $Create.Array($$createType31);
+const $$createType33 = store$0.ModelTokens.createFrom;
+const $$createType34 = $Create.Map($Create.Any, $$createType33);
