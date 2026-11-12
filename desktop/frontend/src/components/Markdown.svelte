@@ -1,13 +1,17 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
   import { Marked } from "marked";
-  import { untrack } from "svelte";
   import { cleanHtml, cleanSvg } from "../lib/sanitize";
   import hljs from "highlight.js/lib/common";
   import { Clipboard } from "@wailsio/runtime";
+  import { mount, unmount, untrack } from "svelte";
+  import { parseUi, keepFor, fenceClosed } from "../lib/genui";
+  import GenUi from "./genui/GenUi.svelte";
   import { wikiMarkdown, markdownOptions, type WikiResolve } from "../lib/wikigraph";
+  // scope: what names the place of this text (a message, a turn of a history), for what a person did
+  // to its components to be kept when it is shown again; without one it is kept while it is shown.
   // wikiLink: the text is a wiki's, its [[links]] resolved by it (the wiki's reader and drawer).
-  let { text, wikiLink }: { text: string; wikiLink?: WikiResolve } = $props();
+  let { text, scope = "", wikiLink }: { text: string; scope?: string; wikiLink?: WikiResolve } = $props();
 
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   // A code block: its language (the fence's, else guessed from the code), highlighted, with a copy
@@ -37,22 +41,25 @@
         return filePath.test(raw) && raw.includes("/") || /\.(html?|md|png|jpe?g|gif|svg|pdf|csv|json)$/i.test(raw) && filePath.test(raw)
           ? `<code class="pl" title="${esc(raw)}">${esc(raw)}</code>` : `<code>${esc(raw)}</code>`;
       },
-      code({ text: code, lang }) {
+      code({ text: code, lang, raw }) {
         const want = (lang ?? "").trim().split(/\s+/)[0].toLowerCase();
         // A diagram: drawn after (Mermaid, loaded when first needed), its text kept to show if it fails.
         if (want === "mermaid") return `<div class="mm"><pre><code>${esc(code)}</code></pre></div>`;
-        let out = "", name = want;
-        if (want && hljs.getLanguage(want)) out = hljs.highlight(code, { language: want, ignoreIllegals: true }).value;
+        // Components (```ui): drawn after, like a diagram; until the block is whole (its closing fence
+        // come) and valid, its code.
+        const ui = want === "ui" && fenceClosed(raw);
+        let out = "", name = ui ? "json" : want;
+        if (name && hljs.getLanguage(name)) out = hljs.highlight(code, { language: name, ignoreIllegals: true }).value;
         else if (!want && code.length < 20000) {
           const r = hljs.highlightAuto(code);
           if (r.language && r.relevance >= 5) { out = r.value; name = r.language; }
         }
         if (!out) out = esc(code);
-        const label = name ? esc(hljs.getLanguage(name)?.name ?? name) : "text";
-        return `<div class="code"><div class="ch"><span class="lang">${label}</span><span class="cp" role="button" tabindex="0" title="${t("Copy")}" aria-label="${t("Copy")}">` +
+        const label = want === "ui" ? "ui" : name ? esc(hljs.getLanguage(name)?.name ?? name) : "text";
+        return (ui ? `<div class="uib">` : "") + `<div class="code"><div class="ch"><span class="lang">${label}</span><span class="cp" role="button" tabindex="0" title="${t("Copy")}" aria-label="${t("Copy")}">` +
           `<svg class="i-copy" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5V3.6c0-.6-.5-1.1-1.1-1.1H3.6c-.6 0-1.1.5-1.1 1.1v5.8c0 .6.5 1.1 1.1 1.1h1.9"/></svg>` +
           `<svg class="i-ok" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span></div>` +
-          `<pre><code class="hljs">${out}</code></pre></div>`;
+          `<pre><code class="hljs">${out}</code></pre></div>` + (ui ? `</div>` : "");
       },
     },
   });
@@ -64,6 +71,91 @@
 
   let box: HTMLDivElement;
   let seq = 0;
+
+  // The page is the HTML's, put in node by node: a top-level node the new HTML has as it was stays
+  // where it is (a reply streaming in changes its end), and with it what is drawn in it (a diagram,
+  // components and what is typed in them, the focus).
+  const madeOf = new WeakMap<Node, string>();
+  const sig = (n: Node) => n.nodeType === Node.ELEMENT_NODE ? (n as Element).outerHTML : n.nodeType + ":" + n.textContent;
+  function patch(h: string) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = h; // sanitized (cleanHtml); a template's content is inert
+    const fresh = [...tpl.content.childNodes], old = [...box.childNodes];
+    fresh.forEach((f, i) => {
+      const s = sig(f), o = old[i];
+      if (o && madeOf.get(o) === s) return;
+      madeOf.set(f, s);
+      if (o) box.replaceChild(f, o); else box.append(f);
+    });
+    for (const o of old.slice(fresh.length)) o.remove();
+  }
+
+  // Components: each ui block whose text is valid drawn in its place, its code hidden (a block not
+  // valid, or still being written, stays code). One drawn before, of the same scope, at the same
+  // place with the same text, is the same: kept, moved into its block if the block is new, never
+  // mounted again. Another scope's (this Markdown given another page's text) is another block.
+  type Live = { inst: ReturnType<typeof mount>; host: HTMLElement };
+  const live = new Map<string, Live>();
+  const own = new Map<string, Record<string, unknown>>(); // without a scope: this text's, while shown
+  function keep(sc: string, n: number, src: string) {
+    if (sc) return keepFor(sc, n, src);
+    const key = n + "\u0000" + src;
+    let k = own.get(key);
+    if (!k) own.set(key, k = {});
+    return k;
+  }
+  function drawUi(sc: string) {
+    const used = new Set<string>();
+    [...box.querySelectorAll<HTMLElement>(".uib")].forEach((b, n) => {
+      const src = b.querySelector("code")?.textContent ?? "";
+      const key = sc + "\u0000" + n + "\u0000" + src;
+      const have = live.get(key);
+      if (have) {
+        used.add(key);
+        if (have.host.parentElement !== b) b.append(have.host);
+        b.classList.add("drawn");
+        return;
+      }
+      const p = parseUi(src);
+      if (!p.ok) return;
+      const host = document.createElement("div");
+      b.append(host);
+      b.classList.add("drawn");
+      try {
+        live.set(key, { inst: mount(GenUi, { target: host, props: { items: p.items, keep: keep(sc, n, src) } }), host });
+        used.add(key);
+      } catch (e) { console.warn("ui block not drawn:", (e as Error)?.message?.slice(0, 200)); host.remove(); b.classList.remove("drawn"); }
+    });
+    for (const [k, l] of live) if (!used.has(k)) { unmount(l.inst); l.host.remove(); live.delete(k); }
+  }
+
+  // A field being typed in whose block was moved (its top-level node new) has the focus back, and
+  // the selection in it.
+  function focused() {
+    const el = document.activeElement as HTMLInputElement | null;
+    if (!el || !box.contains(el)) return null;
+    let sel: [number, number, string] | null = null;
+    try { if (el.selectionStart !== null && el.selectionStart !== undefined) sel = [el.selectionStart, el.selectionEnd ?? el.selectionStart, el.selectionDirection ?? "none"]; } catch {}
+    return { el, sel };
+  }
+  function refocus(f: ReturnType<typeof focused>) {
+    if (!f || !f.el.isConnected) return;
+    f.el.focus({ preventScroll: true });
+    try { if (f.sel) f.el.setSelectionRange(f.sel[0], f.sel[1], f.sel[2] as "forward" | "backward" | "none"); } catch {}
+  }
+
+  $effect(() => {
+    const h = html, sc = scope;
+    untrack(() => {
+      const f = focused();
+      patch(h);
+      // Out of the page now: its block's node was new (a browser takes the focus off it).
+      const moved = f && !f.el.isConnected;
+      drawUi(sc);
+      if (moved) refocus(f);
+    });
+  });
+  $effect(() => () => { for (const l of live.values()) unmount(l.inst); live.clear(); });
   // Diagrams: each drawn once its block is in the page; a drawing that fails leaves the text.
   $effect(() => {
     html;
@@ -110,7 +202,7 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="md selectable" bind:this={box} onclick={copy} onkeydown={copyKey}>{@html html}</div>
+<div class="md selectable" bind:this={box} onclick={copy} onkeydown={copyKey}></div>
 
 <style>
   .md { line-height: 1.65; overflow-wrap: anywhere; font-size: 13.5px; min-width: 0; max-width: 100%; }
@@ -135,6 +227,8 @@
   .md :global(.mm.drawn) { border: 1px solid var(--line-soft); border-radius: 14px; padding: 14px; background: var(--page); overflow: auto; text-align: center; }
   .md :global(.mm.drawn svg) { max-width: 100%; height: auto; }
   .md :global(.mm pre) { border: 1px solid var(--line-soft); border-radius: 14px; }
+  .md :global(.uib.drawn > .code) { display: none; }
+  .md :global(.uib) { min-width: 0; max-width: 100%; }
   .md :global(code.pl) { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .md :global(code.pl:hover) { color: var(--accent); }
   .md :global(a) { color: var(--accent); text-decoration: none; }
