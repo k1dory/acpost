@@ -5,7 +5,7 @@
   import { dur } from "../lib/format";
   import { latest } from "../lib/latest";
   import { analytics } from "../lib/analytics.svelte";
-  import { traceTurn, commandGroups, type TThread, type CommandRow, type Span } from "../lib/trace";
+  import { traceTurn, commandGroups, threadSum, type TThread, type CommandRow, type Span } from "../lib/trace";
   import Dropdown from "./Dropdown.svelte";
   import Icon from "./Icon.svelte";
 
@@ -25,8 +25,10 @@
     loading = true; err = "";
     const done = await asked(
       async () => {
-        const list = recent.length && !s ? recent : (((await Node.Traces("", 20)) ?? []) as any as TThread[]);
-        const th = s ? (list.find(x => x.thread === s) ?? (((await Node.Traces(s, 0)) ?? []) as any as TThread[])[0] ?? null) : null;
+        // The list (it names the chats to choose), and a chosen chat read by itself: in the list
+        // its events share one bound with the other chats', and may be cut short there.
+        const list = recent.length ? recent : (((await Node.Traces("", 20)) ?? []) as any as TThread[]);
+        const th = s ? ((((await Node.Traces(s, 0)) ?? []) as any as TThread[])[0] ?? null) : null;
         return { list, th };
       },
       r => { recent = r.list; one = r.th; },
@@ -36,7 +38,8 @@
   }
   $effect(() => { scope; untrack(load); });
 
-  const threads = $derived(scope ? (one ? [one] : []) : recent);
+  const threads = $derived(scope ? (one?.thread === scope ? [one] : []) : recent);
+  const cut = $derived(threads.some(th => threadSum(th, Date.now()).cut));
   const spans = $derived.by(() => {
     const now = Date.now();
     const out: Span[] = [];
@@ -83,6 +86,7 @@
         </tbody>
       </table>
     </div></div>
+    {#if cut}<div class="note muted">{t("Older turns or some events are not shown")}</div>{/if}
   {/if}
 </section>
 
@@ -103,4 +107,5 @@
   .i { background: var(--good); }
   .bad { color: var(--crit); }
   .none { text-align: center; }
+  .note { font-size: 12px; padding: 10px 6px; }
 </style>
