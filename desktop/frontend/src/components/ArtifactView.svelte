@@ -61,7 +61,8 @@
   });
 
   // Where the shown file's relative links lead from: a file of this Mac's own directory (as the
-  // app's side resolved it), else what the reference says (an attachment: its chat's directory).
+  // app's side resolved it), else what the reference says (an attachment: its chat's directory,
+  // "" for none known — never the directory of whichever chat is open).
   const linkBase = $derived(art?.path ? dirOf(art.path) : cur?.base ?? "");
 
   async function openOutside() {
@@ -74,7 +75,7 @@
   }
 </script>
 
-<div class="av" data-artifact-base={linkBase || undefined}>
+<div class="av" data-artifact-base={linkBase}>
   <div class="bar">
     <b class="nm" title={art?.path ?? art?.name}>{art?.name ?? cur?.name}</b>
     {#if art}<span class="muted small">{art.type.split(";")[0]} · {bytes(art.size)}</span>{/if}

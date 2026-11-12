@@ -7,7 +7,7 @@
 
   // Artifacts: the files the agents handed back in this chat (attached to their replies) and the
   // files of this Mac a reply linked to, the one picked shown by ArtifactView.
-  const attached = $derived(app.msgs.flatMap(m => (m.files ?? []).filter(f => f.reply).map(f => ({ msg: m.id, name: f.name }) as ArtifactRef)));
+  const attached = $derived(app.msgs.flatMap(m => (m.files ?? []).filter(f => f.reply).map(f => ({ msg: m.id, name: f.name, base: app.chatCwd() }) as ArtifactRef)));
   const all = $derived.by(() => {
     const out = [...attached];
     for (const a of app.openedArtifacts) if (!out.some(x => sameRef(x, a))) out.push(a);

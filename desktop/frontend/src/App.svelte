@@ -43,11 +43,19 @@
   const localHost = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0|[a-z0-9-]+\.localhost)$/i;
   function links(e: MouseEvent) {
     const el = e.target as HTMLElement | null;
-    // A link in an artifact leads from the artifact's directory (the library shows any chat's),
-    // else from the open chat's.
-    const base = (el?.closest?.("[data-artifact-base]") as HTMLElement | null)?.dataset.artifactBase || app.chatCwd();
+    // A link in an artifact leads from the artifact's directory (the library shows any chat's;
+    // "" when it has none), elsewhere from the open chat's.
+    const shown = el?.closest?.("[data-artifact-base]") as HTMLElement | null;
+    const base = shown ? shown.dataset.artifactBase ?? "" : app.chatCwd();
+    // A relative path from an artifact with no directory leads nowhere known: not opened against
+    // another chat's.
+    const nowhere = (p: string) => {
+      if (!shown || base || /^(\/|~|[a-z][a-z0-9+.-]*:)/i.test(p)) return false;
+      app.error = t("This file has no directory of its own: a relative link from it cannot be opened.");
+      return true;
+    };
     const code = el?.closest?.("code.pl") as HTMLElement | null;
-    if (code) { e.preventDefault(); app.openArtifact({ name: code.textContent!.split("/").pop()!, path: code.textContent!, base }); return; }
+    if (code) { e.preventDefault(); if (!nowhere(code.textContent!)) app.openArtifact({ name: code.textContent!.split("/").pop()!, path: code.textContent!, base }); return; }
     const a = el?.closest?.("a") as Element | null; // an SVG link too (xlink:href)
     if (!a) return;
     const href = a.getAttribute("href") ?? a.getAttribute("xlink:href") ?? "";
@@ -55,12 +63,12 @@
     if (href.startsWith("#artifact:")) {
       e.preventDefault();
       const path = decodeURIComponent(href.slice(10));
-      app.openArtifact({ name: path.split("/").pop() || path, path, base });
+      if (!nowhere(path)) app.openArtifact({ name: path.split("/").pop() || path, path, base });
       return;
     }
     if (href.startsWith("#")) return;
     e.preventDefault();
-    route(href, base);
+    if (!nowhere(href)) route(href, base);
   }
   // Where an address opens: a page of this Mac in the preview, the web in the browser, a file as
   // an artifact. Also what the app's page was kept from going to (app:navigate).

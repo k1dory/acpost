@@ -888,10 +888,12 @@ class App {
   artifact = $state<ArtifactRef | null>(null);
   openedArtifacts = $state<ArtifactRef[]>([]);
   openArtifact(ref: ArtifactRef) {
-    const a = normalizeRef(ref);
+    const a = normalizeRef(ref, this.home);
     const known = this.openedArtifacts.find(x => sameRef(x, a));
     if (!known) this.openedArtifacts = [...this.openedArtifacts, a];
-    this.artifact = known ?? a;
+    // A reference of its own each time: opened again, the file is read again (changed since, or
+    // its read failed); the list keeps one.
+    this.artifact = { ...(known ?? a) };
     if (this.view !== "chat") this.view = "chat";
     this.openTab("artifacts");
   }

@@ -287,6 +287,7 @@ export const ru: Record<string, string> = {
   "Tasks": "Задания",
   "Filter by name or address": "Фильтр по имени или адресу",
   "Open the chat": "Открыть чат",
+  "This file has no directory of its own: a relative link from it cannot be opened.": "У этого файла нет своей папки: относительную ссылку из него не открыть.",
   "Untitled chat": "Чат без названия",
   "no longer there": "файла больше нет",
   "Nothing matches": "Ничего не найдено",

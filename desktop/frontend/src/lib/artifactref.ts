@@ -15,10 +15,16 @@ function plain(p: string): string {
   return "/" + out.join("/");
 }
 
-/** A reference as it is kept: a local path absolute when its base says where it is from. */
-export function normalizeRef(a: ArtifactRef): ArtifactRef {
+/** A reference as it is kept: a local path absolute when its base (or, for ~/…, home: the home
+ * directory) says where it is from. */
+export function normalizeRef(a: ArtifactRef, home = ""): ArtifactRef {
   if (!a.path) return a;
   let p = a.path.trim().replace(/^file:\/\//, "");
+  // The home directory's, wherever the link is from; without it, the app's side expands it.
+  if (p === "~" || p.startsWith("~/")) {
+    if (!home.startsWith("/")) return { ...a, path: p };
+    p = home.replace(/\/$/, "") + p.slice(1);
+  }
   if (!p.startsWith("/") && a.base?.startsWith("/")) p = a.base.replace(/\/$/, "") + "/" + p;
   if (!p.startsWith("/")) return { ...a, path: p }; // ~/… or no base: the app's side resolves it
   const path = plain(p);
