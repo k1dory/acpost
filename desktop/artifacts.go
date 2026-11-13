@@ -202,7 +202,13 @@ func artifactPath(path, base string) (string, error) {
 	if real, err := filepath.EvalSymlinks(p); err == nil {
 		p = real
 	}
-	for _, part := range strings.Split(p, string(filepath.Separator)) {
+	// Nothing hidden is shown — but for the pictures Codex generated, which it keeps in its own
+	// hidden home: that folder alone, and nothing hidden under it.
+	in := p
+	if img := codexImages(); img != "" && within(p, img) {
+		in = p[len(img):]
+	}
+	for _, part := range strings.Split(in, string(filepath.Separator)) {
 		if strings.HasPrefix(part, ".") {
 			return "", errArtifact
 		}

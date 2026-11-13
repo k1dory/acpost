@@ -47,7 +47,7 @@ func TestFoundArtifacts(t *testing.T) {
 
 	old := foundRoots
 	foundRoots = func() []foundRoot {
-		return []foundRoot{{root, "agent:claude"}, {filepath.Join(top, "missing"), "agent:codex"}}
+		return []foundRoot{{root, "agent:claude", true}, {filepath.Join(top, "missing"), "agent:codex", false}}
 	}
 	t.Cleanup(func() { foundRoots = old })
 
@@ -79,5 +79,39 @@ func TestFoundArtifacts(t *testing.T) {
 	}
 	if got, _ := n.FoundArtifacts("nothing-like-it"); got == nil || len(got) != 0 {
 		t.Fatalf("none is an empty list: %#v", got)
+	}
+}
+
+// The pictures Codex generated are in its hidden home: they are listed, a card and the viewer
+// may read them, and nothing else of that home, nor anything hidden under the pictures' folder.
+func TestFoundCodexImages(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	codex := filepath.Join(home, ".codex")
+	t.Setenv("CODEX_HOME", codex)
+	pic := filepath.Join(codex, "generated_images", "thread_1", "call_1.png")
+	hidden := filepath.Join(codex, "generated_images", ".x", "a.png")
+	auth := filepath.Join(codex, "auth.json")
+	for _, p := range []string{pic, hidden, auth} {
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := (&Node{}).FoundArtifacts("call_1")
+	if len(got) != 1 || got[0].Path != pic || got[0].Agent != "agent:codex" || got[0].Title != "" {
+		t.Fatalf("%+v", got)
+	}
+	if p, err := artifactPath(pic, ""); err != nil || p != pic {
+		t.Fatalf("a generated picture: %q %v", p, err)
+	}
+	for _, p := range []string{hidden, auth, filepath.Join(codex, "generated_images", "..", "auth.json"), filepath.Join(codex, "generated_images2", "a.png")} {
+		if _, err := artifactPath(p, ""); err == nil {
+			t.Errorf("%s was allowed", p)
+		}
+	}
+	link := filepath.Join(codex, "generated_images", "thread_1", "link.png")
+	_ = os.Symlink(auth, link)
+	if _, err := artifactPath(link, ""); err == nil {
+		t.Error("a link out of the pictures' folder was followed")
 	}
 }

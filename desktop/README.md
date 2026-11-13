@@ -67,7 +67,8 @@ the files attached to their replies, and the documents their turns made or chang
 file, read only once the card comes near the screen (a small picture whole, the first lines of a
 text); a click opens it in the same viewer as a chat's artifacts panel, and its chat is a click
 away. Listed with them is what the agents of this Mac left in their own working folders, whatever
-app ran them (`/private/tmp/claude-<uid>`, `/private/tmp/codex-daemon-<uid>`): pages, reports
+app ran them (`/private/tmp/claude-<uid>`, `/private/tmp/codex-daemon-<uid>`, and the pictures Codex
+generated, `$CODEX_HOME/generated_images`): pages, reports
 (`.pdf` `.docx` `.xlsx` `.pptx`) and pictures, a site once by its `index.html`, the newest 1500.
 "Sites", "Documents" and "Pictures" show one sort alone.
 
