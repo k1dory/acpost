@@ -3,7 +3,7 @@ import { bytes } from "./names";
 import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
 import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
-import { afterSent, overLimits } from "./draft";
+import { afterSent, overLimits, asMessage } from "./draft";
 import { Turn, ownBody, type Ev } from "./turn";
 import { editsToReveal, localFiles, type Reveal } from "./ide";
 import { who } from "./format";
@@ -14,6 +14,8 @@ export type Msg = {
   body?: string; reply?: string; error?: string; error_code?: string; hint?: string; meta?: Record<string, string>;
   created_at: string; updated_at: string; finished_at?: string; files?: { name: string; type: string; size: number; reply?: boolean }[];
 };
+export type ShellRun = { id: string; chat: string; cmd: string; running: boolean; output: string; code: number; ms: number;
+  cut?: boolean; timedOut?: boolean; stopped?: boolean; error?: string };
 export type Module = { id: string; name: string; url: string };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean; product?: string };
 export type Chat = {
@@ -160,6 +162,83 @@ class App {
   private revealing: Promise<unknown> = Promise.resolve();
   playbooks = $state<{ name: string; body: string }[]>([]);
   quote = $state("");     // text to put in the composer (⌘L)
+  /** What the person ran from the composer ("!command"), by the chat it was run in (kept while the
+   * app runs). */
+  shells = $state<ShellRun[]>([]);
+  /** The draft each run was made from: its card goes where that draft goes, whatever key the draft
+   * has by then (a new task whose first message is still going is no longer "new"). */
+  private shellOwner = new Map<string, ComposerDraft>();
+  /** (By the key its draft has now: a session whose draft moved to its thread shows that thread's.) */
+  shellsHere(): ShellRun[] { const k = this.draftOf().key; return this.shells.filter(s => s.chat === k); }
+  /** Why a command cannot be run from this chat ("" when it can): it runs on this Mac, in the
+   * chat's directory — not for a chat whose files are elsewhere (a cloud sandbox's, an agent of
+   * another node, the app on a node of another machine), where the same path here is another
+   * directory, if any. */
+  shellRefused(): string {
+    if (this.conn?.url && !this.conn.url.startsWith("unix://")) return t("The app is on another node: a command would run on this Mac");
+    // A new task: where the task is set to run (the chat's agent of before says nothing of it).
+    if (!this.chat && !this.thread) {
+      if (this.draft.where === "cloud") return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
+      return this.draft.agent.includes("@") ? t("This chat's agent is on another node: a command would run on this Mac") : "";
+    }
+    // The conversation's own agent (its first message's, the chat's): where its directory is. Who
+    // the next message goes to (another agent called into it) does not move its files.
+    // (Its first message is the one the thread is named after; not on screen — a long thread shows
+    // its latest — the chat's own agent says it.)
+    const to = this.shellRoot()?.to ?? this.chat?.agent ?? this.target;
+    if (this.chat?.kind === "cloud" || to.startsWith("agent:sb_")) return t("This chat's files are in a cloud sandbox: a command would run on this Mac");
+    if (to.includes("@")) return t("This chat's agent is on another node: a command would run on this Mac");
+    // A chat whose directory the app does not know (started elsewhere without one: it runs in its
+    // agent's own): not the home directory instead.
+    // (Known whole: "." or another path that depends on where the node runs is not a place here.)
+    if (!this.shellCwd().startsWith("/")) return t("This chat's directory is not known here: nothing was run");
+    return "";
+  }
+  /** Where a command of the open conversation runs: the chat's directory; a new task's chosen one
+   * (the home directory when none is, as the task's setup shows). */
+  shellCwd(): string {
+    if (!this.chat && !this.thread) return this.draft.cwd || this.home;
+    // The conversation's own directory: its first message's, else the chat's as the node lists it
+    // (never a later message's of another participant).
+    // As the node lists the chat (where its session runs: a thread of a task may name another
+    // directory than the task's session is in); a thread not listed yet, its first message's.
+    const listed = this.chat && (!this.thread || this.chat.thread === this.thread) ? this.chat.cwd : "";
+    const m = this.shellRoot();
+    return listed || m?.meta?.acp_session_cwd || m?.meta?.acp_cwd || "";
+  }
+  /** The open thread's first message (the one it is named after), when it is on screen. */
+  private shellRoot(): Msg | undefined {
+    const id = this.thread || this.chat?.thread;
+    return id ? this.msgs.find(m => m.id === id) : undefined;
+  }
+  /** Runs the person's command in the chat's directory; its output is shown in the chat. */
+  async runShell(cmd: string) {
+    const owner = this.draftOf(), cwd = this.shellCwd(); // where it is run from, as it was when asked
+    const run: ShellRun = { id: newId(), chat: owner.key, cmd, running: true, output: "", code: 0, ms: 0 };
+    this.shells = [...this.shells, run];
+    this.shellOwner.set(run.id, owner);
+    const set = (p: Partial<ShellRun>) => { this.shells = this.shells.map(s => (s.id === run.id ? { ...s, ...p } : s)); };
+    try {
+      const r: any = await Node.Shell(run.id, cmd, cwd);
+      set({ running: false, output: r?.output ?? "", code: r?.code ?? 0, ms: r?.ms ?? 0, cut: !!r?.cut, timedOut: !!r?.timed_out, stopped: !!r?.stopped });
+    } catch (e) { set({ running: false, error: errText(e) }); }
+  }
+  stopShell(id: string) { Node.ShellStop(id).catch(() => {}); }
+  dropShell(id: string) { this.shells = this.shells.filter(s => s.id !== id); this.shellOwner.delete(id); }
+  /** The runs made from draft d are shown in chat `to` (owner: the draft they belong to from now). */
+  private moveShells(d: ComposerDraft, to: string, owner = d) {
+    this.shells = this.shells.map(s => (this.shellOwner.get(s.id) === d ? { ...s, chat: to } : s));
+    if (owner !== d) for (const [id, o] of this.shellOwner) if (o === d) this.shellOwner.set(id, owner);
+  }
+  /** The command and what it printed, into the composer: the agent is told only this way. */
+  quoteShell(id: string) {
+    const r = this.shells.find(s => s.id === id);
+    if (!r) return;
+    const fence = "`".repeat(Math.max(3, ...[...(r.output.matchAll(/`+/g))].map(m => m[0].length + 1)));
+    // One that did not run says why; one stopped or cut short says so.
+    const end = r.error ? `(not run: ${r.error})\n` : r.stopped ? "(stopped)\n" : r.timedOut ? "(ran too long, ended)\n" : r.code ? `(exit ${r.code})\n` : "";
+    this.quote = `$ ${r.cmd}\n` + (r.error && !r.output ? "" : `${fence}\n${r.output.replace(/\s+$/, "")}\n${fence}\n`) + end;
+  }
   palette = $state(false); // ⌘K
   viewMenu = $state(false); // the title bar's view menu open
   asking = $state<any[]>([]); // approvals waiting
@@ -367,7 +446,11 @@ class App {
     // A draft of its own: a send still going owns the last one (its answer edits that, not this).
     // What was typed carries over, unless it is what is being sent.
     const old = this.draftMap.get("new"), d = new ComposerDraft("new");
-    if (old && !old.busy) { d.text = old.text; d.files = old.files; old.forward(d); }
+    // (As typed it stays as typed: the same text, carried, is still the person's own.)
+    if (old && !old.busy) { d.put(old.text, old.own); d.files = old.files; old.forward(d); }
+    // What was run from the task before: with its text, in this one; a task whose first message is
+    // still going keeps its runs to itself (shown in its thread once it is one).
+    if (old) this.moveShells(old, old.busy ? "sending:" + newId() : "new", old.busy ? old : d);
     this.draftMap.set("new", d);
     this.drafts++;
     this.chat = null;
@@ -603,13 +686,19 @@ class App {
    * draft the thread has already keeps what it holds, and gets what was left of this one. */
   private moveDraft(d: ComposerDraft, to: string) {
     if (this.draftMap.get(to) === d) return;
+    // What was run from this conversation goes where it goes (a new task becoming a thread, a
+    // session becoming one): shown there, and stopped from there.
+    this.moveShells(d, to, this.draftMap.get(to) ?? d);
     if (this.draftMap.get(d.key) === d) {
       this.draftMap.delete(d.key);
       if (d.key !== "new") this.draftAlias.set(d.key, to); // a new task's next draft is a new one
     }
     const there = this.draftMap.get(to);
     if (there && there !== d) {
-      there.text = [there.text, d.text].filter(Boolean).join("\n");
+      // Two texts joined are not what the person typed as one: never a command (draft.ts asMessage).
+      // (One of them empty: the other's text, whole, with whose it was.)
+      if (there.text && d.text) there.text = asMessage(there.text + "\n" + d.text);
+      else if (d.text) there.put(d.text, d.own);
       mergeFiles(there, d); // a request given back keeps its files first
       if (!there.op.pending() && d.op.pending()) there.op = d.op; // whole: its key with its sandbox
       d.forward(there);
@@ -805,7 +894,9 @@ class App {
       // What was sent leaves the draft, what was typed meanwhile stays; the draft is the thread's now.
       // A draft edited into another task keeps all it holds: it is that task, sent text and all.
       if (sent && same) {
-        d.text = afterSent(d.text, sent.text);
+        // (Only when something of it went: text typed since, whole, stays as typed.)
+        const left = afterSent(d.text, sent.text);
+        if (left !== d.text) d.text = asMessage(left); // a remainder the app made: a message
         // Exactly the attachments it sent, by identity: the same file attached again meanwhile stays.
         const gone = new Set(sent.files.map(f => f.rid));
         d.files = d.files.filter(f => !gone.has(f.rid));

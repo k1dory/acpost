@@ -5,6 +5,7 @@
   import TaskSetup from "./TaskSetup.svelte";
   import { bytes } from "../lib/names";
   import { pasteFiles, pasteName, freeName } from "../lib/paste";
+  import { asMessage } from "../lib/draft";
   import { who } from "../lib/format";
   import Avatar from "./Avatar.svelte";
 
@@ -58,7 +59,9 @@
   });
   // ⌘L and playbooks put text here.
   $effect(() => {
-    if (app.quote) { d.text = (d.text ? d.text + "\n" : "") + app.quote; app.quote = ""; requestAnimationFrame(() => ta?.focus()); }
+    // What is put here by something else (a quotation, a run's output, a playbook) is never a
+    // command to run: a draft that would start with "!" starts with a space, a message.
+    if (app.quote) { d.text = asMessage((d.text ? d.text + "\n" : "") + app.quote); app.quote = ""; requestAnimationFrame(() => ta?.focus()); }
   });
 
   // The slash menu: the settings, then the agent's own commands.
@@ -96,7 +99,7 @@
     const it = slash[i];
     if (!it) return;
     if (it.pick) { d.text = ""; pickerFor = it.pick; return; }
-    if ((it as any).playbook) { d.text = (it as any).playbook; ta?.focus(); return; }
+    if ((it as any).playbook) { d.text = asMessage((it as any).playbook); ta?.focus(); return; }
     d.text = "/" + it.name + " ";
     ta?.focus();
   }
@@ -106,7 +109,24 @@
   const stopMode = $derived(running && !d.hasContent);
 
   // The text and files leave the draft only once the node has them (app.submit).
+  // "!git status" is a command of the person's own, run in the chat's directory and shown in the
+  // chat; not a message (one that must start with "!" starts with a space).
+  // Only what the person typed here since the field was last empty (d.own): never text anything
+  // else put in, edited or not.
+  const bang = $derived(d.own && d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
   async function send() {
+    if (bang) {
+      // As typed, to the letter (a space at its end may be an escaped one); nothing but spaces is no command.
+      const cmd = d.text.slice(1);
+      if (!cmd.trim()) return;
+      // Not where the chat's files are not this Mac's: said, the draft kept.
+      const no = app.shellRefused();
+      if (no) { app.error = no; return; }
+      d.text = "";
+      ta?.focus();
+      app.runShell(cmd);
+      return;
+    }
     // "@codex" and nothing else chooses who answers; with a message after it, the message goes to
     // that agent (app.submit).
     const named = isNew || app.sentBefore(d) ? null : app.mention(d.text);
@@ -115,6 +135,9 @@
     ta?.focus();
   }
   function key(e: KeyboardEvent) {
+    // Enter that takes an input method's candidate is part of typing, not a send (WebKit says it
+    // with keyCode 229 when the composition has just ended).
+    if (e.isComposing || e.keyCode === 229) return;
     if (at.length && !app.sentBefore(d)) {
       if (e.key === "ArrowDown") { e.preventDefault(); slashSel = (slashSel + 1) % at.length; return; }
       if (e.key === "ArrowUp") { e.preventDefault(); slashSel = (slashSel - 1 + at.length) % at.length; return; }
@@ -163,7 +186,7 @@
 {#if isNew}<TaskSetup />{/if}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="card comp" ondragover={e => e.preventDefault()} ondrop={e => { e.preventDefault(); add(e.dataTransfer?.files ?? null); }} onpaste={paste}>
+<div class="card comp" class:bang ondragover={e => e.preventDefault()} ondrop={e => { e.preventDefault(); add(e.dataTransfer?.files ?? null); }} onpaste={paste}>
   {#if slash.length}
     <div class="menu card">
       {#each slash as it, i (it.name)}
@@ -212,7 +235,7 @@
       {/each}
     </div>
   {/if}
-  <textarea bind:this={ta} bind:value={d.text} onkeydown={key} rows="1"
+  <textarea bind:this={ta} value={d.text} oninput={e => d.type(e.currentTarget.value, (e as unknown as InputEvent).inputType)} onkeydown={key} rows="1"
     placeholder={isNew ? t("/ for the model, effort and commands") : targets.length > 1 ? t("Reply… (@ calls another agent)") : t("Reply…")}></textarea>
   <div class="bar">
     <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
@@ -233,6 +256,8 @@
 </div>
 
 <style>
+  .comp.bang { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .comp.bang textarea { font-family: var(--mono); }
   .comp { position: relative; padding: 10px 10px 8px 14px; border-radius: var(--r-panel); }
   textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; padding: 4px 2px 8px; font-size: 13.5px; line-height: 1.5; max-height: 240px; user-select: text; cursor: text; }
   .bar { display: flex; align-items: center; gap: 6px; }

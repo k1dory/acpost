@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -593,6 +594,11 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 			if dir == "" {
 				dir = s.cwd()
 			}
+			// Whole: a configured "cwd: ." is the node's own directory, and means nothing to
+			// whoever reads the record from another one (the app).
+			if abs, err := filepath.Abs(dir); err == nil {
+				dir = abs
+			}
 			if err := n.st.PutSession(n.ctx, a.addr, sessionDir+string(sid), dir); err != nil {
 				n.log.Warn("record the session's directory", "agent", a.name, "err", err)
 			}
@@ -650,6 +656,11 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 func (a *acpAgent) keepMade(ctx context.Context, sid string) {
 	if v, err := a.n.st.Session(ctx, a.addr, madeSession+sid); err == nil && v != "" {
 		_ = a.n.st.PutSession(ctx, a.addr, madeSession+sid, sid)
+	}
+	// And the directory it was made in, as long: a chat is listed, and a command of the person's
+	// run, where the session is (chats.go) — not where a later thread of its task asked.
+	if dir, err := a.n.st.Session(ctx, a.addr, sessionDir+sid); err == nil && dir != "" {
+		_ = a.n.st.PutSession(ctx, a.addr, sessionDir+sid, dir)
 	}
 }
 

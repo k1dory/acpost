@@ -186,6 +186,49 @@ export class Module {
 }
 
 /**
+ * ShellResult is what a command did.
+ */
+export class ShellResult {
+    "output": string;
+    "code": number;
+    "ms": number;
+
+    /**
+     * more output than is kept
+     */
+    "cut"?: boolean;
+    "timed_out"?: boolean;
+
+    /**
+     * by the person
+     */
+    "stopped"?: boolean;
+
+    /** Creates a new ShellResult instance. */
+    constructor($$source: Partial<ShellResult> = {}) {
+        if (!("output" in $$source)) {
+            this["output"] = "";
+        }
+        if (!("code" in $$source)) {
+            this["code"] = 0;
+        }
+        if (!("ms" in $$source)) {
+            this["ms"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ShellResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ShellResult {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ShellResult($$parsedSource as Partial<ShellResult>);
+    }
+}
+
+/**
  * Task is a message as the composer sends it.
  */
 export class Task {

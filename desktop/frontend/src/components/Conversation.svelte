@@ -10,6 +10,7 @@
   import Message from "./Message.svelte";
   import History from "./History.svelte";
   import Composer from "./Composer.svelte";
+  import ShellRuns from "./ShellRuns.svelte";
   import ContextMeter from "./ContextMeter.svelte";
   import Icon from "./Icon.svelte";
   import Dropdown from "./Dropdown.svelte";
@@ -64,7 +65,7 @@
     } catch (e) { handErr = errText(e); }
     sending = false;
   }
-  $effect(() => { app.rev; app.msgs.length; app.history.length; if (stick) tick().then(() => box && (box.scrollTop = box.scrollHeight)); });
+  $effect(() => { app.rev; app.msgs.length; app.history.length; app.shells; if (stick) tick().then(() => box && (box.scrollTop = box.scrollHeight)); });
 </script>
 
 <svelte:window onclick={e => { if (handing && !(e.target as HTMLElement).closest(".hand, .menu")) handing = false; }} />
@@ -125,6 +126,8 @@
           <div class="big">{t("What should we work on?")}</div>
         </div>
         <Composer />
+        <!-- Under the composer, in a box of their own that scrolls: the composer stays in reach. -->
+        <div class="runs scroll"><ShellRuns /></div>
       </div>
     </div>
   {:else}
@@ -132,6 +135,7 @@
       <div class="col">
         {#if app.chat && app.chat.kind !== "thread"}<History />{/if}
         {#each app.msgs as m (m.id)}<Message {m} />{/each}
+        <ShellRuns />
       </div>
     </div>
     <div class="foot"><div class="col"><Composer /></div></div>
@@ -166,6 +170,7 @@
   .foot { padding: 8px 32px 20px; }
   .center { flex: 1; min-height: 0; display: grid; align-content: center; padding: 0 32px 8vh; }
   .center .col { width: 100%; }
+  .center .runs { max-height: 34vh; overflow-y: auto; }
   .hello { padding: 0 0 22px; display: grid; gap: 6px; text-align: center; }
   .mark { display: flex; justify-content: center; margin-bottom: 6px; }
   .big { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }

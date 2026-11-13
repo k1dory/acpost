@@ -321,4 +321,42 @@ func TestSharedChatReusedTaskSessionKeepsItsDirectory(t *testing.T) {
 	if got := ask(t, n, SendRequest{To: "other", Thread: second.Thread, Body: "cwd"}).Reply; got != one {
 		t.Fatalf("the agent called in runs in %q, the task's session in %q", got, one)
 	}
+	// And the chat is listed in the directory its session runs in, not the one its thread named.
+	chats, err := n.Chats(ctx, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range chats.Items {
+		if c.Thread == second.Thread && c.Cwd != one {
+			t.Fatalf("the chat is listed in %q, its session runs in %q", c.Cwd, one)
+		}
+	}
+}
+
+// The record of where a session runs lasts as long as the session is used: retention removes
+// what was not used since, and a session's next turn keeps its directory with it.
+func TestSessionDirectoryRecordIsKeptWhileUsed(t *testing.T) {
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := newNode(t, fmt.Sprintf("agents:\n  fake:\n    driver: acp\n    command: [%q]\n    session: task\n    env: {ACPOST_FAKE_AGENT: \"1\", FAKE_STATE: %q}\n", os.Args[0], t.TempDir()))
+	ask(t, n, SendRequest{To: "fake", Task: "x", Cwd: work, Body: "echo one"})
+	sid, err := n.st.Session(ctx, "agent:fake", "task:x")
+	if err != nil || sid == "" {
+		t.Fatalf("the task's session: %q %v", sid, err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	cut := time.Now()
+	time.Sleep(20 * time.Millisecond)
+	ask(t, n, SendRequest{To: "fake", Task: "x", Body: "echo again"}) // used after the cut
+	if _, err := n.st.GC(ctx, cut); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := n.st.Session(ctx, "agent:fake", "task:x"); again != sid {
+		t.Fatalf("the session itself went: %q", again)
+	}
+	if dir, _ := n.st.Session(ctx, "agent:fake", sessionDir+sid); dir != work {
+		t.Fatalf("the session's directory record after retention: %q, want %q", dir, work)
+	}
 }

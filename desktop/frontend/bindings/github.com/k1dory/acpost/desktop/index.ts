@@ -12,6 +12,7 @@ export {
     CloudConnected,
     Connection,
     Module,
+    ShellResult,
     Task,
     Upload
 } from "./models.js";

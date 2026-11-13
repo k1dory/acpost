@@ -680,6 +680,24 @@ export function SetChatTitle(chat: string, title: string): $CancellablePromise<v
 }
 
 /**
+ * Shell runs command in cwd — the directory the app names, whole (an absolute path): none named,
+ * or one that depends on where this app happens to run, runs nothing — and gives what it printed
+ * and how it ended. id names the run for ShellStop.
+ */
+export function Shell(id: string, command: string, cwd: string): $CancellablePromise<$models.ShellResult> {
+    return $Call.ByID(2077317842, id, command, cwd).then(($result: any) => {
+        return $$createType44($result);
+    });
+}
+
+/**
+ * ShellStop ends a running command (and what it started).
+ */
+export function ShellStop(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1315346186, id);
+}
+
+/**
  * StartBacklogItem gives a backlog item to an agent: the thread it starts.
  */
 export function StartBacklogItem(id: string, agent: string): $CancellablePromise<string> {
@@ -691,7 +709,7 @@ export function StartBacklogItem(id: string, agent: string): $CancellablePromise
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType44($result);
+        return $$createType45($result);
     });
 }
 
@@ -725,7 +743,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType45($result);
+        return $$createType46($result);
     });
 }
 
@@ -735,7 +753,7 @@ export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
  */
 export function Traces(thread: string, limit: number): $CancellablePromise<client$0.TraceThread[]> {
     return $Call.ByID(3668876974, thread, limit).then(($result: any) => {
-        return $$createType47($result);
+        return $$createType48($result);
     });
 }
 
@@ -744,7 +762,7 @@ export function Traces(thread: string, limit: number): $CancellablePromise<clien
  */
 export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
     return $Call.ByID(3080916840, id).then(($result: any) => {
-        return $$createType49($result);
+        return $$createType50($result);
     });
 }
 
@@ -762,19 +780,19 @@ export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType51($result);
+        return $$createType52($result);
     });
 }
 
 export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
     return $Call.ByID(3522603132, repo).then(($result: any) => {
-        return $$createType53($result);
+        return $$createType54($result);
     });
 }
 
 export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
     return $Call.ByID(52380493).then(($result: any) => {
-        return $$createType55($result);
+        return $$createType56($result);
     });
 }
 
@@ -830,15 +848,16 @@ const $$createType40 = $Create.Array($$createType39);
 const $$createType41 = store$0.Schedule.createFrom;
 const $$createType42 = $Create.Array($$createType41);
 const $$createType43 = $Create.Array($Create.Any);
-const $$createType44 = $models.Connection.createFrom;
-const $$createType45 = $Create.Array($$createType9);
-const $$createType46 = client$0.TraceThread.createFrom;
-const $$createType47 = $Create.Array($$createType46);
-const $$createType48 = client$0.TreeNode.createFrom;
-const $$createType49 = $Create.Array($$createType48);
-const $$createType50 = client$0.UsageReport.createFrom;
-const $$createType51 = $Create.Array($$createType50);
-const $$createType52 = store$0.WikiPage.createFrom;
-const $$createType53 = $Create.Array($$createType52);
-const $$createType54 = store$0.Wiki.createFrom;
-const $$createType55 = $Create.Array($$createType54);
+const $$createType44 = $models.ShellResult.createFrom;
+const $$createType45 = $models.Connection.createFrom;
+const $$createType46 = $Create.Array($$createType9);
+const $$createType47 = client$0.TraceThread.createFrom;
+const $$createType48 = $Create.Array($$createType47);
+const $$createType49 = client$0.TreeNode.createFrom;
+const $$createType50 = $Create.Array($$createType49);
+const $$createType51 = client$0.UsageReport.createFrom;
+const $$createType52 = $Create.Array($$createType51);
+const $$createType53 = store$0.WikiPage.createFrom;
+const $$createType54 = $Create.Array($$createType53);
+const $$createType55 = store$0.Wiki.createFrom;
+const $$createType56 = $Create.Array($$createType55);
