@@ -16,7 +16,10 @@ import (
 
 // Found artifacts: what the agents of this Mac left in their own working folders outside any
 // chat's directory — Claude Code's and Codex's under /private/tmp (a session's scratchpad, the
-// pictures it took). Pages, reports and pictures only; a site is listed once, by its index.html.
+// pictures it took), and the pictures Codex generated, which it keeps in its own home
+// ($CODEX_HOME/generated_images/<thread>/<call>.png, as its image tool documents; everything else
+// it writes goes into the task's directory). Pages, reports and pictures only; a site is listed
+// once, by its index.html.
 
 const (
 	foundMax    = 1500            // the newest listed
@@ -31,16 +34,41 @@ var foundExts = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
 }
 
-// foundRoot is a folder agents keep their working files in, and whose they are.
-type foundRoot struct{ dir, agent string }
+// foundRoot is a folder agents keep their working files in, and whose they are; projects says
+// its first folders are named by a project's path (Claude Code's are).
+type foundRoot struct {
+	dir, agent string
+	projects   bool
+}
+
+// codexImages is where Codex keeps the pictures it generated: generated_images in its home.
+func codexImages() string {
+	home := os.Getenv("CODEX_HOME")
+	if !filepath.IsAbs(home) {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		home = filepath.Join(h, ".codex")
+	}
+	p := filepath.Join(home, "generated_images")
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	return p
+}
 
 // foundRoots are the folders looked in; a test puts its own.
 var foundRoots = func() []foundRoot {
 	uid := strconv.Itoa(os.Getuid())
-	return []foundRoot{
-		{"/private/tmp/claude-" + uid, "agent:claude"},
-		{"/private/tmp/codex-daemon-" + uid, "agent:codex"},
+	roots := []foundRoot{
+		{"/private/tmp/claude-" + uid, "agent:claude", true},
+		{"/private/tmp/codex-daemon-" + uid, "agent:codex", false},
 	}
+	if p := codexImages(); p != "" {
+		roots = append(roots, foundRoot{p, "agent:codex", false})
+	}
+	return roots
 }
 
 // FoundArtifacts lists the pages, reports and pictures in the agents' working folders of this
@@ -107,8 +135,11 @@ func (n *Node) FoundArtifacts(match string) ([]store.Artifact, error) {
 			}
 			out = append(out, store.Artifact{
 				Kind: "change", Name: shown, Type: typeOf(name, "", nil), Size: st.Size(), Path: p,
-				Title: foundProject(root, p), Agent: r.agent, At: st.ModTime().UTC(),
+				Agent: r.agent, At: st.ModTime().UTC(),
 			})
+			if r.projects {
+				out[len(out)-1].Title = foundProject(root, p)
+			}
 			return nil
 		})
 	}
