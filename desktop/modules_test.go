@@ -137,3 +137,28 @@ func TestModulesOfTwoAppsAreAllKept(t *testing.T) {
 		t.Fatalf("%d modules kept of 24: %v", len(ms), err)
 	}
 }
+
+// Plain http is for this Mac and the private networks; a name, a public number, or a number
+// written another way is https or nothing.
+func TestModulePlainHTTPIsLocal(t *testing.T) {
+	for _, u := range []string{
+		"http://localhost:3000", "http://LOCALHOST", "http://127.0.0.1:8080", "http://127.9.9.9", "http://[::1]:3000",
+		"http://10.0.0.1", "http://10.99.99.99:8443/x", "http://172.16.0.1", "http://172.31.255.254", "http://192.168.0.170:8089",
+	} {
+		if _, err := checkModule(Module{Name: "m", URL: u}); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	for _, u := range []string{
+		"http://wiki.example.com", "http://8.8.8.8", "http://172.15.0.1", "http://172.32.0.1", "http://192.169.0.1", "http://11.0.0.1",
+		"http://169.254.1.1", "http://0x7f.1", "http://2130706433", "http://10.0.0.1.example.com", "http://[fd00::1]", "http://[::ffff:8.8.8.8]",
+		"http://192.168.1", "http://router.local",
+	} {
+		if _, err := checkModule(Module{Name: "m", URL: u}); err == nil {
+			t.Errorf("%s was taken", u)
+		}
+	}
+	if m, err := checkModule(Module{Name: "m", URL: "https://8.8.8.8"}); err != nil || m.URL != "https://8.8.8.8" {
+		t.Errorf("https anywhere: %+v %v", m, err)
+	}
+}

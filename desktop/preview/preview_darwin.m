@@ -2,6 +2,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#include <arpa/inet.h>
 
 #include "_cgo_export.h"
 
@@ -306,7 +307,32 @@ static void apModTell(WKWebView *w, NSString *kind, NSString *message) {
 	goModuleEvent((char *)[mid UTF8String], (char *)[kind UTF8String], (char *)[(message ?: @"") UTF8String]);
 }
 
+// apLocalHost is whether a plain http page may be read from host: this Mac or a numbered address
+// of a private network (10.x, 172.16-31.x, 192.168.x, 127.x), as modules.go's localHost has it.
+static BOOL apLocalHost(NSString *host) {
+	if (!host.length) return NO;
+	if ([host caseInsensitiveCompare:@"localhost"] == NSOrderedSame) return YES;
+	struct in_addr a4;
+	if (inet_pton(AF_INET, host.UTF8String, &a4) == 1) {
+		uint32_t a = ntohl(a4.s_addr);
+		return (a >> 24) == 127 || (a >> 24) == 10 || (a >> 20) == 0xAC1 || (a >> 16) == 0xC0A8;
+	}
+	struct in6_addr a6;
+	return inet_pton(AF_INET6, host.UTF8String, &a6) == 1 && IN6_IS_ADDR_LOOPBACK(&a6);
+}
+
 @implementation APModule
+// A plain http page is read only from this Mac and its network: the transport security is opened
+// to local addresses for that, and a page there may not lead the pane to a plain one elsewhere.
+- (void)webView:(WKWebView *)w decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))done {
+	NSURL *u = a.request.URL;
+	if ([u.scheme.lowercaseString isEqualToString:@"http"] && !apLocalHost(u.host)) {
+		if (!a.targetFrame || a.targetFrame.isMainFrame) apModTell(w, @"load", @"plain http is for this Mac and its network; elsewhere https");
+		done(WKNavigationActionPolicyCancel);
+		return;
+	}
+	done(WKNavigationActionPolicyAllow);
+}
 - (void)webView:(WKWebView *)w didFinishNavigation:(WKNavigation *)n { apModTell(w, @"nav", @""); }
 - (void)webView:(WKWebView *)w didFailProvisionalNavigation:(WKNavigation *)n withError:(NSError *)e {
 	if (e.code == NSURLErrorCancelled) return; // another load took its place

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -118,16 +119,33 @@ func checkModule(m Module) (Module, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return m, errors.New("a module's address is an http or https one, such as https://wiki.example.com or http://localhost:3000")
 	}
-	// Plain http is for a tool served on this Mac: the system's transport security, which the app
-	// keeps as it is, refuses it to any other host (the page would be a blank pane).
-	if h := u.Hostname(); u.Scheme == "http" && h != "localhost" && h != "127.0.0.1" && h != "::1" {
-		return m, errors.New("a module on another machine is an https address; plain http is for this Mac (http://localhost:3000)")
+	// Plain http is for a tool served on this Mac or on the network it is in: the address is
+	// localhost or a number of a private network (10.x, 172.16–31.x, 192.168.x, 127.x). The system's
+	// transport security is opened to the local network alone (Info.plist), and the module's pane
+	// refuses a plain page of any other host.
+	if u.Scheme == "http" && !localHost(u.Hostname()) {
+		return m, errors.New("a module on the internet is an https address; plain http is for this Mac and its network (http://localhost:3000, http://192.168.1.10:8080)")
 	}
 	if u.User != nil {
 		return m, errors.New("a module's address has no user or password in it: sign in on its page")
 	}
 	m.URL = u.String()
 	return m, nil
+}
+
+// localHost is whether host is this Mac or a numbered address of a private network: the hosts a
+// module may be read from over plain http. A name other than localhost is not one, whatever it
+// resolves to: what it resolves to is another's to change.
+func localHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	return a.IsLoopback() || (a.Is4() && a.IsPrivate())
 }
 
 // Modules lists them, in the order they were added.
