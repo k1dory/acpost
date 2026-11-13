@@ -58,6 +58,30 @@ async function show() {
 const cards = () => [...document.querySelectorAll(".lc")];
 
 describe("the artifacts library", () => {
+  it("lists what the agents left in their working folders with the chats', and shows one sort alone", async () => {
+    fake.Node.Artifacts.mockResolvedValue({ items: [items[1]], next: "" });
+    fake.Node.FoundArtifacts.mockResolvedValue([
+      { kind: "change", name: "landing/index.html", type: "text/html", size: 5, path: "/private/tmp/claude-501/p/s/scratchpad/landing/index.html", msg: "", title: "site", agent: "agent:claude", at: now },
+      { kind: "change", name: "report.pdf", type: "application/pdf", size: 5, path: "/private/tmp/claude-501/p/s/scratchpad/report.pdf", msg: "", title: "site", agent: "agent:claude", at: now },
+      { kind: "change", name: "shot.png", type: "image/png", size: 5, path: "/private/tmp/claude-501/p/s/images/shot.png", msg: "", title: "site", agent: "agent:claude", at: now },
+    ]);
+    await show();
+    expect(fake.Node.FoundArtifacts).toHaveBeenCalledWith("");
+    expect(cards().length).toBe(4);
+    const sorts = [...document.querySelectorAll<HTMLButtonElement>(".sort")];
+    sorts[1].click(); flushSync();
+    expect(cards().map(c => c.querySelector(".nm")!.textContent)).toEqual(["landing/index.html"]);
+    sorts[2].click(); flushSync();
+    expect(cards().length).toBe(2); // report.md of a chat, report.pdf found
+    sorts[3].click(); flushSync();
+    expect(cards().map(c => c.querySelector(".nm")!.textContent)).toEqual(["shot.png"]);
+  });
+  it("lists the found files when the node cannot be asked", async () => {
+    fake.Node.Artifacts.mockRejectedValue(new Error("no node"));
+    fake.Node.FoundArtifacts.mockResolvedValue([{ kind: "change", name: "report.pdf", size: 5, path: "/t/report.pdf", msg: "", at: now }]);
+    await show();
+    expect(cards().length).toBe(1);
+  });
   it("lists every chat's artifacts, asking for a card's content only once it is near the screen", async () => {
     fake.Node.Artifacts.mockResolvedValue({ items, next: "" });
     fake.Node.ArtifactPreview.mockImplementation(async (msg: string, name: string) =>
