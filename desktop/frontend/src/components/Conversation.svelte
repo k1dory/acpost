@@ -151,7 +151,8 @@
   .sub .mono { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
   .src { font-weight: 500; color: var(--ink-2); }
   .sp { flex: 1; }
-  .meter { flex: none; }
+  /* The meter gives way before the title does, and never leaves the header. */
+  .meter { flex: 0 20 auto; min-width: 0; }
   .hand { position: relative; }
   .hand .on { background: var(--hover); }
   .pop { position: absolute; right: 0; top: 34px; z-index: 40; width: 340px; padding: 14px; display: grid; gap: 10px; }
