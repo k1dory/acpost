@@ -18,8 +18,11 @@
 </div>
 
 <style>
-  .meter { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
-  .bar { width: 90px; height: 4px; border-radius: 4px; background: var(--track); overflow: hidden; }
+  /* One line of fixed height: a part that does not fit wraps under it and is not seen, whole —
+     the cost is not cut in half by the window's edge. The parts are in the order of their worth. */
+  .meter { display: flex; align-items: center; gap: 0 10px; font-size: 12px; line-height: 18px; height: 18px; overflow: hidden; color: var(--ink-2); flex-wrap: wrap; min-width: 0; }
+  .num { flex: none; white-space: nowrap; }
+  .bar { flex: none; width: 90px; height: 4px; border-radius: 4px; background: var(--track); overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--accent); }
   .bar.hi span { background: var(--warn); }
 </style>
