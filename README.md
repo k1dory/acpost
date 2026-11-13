@@ -693,7 +693,8 @@ message. The agent sees it only when you put it into a message ("Add to message"
 
 **Modules.** A view of your own can be added beside "Agents" and "IDE" (Settings → Modules, or
 "Add a module…" in the view switcher): a name and an http(s) address — a tracker, a wiki, a
-dashboard, a tool served on this Mac (plain http only there; elsewhere https). Its page is shown in a native pane with the chat beside it,
+dashboard, a tool served on this Mac or its network (plain http only for localhost and private
+addresses — 10.x, 172.16–31.x, 192.168.x, 127.x; elsewhere https). Its page is shown in a native pane with the chat beside it,
 as the IDE is; it signs in as in a browser, and nothing of the app's (the node, its calls) is
 within its reach. Modules are kept in `modules.json` beside the node's configuration.
 
