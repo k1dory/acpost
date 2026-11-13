@@ -66,7 +66,10 @@ the files attached to their replies, and the documents their turns made or chang
 (pages, Markdown, pictures, PDFs, tables; not every source file). A card shows a little of its
 file, read only once the card comes near the screen (a small picture whole, the first lines of a
 text); a click opens it in the same viewer as a chat's artifacts panel, and its chat is a click
-away.
+away. Listed with them is what the agents of this Mac left in their own working folders, whatever
+app ran them (`/private/tmp/claude-<uid>`, `/private/tmp/codex-daemon-<uid>`): pages, reports
+(`.pdf` `.docx` `.xlsx` `.pptx`) and pictures, a site once by its `index.html`, the newest 1500.
+"Sites", "Documents" and "Pictures" show one sort alone.
 
 A reply can carry components besides Markdown and Mermaid: a ```` ```ui ```` block holds one JSON
 object `{"type": …}` (or an array of up to 8) that the chat draws in its place: `stats` tiles, a

@@ -4,16 +4,23 @@
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import { inView } from "../lib/visible";
-  import { itemKey, refOf, webLink, type LibItem } from "../lib/library";
+  import { itemKey, refOf, webLink, sortOf, withFound, type LibItem } from "../lib/library";
   import Icon from "./Icon.svelte";
   import LibraryCard from "./LibraryCard.svelte";
   import ArtifactView from "./ArtifactView.svelte";
 
   // The library: the artifacts of every chat, newest first — what agents attached to their replies,
-  // and the documents their turns made on this Mac — a page at a time, filtered by name or address.
+  // the documents their turns made on this Mac, and what they left in their own working folders —
+  // a page at a time, filtered by name or address.
   const pageSize = 60;
   let items = $state<LibItem[] | null>(null);
   let next = $state("");
+  // What the agents left in their own working folders of this Mac (pages, reports, pictures),
+  // whole; and the sort shown: all, or sites, documents, pictures alone.
+  let found = $state<LibItem[]>([]);
+  let only = $state<"" | "site" | "doc" | "image">("");
+  const all = $derived(withFound(items ?? [], found, !!next));
+  const shown = $derived(only ? all.filter(a => sortOf(a) === only) : all);
   let q = $state("");
   let err = $state("");
   let more = $state(false);
@@ -29,12 +36,16 @@
   async function load() {
     const my = ++gen;
     err = ""; next = ""; more = false; reloading = true;
+    // The folders are looked in beside the node's page: neither waits for the other's failure.
+    const mine = Promise.resolve().then(() => Node.FoundArtifacts(q.trim())).then((f: any) => (f ?? []) as LibItem[], () => [] as LibItem[]);
     try {
       const r = (await Node.Artifacts(q.trim(), "", pageSize)) as any;
+      const f = await mine;
       if (my !== gen) return;
       items = r?.items ?? [];
       next = r?.next ?? "";
-    } catch (e) { if (my === gen) { err = errText(e); items ??= []; } }
+      found = f;
+    } catch (e) { const f = await mine; if (my === gen) { err = errText(e); items ??= []; found = f; } }
     finally { if (my === gen) reloading = false; }
   }
   function refresh() { stamp++; load(); }
@@ -92,6 +103,11 @@
     {:else}
       <h1>{t("Artifacts")}</h1>
       <span class="sp"></span>
+      <div class="sorts nodrag" role="group" aria-label={t("Show")}>
+        {#each [["", "Everything"], ["site", "Sites"], ["doc", "Documents"], ["image", "Pictures"]] as [k, label] (k)}
+          <button class="sort" class:on={only === k} aria-pressed={only === k} onclick={() => (only = k as typeof only)}>{t(label)}</button>
+        {/each}
+      </div>
       <label class="filter nodrag">
         <Icon name="search" size={13} />
         <input placeholder={t("Filter by name or address")} bind:value={q} />
@@ -106,10 +122,10 @@
       {#if err}<div class="err selectable">{err}</div>{/if}
       {#if items === null}
         <div class="empty"><span class="spin"></span></div>
-      {:else if !items.length}
+      {:else if !shown.length && !next}
         <div class="empty">
           <Icon name="file" size={28} />
-          {#if q.trim()}<div>{t("Nothing matches")}</div>
+          {#if q.trim() || only}<div>{t("Nothing matches")}</div>
           {:else}
             <div class="big">{t("No artifacts yet")}</div>
             <div class="muted">{t("Files the agents hand back with their replies, and the documents, pages and pictures they make on this Mac, gather here from every chat.")}</div>
@@ -117,7 +133,7 @@
         </div>
       {:else}
         <div class="grid">
-          {#each items as a (itemKey(a))}
+          {#each shown as a (itemKey(a))}
             <LibraryCard item={a} {stamp} onopen={open} onchat={openChat} />
           {/each}
         </div>
@@ -135,6 +151,9 @@
   .sp { flex: 1; }
   .back { display: inline-grid; transform: rotate(180deg); }
   .filter { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 9px; color: var(--muted); width: min(280px, 40vw); }
+  .sorts { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line-soft); border-radius: 9px; flex: none; }
+  .sort { border: 0; background: transparent; color: var(--ink-2); font-size: 12px; height: 22px; padding: 0 9px; border-radius: 7px; }
+  .sort.on { background: var(--hover); color: var(--ink); }
   .filter input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-size: 12.5px; color: var(--ink); }
   .main { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px 30px 28px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }

@@ -48,7 +48,7 @@
     {#if item.agent}<span class="ag"><Avatar addr={item.agent} size={14} /></span>{/if}
     {#if item.thread}
       <button class="chat" onclick={() => onchat(item)} title={t("Open the chat")}>{item.title || t("Untitled chat")}</button>
-    {:else}<span class="chat muted">{agentLabel(item.agent)}</span>{/if}
+    {:else}<span class="chat muted" title={item.title ?? ""}>{item.title || agentLabel(item.agent)}</span>{/if}
     <span class="when muted">{item.gone ? t("no longer there") : ago(item.at)}</span>
   </div>
 </div>
