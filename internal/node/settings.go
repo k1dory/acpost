@@ -39,10 +39,10 @@ func taskCwd(m store.Message) string {
 // node's user and its agents choose them; a message in a thread inherits the thread's directory.
 func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *SendRequest) error {
 	// A node forwards acp_ keys its node set; these are this node's to set, from its user's choice.
-	for _, k := range []string{metaCwd, metaModel, metaEffort, metaMode, metaModeStrict} {
+	for _, k := range []string{metaCwd, metaModel, metaEffort, metaMode, metaModeStrict, metaSystem, metaMCP} {
 		delete(r.Meta, k)
 	}
-	asked := r.Cwd != "" || r.Model != "" || r.Effort != "" || r.Mode != ""
+	asked := r.Cwd != "" || r.Model != "" || r.Effort != "" || r.Mode != "" || r.System != "" || len(r.MCP) > 0
 	if !asked && r.Thread == "" {
 		return nil
 	}
@@ -50,7 +50,7 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 	local := cfg != nil && cfg.Driver == "acp" && (to.Node == "" || to.Node == n.Name())
 	if asked {
 		if !p.local() {
-			return errf("refused", "the directory, model, effort and mode are chosen by the node's user")
+			return errf("refused", "the directory, model, effort, mode, system text and MCP servers are chosen by the node's user")
 		}
 		if !local {
 			return errh("invalid", "they are an ACP agent's of this node", "%s is not an ACP agent of this node", to)
@@ -73,6 +73,13 @@ func (n *Node) resolveSettings(ctx context.Context, p Principal, to Address, r *
 	}
 	if r.ModeStrict && r.Mode != "" {
 		set(metaModeStrict, "1")
+	}
+	if err := checkSessionOpen(r.System, r.MCP); err != nil {
+		return err
+	}
+	set(metaSystem, r.System)
+	if len(r.MCP) > 0 {
+		set(metaMCP, eventJSON(r.MCP))
 	}
 	switch {
 	case r.Cwd != "":

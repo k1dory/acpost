@@ -572,7 +572,7 @@ func (s *acpSlot) sessionFor(ctx context.Context, p *acpProc, key, sessionCwd st
 		}
 	}
 	if sid == "" {
-		r, err := p.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
+		r, err := p.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: cwd, McpServers: s.a.openMCP(ctx, p), Meta: openMeta(ctx)})
 		if err != nil {
 			return "", fmt.Errorf("session/new: %w", procErr(p, err))
 		}
@@ -758,7 +758,7 @@ func (s *acpSlot) openSession(ctx context.Context, p *acpProc, id acp.SessionId,
 	caps := p.init.AgentCapabilities
 	var errs []error
 	if caps.SessionCapabilities.Resume != nil {
-		r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
+		r, err := p.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.openMCP(ctx, p), Meta: openMeta(ctx)})
 		if err == nil {
 			return acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}, nil
 		}
@@ -766,7 +766,7 @@ func (s *acpSlot) openSession(ctx context.Context, p *acpProc, id acp.SessionId,
 	}
 	if caps.LoadSession {
 		// The history the agent replays is not attributed to any turn: no turn is registered yet.
-		r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.mcpServers(ctx, p)})
+		r, err := p.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: id, Cwd: cwd, McpServers: s.a.openMCP(ctx, p), Meta: openMeta(ctx)})
 		if err == nil {
 			return acpx.SessionState{Modes: r.Modes, Options: r.ConfigOptions}, nil
 		}
@@ -955,7 +955,7 @@ func (s *acpSlot) handle(m store.Message) {
 	if key != "" && !strings.HasPrefix(key, "session:") {
 		stored, _ = n.st.Session(turnCtx, a.addr, key)
 	}
-	sid, err := s.sessionFor(turnCtx, p, key, cwd, locks)
+	sid, err := s.sessionFor(withSessionOpen(turnCtx, m), p, key, cwd, locks)
 	if err == nil && stored != "" && string(sid) != stored {
 		// The task's session could not be opened again (the agent no longer has it, or cannot open
 		// one again): this turn starts a new one, without what was said before.
