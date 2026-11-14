@@ -152,3 +152,12 @@ func TestToolEventNamesTheTool(t *testing.T) {
 		}
 	}
 }
+
+// With `preamble: false` a new session's first prompt is the message as sent: the note on what the
+// acpost app renders is not for an agent whose answers a backend of its own shows.
+func TestNoReaderNoteWithoutThePreamble(t *testing.T) {
+	n := openNode(t, "")
+	if m := ask(t, n, SendRequest{Body: "prompt", Thread: "c1"}); m.Reply != "prompt" {
+		t.Fatalf("the first prompt of a session is %q (%s)", m.Reply, m.Error)
+	}
+}

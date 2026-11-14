@@ -1021,7 +1021,9 @@ func (s *acpSlot) handle(m store.Message) {
 		}
 		m.Body = k + m.Body
 		// A person reads the answer (in the app or a terminal): what renders, said once a session.
-		if from, err := ParseAddress(m.From); err == nil && from.Kind == "user" {
+		// Not with `preamble: false`: the prompt is the sender's own text, and who reads the answer
+		// is the sender's to say (a backend with a renderer of its own).
+		if from, err := ParseAddress(m.From); err == nil && from.Kind == "user" && a.cfg.PreambleOn() {
 			m.Body = readerNote + m.Body
 		}
 	}
