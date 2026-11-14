@@ -243,6 +243,7 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 			a.mu.Lock()
 			a.prompts[p.SessionId] = n
 			a.opened[p.SessionId] = openedWith(p.Meta, p.McpServers)
+			a.cwds[p.SessionId] = p.Cwd
 			a.mu.Unlock()
 			return acp.LoadSessionResponse{}, nil
 		}
