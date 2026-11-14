@@ -446,7 +446,7 @@ agents:
     concurrency: 1                   # turns at once (one ACP session each)
     turn_timeout: 30m
     idle_timeout: 10m                # the agent process is stopped after this long without work
-    preamble: true                   # tell the agent who wrote and how its answer is returned
+    preamble: true                   # tell the agent who wrote and how its answer is returned (false: the prompt is the message as sent, without the app's note on what it renders either)
     allow_from: ["*"]                # who may send to it
   backend-bot:
     driver: inbox
