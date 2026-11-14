@@ -317,6 +317,7 @@ func (s *acpSlot) loop() {
 
 func (s *acpSlot) env() []string {
 	env := agentEnv(s.a.n.cfg, os.Environ(), s.a.cfg.Env) // never the node's secrets (agentenv.go)
+	env = withCLI(env)                                    // `acpost` is this node's command (clipath.go)
 	return append(env, "ACPOST_NODE="+s.a.n.LocalURL(), "ACPOST_TOKEN="+s.token)
 }
 

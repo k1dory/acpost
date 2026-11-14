@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/k1dory/acpost/internal/config"
+	"github.com/k1dory/acpost/internal/node"
 	"github.com/k1dory/acpost/internal/server"
 )
 
@@ -40,6 +41,10 @@ func serveCmd(g *globals) *cobra.Command {
 			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 			defer stop()
+			// The agents the node starts find this command as `acpost` (node/clipath.go).
+			if self, err := os.Executable(); err == nil {
+				node.CLI = self
+			}
 			return server.Run(ctx, cfg, log, nil)
 		},
 	}

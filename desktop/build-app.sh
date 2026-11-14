@@ -11,6 +11,9 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp build/darwin/icons.icns "$app/Contents/Resources/"
 cp bin/acpost "$app/Contents/MacOS/acpost"
+# The acpost command, for the agents the app's node starts (cli.go): pure Go, no cgo.
+mkdir -p "$app/Contents/Helpers"
+(cd .. && CGO_ENABLED=0 go build -trimpath -ldflags="-w -s" -o "desktop/$app/Contents/Helpers/acpost" ./cmd/acpost)
 cp build/darwin/Info.plist "$app/Contents/"
 xattr -cr "$app"
 codesign --force --deep --sign - "$app"

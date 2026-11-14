@@ -92,6 +92,15 @@ alike for local and remote messages.
 go install github.com/k1dory/acpost/cmd/acpost@latest
 ```
 
+From a checkout, `./install.sh` builds the command into `~/.local/bin` (`ACPOST_BIN` names another
+directory), says when that directory is not on your `PATH` and which ACP adapters are missing;
+`--adapters` installs them with npm, `--app` (macOS) builds the app into `/Applications` too.
+
+An agent is told to run `acpost send` and `acpost attach`, so the node puts its own command first on
+the `PATH` of the agents it starts (a link in `<state>/bin`): `acpost serve` its own binary, the app
+the command its bundle carries. An agent finds `acpost` on a machine where it was never installed,
+and it is the one that speaks its node's API.
+
 Pure Go, no cgo: the store is SQLite compiled to Go (`modernc.org/sqlite`). The ACP adapters are
 separate:
 
