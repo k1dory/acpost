@@ -60,6 +60,10 @@ type SendRequest struct {
 	Cwd, Model, Effort, Mode string
 	// ModeStrict: the turn runs only in Mode (it fails if the agent cannot set it).
 	ModeStrict bool
+	// System and MCP are the sender's for the session the message opens: text appended to the
+	// agent's system prompt, and HTTP MCP servers beside the node's (sessionopen.go).
+	System string
+	MCP    []SessionMCP
 	// Files go with the message (checked against limits.max_files and max_files_size).
 	Files   []store.File
 	TTL     time.Duration

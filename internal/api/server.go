@@ -229,8 +229,11 @@ func (s *server) send(w http.ResponseWriter, r *http.Request, p node.Principal) 
 		return
 	}
 	sr := node.SendRequest{To: req.To, Body: req.Body, Task: req.Task, Thread: req.Thread, Meta: req.Meta, Session: req.Session,
-		Cwd: req.Cwd, Model: req.Model, Effort: req.Effort, Mode: req.Mode,
+		Cwd: req.Cwd, Model: req.Model, Effort: req.Effort, Mode: req.Mode, System: req.System,
 		Files: req.Files, IdemKey: r.Header.Get("Idempotency-Key")}
+	for _, m := range req.MCP {
+		sr.MCP = append(sr.MCP, node.SessionMCP{Name: m.Name, URL: m.URL})
+	}
 	if req.TTL != "" {
 		d, err := time.ParseDuration(req.TTL)
 		if err != nil {

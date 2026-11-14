@@ -179,8 +179,9 @@ acpost usage   [--since 30d | --from DAY [--to DAY]] [--by agent|model|day|sessi
 
 **What the agent did.** A tool call is a `tool_call` event when it starts and `tool_call_update`
 events as it goes (when its input becomes known, an edit, its end), each with the call as its
-updates made it so far: title, kind, status, input (the command, the path; up to 2 KiB), what the
-agent says it is for (`description`), locations, the tail of its output (4 KiB) and exit code,
+updates made it so far: title, kind, status, the agent's own name of the tool when it gives one
+(`name`: claude-agent-acp's `Bash`, `Edit`, `mcp__server__tool`), input (the command, the path; up
+to 2 KiB), what the agent says it is for (`description`), locations, the tail of its output (4 KiB) and exit code,
 and its edits (`path`, lines `added`/`removed`, `old`/`new` text up to 8 KiB). The node declares
 the `terminal_output` extension, so codex-acp sends a command's output and exit code too. Secrets
 are masked before anything is kept or relayed: values of fields named like one (`token`,
@@ -522,7 +523,7 @@ ends with `event: acpost-error` carrying the same envelope and `status` (event k
 
 | | |
 |---|---|
-| `POST /v1/messages` | send. Body: `to`, `body`, `task`, `thread`, `session`, `meta`, `ttl`, `files` (`[{"name":"a.md","data":"<base64>"}]`). Header `Idempotency-Key`. 201, or 200 for a repeat |
+| `POST /v1/messages` | send. Body: `to`, `body`, `task`, `thread`, `session`, `meta`, `ttl`, `files` (`[{"name":"a.md","data":"<base64>"}]`); for an ACP agent of the node, from its user: `cwd`, `model`, `effort`, `mode`, and for the session the message opens `system` (text appended to the agent's system prompt, 32 KiB at most) and `mcp` (`[{"name":"tools","url":"https://…"}]`, HTTP MCP servers beside the node's, 8 at most). Header `Idempotency-Key`. 201, or 200 for a repeat |
 | `GET /v1/messages/{id}` | the message; `files` lists its files without their data |
 | `GET /v1/messages/{id}/files` | the files of the message and its reply, with `data` (base64) |
 | `POST /v1/attach` | `{"files":[…]}`: an agent process attaches files to the reply it is working on |
@@ -642,6 +643,7 @@ notion of addresses or mailboxes, so acpost puts its own envelope around it: the
 | next message with that key | `session/prompt` in the same session; after a restart of the agent `session/resume` or `session/load` when the agent offers them |
 | attached files | `resource` (text, with `embeddedContext`), `image` (with `image`), else `resource_link` to a copy on disk |
 | reply | `agent_message_chunk` text of the turn; its `image`/`resource`/`resource_link` blocks and files from `acpost attach` are the reply's files; `stopReason` other than `end_turn` is a failure |
+| a message's `system` and `mcp` | `_meta.systemPrompt` (`{"append": …}`) and `mcpServers` of the request that opens its session (`session/new`, `session/load`, `session/resume`); a session already open in the agent's process keeps what it was opened with. The servers' URLs are kept with the message (its meta), as the node's user sees it |
 | permission request | answered by `permissions`, recorded as an event |
 | `acpost cancel` | `session/cancel` |
 | tool calls, plans, notices | events of the message (`show --events`) |

@@ -25,6 +25,12 @@ import (
 	"github.com/k1dory/acpx"
 )
 
+// SessionMCP is an HTTP MCP server a sender gives the session its message opens.
+type SessionMCP struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
 // SendRequest is the body of POST /v1/messages.
 type SendRequest struct {
 	To     string `json:"to"`
@@ -35,10 +41,14 @@ type SendRequest struct {
 	Session string `json:"session,omitempty"`
 	// Cwd is the directory a new task's session runs in (an ACP agent of the node); Model, Effort
 	// and Mode are selected in the session before this message's turn.
-	Cwd    string            `json:"cwd,omitempty"`
-	Model  string            `json:"model,omitempty"`
-	Effort string            `json:"effort,omitempty"`
-	Mode   string            `json:"mode,omitempty"`
+	Cwd    string `json:"cwd,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	Mode   string `json:"mode,omitempty"`
+	// System is text appended to the agent's system prompt, and MCP are HTTP MCP servers, for the
+	// session the message opens (an ACP agent of the node; the node's user).
+	System string            `json:"system,omitempty"`
+	MCP    []SessionMCP      `json:"mcp,omitempty"`
 	Meta   map[string]string `json:"meta,omitempty"`
 	Files  store.Files       `json:"files,omitempty"`
 	TTL    string            `json:"ttl,omitempty"`

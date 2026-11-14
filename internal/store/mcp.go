@@ -62,6 +62,15 @@ type MCPServer struct {
 }
 
 var mcpName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+
+// CheckMCPName: a server's name as the store keeps it.
+func CheckMCPName(name string) error {
+	if !mcpName.MatchString(name) {
+		return fmt.Errorf("name %q: letters, digits, _ . - (64 at most)", name)
+	}
+	return nil
+}
+
 var mcpKey = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
 // Check says what is wrong with a server, if anything.

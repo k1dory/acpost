@@ -49,6 +49,10 @@ type toolEvent struct {
 	Edits     []toolEdit      `json:"edits,omitempty"`
 	// Description is what the agent says the call is for, when it says (claude-agent-acp).
 	Description string `json:"description,omitempty"`
+	// Name is the agent's own name of the tool, when it says (claude-agent-acp:
+	// _meta.claudeCode.toolName — Bash, Edit, mcp__server__tool): what a client that knows the
+	// agent's tools chooses its view by. The kind is the protocol's, and coarser.
+	Name string `json:"name,omitempty"`
 }
 
 // toolTrack is a tool call as its updates made it so far (an agent sends what it knows in pieces:
@@ -265,6 +269,11 @@ func (tr *toolTrack) event() toolEvent {
 
 // merge takes what an update says.
 func (tr *toolTrack) merge(input any, locs []acp.ToolCallLocation, content []acp.ToolCallContent, output any, meta map[string]any) {
+	if cc, ok := meta["claudeCode"].(map[string]any); ok {
+		if name, ok := cc["toolName"].(string); ok && name != "" {
+			tr.Name = name
+		}
+	}
 	if b, ok := inputJSON(input); ok {
 		tr.Input = b
 		if m, ok := input.(map[string]any); ok {
@@ -418,7 +427,7 @@ const toolEventMax = 14 << 10
 // fitEvent cuts what an event says until it fits toolEventMax encoded: names first to a sane
 // length, then the edits' text, the output, the input.
 func fitEvent(e toolEvent) toolEvent {
-	e.ID, e.Kind, e.Status = cutString(e.ID, 128), cutString(e.Kind, 64), cutString(e.Status, 64)
+	e.ID, e.Kind, e.Status, e.Name = cutString(e.ID, 128), cutString(e.Kind, 64), cutString(e.Status, 64), cutString(e.Name, 128)
 	e.Title, e.Description = cutString(redact(e.Title), 512), cutString(redact(e.Description), 512)
 	for i := range e.Locations {
 		e.Locations[i] = cutString(e.Locations[i], 512)

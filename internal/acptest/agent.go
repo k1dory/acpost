@@ -20,6 +20,8 @@
 //	                 file $FAKE_DISK embedded (it exists with that content), new embedded text,
 //	                 a resource_link to the file $FAKE_LINK, and each resource it was given
 //	                 handed back as a resource_link
+//	opened           answers what its session was opened with: "system=TEXT mcp=NAME=URL,…"
+//	named [TOOL]     makes a tool call it names TOOL (Bash) in _meta.claudeCode.toolName, answers "ran"
 //	blocks           answers one line per non-text block it got (FAKE_PLAIN=1: it declares no
 //	                 embedded context or images)
 //
@@ -57,6 +59,7 @@ type fakeAgent struct {
 	sessions atomic.Int64
 	cwds     map[acp.SessionId]string
 	mcp      map[acp.SessionId]string            // the MCP servers the session was given
+	opened   map[acp.SessionId]string            // what the session was opened with: its system text and its HTTP MCP servers' URLs
 	settings map[acp.SessionId]map[string]string // config id → value: model, effort
 }
 
@@ -92,7 +95,7 @@ func (a *fakeAgent) options(sid acp.SessionId) []acp.SessionConfigOption {
 // Run serves the scripted agent on stdin/stdout until the client goes, then exits.
 func Run() {
 	a := &fakeAgent{prompts: map[acp.SessionId]int{}, cancels: map[acp.SessionId]context.CancelFunc{},
-		cwds: map[acp.SessionId]string{}, settings: map[acp.SessionId]map[string]string{}, mcp: map[acp.SessionId]string{}}
+		cwds: map[acp.SessionId]string{}, settings: map[acp.SessionId]map[string]string{}, mcp: map[acp.SessionId]string{}, opened: map[acp.SessionId]string{}}
 	a.conn = acp.NewAgentSideConnection(a, os.Stdout, os.Stdin)
 	<-a.conn.Done()
 	os.Exit(0)
@@ -117,6 +120,7 @@ func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (ac
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{LoadSession: os.Getenv("FAKE_NO_LOAD") == "", // FAKE_NO_LOAD: an adapter that cannot reopen a session
 			SessionCapabilities: acp.SessionCapabilities{List: &acp.SessionListCapabilities{}, Fork: &acp.SessionForkCapabilities{}},
+			McpCapabilities:     acp.McpCapabilities{Http: os.Getenv("FAKE_MCP_HTTP") != ""}, // FAKE_MCP_HTTP: it takes HTTP MCP servers
 			PromptCapabilities:  acp.PromptCapabilities{EmbeddedContext: os.Getenv("FAKE_PLAIN") == "", Image: os.Getenv("FAKE_PLAIN") == ""}},
 		AgentInfo: &acp.Implementation{Name: "fake-agent", Version: "1"},
 	}, nil
@@ -159,6 +163,7 @@ func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (ac
 		}
 	}
 	a.mcp[sid] = strings.Join(mcp, ";")
+	a.opened[sid] = openedWith(p.Meta, p.McpServers)
 	a.mu.Unlock()
 	if log := os.Getenv("FAKE_NEW_LOG"); log != "" {
 		// The new session is known at once (listed, loadable by id, its id in the log), as an agent
@@ -237,6 +242,7 @@ func (a *fakeAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (
 			n, _ := strconv.Atoi(string(b))
 			a.mu.Lock()
 			a.prompts[p.SessionId] = n
+			a.opened[p.SessionId] = openedWith(p.Meta, p.McpServers)
 			a.mu.Unlock()
 			return acp.LoadSessionResponse{}, nil
 		}
@@ -319,6 +325,17 @@ func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prompt
 	switch cmd {
 	case "echo":
 		a.say(ctx, sid, arg)
+	case "opened": // what the session was opened with
+		a.mu.Lock()
+		got := a.opened[sid]
+		a.mu.Unlock()
+		a.say(ctx, sid, got)
+	case "named": // a tool call the agent names, as claude-agent-acp does
+		_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+			SessionUpdate: "tool_call", ToolCallId: "n1", Title: "npm test", Kind: acp.ToolKindExecute, Status: acp.ToolCallStatusPending,
+			Meta: map[string]any{"claudeCode": map[string]any{"toolName": cmpOr(arg, "Bash")}}}}})
+		_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: sid, Update: acp.UpdateToolCall("n1", acp.WithUpdateStatus(acp.ToolCallStatusCompleted))})
+		a.say(ctx, sid, "ran")
 	case "mcp": // the MCP servers the session was given
 		a.mu.Lock()
 		got := a.mcp[sid]
@@ -657,4 +674,27 @@ func linkPath(uri string) string {
 		return uri
 	}
 	return plat.URIPath(u.Path)
+}
+
+// openedWith is what a session's opening request carried beside its directory: the system text
+// appended to the agent's prompt (_meta.systemPrompt.append) and its HTTP MCP servers.
+func openedWith(meta map[string]any, servers []acp.McpServer) string {
+	system := ""
+	if sp, ok := meta["systemPrompt"].(map[string]any); ok {
+		system, _ = sp["append"].(string)
+	}
+	var urls []string
+	for _, m := range servers {
+		if m.Http != nil {
+			urls = append(urls, m.Http.Name+"="+m.Http.Url)
+		}
+	}
+	return "system=" + system + " mcp=" + strings.Join(urls, ",")
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
