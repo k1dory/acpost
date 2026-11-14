@@ -17,6 +17,7 @@
   import IDE from "./components/IDE.svelte";
   import ModuleView from "./components/ModuleView.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
+  import { hasFiles } from "./lib/paste";
 
   let splashMin = $state(false), splashMax = $state(false);
   onMount(() => {
@@ -125,7 +126,11 @@
   }
 </script>
 
-<svelte:window onkeydown={keys} onclickcapture={links} onsubmitcapture={e => e.preventDefault()} />
+<!-- A file dropped where nothing takes it (a view without a composer) is not opened in the app's
+     place: the webview would leave the app for the file. -->
+<svelte:window onkeydown={keys} onclickcapture={links} onsubmitcapture={e => e.preventDefault()}
+  ondragover={e => { if (hasFiles(e.dataTransfer?.types)) e.preventDefault(); }}
+  ondrop={e => { if (hasFiles(e.dataTransfer?.types)) e.preventDefault(); }} />
 
 <div class="shell">
   <Sidebar />

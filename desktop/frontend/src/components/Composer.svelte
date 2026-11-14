@@ -4,7 +4,7 @@
   import Icon from "./Icon.svelte";
   import TaskSetup from "./TaskSetup.svelte";
   import { bytes } from "../lib/names";
-  import { pasteFiles, pasteName, freeName } from "../lib/paste";
+  import { pasteFiles, pasteName, freeName, hasFiles } from "../lib/paste";
   import { asMessage } from "../lib/draft";
   import { who } from "../lib/format";
   import Avatar from "./Avatar.svelte";
@@ -172,11 +172,32 @@
     e.preventDefault();
     add(files, pasteName);
   }
+  // Files dragged from the Finder are attached wherever in the window they are dropped, not only
+  // on this card: the window says so while they are over it. A drag without files (text, a card
+  // of the board) is not this one's. `over` counts enters and leaves: a drag passes from element
+  // to element, and leaves the window when the count is back at none.
+  let over = $state(0);
+  const carriesFiles = (e: DragEvent) => !!e.dataTransfer && (hasFiles(e.dataTransfer.types) || (e.dataTransfer.files?.length ?? 0) > 0);
+  function dragEnter(e: DragEvent) { if (carriesFiles(e)) { e.preventDefault(); over++; } }
+  function dragOver(e: DragEvent) {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    if (!over) over = 1; // a drag that began over the window before this composer was there
+  }
+  function dragLeave(e: DragEvent) { if (carriesFiles(e)) over = Math.max(0, over - 1); }
+  function drop(e: DragEvent) {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    over = 0;
+    add(e.dataTransfer?.files ?? null);
+  }
   $effect(() => { if (ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; } d.text; });
   $effect(() => { slash.length; at.length; slashSel = 0; });
 </script>
 
 <svelte:window
+  ondragenter={dragEnter} ondragover={dragOver} ondragleave={dragLeave} ondrop={drop}
   onclick={e => { if (pickerFor && !(e.target as HTMLElement).closest(".menu, .opt")) pickerFor = ""; }}
   onkeydown={e => {
     if (e.key === "Escape") pickerFor = "";
@@ -185,8 +206,10 @@
 
 {#if isNew}<TaskSetup />{/if}
 
+{#if over}<div class="dropzone" aria-hidden="true"><div class="droptext"><Icon name="clip" size={18} />{t("Drop files to attach them")}</div></div>{/if}
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="card comp" class:bang ondragover={e => e.preventDefault()} ondrop={e => { e.preventDefault(); add(e.dataTransfer?.files ?? null); }} onpaste={paste}>
+<div class="card comp" class:bang class:over={over > 0} onpaste={paste}>
   {#if slash.length}
     <div class="menu card">
       {#each slash as it, i (it.name)}
@@ -268,6 +291,12 @@
   .opt { height: 24px; cursor: default; }
   .opt:hover { background: var(--hover); }
   .files { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px; }
+  /* Over the whole window, and never in the drag's way: the drop lands on what is under it. */
+  .dropzone { position: fixed; inset: 8px; z-index: 200; pointer-events: none; display: grid; place-items: center;
+    border: 2px dashed var(--accent); border-radius: 14px; background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .droptext { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 10px; background: var(--card);
+    border: 1px solid var(--line); font-size: 13.5px; font-weight: 500; box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); }
+  .comp.over { border-color: var(--accent); }
   .x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 2px; display: grid; }
   .menu { position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 30; padding: 6px; display: grid; max-height: 300px; overflow: auto; }
   .menu.pick { right: auto; min-width: 200px; max-width: 280px; }
