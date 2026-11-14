@@ -105,6 +105,53 @@ describe("pasting into the composer", () => {
     expect(app.draftOf().files.map(f => f.name)).toEqual(["report.txt", "report (2).txt"]);
   });
 
+  // A drag of files from the Finder, as the webview reports it over an element.
+  function drag(type: string, on: EventTarget, files: File[] = [], types = ["Files"]) {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "dataTransfer", { value: { files, types, dropEffect: "none" } });
+    on.dispatchEvent(e);
+    return e;
+  }
+
+  it("files dropped anywhere in the window are attached, and the window says so while they are over it", async () => {
+    const app = await setup();
+    const far = document.body;                       // not the composer: the conversation, the sidebar
+    expect(document.querySelector(".dropzone")).toBeNull();
+    expect(drag("dragenter", far).defaultPrevented).toBe(true);
+    expect(drag("dragover", far).defaultPrevented).toBe(true);   // without it the webview refuses the drop
+    await settle(app);
+    expect(document.querySelector(".dropzone")?.textContent).toContain("Drop files to attach them");
+    const e = drag("drop", far, [new File(["x"], "notes.txt", { type: "text/plain" })]);
+    await settle(app);
+    expect(e.defaultPrevented).toBe(true);           // not opened in the app's place
+    expect(app.draftOf().files.map(f => f.name)).toEqual(["notes.txt"]);
+    expect(document.querySelector(".dropzone")).toBeNull();
+  });
+
+  it("a drag that leaves the window takes the notice with it; one passing between elements does not", async () => {
+    const app = await setup();
+    const comp = document.querySelector(".comp")!;
+    drag("dragenter", document.body);
+    drag("dragenter", comp);                         // into a child: an enter, then the leave of the parent
+    drag("dragleave", document.body);
+    await settle(app);
+    expect(document.querySelector(".dropzone")).not.toBeNull();
+    drag("dragleave", comp);
+    await settle(app);
+    expect(document.querySelector(".dropzone")).toBeNull();
+    expect(app.draftOf().files).toEqual([]);
+  });
+
+  it("a drag without files (text, a card) is left to whatever it is for", async () => {
+    const app = await setup();
+    expect(drag("dragenter", document.body, [], ["text/plain"]).defaultPrevented).toBe(false);
+    expect(drag("dragover", document.body, [], ["text/plain"]).defaultPrevented).toBe(false);
+    expect(drag("drop", document.body, [], ["text/plain"]).defaultPrevented).toBe(false);
+    await settle(app);
+    expect(document.querySelector(".dropzone")).toBeNull();
+    expect(app.draftOf().files).toEqual([]);
+  });
+
   it("an address ending in the image's name pastes as text (R1.3)", async () => {
     const app = await setup();
     expect(paste([img()], "https://example.com/image.png")).toBe(false);

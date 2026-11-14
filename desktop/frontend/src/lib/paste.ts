@@ -92,3 +92,11 @@ export function pasteName(f: { name: string; type: string }, taken: Iterable<str
   const ext = exts[f.type] ?? (f.name.includes(".") ? f.name.split(".").pop()! : "bin");
   return freeName(`pasted-${hms}-${++pasted}.${ext}`, taken);
 }
+
+/** Whether a drag carries files (its types, as the browser gives them while the drag is over the
+ * page: the files themselves are readable only at the drop). */
+export function hasFiles(types: readonly string[] | DOMStringList | undefined | null): boolean {
+  if (!types) return false;
+  for (let i = 0; i < types.length; i++) if (types[i] === "Files") return true;
+  return false;
+}

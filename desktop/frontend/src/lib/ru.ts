@@ -130,6 +130,7 @@ export const ru: Record<string, string> = {
   "Who answers": "Кто отвечает",
   "Who answers: another agent can be called into this chat": "Кто отвечает: в этот чат можно позвать другого агента",
   "Attach files": "Прикрепить файлы",
+  "Drop files to attach them": "Отпустите файлы, чтобы прикрепить",
   "Model": "Модель",
   "Mode": "Режим",
   "Reasoning effort": "Effort",
