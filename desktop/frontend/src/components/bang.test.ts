@@ -49,9 +49,6 @@ describe("! in the composer", () => {
     expect(fake.Node.SendTask).not.toHaveBeenCalled();
     expect(textarea().value).toBe("");
     expect(document.querySelector(".sh")!.textContent).toContain("git status --short");
-    // While it runs it can be stopped.
-    ([...document.querySelectorAll(".sh button")].find(b => b.textContent === "Stop") as HTMLButtonElement).click();
-    expect(fake.Node.ShellStop).toHaveBeenCalledWith(fake.Node.Shell.mock.calls[0][0]);
     done({ output: " M a.go\n", code: 1, ms: 40 });
     await flush(); await flush(); svelte.flushSync();
     // Sent by itself, to the chat's agent, in its thread; nothing is put into the composer.
@@ -211,7 +208,7 @@ describe("! in the composer", () => {
     expect(app.shellsHere()).toHaveLength(0);
   });
 
-  it("a new task's run that ends after its thread is made goes to the agent it was asked for, and not to one chosen since", async () => {
+  it("a new task's run that ends after its thread is made is not sent by itself, whoever is chosen there", async () => {
     for (const switchTo of ["", "agent:codex"]) {
       vi.resetModules(); fake = fakeNode();
       svelte = await import("svelte");
@@ -234,14 +231,37 @@ describe("! in the composer", () => {
       end({ output: "ok\n", code: 0, ms: 5 });
       await ran; await flush();
       const sent = fake.Node.SendTask.mock.calls.slice(1).map((c: any[]) => c[0]);
-      if (switchTo) {
-        expect(sent).toHaveLength(0);
-        expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo ok"]); // its card waits, to be sent or dropped
-      } else {
-        expect(sent).toHaveLength(1);
-        expect(app.shellsHere()).toHaveLength(0);
-      }
+      // The task became a thread while it ran: another conversation than the one it was asked in,
+      // whoever answers there now — its card waits, to be sent or dropped.
+      expect(sent).toHaveLength(0);
+      expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo ok"]);
     }
+  });
+
+  it("a run the person asked to stop is not sent by itself, though its end says it was not stopped", async () => {
+    const app = await setup();
+    let done!: (r: any) => void;
+    fake.Node.Shell.mockReturnValue(new Promise(f => (done = f)));
+    const ran = app.runShell("make");
+    app.stopShell(fake.Node.Shell.mock.calls[0][0]); // pressed as the command was ending by itself
+    done({ output: "built\n", code: 0, ms: 5, stopped: false });
+    await ran; await flush();
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(app.shellsHere().map(s => s.cmd)).toEqual(["make"]);
+  });
+
+  it("a run sent by the button while a message goes before it is not sent to an agent chosen meanwhile", async () => {
+    const app = await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "x\n", code: 0, ms: 5, stopped: true });
+    await app.runShell("ls");
+    const d = app.draftOf();
+    d.busy = true; // a message of the person's is going
+    const sending = app.sendShell(app.shellsHere()[0].id);
+    app.target = "agent:codex";
+    d.busy = false;
+    expect(await sending).toBe(false);
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(app.shellsHere()).toHaveLength(1);
   });
 
   it("text the app puts into a draft that was a command makes it a message: Enter sends, nothing is run", async () => {
