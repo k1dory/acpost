@@ -69,7 +69,7 @@ function savedTabs(): PanelTab[] {
 }
 
 class App {
-  conn = $state<{ ok: boolean; error?: string; url?: string; node?: string; you?: string } | null>(null);
+  conn = $state<{ ok: boolean; error?: string; url?: string; node?: string; you?: string; app?: string; nodeVersion?: string } | null>(null);
   agents = $state<Agent[]>([]);
   chats = $state<Chat[]>([]);
   folders = $state<Folder[]>([]);
@@ -284,7 +284,7 @@ class App {
     let c: any;
     try { c = await Node.Status(); } catch (e) { c = { ok: false, error: errText(e) }; } // the app's side failed: shown as the node down
     const back = this.conn !== null && !this.conn.ok && c.ok;
-    this.conn = { ok: c.ok, error: c.error, url: c.url, node: c.status?.node, you: c.status?.you };
+    this.conn = { ok: c.ok, error: c.error, url: c.url, node: c.status?.node, you: c.status?.you, app: c.app, nodeVersion: c.status?.version };
     if (!c.ok) return;
     if (c.status?.limits) this.limits = c.status.limits;
     try { await this.connected(); } catch (e) { this.error = errText(e); }
