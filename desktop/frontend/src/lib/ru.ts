@@ -155,6 +155,8 @@ export const ru: Record<string, string> = {
   "Fork: the conversation so far, in a new chat": "Fork — продолжить в новом чате",
   "Needs approval": "Нужно подтверждение",
   "Yes": "Да",
+  "Show all of it": "Показать целиком",
+  "Fold": "Свернуть",
   "No": "Нет",
   "Always Allow": "Всегда разрешать",
   "An agent asks": "Агент спрашивает",

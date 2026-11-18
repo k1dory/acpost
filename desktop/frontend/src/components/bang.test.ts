@@ -211,6 +211,39 @@ describe("! in the composer", () => {
     expect(app.shellsHere()).toHaveLength(0);
   });
 
+  it("a new task's run that ends after its thread is made goes to the agent it was asked for, and not to one chosen since", async () => {
+    for (const switchTo of ["", "agent:codex"]) {
+      vi.resetModules(); fake = fakeNode();
+      svelte = await import("svelte");
+      const { app } = await import("../lib/state.svelte");
+      app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 },
+        { name: "codex", address: "agent:codex", driver: "acp", queued: 0, running: 0 }];
+      app.conn = { ok: true };
+      app.newTask();
+      app.draft.agent = "agent:claude";
+      let end!: (r: any) => void;
+      fake.Node.Shell.mockReturnValue(new Promise(f => (end = f)));
+      const ran = app.runShell("echo ok");
+      fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T9", depth: 0, state: "queued", created_at: "", updated_at: "" });
+      fake.Node.Chats.mockResolvedValue({ items: [] });
+      const d = app.draftOf();
+      d.text = "first message";
+      expect(await app.submit(d)).toBe(true);
+      expect(app.thread).toBe("T9");
+      if (switchTo) app.target = switchTo; // the person picks another agent in the thread meanwhile
+      end({ output: "ok\n", code: 0, ms: 5 });
+      await ran; await flush();
+      const sent = fake.Node.SendTask.mock.calls.slice(1).map((c: any[]) => c[0]);
+      if (switchTo) {
+        expect(sent).toHaveLength(0);
+        expect(app.shellsHere().map(s => s.cmd)).toEqual(["echo ok"]); // its card waits, to be sent or dropped
+      } else {
+        expect(sent).toHaveLength(1);
+        expect(app.shellsHere()).toHaveLength(0);
+      }
+    }
+  });
+
   it("text the app puts into a draft that was a command makes it a message: Enter sends, nothing is run", async () => {
     const app = await setup();
     type("!echo intended");

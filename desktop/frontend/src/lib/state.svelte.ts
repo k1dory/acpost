@@ -178,7 +178,9 @@ class App {
   private shellOwner = new Map<string, ComposerDraft>();
   // Where each run's output would go, as it was when the command was asked: sent without being
   // asked only there (what a command printed is the person's; where it goes is what they saw).
-  private shellDest = new Map<string, string>();
+  // `who`: the agent it would be said to, kept apart from the place: a new task that became a
+  // thread is the same conversation, but the person may have chosen another agent in it since.
+  private shellDest = new Map<string, { goes: string; who: string }>();
   // Each run's own request to the agent and its key: sent again as it was (its answer lost, other
   // messages sent meanwhile) it has the same key, and the node has it once; sent elsewhere, another.
   private shellReq = new Map<string, { key: string; what?: string }>();
@@ -186,6 +188,12 @@ class App {
    * the chat, its thread and whom it is said to. */
   private shellGoes(): string {
     return !this.chat && !this.thread ? "new\u0000" + this.destNow() : ["chat", this.chat?.key ?? "", this.thread, this.target].join("\u0000");
+  }
+  /** Whom a message of the open conversation is said to now: a new task's agent, a chat's chosen. */
+  private shellWho(): string {
+    if (this.chat || this.thread) return this.target;
+    const d = this.draft;
+    return d.where === "cloud" ? d.cloudAgent : d.agent;
   }
   /** (By the key its draft has now: a session whose draft moved to its thread shows that thread's.) */
   shellsHere(): ShellRun[] { const k = this.draftOf().key; return this.shells.filter(s => s.chat === k); }
@@ -238,7 +246,7 @@ class App {
     const run: ShellRun = { id: newId(), chat: owner.key, cmd, running: true, output: "", code: 0, ms: 0 };
     this.shells = [...this.shells, run];
     this.shellOwner.set(run.id, owner);
-    this.shellDest.set(run.id, this.shellGoes());
+    this.shellDest.set(run.id, { goes: this.shellGoes(), who: this.shellWho() });
     try {
       const r: any = await Node.Shell(run.id, cmd, cwd);
       this.setShell(run.id, { running: false, output: r?.output ?? "", code: r?.code ?? 0, ms: r?.ms ?? 0, cut: !!r?.cut, timedOut: !!r?.timed_out, stopped: !!r?.stopped });
@@ -265,7 +273,8 @@ class App {
       // Another agent, place or directory chosen while it ran: the person sends it there themselves.
       // (A new task that became a thread meanwhile is the same conversation: said in its thread.)
       const dest = this.shellDest.get(id);
-      if (auto && dest !== this.shellGoes() && !(dest === "thread" && this.draftMap.get(d.key) === d)) return false;
+      if (auto && (!dest || dest.who !== this.shellWho() ||
+        (dest.goes !== this.shellGoes() && !(dest.goes === "thread" && this.draftMap.get(d.key) === d)))) return false;
       const at = { ...this.sendAt(d), own: this.shellReq.get(id) ?? this.shellReq.set(id, { key: newId() }).get(id)! };
       d.busy = true;
       let ok = false;
@@ -283,7 +292,7 @@ class App {
   private moveShells(d: ComposerDraft, to: string, owner = d, dest = "") {
     // Moved, a run is no longer where it was asked: to the thread its own task became it still
     // goes by itself (`dest`), carried to another task it waits for the person.
-    for (const [id, o] of this.shellOwner) if (o === d) this.shellDest.set(id, dest);
+    for (const [id, o] of this.shellOwner) if (o === d) this.shellDest.set(id, { goes: dest, who: this.shellDest.get(id)?.who ?? "" });
     this.shells = this.shells.map(s => (this.shellOwner.get(s.id) === d ? { ...s, chat: to } : s));
     if (owner !== d) for (const [id, o] of this.shellOwner) if (o === d) this.shellOwner.set(id, owner);
   }

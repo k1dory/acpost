@@ -7,6 +7,7 @@
   let { req, msg }: { req: Request; msg: string } = $props();
   let show = $state(false);
   let busy = $state(false);
+  let full = $state(false);
   const allow = $derived(req.options?.find(o => o.kind.startsWith("allow")) ?? req.options?.[0]);
   const reject = $derived(req.options?.find(o => o.kind.startsWith("reject")));
   // A command to run is shown as one: its lines kept (a heredoc), in the code font, a few of them.
@@ -23,7 +24,10 @@
   <div class="row">
     <span class="ic"><Icon name="alert" /></span>
     <div class="t">
-      <div class="title" class:cmd={isCmd}>{req.title || t("The agent asks")}</div>
+      {#if isCmd}
+        <!-- Allow approves all of it: a command longer than its few lines unfolds whole. -->
+        <button class="title cmd selectable" class:full onclick={() => (full = !full)} title={full ? t("Fold") : t("Show all of it")}>{req.title}</button>
+      {:else}<div class="title">{req.title || t("The agent asks")}</div>{/if}
       {#if req.message || req.text}<div class="desc muted selectable">{req.message || req.text}</div>{/if}
     </div>
     {#if req.decision}
@@ -64,7 +68,8 @@
   .card.ask.done .ic { color: var(--muted); }
   .t { flex: 1 1 180px; min-width: 0; }
   .title { font-weight: 600; overflow-wrap: anywhere; }
-  .title.cmd { font: 500 12.5px/1.5 var(--mono); white-space: pre-wrap; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
+  .title.cmd { font: 500 12.5px/1.5 var(--mono); white-space: pre-wrap; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; text-align: left; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; width: 100%; }
+  .title.cmd.full { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
   .desc { font-size: 12.5px; margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .raw { margin: 0; font: 12px/1.5 var(--mono); background: var(--page); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
   .acts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
