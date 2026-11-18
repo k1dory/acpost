@@ -121,7 +121,7 @@
   .sp { flex: 1; }
   .ask { color: var(--warn); font-weight: 600; }
   .follow { color: var(--muted); }
-  .follow.on { color: var(--ink); background: var(--hover); }
+  .follow.on { color: var(--accent); background: var(--accent-bg); }
   .box { flex: 1; min-height: 0; display: grid; place-items: center; }
   .hint { font-size: 12.5px; color: var(--muted); display: grid; gap: 14px; justify-items: center; text-align: center; }
   .err { margin: 8px; padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }

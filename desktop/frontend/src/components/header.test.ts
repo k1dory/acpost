@@ -71,4 +71,28 @@ describe("chat header icons", () => {
     app.view = "chat";
     svelte.unmount(c);
   });
+
+  it("the terminal is one click from the header: beside the IDE it opens in the chat's view, asked again it hides", async () => {
+    fake = fakeNode();
+    fake.Node.SessionHistory.mockResolvedValue([]);
+    const svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.conn = { ok: true };
+    app.chat = { key: "session:claude/s1", kind: "session", agent: "agent:claude", session: "s1", cwd: "/x", title: "t", updated: "" };
+    app.view = "ide"; app.setPanel(false);
+    const Conversation = (await import("./Conversation.svelte")).default;
+    const c = svelte.mount(Conversation, { target: document.body });
+    svelte.flushSync();
+    const btn = () => document.querySelector<HTMLButtonElement>('header button[aria-label="Terminal (⌘J)"]')!;
+    expect(btn()).toBeTruthy();
+    btn().click(); svelte.flushSync();
+    expect(app.view).toBe("chat");
+    expect(app.panel).toBe(true);
+    expect(app.tab).toBe("terminal");
+    expect(app.tabs).toContain("terminal");
+    btn().click(); svelte.flushSync();
+    expect(app.panel).toBe(false);
+    expect(app.tabs).toContain("terminal"); // its shell goes on
+    svelte.unmount(c);
+  });
 });

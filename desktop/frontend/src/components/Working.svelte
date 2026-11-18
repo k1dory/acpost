@@ -48,7 +48,7 @@
 <style>
   .working { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
   .word {
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; min-width: 0; font-weight: 500;
     background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 40%, var(--ink) 50%, var(--muted) 60%, var(--muted) 100%);
     background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
     animation: shimmer 2.2s linear infinite, enter .25s ease-out;
@@ -56,5 +56,5 @@
   .word.claude { background-image: linear-gradient(90deg, #b8664c 0%, #b8664c 40%, #f0a789 50%, #b8664c 60%, #b8664c 100%); }
   @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
   @keyframes enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
-  .num { font-size: 11px; }
+  .num { font-size: 11px; flex: none; }
 </style>

@@ -8,7 +8,7 @@
 </script>
 
 <div class="th">
-  <button class="head" onclick={() => (open = !open)}>
+  <button class="head" onclick={() => (open = !open)} aria-expanded={open}>
     {#if markOf(agent)}<AgentMark of={agent} size={14} busy={live} />{:else}<Icon name="brain" size={14} />{/if}
     <span class:live>{live ? t("Thinking…") : ms >= 1000 ? t("Thought for {d}", { d: dur(ms) }) : t("Thought briefly")}</span>
     <span class="chev" class:rot={open}><Icon name="chev" size={12} /></span>
@@ -26,5 +26,5 @@
   @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
   .head:hover { background: var(--hover); color: var(--ink-2); }
   .chev { display: grid; transition: transform .15s; } .chev.rot { transform: rotate(90deg); }
-  .body { margin: 4px 0 6px 6px; padding-left: 12px; border-left: 2px solid var(--line); color: var(--ink-2); font-size: 13px; white-space: pre-wrap; max-height: 300px; overflow: auto; }
+  .body { margin: 4px 0 6px 6px; padding-left: 12px; border-left: 2px solid var(--line); color: var(--ink-2); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; }
 </style>

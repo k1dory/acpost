@@ -6,6 +6,7 @@ import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from 
 import { afterSent, overLimits, asMessage } from "./draft";
 import { Turn, ownBody, type Ev } from "./turn";
 import { editsToReveal, localFiles, type Reveal } from "./ide";
+import { shellBody } from "./shell";
 import { who } from "./format";
 import { normalizeRef, sameRef } from "./artifactref";
 
@@ -15,7 +16,7 @@ export type Msg = {
   created_at: string; updated_at: string; finished_at?: string; files?: { name: string; type: string; size: number; reply?: boolean }[];
 };
 export type ShellRun = { id: string; chat: string; cmd: string; running: boolean; output: string; code: number; ms: number;
-  cut?: boolean; timedOut?: boolean; stopped?: boolean; error?: string };
+  cut?: boolean; timedOut?: boolean; stopped?: boolean; error?: string; sending?: boolean };
 export type Module = { id: string; name: string; url: string };
 export type Agent = { name: string; address: string; driver: string; node?: string; queued: number; running: number; process?: boolean; product?: string };
 export type Chat = {
@@ -90,6 +91,13 @@ class App {
     if (!this.tabs.includes(k)) { this.tabs = [...this.tabs, k]; this.saveTabs(); }
     this.showTab(k);
     this.setPanel(true);
+  }
+  /** The terminal, from wherever the person is: beside the IDE (or a module) there is no panel, so
+   *  the chat's own view is shown with it. Asked for again while it is shown, the panel hides. */
+  terminal() {
+    if (this.view === "chat" && this.panel && this.tab === "terminal" && this.tabs.includes("terminal")) { this.setPanel(false); return; }
+    if (this.view !== "chat") this.view = "chat";
+    this.openTab("terminal");
   }
   closeTab(k: PanelTab) {
     const i = this.tabs.indexOf(k);
@@ -168,6 +176,28 @@ class App {
   /** The draft each run was made from: its card goes where that draft goes, whatever key the draft
    * has by then (a new task whose first message is still going is no longer "new"). */
   private shellOwner = new Map<string, ComposerDraft>();
+  // Where each run's output would go, as it was when the command was asked: sent without being
+  // asked only there (what a command printed is the person's; where it goes is what they saw).
+  // Sent by itself only if nothing of it changed by the time it ended: the conversation (a new
+  // task that became a thread meanwhile is a change: its card waits) and whom it is said to.
+  private shellDest = new Map<string, string>();
+  /** Runs the person asked to stop: never sent by themselves, whatever the run's end says. */
+  private shellStopped = new Set<string>();
+  private shellTo(): string { return this.shellGoes() + "\u0000" + this.shellWho(); }
+  // Each run's own request to the agent and its key: sent again as it was (its answer lost, other
+  // messages sent meanwhile) it has the same key, and the node has it once; sent elsewhere, another.
+  private shellReq = new Map<string, { key: string; what?: string }>();
+  /** Where a message of the open conversation goes now: the task's place, agent and directory, or
+   * the chat, its thread and whom it is said to. */
+  private shellGoes(): string {
+    return !this.chat && !this.thread ? "new\u0000" + this.destNow() : ["chat", this.chat?.key ?? "", this.thread, this.target].join("\u0000");
+  }
+  /** Whom a message of the open conversation is said to now: a new task's agent, a chat's chosen. */
+  private shellWho(): string {
+    if (this.chat || this.thread) return this.target;
+    const d = this.draft;
+    return d.where === "cloud" ? d.cloudAgent : d.agent;
+  }
   /** (By the key its draft has now: a session whose draft moved to its thread shows that thread's.) */
   shellsHere(): ShellRun[] { const k = this.draftOf().key; return this.shells.filter(s => s.chat === k); }
   /** Why a command cannot be run from this chat ("" when it can): it runs on this Mac, in the
@@ -211,33 +241,64 @@ class App {
     const id = this.thread || this.chat?.thread;
     return id ? this.msgs.find(m => m.id === id) : undefined;
   }
-  /** Runs the person's command in the chat's directory; its output is shown in the chat. */
+  /** Runs the person's command in the chat's directory and tells the chat's agent of it: the
+   * command and what it printed go to the agent as a message once it ended (what is not to be
+   * told is run in the terminal). While it runs it is shown in the chat, and can be stopped. */
   async runShell(cmd: string) {
     const owner = this.draftOf(), cwd = this.shellCwd(); // where it is run from, as it was when asked
     const run: ShellRun = { id: newId(), chat: owner.key, cmd, running: true, output: "", code: 0, ms: 0 };
     this.shells = [...this.shells, run];
     this.shellOwner.set(run.id, owner);
-    const set = (p: Partial<ShellRun>) => { this.shells = this.shells.map(s => (s.id === run.id ? { ...s, ...p } : s)); };
+    this.shellDest.set(run.id, this.shellTo());
     try {
       const r: any = await Node.Shell(run.id, cmd, cwd);
-      set({ running: false, output: r?.output ?? "", code: r?.code ?? 0, ms: r?.ms ?? 0, cut: !!r?.cut, timedOut: !!r?.timed_out, stopped: !!r?.stopped });
-    } catch (e) { set({ running: false, error: errText(e) }); }
+      this.setShell(run.id, { running: false, output: r?.output ?? "", code: r?.code ?? 0, ms: r?.ms ?? 0, cut: !!r?.cut, timedOut: !!r?.timed_out, stopped: !!r?.stopped });
+    } catch (e) { this.setShell(run.id, { running: false, error: errText(e) }); return; } // not run: nothing to tell
+    // One the person stopped is theirs to send or drop.
+    if (!this.shellStopped.has(run.id) && !this.shells.find(s => s.id === run.id)?.stopped) await this.sendShell(run.id, true);
   }
-  stopShell(id: string) { Node.ShellStop(id).catch(() => {}); }
-  dropShell(id: string) { this.shells = this.shells.filter(s => s.id !== id); this.shellOwner.delete(id); }
+  private setShell(id: string, p: Partial<ShellRun>) { this.shells = this.shells.map(s => (s.id === id ? { ...s, ...p } : s)); }
+  /** Sends a run to the chat's agent; sent, its card gives way to the message. `auto`: as the run
+   * ended, without being asked — only while its chat is the one open and no message of the
+   * person's is waiting to be sent again from it (then the card stays, with its button). */
+  async sendShell(id: string, auto = false): Promise<boolean> {
+    const r = this.shells.find(s => s.id === id);
+    if (!r || r.running || r.sending) return false;
+    // Where it goes is what the person saw when it was asked (auto) or when they pressed the button:
+    // whatever is chosen while it waits for a message going before it, it is not sent there.
+    const want = auto ? this.shellDest.get(id) : this.shellTo();
+    const owner = this.shellOwner.get(id); // and from whose draft: carried to another while it waits, it waits for the person
+    this.setShell(id, { sending: true });
+    try {
+      // After a message of the person's that is going now (a new task's first: the run is told in
+      // the thread it makes).
+      for (let d = this.shellOwner.get(id); d?.busy; d = this.shellOwner.get(id)) await new Promise(f => setTimeout(f, 30));
+      const d = this.shellOwner.get(id);
+      if (!d || !this.shells.some(s => s.id === id)) return false; // removed meanwhile
+      if (d !== owner || (auto && this.shellDest.get(id) !== want)) { if (!auto) this.error = t("The chat changed while the command waited: send it again"); return false; }
+      if (this.draftOf() !== d) { if (!auto) this.error = t("Open the chat the command was run in to send it"); return false; }
+      if (auto && d.sending && d.sending.typed !== undefined) return false;
+      // Another conversation, agent, place or directory by now: the person sends it there themselves.
+      if (!want || want !== this.shellTo()) { if (!auto) this.error = t("The chat changed while the command waited: send it again"); return false; }
+      const at = { ...this.sendAt(d), own: this.shellReq.get(id) ?? this.shellReq.set(id, { key: newId() }).get(id)! };
+      d.busy = true;
+      let ok = false;
+      try { ok = await this.send(shellBody(r.cmd, r.output, r, at.limits?.max_body ?? 0), [], d, undefined, at); } finally { d.busy = false; }
+      if (ok) this.dropShell(id);
+      // Not sent, and a new task was started meanwhile (its draft is on no screen): the run goes to
+      // the new task's, to be sent from there or removed — as a message's text does (submit).
+      else if (![...this.draftMap.values()].includes(d)) this.moveDraft(d, "new");
+      return ok;
+    } finally { this.setShell(id, { sending: false }); }
+  }
+  stopShell(id: string) { this.shellStopped.add(id); Node.ShellStop(id).catch(() => {}); }
+  dropShell(id: string) { this.shells = this.shells.filter(s => s.id !== id); this.shellOwner.delete(id); this.shellDest.delete(id); this.shellReq.delete(id); this.shellStopped.delete(id); }
   /** The runs made from draft d are shown in chat `to` (owner: the draft they belong to from now). */
   private moveShells(d: ComposerDraft, to: string, owner = d) {
+    // Moved, a run is no longer where it was asked: it waits for the person to send it.
+    for (const [id, o] of this.shellOwner) if (o === d) this.shellDest.delete(id);
     this.shells = this.shells.map(s => (this.shellOwner.get(s.id) === d ? { ...s, chat: to } : s));
     if (owner !== d) for (const [id, o] of this.shellOwner) if (o === d) this.shellOwner.set(id, owner);
-  }
-  /** The command and what it printed, into the composer: the agent is told only this way. */
-  quoteShell(id: string) {
-    const r = this.shells.find(s => s.id === id);
-    if (!r) return;
-    const fence = "`".repeat(Math.max(3, ...[...(r.output.matchAll(/`+/g))].map(m => m[0].length + 1)));
-    // One that did not run says why; one stopped or cut short says so.
-    const end = r.error ? `(not run: ${r.error})\n` : r.stopped ? "(stopped)\n" : r.timedOut ? "(ran too long, ended)\n" : r.code ? `(exit ${r.code})\n` : "";
-    this.quote = `$ ${r.cmd}\n` + (r.error && !r.output ? "" : `${fence}\n${r.output.replace(/\s+$/, "")}\n${fence}\n`) + end;
   }
   palette = $state(false); // ⌘K
   viewMenu = $state(false); // the title bar's view menu open
@@ -830,7 +891,7 @@ class App {
   /** Sends a message: true once the node has it, false if not (said in error; the draft keeps the
    * text to send again). The chat it was sent from gets it, whichever is open by then. */
   async send(body: string, files: { name: string; type: string; data: string }[], d = this.draftOf(),
-    sent?: { text: string; files: Attachment[] }, at = this.sendAt(d)): Promise<boolean> {
+    sent?: { text: string; files: Attachment[] }, at: ReturnType<App["sendAt"]> & { own?: { key: string; what?: string } } = this.sendAt(d)): Promise<boolean> {
     // What the message is for, as it was when sent: the screen may change while it goes.
     const { chat, thread, draft, epoch, dest } = at;
     // The draft is a thread's already (its conversation became one, the answer lost): what is
@@ -872,6 +933,14 @@ class App {
       // Unless the person since chose another agent for it (the chip, "@name"): then it is a
       // message to that one, in the thread, with a key of its own.
       const other = (at.named || this.picks(thread || into) > 0) && d.sending?.task?.to !== to;
+      // A request of its own (a command's run): the same request has the key it had first, whatever
+      // was sent from the draft between its tries — the draft's own message being sent is not touched.
+      const own = at.own;
+      if (own) {
+        if (own.what !== undefined && own.what !== what) own.key = newId();
+        own.what = what;
+        task.idem = own.key;
+      } else {
       if (d.sending?.moved && d.sending.content === content && !other) {
         task = { ...d.sending.task };
         what = d.sending.what;
@@ -881,10 +950,11 @@ class App {
       // The same request from text typed a little differently (a space gone): its key stays, and
       // this text is what the next unchanged retry is.
       else if (!d.sending.moved || at.typed !== undefined) { d.sending.typed = at.typed; d.sending.named = at.mention; }
-      const key = d.sending.key;
-      task.idem = key;
+      task.idem = d.sending.key;
+      }
+      const key = task.idem;
       const m = (await Node.SendTask(task)) as any as Msg;
-      if (d.sending?.key === key) d.forget();
+      if (own ? !d.sending : d.sending?.key === key) d.forget();
       // The conversation it was sent from is still the one open (not the screen's generation: a
       // chat left and opened again is still it).
       // The draft may have been edited into another task while it went (another place, agent,

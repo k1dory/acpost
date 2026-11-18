@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { fade } from "svelte/transition";
   import { app, applyTheme } from "./lib/state.svelte";
   import { on, Node } from "./lib/api";
@@ -18,6 +18,50 @@
   import ModuleView from "./components/ModuleView.svelte";
   import { t, i18n } from "./lib/i18n.svelte";
   import { hasFiles } from "./lib/paste";
+  import { screenScale } from "./lib/format";
+  import { sideWidth, sideDefault, sideMin, sideRest } from "./lib/sidewidth";
+
+  // The chat's column beside the IDE (or a module): as wide as the person drags its edge, kept
+  // between launches; never so wide that nothing is left of what it stands beside.
+  let side = $state(sideDefault);
+  try { side = +(localStorage.getItem("ide-chat") ?? sideDefault) || sideDefault; } catch {}
+  let winW = $state(window.innerWidth);
+  // (The text's size scales the page: asked again when it changes, measured once it is applied.)
+  let scale = $state(screenScale());
+  $effect(() => { app.textSize; tick().then(() => (scale = screenScale())); });
+  const sideW = $derived(sideWidth(side, winW / scale));
+  let dragging = $state(false);
+  function dragSide(e: PointerEvent) {
+    const grip = e.currentTarget as HTMLElement, x0 = e.clientX, w0 = sideW, k = screenScale(); // the mouse moves in screen pixels
+    // Captured: the IDE is a native view over the page, and the pointer crosses it.
+    try { grip.setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
+    dragging = true;
+    const move = (ev: PointerEvent) => (side = sideWidth(w0 - (ev.clientX - x0) / k, window.innerWidth / k));
+    // Ended however it ends (let go, cancelled, the capture lost with the grip itself): once.
+    const ends = ["pointerup", "pointercancel", "lostpointercapture"];
+    const up = () => {
+      if (!dragging) return;
+      dragging = false;
+      grip.removeEventListener("pointermove", move);
+      for (const n of ends) grip.removeEventListener(n, up);
+      keepSide();
+    };
+    grip.addEventListener("pointermove", move);
+    for (const n of ends) grip.addEventListener(n, up);
+  }
+  function keepSide() { try { localStorage.setItem("ide-chat", String(Math.round(side))); } catch {} }
+  function resetSide() { side = sideDefault; try { localStorage.removeItem("ide-chat"); } catch {} }
+  // By the keyboard: the arrows move the edge (left: a wider chat), Home is the usual width.
+  function keySide(e: KeyboardEvent) {
+    const by = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0;
+    if (e.key === "Home") resetSide();
+    else if (by) { side = sideWidth(sideW + by, window.innerWidth / screenScale()); keepSide(); }
+    else return;
+    e.preventDefault();
+  }
+  // The grip gone while it was dragged (another view opened by a key): the drag is over.
+  $effect(() => { if (!app.beside) dragging = false; });
 
   let splashMin = $state(false), splashMax = $state(false);
   onMount(() => {
@@ -113,7 +157,7 @@
     else if (e.key === "0") { e.preventDefault(); app.setTextSize(1); }
     else if (e.key === "n") { e.preventDefault(); app.newTask(); }
     else if (e.key === "\\") { e.preventDefault(); app.setPanel(!app.panel); }
-    else if (e.key === "j") { e.preventDefault(); app.openTab("terminal"); }
+    else if (e.key === "j") { e.preventDefault(); app.terminal(); }
     else if (e.key === ",") { e.preventDefault(); app.view = "settings"; }
     else if (e.key === "k") { e.preventDefault(); app.palette = !app.palette; }
     else if (e.key === "b") { e.preventDefault(); app.view = "board"; }
@@ -128,7 +172,7 @@
 
 <!-- A file dropped where nothing takes it (a view without a composer) is not opened in the app's
      place: the webview would leave the app for the file. -->
-<svelte:window onkeydown={keys} onclickcapture={links} onsubmitcapture={e => e.preventDefault()}
+<svelte:window bind:innerWidth={winW} onkeydown={keys} onclickcapture={links} onsubmitcapture={e => e.preventDefault()}
   ondragover={e => { if (hasFiles(e.dataTransfer?.types)) e.preventDefault(); }}
   ondrop={e => { if (hasFiles(e.dataTransfer?.types)) e.preventDefault(); }} />
 
@@ -155,7 +199,12 @@
   {:else}
     <!-- The chat, and in the IDE the same chat as a column on the right (one instance: a draft being
          typed stays), VS Code taking the rest of the window. -->
-    <div class="convwrap" class:ide-chat={app.beside}><Conversation /></div>
+    <div class="convwrap" class:ide-chat={app.beside} style:width={app.beside ? sideW + "px" : null}>
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
+      {#if app.beside}<div class="grip" class:on={dragging} role="separator" aria-orientation="vertical" tabindex="0" aria-label={t("The chat's width")} aria-valuenow={sideW} aria-valuemin={sideMin} aria-valuemax={Math.max(sideMin, Math.round(winW / scale) - sideRest)}
+        title={t("Drag to resize; double-click for the usual width")} onpointerdown={dragSide} onkeydown={keySide} ondblclick={resetSide}></div>{/if}
+      <Conversation />
+    </div>
     {#if app.view === "ide"}<IDE />{:else if app.module}{#key app.module.id}<ModuleView m={app.module} />{/key}{/if}
   {/if}
   {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
@@ -174,7 +223,10 @@
 <style>
   .shell { height: 100%; display: flex; min-height: 0; }
   .convwrap { flex: 1; display: flex; min-width: 0; }
-  .convwrap.ide-chat { flex: none; width: 400px; order: 2; border-left: 1px solid var(--line); }
+  .convwrap.ide-chat { flex: none; width: 400px; order: 2; border-left: 1px solid var(--line); position: relative; }
+  /* Inside the column's edge: what is left of it is the IDE's native view, over the page. */
+  .grip { position: absolute; left: 0; top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 45; }
+  .grip:hover, .grip.on, .grip:focus-visible { box-shadow: inset 2px 0 0 var(--accent); outline: 0; }
   .ide-chat :global(.conv) { min-width: 0; }
   .down { flex: 1; display: grid; place-items: center; }
   .splash { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: var(--page); }

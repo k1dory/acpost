@@ -6,6 +6,7 @@
   import { markOf } from "./AgentMark.svelte";
   import { brand } from "../lib/brand";
   import { tick } from "svelte";
+  import { follows, nearEnd } from "../lib/stick";
   import Logo from "./Logo.svelte";
   import Message from "./Message.svelte";
   import History from "./History.svelte";
@@ -18,7 +19,12 @@
   import { who } from "../lib/format";
 
   let box = $state<HTMLDivElement>();
-  let stick = true;
+  let col = $state<HTMLDivElement>();
+  // The chat follows its end while the person is at it (lib/stick.ts): `was` is where the view was
+  // at its last scroll.
+  let stick = true, was = 0;
+  // The person is away from the end, reading above: a way back to it is shown.
+  let away = $state(false);
   const title = $derived(app.chat?.title || (app.msgs[0]?.body ?? "").split("\n")[0].slice(0, 80) || t("New task"));
   const waiting = $derived((app.rev, Object.entries(app.turns).flatMap(([id, t]) => t.waiting().map(r => ({ id, r })))));
   // The context of the latest turn that said it: at the top of the chat.
@@ -38,7 +44,16 @@
   const cwd = $derived(app.chatCwd());
   const short = (d: string) => tilde(d, app.home);
 
-  function onScroll() { if (box) stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80; }
+  function onScroll() {
+    if (!box) return;
+    stick = follows(stick, box.scrollHeight - box.scrollTop - box.clientHeight, box.scrollTop, was);
+    was = box.scrollTop;
+    away = !stick && box.scrollHeight - box.scrollTop - box.clientHeight > nearEnd;
+  }
+  function toEnd() { if (box && stick) { box.scrollTop = box.scrollHeight; was = box.scrollTop; away = false; } }
+  function jump() { stick = true; toEnd(); }
+  // The request that waits, brought into view (the header's "N to approve").
+  function toAsk() { box?.querySelector("[data-ask]")?.scrollIntoView?.({ block: "center", behavior: "smooth" }); }
   // Handoff: this chat (on the Mac) goes on in the cloud.
   const canHand = $derived(!!app.cloudAgents.length && !!cwd && !!app.chat && app.chat.kind !== "cloud" && !(app.chat.agent ?? "").startsWith("agent:sb_"));
   let handing = $state(false);
@@ -65,7 +80,24 @@
     } catch (e) { handErr = errText(e); }
     sending = false;
   }
-  $effect(() => { app.rev; app.msgs.length; app.history.length; app.shells; if (stick) tick().then(() => box && (box.scrollTop = box.scrollHeight)); });
+  // Another chat is opened at its end; a message the person sent brings them back to it.
+  $effect(() => { app.chat?.key; app.thread; stick = true; away = false; });
+  let lastMsg = "";
+  $effect(() => {
+    const m = app.msgs[app.msgs.length - 1];
+    if (!m || m.id === lastMsg) return;
+    lastMsg = m.id;
+    if (m.from.startsWith("user:") && !m.from.includes("@")) stick = true;
+  });
+  $effect(() => { app.rev; app.msgs.length; app.history.length; app.shells; if (stick) tick().then(toEnd); });
+  // Whatever makes the chat taller follows too, not only what the app counts: text laid out after
+  // its event (a diagram drawn, an image loaded, a block unfolded), the composer growing over it.
+  $effect(() => {
+    if (!box || !col || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(toEnd);
+    ro.observe(col); ro.observe(box);
+    return () => ro.disconnect();
+  });
 </script>
 
 <svelte:window onclick={e => { if (handing && !(e.target as HTMLElement).closest(".hand, .menu")) handing = false; }} />
@@ -90,8 +122,8 @@
       <button class="btn ghost icon nodrag" title={t("New task")} aria-label={t("New task")} onclick={() => app.newTask()}><Icon name="plus" size={headerIcon} /></button>
       <button class="btn ghost icon nodrag" title={t("Another chat (⌘K)")} aria-label={t("Another chat (⌘K)")} onclick={() => (app.palette = true)}><Icon name="chat" size={headerIcon} /></button>
     {/if}
-    {#if waiting.length}<span class="chip ask nodrag">{t("{n} to approve", { n: waiting.length })}</span>{/if}
-    {#if usage}<div class="meter nodrag"><ContextMeter u={usage} /></div>{/if}
+    {#if waiting.length}<button class="chip ask nodrag" title={t("Show the request")} onclick={toAsk}>{t("{n} to approve", { n: waiting.length })}</button>{/if}
+    {#if usage}<div class="meter nodrag"><ContextMeter u={usage} compact={app.beside} /></div>{/if}
     {#if canHand}
       <div class="hand nodrag">
         <button class="btn ghost icon" class:on={handing} title={t("Continue in the cloud")} aria-label={t("Continue in the cloud")} onclick={openHand}><Icon name="cloud" size={headerIcon} /></button>
@@ -110,6 +142,8 @@
         {/if}
       </div>
     {/if}
+    <!-- The terminal is one click away wherever the chat is (beside the IDE it opens in the chat's view). -->
+    <button class="btn ghost icon nodrag" class:on={!app.beside && app.panel && app.tab === "terminal"} title={t("Terminal (⌘J)")} aria-label={t("Terminal (⌘J)")} onclick={() => app.terminal()}><Icon name="term" size={headerIcon} /></button>
     <!-- Beside the IDE there is no right panel to open, and the column is too narrow for more. -->
     {#if !app.beside}
     {#if app.chat?.session && app.chat.kind !== "cloud"}<button class="btn ghost icon nodrag" title={t("Fork: the conversation so far, in a new chat")} aria-label={t("Fork: the conversation so far, in a new chat")} onclick={() => app.forkChat()}><Icon name="fork" size={headerIcon} /></button>{/if}
@@ -119,7 +153,7 @@
 
   {#if !app.chat && !app.thread}
     <!-- A new task: the composer in the middle, with where, who and in which directory. -->
-    <div class="center">
+    <div class="center" class:beside={app.beside}>
       <div class="col">
         <div class="hello">
           <div class="mark"><Logo size={84} draw /></div>
@@ -131,14 +165,17 @@
       </div>
     </div>
   {:else}
-    <div class="scroll body" bind:this={box} onscroll={onScroll}>
-      <div class="col">
+    <div class="scroll body" class:beside={app.beside} bind:this={box} onscroll={onScroll}>
+      <div class="col" bind:this={col}>
         {#if app.chat && app.chat.kind !== "thread"}<History />{/if}
         {#each app.msgs as m (m.id)}<Message {m} />{/each}
         <ShellRuns />
       </div>
     </div>
-    <div class="foot"><div class="col"><Composer /></div></div>
+    <div class="foot" class:beside={app.beside}>
+      {#if away}<button class="btn sm toend" title={t("To the end of the chat")} aria-label={t("To the end of the chat")} onclick={jump}><span class="dn"><Icon name="chev" size={13} /></span></button>{/if}
+      <div class="col"><Composer /></div>
+    </div>
   {/if}
 </section>
 
@@ -158,7 +195,13 @@
   .pop { position: absolute; right: 0; top: 34px; z-index: 40; width: 340px; padding: 14px; display: grid; gap: 10px; }
   /* Beside the IDE the column is narrow, and what leaves it is under the IDE's own view: the form
      is laid against the header, within the column. */
-  header.beside { position: relative; }
+  /* Beside the IDE: as high as the IDE's own bar and of its colour (one line across the window),
+     the margins and the gaps between the icons given to the title. */
+  header.beside { position: relative; height: 50px; padding: 0 8px 0 14px; gap: 2px; background: var(--side); }
+  header.beside .t { margin-right: 8px; }
+  header.beside .meter { flex: 0 1 auto; min-width: 0; overflow: hidden; margin: 0 6px; }
+  header.beside .t { flex: 1 1 60px; }
+  header.beside .chip { margin: 0 4px; }
   header.beside .hand { position: static; }
   header.beside .pop { right: 12px; top: 46px; width: min(340px, calc(100% - 24px)); }
   .ph { font-weight: 600; font-size: 13px; }
@@ -168,7 +211,17 @@
   .pop .err { padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }
   .body { flex: 1; min-height: 0; padding: 28px 32px 12px; overflow-x: hidden; }
   .col { max-width: 720px; margin: 0 auto; min-width: 0; }
-  .foot { padding: 8px 32px 20px; }
+  .foot { position: relative; padding: 8px 32px 20px; }
+  /* Over the chat's last lines, in the middle: back to the end, where the chat follows again. */
+  .toend { position: absolute; left: 50%; top: -36px; transform: translateX(-50%); width: 30px; height: 30px; padding: 0; justify-content: center; border-radius: 50%; z-index: 5; box-shadow: var(--shadow); }
+  .dn { display: grid; transform: rotate(90deg); }
+  button.chip.ask:hover { background: var(--warn-bg); }
+  button.chip.ask:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Beside the IDE the column is narrow: its width goes to the chat, not to the margins. */
+  /* (The list's scrollbar takes 10px of its right side: the messages and the composer end at one line.) */
+  .body.beside { padding: 14px 4px 8px 14px; }
+  .foot.beside { padding: 6px 14px 12px; }
+  .center.beside { padding: 0 14px 8vh; }
   .center { flex: 1; min-height: 0; display: grid; align-content: center; padding: 0 32px 8vh; }
   .center .col { width: 100%; }
   .center .runs { max-height: 34vh; overflow-y: auto; }

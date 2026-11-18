@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,7 +24,7 @@ import (
 
 const (
 	shellTimeout = 2 * time.Minute // a command that has not ended by then is ended
-	shellOutput  = 256 << 10       // bytes of output kept (the first)
+	shellOutput  = 256 << 10       // bytes of output kept (its beginning and, mostly, its end)
 )
 
 // ShellResult is what a command did.
@@ -57,26 +56,55 @@ func stopShells() {
 	shells.running.Wait()
 }
 
-// capped keeps the first max bytes written to it.
+// capped keeps max bytes of what is written to it: the first quarter and the last three (a long
+// build says why it failed at its end), and how much between them it let go.
 type capped struct {
 	sync.Mutex
-	b   bytes.Buffer
-	max int
-	cut bool
+	head, tail []byte
+	max        int
+	gone       int64 // bytes between the head and the tail, not kept
+	cut        bool
 }
 
 func (c *capped) Write(p []byte) (int, error) {
 	c.Lock()
 	defer c.Unlock()
-	if room := c.max - c.b.Len(); room < len(p) {
-		c.cut = true
-		if room > 0 {
-			c.b.Write(p[:room])
-		}
-	} else {
-		c.b.Write(p)
+	n := len(p)
+	if room := c.max/4 - len(c.head); room > 0 && len(c.tail) == 0 {
+		k := min(room, len(p))
+		c.head = append(c.head, p[:k]...)
+		p = p[k:]
 	}
-	return len(p), nil // all taken: the command is not stopped by a full pipe
+	c.tail = append(c.tail, p...)
+	// Trimmed when it is twice what is kept, not at each write.
+	if keep := c.max - c.max/4; len(c.tail) > 2*keep {
+		c.gone += int64(len(c.tail) - keep)
+		c.tail = append(c.tail[:0], c.tail[len(c.tail)-keep:]...)
+		c.cut = true
+	}
+	return n, nil // all taken: the command is not stopped by a full pipe
+}
+
+// String is what was kept: all of it, or its beginning, a line saying how much is left out, its end.
+func (c *capped) String() string {
+	c.Lock()
+	defer c.Unlock()
+	tail, gone := c.tail, c.gone
+	if keep := c.max - c.max/4; len(tail) > keep {
+		gone += int64(len(tail) - keep)
+		tail = tail[len(tail)-keep:]
+	}
+	if gone == 0 {
+		return string(c.head) + string(tail)
+	}
+	return string(c.head) + fmt.Sprintf("\n[… %d bytes left out …]\n", gone) + string(tail)
+}
+
+// wasCut: more was written than is kept.
+func (c *capped) wasCut() bool {
+	c.Lock()
+	defer c.Unlock()
+	return c.cut || len(c.tail) > c.max-c.max/4
 }
 
 // Shell runs command in cwd — the directory the app names, whole (an absolute path): none named,
@@ -160,7 +188,7 @@ func runShell(id, command, cwd string, timeout time.Duration) (ShellResult, erro
 	shells.Lock()
 	wasStopped := stopped
 	shells.Unlock()
-	res := ShellResult{Output: strings.ToValidUTF8(out.b.String(), "�"), Ms: time.Since(start).Milliseconds(), Cut: out.cut,
+	res := ShellResult{Output: strings.ToValidUTF8(out.String(), "�"), Ms: time.Since(start).Milliseconds(), Cut: out.wasCut(),
 		TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded), Stopped: wasStopped}
 	var exit *exec.ExitError
 	switch {

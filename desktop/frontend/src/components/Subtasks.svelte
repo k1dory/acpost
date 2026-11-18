@@ -5,6 +5,7 @@
   import { who, ago } from "../lib/format";
   import AgentMark from "./AgentMark.svelte";
   import { inView } from "../lib/visible";
+  import Icon from "./Icon.svelte";
 
   // What the agent asked other agents while on this message (and what they asked in turn): a
   // tree, each to open in its own chat.
@@ -46,8 +47,8 @@
 <div class="anchor" use:inView={v => { visible = v; if (v) seen = true; }}></div>
 {#if ordered.length}
   <div class="st">
-    <button class="sh" onclick={() => (open = !open)}>
-      <span class="chev" class:rot={open}>›</span> {t("Subtasks")} <span class="muted">{ordered.length}</span>
+    <button class="sh" onclick={() => (open = !open)} aria-expanded={open}>
+      {t("Subtasks")} <span class="muted">{ordered.length}</span><span class="chev" class:rot={open}><Icon name="chev" size={12} /></span>
     </button>
     {#if open}
       {#each ordered as n (n.id)}
@@ -67,7 +68,7 @@
   .anchor { height: 0; }
   .st { margin-top: 8px; border: 1px solid var(--line-soft); border-radius: 12px; padding: 4px; display: grid; grid-template-columns: minmax(0, 1fr); }
   .sh { border: 0; background: transparent; text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 5px 8px; display: flex; gap: 6px; align-items: center; }
-  .chev { display: inline-block; transition: transform .15s; }
+  .chev { display: grid; color: var(--muted); transition: transform .15s; }
   .chev.rot { transform: rotate(90deg); }
   .it { display: flex; align-items: center; gap: 7px; border: 0; background: transparent; text-align: left; padding: 5px 8px; border-radius: 8px; font-size: 12px; min-width: 0; }
   .it:hover { background: var(--hover); }
