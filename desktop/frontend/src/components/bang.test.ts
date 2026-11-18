@@ -264,6 +264,29 @@ describe("! in the composer", () => {
     expect(app.shellsHere()).toHaveLength(1);
   });
 
+  it("a run waiting behind another's send is not sent from the new task its card is carried to when that send fails", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.newTask();
+    app.draft.agent = "agent:claude";
+    let fail!: (e: any) => void;
+    fake.Node.SendTask.mockReturnValueOnce(new Promise((_, r) => (fail = r)));
+    fake.Node.Shell.mockResolvedValueOnce({ output: "1\n", code: 0, ms: 1 });
+    const first = app.runShell("echo 1"); // its send is going
+    await flush();
+    fake.Node.Shell.mockResolvedValueOnce({ output: "2\n", code: 0, ms: 1 });
+    const second = app.runShell("echo 2"); // ends and waits behind it
+    await flush();
+    app.newTask(); // the person starts another task, as it was
+    app.draft.agent = "agent:claude";
+    fail(new Error("down"));
+    await first; await second; await flush();
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1); // only the first, which failed
+    expect(app.shellsHere().map(s => s.cmd).sort()).toEqual(["echo 1", "echo 2"]); // both wait in the new task's draft
+  });
+
   it("text the app puts into a draft that was a command makes it a message: Enter sends, nothing is run", async () => {
     const app = await setup();
     type("!echo intended");

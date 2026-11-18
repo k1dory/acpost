@@ -267,6 +267,7 @@ class App {
     // Where it goes is what the person saw when it was asked (auto) or when they pressed the button:
     // whatever is chosen while it waits for a message going before it, it is not sent there.
     const want = auto ? this.shellDest.get(id) : this.shellTo();
+    const owner = this.shellOwner.get(id); // and from whose draft: carried to another while it waits, it waits for the person
     this.setShell(id, { sending: true });
     try {
       // After a message of the person's that is going now (a new task's first: the run is told in
@@ -274,6 +275,7 @@ class App {
       for (let d = this.shellOwner.get(id); d?.busy; d = this.shellOwner.get(id)) await new Promise(f => setTimeout(f, 30));
       const d = this.shellOwner.get(id);
       if (!d || !this.shells.some(s => s.id === id)) return false; // removed meanwhile
+      if (d !== owner || (auto && this.shellDest.get(id) !== want)) { if (!auto) this.error = t("The chat changed while the command waited: send it again"); return false; }
       if (this.draftOf() !== d) { if (!auto) this.error = t("Open the chat the command was run in to send it"); return false; }
       if (auto && d.sending && d.sending.typed !== undefined) return false;
       // Another conversation, agent, place or directory by now: the person sends it there themselves.
