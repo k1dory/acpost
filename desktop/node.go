@@ -18,6 +18,7 @@ import (
 	"github.com/k1dory/acpost/internal/client"
 	"github.com/k1dory/acpost/internal/config"
 	"github.com/k1dory/acpost/internal/forge"
+	acpnode "github.com/k1dory/acpost/internal/node"
 	"github.com/k1dory/acpost/internal/store"
 	"github.com/k1dory/acpx"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -159,6 +160,8 @@ type Connection struct {
 	OK     bool          `json:"ok"`
 	Error  string        `json:"error,omitempty"`
 	Status client.Status `json:"status"`
+	// App is the version of the app itself; Status.Version is the node's (another node may differ).
+	App string `json:"app"`
 }
 
 // Status says whether the node answers, and what it is.
@@ -168,12 +171,12 @@ func (n *Node) Status() Connection {
 	n.mu.Unlock()
 	if failed || n.ownNodeEnded() { // the app's own node stopped after it got ready: started again
 		if err := n.ensureNode(); err != nil {
-			return Connection{Error: err.Error()}
+			return Connection{Error: err.Error(), App: acpnode.Version}
 		}
 	}
 	c, err := n.client()
 	if err != nil {
-		return Connection{Error: err.Error()}
+		return Connection{Error: err.Error(), App: acpnode.Version}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -181,7 +184,7 @@ func (n *Node) Status() Connection {
 	n.mu.Lock()
 	url := n.url
 	n.mu.Unlock()
-	out := Connection{URL: url, OK: err == nil, Status: st}
+	out := Connection{URL: url, OK: err == nil, Status: st, App: acpnode.Version}
 	if err != nil {
 		out.Error = err.Error()
 		if errors.Is(err, client.ErrUnavailable) {

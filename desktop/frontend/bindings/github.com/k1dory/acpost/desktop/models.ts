@@ -125,6 +125,11 @@ export class Connection {
     "error"?: string;
     "status": client$0.Status;
 
+    /**
+     * App is the version of the app itself; Status.Version is the node's (another node may differ).
+     */
+    "app": string;
+
     /** Creates a new Connection instance. */
     constructor($$source: Partial<Connection> = {}) {
         if (!("url" in $$source)) {
@@ -135,6 +140,9 @@ export class Connection {
         }
         if (!("status" in $$source)) {
             this["status"] = (new client$0.Status());
+        }
+        if (!("app" in $$source)) {
+            this["app"] = "";
         }
 
         Object.assign(this, $$source);
