@@ -4,6 +4,8 @@
   import { who } from "../lib/format";
   import Avatar from "./Avatar.svelte";
   import TurnBlocks from "./TurnBlocks.svelte";
+  import { shellNote } from "../lib/shell";
+  import ShellNote from "./ShellNote.svelte";
 
   // A conversation started elsewhere (a terminal's Claude Code, Codex, a cloud sandbox), read back.
   const agent = $derived(app.chat?.agent ?? "");
@@ -16,7 +18,8 @@
   {#each views as s, i (i)}
     <div class="pair">
       {#if s.user.trim()}
-        <div class="user"><div class="ubody selectable">{s.user.trim()}</div></div>
+        {@const shell = shellNote(s.user.trim())}
+        {#if shell}<ShellNote note={shell} quoted />{:else}<div class="user"><div class="ubody selectable">{s.user.trim()}</div></div>{/if}
       {/if}
       {#if s.view.blocks.length}
         <div class="agent">
@@ -31,11 +34,11 @@
 
 <style>
   /* (As in Message.svelte: one column no wider than the chat.) */
-  .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 4px 0 28px; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 2px 0 22px; }
   .user { justify-self: end; max-width: 85%; }
-  .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); max-height: 320px; overflow: auto; }
+  .ubody { font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); max-height: 320px; overflow: auto; }
   .agent { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-height: 24px; margin-bottom: 2px; }
   .nm { font-weight: 600; }
   .wait { display: grid; gap: 10px; padding: 8px 0; } .wait .sk { height: 12px; }
   .sep { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; margin: 0 0 24px; }

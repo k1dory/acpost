@@ -206,10 +206,14 @@
 
 <style>
   .md { line-height: 1.65; overflow-wrap: anywhere; font-size: 13.5px; min-width: 0; max-width: 100%; }
+  /* Beside the IDE the lines are short: they sit closer. */
+  :global(.body.beside) .md { line-height: 1.55; }
   .md :global(table) { display: block; overflow-x: auto; max-width: 100%; }
   .md :global(p) { margin: 0 0 .8em; }
   .md :global(p:last-child) { margin-bottom: 0; }
-  .md :global(h1), .md :global(h2), .md :global(h3) { font-size: 14.5px; font-weight: 600; margin: 1em 0 .4em; }
+  .md :global(h1), .md :global(h2), .md :global(h3) { font-weight: 600; margin: 1.1em 0 .4em; line-height: 1.35; }
+  .md :global(h1) { font-size: 16px; } .md :global(h2) { font-size: 15px; } .md :global(h3) { font-size: 13.5px; }
+  .md :global(:is(h1, h2, h3):first-child) { margin-top: 0; }
   .md :global(ul), .md :global(ol) { margin: 0 0 .7em; padding-left: 1.3em; }
   .md :global(li) { margin: .15em 0; }
   .md :global(code) { font-family: var(--mono); font-size: 12px; background: var(--sel); padding: 1px 5px; border-radius: 6px; font-variant-ligatures: none; }
@@ -233,7 +237,9 @@
   .md :global(code.pl:hover) { color: var(--accent); }
   .md :global(a) { color: var(--accent); text-decoration: none; }
   .md :global(table) { border-collapse: collapse; margin: 0 0 .8em; font-size: 13px; }
-  .md :global(th), .md :global(td) { border: 1px solid var(--line); padding: 5px 9px; }
+  /* A cell wraps at its words (a long path inside it at any letter only when it must): a table of
+     prose is not one line per row wider than the chat. */
+  .md :global(th), .md :global(td) { border: 1px solid var(--line); padding: 5px 9px; overflow-wrap: break-word; vertical-align: top; }
   .md :global(blockquote) { margin: 0 0 .7em; padding-left: 12px; border-left: 3px solid var(--line); color: var(--ink-2); }
 
   /* Highlighting: few colours, readable in both themes. */

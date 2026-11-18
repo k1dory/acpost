@@ -109,8 +109,9 @@
   const stopMode = $derived(running && !d.hasContent);
 
   // The text and files leave the draft only once the node has them (app.submit).
-  // "!git status" is a command of the person's own, run in the chat's directory and shown in the
-  // chat; not a message (one that must start with "!" starts with a space).
+  // "!git status" is a command of the person's own, run in the chat's directory; the agent is told
+  // of it and what it printed once it ended (app.runShell). Not a message typed (one that must
+  // start with "!" starts with a space).
   // Only what the person typed here since the field was last empty (d.own): never text anything
   // else put in, edited or not.
   const bang = $derived(d.own && d.text.startsWith("!") && !d.files.length && d.reading.size === 0);
@@ -254,19 +255,19 @@
     <div class="files">
       {#each d.files as f, i}
         <span class="chip"><Icon name="file" size={12} /> {f.name} <span class="muted">{bytes(f.size)}</span>
-          <button class="x" onclick={() => (d.files = d.files.filter((_, j) => j !== i))}><Icon name="x" size={10} /></button></span>
+          <button class="x" aria-label={t("Remove")} title={t("Remove")} onclick={() => (d.files = d.files.filter((_, j) => j !== i))}><Icon name="x" size={10} /></button></span>
       {/each}
     </div>
   {/if}
   <textarea bind:this={ta} value={d.text} oninput={e => d.type(e.currentTarget.value, (e as unknown as InputEvent).inputType)} onkeydown={key} rows="1"
     placeholder={isNew ? t("/ for the model, effort and commands") : targets.length > 1 ? t("Reply… (@ calls another agent)") : t("Reply…")}></textarea>
   <div class="bar">
-    <button class="btn ghost sm" onclick={() => picker.click()} title={t("Attach files")}><Icon name="clip" size={14} /></button>
+    <button class="btn ghost sm clip" onclick={() => picker.click()} title={t("Attach files")} aria-label={t("Attach files")}><Icon name="clip" size={14} /></button>
     <input bind:this={picker} type="file" multiple hidden onchange={e => add((e.target as HTMLInputElement).files)} />
     {#if targets.length > 1}<button class="chip opt to" onclick={() => (pickerFor = pickerFor === "agent" ? "" : "agent")} title={t("Who answers: another agent can be called into this chat")}><Avatar addr={agent} size={14} /> {who(agent).name}{#if who(agent).node}<span class="muted">@{who(agent).node}</span>{/if}</button>{/if}
-    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}>{current(model, "model")}</button>{/if}
-    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> {current(effort, "effort")}</button>{/if}
-    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}>{current(mode, "mode")}</button>{/if}
+    {#if model}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "model" ? "" : "model")} title={t("Model")}><span class="lbl">{current(model, "model")}</span></button>{/if}
+    {#if effort}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "effort" ? "" : "effort")} title={t("Reasoning effort")}><Icon name="brain" size={11} /> <span class="lbl">{current(effort, "effort")}</span></button>{/if}
+    {#if mode}<button class="chip opt" onclick={() => (pickerFor = pickerFor === "mode" ? "" : "mode")} title={t("Mode")}><span class="lbl">{current(mode, "mode")}</span></button>{/if}
     {#if cloud}<span class="chip muted" title={t("A cloud agent runs without asking; opening or merging a pull request waits for you")}>{t("runs without asking")}</span>{/if}
     <span class="sp"></span>
     <span class="hint muted">{stopMode ? "⌃C" : "⌘↵"}</span>
@@ -281,14 +282,21 @@
 <style>
   .comp.bang { box-shadow: inset 0 0 0 1.5px var(--accent); }
   .comp.bang textarea { font-family: var(--mono); }
-  .comp { position: relative; padding: 10px 10px 8px 14px; border-radius: var(--r-panel); }
+  .comp { position: relative; padding: 10px 10px 8px 14px; border-radius: var(--r-panel); container-type: inline-size; }
+  /* Where the caret is, is seen. */
+  .comp:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
   textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; padding: 4px 2px 8px; font-size: 13.5px; line-height: 1.5; max-height: 240px; user-select: text; cursor: text; }
-  .bar { display: flex; align-items: center; gap: 6px; }
+  .bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .bar > .clip, .bar > .send, .bar > .hint { flex: none; }
   .sp { flex: 1; }
   .hint { font: 11px var(--mono); }
   .stop .sq { width: 10px; height: 10px; border-radius: 2.5px; background: currentColor; display: block; }
   .send { width: 30px; height: 30px; padding: 0; justify-content: center; border-radius: 10px; }
-  .opt { height: 24px; cursor: default; }
+  /* The options give way before the send button leaves the card: a long name is cut, said on hover. */
+  .opt { height: 24px; cursor: default; flex: 0 1 auto; min-width: 34px; max-width: 170px; overflow: hidden; }
+  .opt .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
+  .opt :global(svg) { flex: none; }
+  @container (max-width: 400px) { .hint { display: none; } .bar { gap: 4px; } }
   .opt:hover { background: var(--hover); }
   .files { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 6px; }
   /* Over the whole window, and never in the drag's way: the drop lands on what is under it. */
@@ -297,7 +305,8 @@
   .droptext { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 10px; background: var(--card);
     border: 1px solid var(--line); font-size: 13.5px; font-weight: 500; box-shadow: 0 6px 24px rgb(0 0 0 / 0.12); }
   .comp.over { border-color: var(--accent); }
-  .x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 2px; display: grid; }
+  .x { border: 0; background: transparent; color: var(--muted); padding: 0; width: 18px; height: 18px; margin-right: -5px; border-radius: 6px; display: grid; place-items: center; }
+  .x:hover { background: var(--hover); color: var(--ink); }
   .menu { position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 30; padding: 6px; display: grid; max-height: 300px; overflow: auto; }
   .menu.pick { right: auto; min-width: 200px; max-width: 280px; }
   .pb { font-size: 10.5px; color: var(--accent); }

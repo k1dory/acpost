@@ -95,14 +95,17 @@
 
 <style>
   .rp { position: relative; flex: none; display: flex; flex-direction: column; background: var(--side); border-left: 1px solid var(--line); min-height: 0; }
-  .grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; }
+  .grip { position: absolute; left: -5px; top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 5; }
+  /* (As the chat column's beside the IDE: a line of the accent where the panel's edge is.) */
+  .grip:hover { background: linear-gradient(90deg, transparent 4px, var(--accent) 4px, var(--accent) 6px, transparent 6px); }
   .tabs { height: 46px; display: flex; align-items: center; gap: 1px; padding: 0 10px; overflow-x: auto; flex: none; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
   .tab { display: inline-flex; align-items: center; height: 26px; border-radius: 8px; color: var(--ink-2); flex: none; }
   .tab:hover { background: var(--hover); }
   .tl { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 2px 0 8px; border: 0; background: transparent; color: inherit; font-weight: 500; font-size: 12px; white-space: nowrap; }
   .x { width: 18px; height: 18px; margin-right: 4px; border: 0; background: transparent; color: var(--muted); border-radius: 5px; display: grid; place-items: center; opacity: 0; }
-  .tab:hover .x, .tab.on .x { opacity: 1; }
+  .tab:hover .x, .tab.on .x, .x:focus-visible { opacity: 1; }
+  .x:focus-visible, .tl:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .x:hover { background: var(--hover); color: var(--ink); }
   .sp { flex: 1; }
   .add { position: relative; flex: none; margin-left: 2px; }

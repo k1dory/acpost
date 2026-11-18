@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-// "!command" in the composer runs the person's command in the chat's directory; it is not a message.
+// "!command" in the composer runs the person's command in the chat's directory; the agent is told of it
+// and what it printed once it ended.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fakeNode, flush, type Fake } from "../test/fake";
 
@@ -35,8 +36,9 @@ beforeEach(() => { vi.resetModules(); fake = fakeNode(); document.body.innerHTML
 afterEach(() => { for (const m of mounted) svelte.unmount(m); mounted = []; });
 
 describe("! in the composer", () => {
-  it("runs the command in the chat's directory and shows what it printed; nothing is sent to the agent", async () => {
+  it("runs the command in the chat's directory; once it ended the agent is sent it and what it printed, and its card gives way to that message", async () => {
     const app = await setup();
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", body: "x", created_at: "", updated_at: "" });
     let done!: (r: any) => void;
     fake.Node.Shell.mockImplementation(() => new Promise(r => { done = r; }));
     type("!git status --short");
@@ -51,14 +53,117 @@ describe("! in the composer", () => {
     ([...document.querySelectorAll(".sh button")].find(b => b.textContent === "Stop") as HTMLButtonElement).click();
     expect(fake.Node.ShellStop).toHaveBeenCalledWith(fake.Node.Shell.mock.calls[0][0]);
     done({ output: " M a.go\n", code: 1, ms: 40 });
-    await flush(); svelte.flushSync();
-    expect(document.querySelector(".sh .out")!.textContent).toBe(" M a.go\n");
-    expect(document.querySelector(".sh .chip.crit")!.textContent).toBe("1");
-    // Into the message only when the person puts it there.
-    ([...document.querySelectorAll(".sh button")].find(b => b.textContent === "Add to message") as HTMLButtonElement).click();
-    svelte.flushSync();
-    expect(textarea().value).toBe("$ git status --short\n```\n M a.go\n```\n(exit 1)\n");
+    await flush(); await flush(); svelte.flushSync();
+    // Sent by itself, to the chat's agent, in its thread; nothing is put into the composer.
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+    const task = fake.Node.SendTask.mock.calls[0][0];
+    expect(task.body).toBe("$ git status --short\n```\n M a.go\n```\n(exit 1)");
+    expect([task.to, task.thread]).toEqual(["agent:claude", "T"]);
+    expect(textarea().value).toBe("");
+    expect(app.shellsHere()).toHaveLength(0);
+    expect(document.querySelector(".sh")).toBeNull();
+    expect(app.msgs.map(m => m.id)).toEqual(["m1"]);
+  });
+
+  it("a run the person stopped, or one not sent, keeps its card: it is sent when they say, or removed", async () => {
+    const app = await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "half\n", code: -1, ms: 9, stopped: true });
+    type("!sleep 100");
+    enter();
+    await flush(); await flush(); svelte.flushSync();
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(document.querySelector(".sh .out")!.textContent).toBe("half\n");
+    // The node does not take it: said, the card stays.
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("down"));
+    const btn = () => [...document.querySelectorAll(".sh button")].find(b => b.textContent === "Send to the agent") as HTMLButtonElement;
+    btn().click();
+    await flush(); await flush(); svelte.flushSync();
+    expect(app.error).toContain("down");
     expect(app.shellsHere()).toHaveLength(1);
+    fake.Node.SendTask.mockResolvedValue({ id: "m2", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    btn().click();
+    await flush(); await flush(); svelte.flushSync();
+    expect(fake.Node.SendTask.mock.calls[1][0].body).toBe("$ sleep 100\n```\nhalf\n```\n(stopped)");
+    // The same message again (its answer was lost the first time): the same key.
+    expect(fake.Node.SendTask.mock.calls[1][0].idem).toBe(fake.Node.SendTask.mock.calls[0][0].idem);
+    expect(app.shellsHere()).toHaveLength(0);
+  });
+
+  it("a run that ends in another chat than the one open is not sent from there; a new task's run begins the task", async () => {
+    const app = await setup();
+    let done!: (r: any) => void;
+    fake.Node.Shell.mockImplementation(() => new Promise(r => { done = r; }));
+    type("!make");
+    enter();
+    await flush();
+    fake.Node.Thread.mockResolvedValue([]);
+    await app.open({ key: "thread:U", kind: "thread", thread: "U", agent: "agent:claude", cwd: "/u", title: "u", updated: "" } as any);
+    done({ output: "ok\n", code: 0, ms: 3 });
+    await flush(); await flush();
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(app.shells.map(s => s.cmd)).toEqual(["make"]); // kept where it was run
+    // A new task: the command and its output are its first message.
+    app.newTask();
+    app.draft.agent = "agent:claude"; app.draft.cwd = "/w";
+    fake.Node.Shell.mockResolvedValue({ output: "v1\n", code: 0, ms: 1 });
+    fake.Node.SendTask.mockResolvedValue({ id: "m9", from: "user:me", to: "agent:claude", thread: "T9", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    fake.Node.Chats.mockResolvedValue({ items: [] });
+    await app.runShell("cat VERSION");
+    const task = fake.Node.SendTask.mock.calls[0][0];
+    expect([task.body, task.to, task.cwd]).toEqual(["$ cat VERSION\n```\nv1\n```\n", "agent:claude", "/w"]);
+    expect(app.thread).toBe("T9");
+  });
+
+  it("a run whose task was set to go elsewhere while it ran is not sent by itself: the person sends it there, or not", async () => {
+    const app = await setup();
+    app.newTask();
+    app.draft.agent = "agent:claude"; app.draft.cwd = "/w";
+    let done!: (r: any) => void;
+    fake.Node.Shell.mockImplementation(() => new Promise(r => { done = r; }));
+    const ran = app.runShell("env");
+    await flush();
+    app.draft.agent = "agent:codex"; // another agent chosen for the task while the command runs
+    done({ output: "TOKEN=1\n", code: 0, ms: 3 });
+    await ran; await flush();
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(app.shells.map(s => [s.cmd, !!s.sending])).toEqual([["env", false]]); // kept, with its button
+    // Carried to another new task it waits there too.
+    app.draft.agent = "agent:claude";
+    app.newTask();
+    await flush();
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+  });
+
+  it("a run sent again after another message went between its tries has the key it had: the node has it once", async () => {
+    const app = await setup();
+    fake.Node.Shell.mockResolvedValue({ output: "ok\n", code: 0, ms: 1 });
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("answer lost"));
+    await app.runShell("make");
+    expect(app.shellsHere()).toHaveLength(1);
+    const reply = { id: "m2", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" };
+    fake.Node.SendTask.mockResolvedValue(reply);
+    expect(await app.send("and another thing", [])).toBe(true);
+    expect(await app.sendShell(app.shellsHere()[0].id)).toBe(true);
+    const keys = fake.Node.SendTask.mock.calls.map((c: any) => c[0].idem);
+    expect(keys[2]).toBe(keys[0]);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(app.shells).toHaveLength(0);
+  });
+
+  it("a run not sent from a task left for a new one is found in the new task, to send or remove", async () => {
+    const app = await setup();
+    app.newTask();
+    app.draft.agent = "agent:claude"; app.draft.cwd = "/w";
+    fake.Node.Shell.mockResolvedValue({ output: "ok\n", code: 0, ms: 1 });
+    let fail!: (e: any) => void;
+    fake.Node.SendTask.mockImplementation(() => new Promise((_, no) => { fail = no; }));
+    const ran = app.runShell("make");
+    await flush(); await flush();
+    app.newTask(); // while the run's message is going
+    app.draft.agent = "agent:claude"; app.draft.cwd = "/w";
+    fail(new Error("down"));
+    await ran; await flush();
+    expect(app.shellsHere().map(s => [s.cmd, !!s.sending])).toEqual([["make", false]]);
   });
 
   it("a bare ! runs nothing; a message that starts with a space and ! is a message; a run that fails says why", async () => {
@@ -76,10 +181,9 @@ describe("! in the composer", () => {
     enter();
     await flush(); svelte.flushSync();
     expect(document.querySelector(".sh .out.err")!.textContent).toContain("no such file");
-    ([...document.querySelectorAll(".sh button")].find(b => b.textContent === "Add to message") as HTMLButtonElement).click();
-    svelte.flushSync();
-    expect(textarea().value).toBe("$ ls\n(not run: fork/exec /bin/zsh: no such file)\n");
-    type("");
+    // Not run: there is nothing to tell the agent, by itself or by a button.
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+    expect([...document.querySelectorAll(".sh button")].some(b => b.textContent === "Send to the agent")).toBe(false);
     // Another chat does not show this one's runs.
     app.thread = "U"; app.chat = null;
     svelte.flushSync();
@@ -107,17 +211,12 @@ describe("! in the composer", () => {
     expect(app.shellsHere()).toHaveLength(0);
   });
 
-  it("a run's output put into a draft that was a command makes it a message: Enter sends, nothing is run", async () => {
+  it("text the app puts into a draft that was a command makes it a message: Enter sends, nothing is run", async () => {
     const app = await setup();
-    fake.Node.Shell.mockResolvedValue({ output: "`touch /tmp/x`\n", code: 0, ms: 1 });
-    type("!echo first");
-    enter();
-    await flush(); svelte.flushSync();
-    fake.Node.Shell.mockClear();
     type("!echo intended");
-    ([...document.querySelectorAll(".sh button")].find(b => b.textContent === "Add to message") as HTMLButtonElement).click();
+    app.quote = "> quoted\n";
     svelte.flushSync();
-    expect(textarea().value.startsWith(" !echo intended\n$ echo first")).toBe(true);
+    expect(textarea().value.startsWith(" !echo intended\n> quoted")).toBe(true);
     expect(document.querySelector(".comp.bang")).toBeNull();
     fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
     enter();
@@ -241,11 +340,13 @@ describe("! in the composer", () => {
     svelte.flushSync();
     expect(textarea().value).toBe("!echo x >> log");
     expect(document.querySelector(".comp.bang")).toBeNull();
+    fake.Node.SendTask.mockClear(); // (the run itself was told to the agent)
     fake.Node.SendTask.mockResolvedValue({ id: "m1", from: "user:me", to: "agent:claude", thread: "T", depth: 0, state: "queued", created_at: "", updated_at: "" });
     enter();
     await flush(); await flush();
     expect(fake.Node.Shell).toHaveBeenCalledTimes(1);
     expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+    expect(fake.Node.SendTask.mock.calls[0][0].body).toBe("!echo x >> log");
   });
 
   it("Enter that accepts an input method's candidate neither runs nor sends; the next Enter runs once", async () => {
@@ -367,7 +468,6 @@ describe("! in the composer", () => {
     enter();
     await flush();
     expect(fake.Node.Shell.mock.calls[0].slice(1)).toEqual(["printf retained", "/Users/me"]);
-    expect(fake.Node.SendTask).not.toHaveBeenCalled();
   });
 
   it("what the app left in the field does not become a command by being edited", async () => {

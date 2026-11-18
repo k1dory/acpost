@@ -27,10 +27,14 @@
   import { Node, errText } from "../lib/api";
   import { bytes } from "../lib/names";
   import { openTrace } from "../lib/analytics.svelte";
+  import { shellNote } from "../lib/shell";
+  import ShellNote from "./ShellNote.svelte";
 
   let { m }: { m: Msg } = $props();
   const turn = $derived.by(() => { app.rev; return app.turns[m.id]?.view(); });
   const done = $derived(final(m.state));
+  // A command the person ran, told to the agent: shown as the command, its output folded.
+  const shell = $derived(shellNote(m.body));
   const streamed = $derived(turn ? turn.blocks.filter(b => b.t === "text").map(b => (b as any).text).join("") : "");
   const sender = $derived(who(m.from));
   const agent = $derived(who(m.to));
@@ -48,18 +52,21 @@
   async function takeBack() {
     try { await Node.Cancel(m.id); } catch (e) { app.error = errText(e); }
   }
+  // The person's own message says only when: whose it is is plain from its side of the chat. Another
+  // person's (a shared chat) and a subagent's say who.
+  const own = $derived(!m.depth && m.from.startsWith("user:") && !m.from.includes("@"));
   const replyDiffers = $derived(done && !!m.reply && m.reply.trim() !== streamed.trim() && !streamed.trim().endsWith(m.reply.trim()));
 </script>
 
-<div class="pair" class:focus={app.focus === m.id}>
-  <div class="user" class:editing={editing !== null}>
-    <div class="meta"><Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span><span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">{t("subagent")}</span>{/if}</div>
+<div class="pair" class:focus={app.focus === m.id && app.panel && !app.beside && app.tab === "changes"}>
+  <div class="user" class:editing={editing !== null} class:shell={!!shell}>
+    <div class="meta" class:own>{#if !own}<Avatar addr={m.from} size={20} /><span class="nm">{sender.name}</span>{/if}<span class="muted num">{clock(m.created_at)}</span>{#if m.depth > 0}<span class="chip">{t("subagent")}</span>{/if}</div>
     {#if editing !== null}
       <textarea class="ubody edit" bind:value={editing} readonly={saving} rows="3"
         onkeydown={e => { if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); saveEdit(); } else if (e.key === "Escape" && !saving) editing = null; }}></textarea>
       <div class="eacts"><button class="btn sm" disabled={saving} onclick={() => (editing = null)}>{t("Cancel")}</button><button class="btn primary sm" disabled={saving} onclick={saveEdit}>{t("Save")}</button></div>
     {:else}
-      {#if m.body}<div class="ubody selectable">{m.body}</div>{/if}
+      {#if shell}<ShellNote note={shell} />{:else if m.body}<div class="ubody selectable">{m.body}</div>{/if}
       {#if m.state === "queued"}
         <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button><button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button></div>
       {/if}
@@ -78,7 +85,7 @@
       {:else if m.state === "failed"}<span class="chip crit">{t("failed")}</span>
       {:else if m.state === "cancelled"}<span class="chip">{t("cancelled")}</span>
       {:else if m.state === "expired"}<span class="chip warn">{t("expired")}</span>{/if}
-      {#if m.state !== "queued" && m.to.startsWith("agent:")}<button class="btn ghost sm trace" title={t("Where this turn's time went")} onclick={e => { e.stopPropagation(); openTrace(m.thread || m.id, m.id); }}><Icon name="activity" size={12} /> {t("Trace")}</button>{/if}
+      {#if m.state !== "queued" && m.to.startsWith("agent:")}<button class="btn ghost sm trace" title={t("Where this turn's time went")} aria-label={t("Trace")} onclick={e => { e.stopPropagation(); openTrace(m.thread || m.id, m.id); }}><Icon name="activity" size={13} /></button>{/if}
     </div>
 
     {#if turn}<TurnBlocks view={turn} msg={m.id} msgState={m.state} agent={m.to} />{/if}
@@ -114,17 +121,24 @@
 <style>
   /* One column no wider than the chat: a long line in it (a command, an approval's buttons) wraps
      or is cut there, it does not push the column past a narrow window. */
-  .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 4px 0 32px; }
-  .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 10px; flex-wrap: wrap; }
+  .pair { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 2px 0 22px; }
+  /* The turn whose changed files the panel shows. */
+  .pair.focus > .agent::before { content: ""; position: absolute; left: -12px; top: 0; bottom: 0; width: 2px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 8px; flex-wrap: wrap; }
+  .meta.own { font-size: 11px; margin-bottom: 4px; }
   .nm { font-weight: 600; }
   .user { justify-self: end; max-width: 85%; }
+  /* A command's line is the column's width: its output, unfolded, has the room a terminal gives. */
+  .user.shell { justify-self: stretch; max-width: none; min-width: 0; }
   /* The editor is 360px wide where there is room (the bubble sizes itself to it), the column's
      width where there is not. */
   .user.editing { width: 360px; }
+  .ubody.edit { max-height: none; }
   .edit { width: 100%; min-width: 0; resize: vertical; font: inherit; border: 1px solid var(--accent); outline: 0; }
   .eacts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
   .user .meta { justify-content: flex-end; }
-  .ubody { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
+  /* A pasted path or a stack's line wraps inside the bubble; a long paste scrolls in it. */
+  .ubody { font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); }
   .arts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .art { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-soft); background: var(--card); border-radius: 10px; padding: 7px 10px; font-size: 12.5px; max-width: 280px; }
   .art:hover { border-color: var(--accent); }
@@ -133,11 +147,15 @@
   .fbtn { cursor: default; }
   .fbtn:hover { border-color: var(--accent); }
   .files { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
-  .agent { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .agent > .meta { margin-bottom: 2px; }
-  .trace { margin-left: auto; gap: 4px; color: var(--muted); opacity: 0; }
+  .agent { position: relative; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  /* One line of one height whatever the turn's state is: what the agent is doing is cut, it does not
+     wrap under the name and move the text below. */
+  .agent > .meta { margin-bottom: 2px; flex-wrap: nowrap; min-height: 24px; min-width: 0; }
+  .agent > .meta > :global(*) { flex: none; }
+  .agent > .meta > :global(.working) { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  .trace { margin-left: auto; width: 24px; padding: 0; justify-content: center; color: var(--muted); opacity: 0; }
   .agent:hover .trace, .trace:focus-visible { opacity: 1; }
   .err .hint { margin-top: 6px; opacity: .85; }
-  .err { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
+  .err { display: grid; grid-template-columns: minmax(0, 1fr); overflow-wrap: anywhere; gap: 2px; padding: 10px 12px; border-radius: var(--r-row); background: var(--crit-bg); color: var(--crit); font-size: 13px; }
   .wait { display: grid; gap: 8px; } .wait .sk { height: 12px; }
 </style>

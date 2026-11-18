@@ -10,7 +10,7 @@
   {#each entries as e}
     <div class="e" class:done={e.status === "completed"} class:now={e.status === "in_progress"}>
       <span class="st">{#if e.status === "completed"}<Icon name="check" size={12} />{:else if e.status === "in_progress"}<span class="spin"></span>{:else}<span class="ring"></span>{/if}</span>
-      <span>{e.content}</span>
+      <span class="tx">{e.content}</span>
     </div>
   {/each}
 </div>
@@ -23,6 +23,7 @@
   .e { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; color: var(--ink-2); }
   .e.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
   .e.now { color: var(--ink); font-weight: 500; }
-  .st { width: 14px; display: grid; place-items: center; padding-top: 3px; color: var(--good); }
+  .tx { min-width: 0; overflow-wrap: anywhere; }
+  .st { width: 14px; flex: none; display: grid; place-items: center; padding-top: 3px; color: var(--good); }
   .ring { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--line); }
 </style>

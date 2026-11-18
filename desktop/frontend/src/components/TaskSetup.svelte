@@ -130,9 +130,9 @@
   .warn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); margin-left: 2px; }
   .cloud-down { font-size: 11.5px; color: var(--warn); }
   .dir { position: relative; }
-  .pick { height: 28px; padding: 0 10px; font-size: 12px; gap: 6px; cursor: default; max-width: 340px; }
+  .pick { height: 28px; padding: 0 10px; font-size: 12px; gap: 6px; cursor: default; max-width: min(340px, 100%); }
   .cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-  .menu { position: absolute; left: 50%; transform: translateX(-50%); top: 34px; z-index: 30; width: 440px; padding: 6px; display: grid; }
+  .menu { position: absolute; left: 50%; transform: translateX(-50%); top: 34px; z-index: 30; width: min(440px, calc(100vw - 24px)); padding: 6px; display: grid; }
   .searchrow { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; color: var(--muted); border-bottom: 1px solid var(--line-soft); margin-bottom: 4px; }
   .q { flex: 1; border: 0; outline: 0; background: transparent; font-size: 13px; color: var(--ink); }
   .items { max-height: 300px; overflow: auto; display: grid; }

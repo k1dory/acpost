@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -68,9 +69,21 @@ func TestShellStop(t *testing.T) {
 	}
 }
 
-func TestShellKeepsTheFirstOutput(t *testing.T) {
-	r, err := runShell("", "head -c 400000 /dev/zero | tr '\\0' x", "", time.Minute)
-	if err != nil || !r.Cut || len(r.Output) != shellOutput {
+// Of more output than is kept: its beginning and its end (where a build says why it failed), and
+// how much between them is left out.
+func TestShellKeepsTheBeginningAndTheEnd(t *testing.T) {
+	r, err := runShell("", "echo first; head -c 900000 /dev/zero | tr '\\0' x; echo; echo the error", "", time.Minute)
+	if err != nil || !r.Cut {
+		t.Fatalf("%d bytes, cut %v, %v", len(r.Output), r.Cut, err)
+	}
+	const total = 6 + 900000 + 1 + 10
+	note := fmt.Sprintf("\n[… %d bytes left out …]\n", total-shellOutput)
+	if !strings.HasPrefix(r.Output, "first\nxxx") || !strings.HasSuffix(r.Output, "xxx\nthe error\n") || !strings.Contains(r.Output, note) || len(r.Output) != shellOutput+len(note) {
+		t.Fatalf("%d bytes: %q … %q", len(r.Output), r.Output[:20], r.Output[len(r.Output)-20:])
+	}
+	// All of what fits is kept as it was written, nothing said of a cut.
+	r, err = runShell("", "head -c 200000 /dev/zero | tr '\\0' y", "", time.Minute)
+	if err != nil || r.Cut || r.Output != strings.Repeat("y", 200000) {
 		t.Fatalf("%d bytes, cut %v, %v", len(r.Output), r.Cut, err)
 	}
 }
