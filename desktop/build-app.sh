@@ -4,8 +4,11 @@ set -eu
 cd "$(dirname "$0")"
 # npm ci: the lock file as it is. Vite empties dist, .keep (go:embed needs a file there) comes back.
 (cd frontend && npm ci --no-audit --no-fund >/dev/null && npm run build >/dev/null && touch dist/.keep)
+# The version both binaries say (Settings, acpost --version): the nearest tag, commits since, the commit.
+v=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+ld="-w -s -X github.com/k1dory/acpost/internal/node.Version=$v"
 export CGO_ENABLED=1 CGO_CFLAGS=-mmacosx-version-min=12.0 CGO_LDFLAGS=-mmacosx-version-min=12.0 MACOSX_DEPLOYMENT_TARGET=12.0
-go build -tags production -trimpath -buildvcs=false -ldflags="-w -s" -o bin/acpost .
+go build -tags production -trimpath -buildvcs=false -ldflags="$ld" -o bin/acpost .
 app=bin/acpost.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -13,7 +16,7 @@ cp build/darwin/icons.icns "$app/Contents/Resources/"
 cp bin/acpost "$app/Contents/MacOS/acpost"
 # The acpost command, for the agents the app's node starts (cli.go): pure Go, no cgo.
 mkdir -p "$app/Contents/Helpers"
-(cd .. && CGO_ENABLED=0 go build -trimpath -ldflags="-w -s" -o "desktop/$app/Contents/Helpers/acpost" ./cmd/acpost)
+(cd .. && CGO_ENABLED=0 go build -trimpath -ldflags="$ld" -o "desktop/$app/Contents/Helpers/acpost" ./cmd/acpost)
 cp build/darwin/Info.plist "$app/Contents/"
 xattr -cr "$app"
 codesign --force --deep --sign - "$app"

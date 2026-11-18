@@ -447,6 +447,10 @@
             <div class="t"><b>{t("Node")}</b><span class="muted small mono">{app.conn?.url}</span></div>
             <span class="chip" class:good={app.conn?.ok}>{app.conn?.node}</span>
           </div>
+          <div class="row">
+            <div class="t"><b>{t("Version")}</b>{#if app.conn?.nodeVersion && app.conn.nodeVersion !== app.conn.app}<span class="muted small mono">{t("node")} {app.conn.nodeVersion}</span>{/if}</div>
+            <span class="chip mono" title={t("The app's version")}>acpost {app.conn?.app || "dev"}</span>
+          </div>
         </div></div>
       {/if}
     </div>

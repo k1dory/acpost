@@ -338,6 +338,9 @@ export const ru: Record<string, string> = {
   "Larger": "Больше",
   "The usual size": "Обычный размер",
   "Node": "Узел",
+  "node": "узел",
+  "Version": "Версия",
+  "The app's version": "Версия приложения",
 
   // Errors
   "What to do": "Что сделать",

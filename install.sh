@@ -21,7 +21,8 @@ command -v go >/dev/null || { echo "install.sh: Go is needed (https://go.dev/dl)
 bin=${ACPOST_BIN:-$HOME/.local/bin}
 mkdir -p "$bin"
 # Built beside and moved over: a node running the old command keeps running it.
-CGO_ENABLED=0 go build -trimpath -ldflags="-w -s" -o "$bin/.acpost.new" ./cmd/acpost
+v=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+CGO_ENABLED=0 go build -trimpath -ldflags="-w -s -X github.com/k1dory/acpost/internal/node.Version=$v" -o "$bin/.acpost.new" ./cmd/acpost
 mv -f "$bin/.acpost.new" "$bin/acpost"
 echo "acpost: $bin/acpost"
 case ":$PATH:" in
