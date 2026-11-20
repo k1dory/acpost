@@ -385,6 +385,10 @@ export class Chat {
     "messages"?: number;
     "running"?: number;
     "queued"?: number;
+
+    /**
+     * turns failed since the last that ended otherwise
+     */
     "failed"?: number;
     "folder"?: string;
 

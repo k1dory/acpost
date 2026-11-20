@@ -85,6 +85,10 @@ describe("/permissions", () => {
     app.conn = { ok: true };
     app.draft.agent = "agent:claude"; app.draft.cwd = "/work/proj";
     const turn = new Turn().add([{ seq: 1, time: "2026-11-20T10:00:00Z", kind: "tool_call", data: JSON.stringify({ id: "c1", title: "git push", kind: "execute", status: "failed", input: { command: "git push --force" }, output: classifierDenial + "[Destructive]. If you have other tasks…" }) }]);
+    app.agents.push({ name: "codex", address: "agent:codex", driver: "acp", queued: 0, running: 0, product: "codex-acp" });
+    app.chat = { key: "thread:m1", kind: "thread", thread: "m1", title: "x", updated: "" } as any;
+    app.thread = "m1";
+    app.target = "agent:codex"; // the chat is addressed to another agent by now
     app.msgs = [{ id: "m1", thread: "m1", from: "user:me", to: "agent:claude", depth: 0, state: "done", body: "x", created_at: "", updated_at: "" } as any];
     app.turns = { m1: turn } as any;
     app.openPermissions();
@@ -105,6 +109,7 @@ describe("/permissions", () => {
     for (let i = 0; i < 5 && app.permissionsFor !== null; i++) await settle(svelte);
     expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
     expect(fake.Node.SendTask.mock.calls[0][0].body).toContain("git push --force");
+    expect(fake.Node.SendTask.mock.calls[0][0].to).toBe("agent:claude"); // to the agent whose call it was
     expect(app.permissionsFor).toBeNull();
   });
 });

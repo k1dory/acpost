@@ -324,6 +324,18 @@ class App {
       ...this.history.map((h, i) => ["history:" + i, h.turn, this.chat?.agent ?? ""] as [string, Turn, string]),
     ]);
   }
+  /** A message the app says for the person, to agent `to` of the open chat (an approval of what
+   * auto mode blocked): its own, not the draft's — the person's text and its @names stay theirs.
+   * Sent once whatever the retries: its key is kept by `id`, as a command's run keeps its own. */
+  private ownSends = new Map<string, { key: string; what?: string }>();
+  async sendOwn(id: string, body: string, to: string): Promise<boolean> {
+    const d = this.draftOf();
+    if (d.busy || !this.chat) return false;
+    const own = this.ownSends.get(id) ?? this.ownSends.set(id, { key: newId() }).get(id)!;
+    const at = { ...this.sendAt(d), target: to || this.target, own };
+    d.busy = true;
+    try { return await this.send(body, [], d, undefined, at); } finally { d.busy = false; }
+  }
   /** Opens /permissions for the chat's folder: on what auto mode blocked in it, when it blocked
    * anything (as Claude Code does), else on the rules that allow. */
   openPermissions(tab?: App["permissionsTab"]) {
@@ -443,7 +455,9 @@ class App {
   notify(title: string, body: string) {
     let on = true;
     try { on = localStorage.getItem("notify") !== "0"; } catch {}
-    if (on && !document.hasFocus()) Node.Notify(title, body).catch(() => {});
+    // Whether the window is in front is the app's side to say (the page may think it has the focus
+    // while the app is in the background): it shows the notification only when it is not.
+    if (on) Node.Notify(title, body).catch(() => {});
   }
 
   /** What waits for the user: approvals asked (notified once each). */

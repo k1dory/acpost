@@ -250,6 +250,12 @@ func typeOf(name, said string, b []byte) string {
 // failure or a crash midway leaves what was there. A new file gets perm under the umask, as
 // os.WriteFile gives it; keep (when not nil) is an existing file's mode, kept as it was.
 func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool) error {
+	return writeAtomicIf(path, b, perm, keep, replace, nil)
+}
+
+// writeAtomicIf is writeAtomic that asks check last, once the new content is on disk beside the
+// file and just before it takes the file's place: an error from it leaves the file as it is.
+func writeAtomicIf(path string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool, check func() error) error {
 	dir := filepath.Dir(path)
 	mode := perm
 	if keep != nil {
@@ -288,6 +294,11 @@ func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, rep
 	}
 	if err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	if replace {
 		err = os.Rename(tmp, path)

@@ -37,15 +37,20 @@ func (s *Store) Conversations(ctx context.Context, party *Party, before string, 
 		where = append(where, cond)
 		args = append(args, pargs...)
 	}
-	// Failed: the turns that failed since the thread's last one that ended otherwise (done, or
-	// stopped by a person): a failure answered by a turn that went well is no longer the thread's state.
-	q := `WITH ok AS (SELECT thread AS ok_thread, max(created_at) AS ok_at FROM messages WHERE state IN ('done', 'cancelled') GROUP BY thread)
-		SELECT thread, max(updated_at) AS upd, min(created_at), count(*), sum(state = 'running'), sum(state = 'queued'),
-		sum(state IN ('failed', 'expired') AND created_at > coalesce(ok_at, -1)), group_concat(DISTINCT recipient)
-		FROM messages LEFT JOIN ok ON ok_thread = thread`
+	// What the party sees, once: the threads and their counts are of these messages only (a turn it
+	// cannot see changes nothing it is told).
+	vis := "(SELECT * FROM messages)"
 	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
+		vis = "(SELECT * FROM messages WHERE " + strings.Join(where, " AND ") + ")"
 	}
+	// Failed: the turns that failed after the thread's last one that ended otherwise (done, or
+	// stopped by a person), in the order they were sent (seq): a failure answered by a turn that
+	// went well is no longer the thread's state.
+	q := `WITH vis AS ` + vis + `,
+		ok AS (SELECT thread AS ok_thread, max(seq) AS ok_seq FROM vis WHERE state IN ('done', 'cancelled') GROUP BY thread)
+		SELECT thread, max(updated_at) AS upd, min(created_at), count(*), sum(state = 'running'), sum(state = 'queued'),
+		sum(state IN ('failed', 'expired') AND seq > coalesce(ok_seq, -1)), group_concat(DISTINCT recipient)
+		FROM vis LEFT JOIN ok ON ok_thread = thread`
 	q += " GROUP BY thread"
 	if before != "" {
 		ts, thread, _ := strings.Cut(before, "/")

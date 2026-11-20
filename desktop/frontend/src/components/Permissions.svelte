@@ -5,7 +5,6 @@
   import { Node, errText } from "../lib/api";
   import Icon from "./Icon.svelte";
   import { ruleFor, approveText, type Blocked } from "../lib/blocked";
-  import { sendNow } from "./genui/draft";
   import { clock } from "../lib/format";
 
   // /permissions, as Claude Code draws it in its terminal: the rules that let a tool run without
@@ -56,9 +55,9 @@
   let approving = $state("");
   async function approve(b: Blocked) {
     approving = b.msg + ":" + b.id;
-    // To the agent whose call it was (a chat shared with others may be addressed to another now).
-    if (b.to && app.target !== b.to && app.agents.some(a => a.address === b.to)) app.target = b.to;
-    try { if (await sendNow(approveText(b, t("I approve this action that auto mode blocked; run it again:")))) close(); }
+    // To the agent whose call it was (a chat shared with others may be addressed to another now),
+    // as a message of its own: the person's draft is left as it is.
+    try { if (await app.sendOwn("approve:" + b.msg + ":" + b.id, approveText(b, t("I approve this action that auto mode blocked; run it again:")), b.to)) close(); }
     finally { approving = ""; }
   }
   const short = (p: string) => (app.home && p.startsWith(app.home) ? "~" + p.slice(app.home.length) : p);

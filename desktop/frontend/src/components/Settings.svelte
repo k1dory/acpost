@@ -2,7 +2,7 @@
   import { agentLabel, tilde as tildeOf } from "../lib/names";
   import { mcpRequest, type MCP, type MCPEdit } from "../lib/mcp";
   import { newScheduleDraft } from "../lib/records";
-  import { t, i18n, type Lang } from "../lib/i18n.svelte";
+  import { t, tr, i18n, type Lang } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { Node, errText, errInfo } from "../lib/api";
   import Icon from "./Icon.svelte";
@@ -149,6 +149,12 @@
   let notify = $state(true);
   try { notify = localStorage.getItem("notify") !== "0"; } catch {}
   function setNotify(v: boolean) { notify = v; try { localStorage.setItem("notify", v ? "1" : "0"); } catch {} }
+  // One now, the window in front or not: macOS asks for permission the first time; refused, it says where to allow it.
+  let noteErr = $state("");
+  async function testNotify() {
+    noteErr = "";
+    try { await Node.NotifyTest("acpost", t("Notifications work")); } catch (e) { noteErr = errText(e); }
+  }
 </script>
 
 <section class="set">
@@ -417,8 +423,10 @@
         <div class="card panel"><div class="inner">
           <div class="row">
             <div class="t"><b>{t("Notifications")}</b><span class="muted small">{t("When a turn ends or an agent waits for you, and the app is in the background")}</span></div>
+            <button class="btn ghost sm" onclick={testNotify}>{t("Test")}</button>
             <button class="sw" class:on={notify} onclick={() => setNotify(!notify)} aria-label={t("Notifications")}><span></span></button>
           </div>
+          {#if noteErr}<div class="row"><span class="muted small selectable">{tr(noteErr)}</span></div>{/if}
           <div class="row">
             <div class="t"><b>{t("Appearance")}</b></div>
             <div class="seg">

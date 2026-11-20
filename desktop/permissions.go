@@ -149,7 +149,7 @@ func editPermList(path, key, rule string, add bool) error {
 	return fmt.Errorf("%s kept changing while it was edited: not written", path)
 }
 
-// permBeforeWrite, in tests, runs between an edit's read and its write.
+// permBeforeWrite, in tests, runs at the check before the write takes the file's place.
 var permBeforeWrite func()
 
 var errPermChanged = errors.New("the settings file changed while it was edited")
@@ -225,29 +225,30 @@ func editPermOnce(path, key, rule string, add bool) error {
 		return err
 	}
 	out.WriteByte('\n')
-	if permBeforeWrite != nil {
-		permBeforeWrite()
-	}
-	// Still what was read (or still none): else what changed it is read and edited again.
-	now, err := os.ReadFile(path)
-	if !existed {
-		if err == nil {
-			return errPermChanged
+	// Written only if the file is still what was read (or still none), checked last — the new
+	// content already beside it, just before it takes the file's place; else it is read and edited
+	// again. Claude Code writes its settings without a lock to share: a write of its own in the
+	// instant between that check and the rename is the one case this cannot see.
+	same := func() error {
+		if permBeforeWrite != nil {
+			permBeforeWrite()
 		}
-		if !errors.Is(err, fs.ErrNotExist) {
+		now, err := os.ReadFile(path)
+		switch {
+		case !existed && errors.Is(err, fs.ErrNotExist):
+			return nil
+		case !existed && err == nil, existed && err == nil && !bytes.Equal(now, b), existed && errors.Is(err, fs.ErrNotExist):
+			return errPermChanged
+		case err != nil:
 			return err
 		}
-		// None yet: linked in only where there is still none.
-		err := writeAtomic(path, out.Bytes(), 0o644, nil, false)
-		if errors.Is(err, fs.ErrExist) {
-			return errPermChanged
-		}
-		return err
+		return nil
 	}
-	if err != nil || !bytes.Equal(now, b) {
-		return errPermChanged
+	err = writeAtomicIf(path, out.Bytes(), 0o644, keep, existed, same)
+	if !existed && errors.Is(err, fs.ErrExist) {
+		return errPermChanged // made meanwhile: linked in only where there is none
 	}
-	return writeAtomic(path, out.Bytes(), 0o644, keep, true)
+	return err
 }
 
 // object is a JSON object whose members keep their order and their text.

@@ -518,10 +518,20 @@ export function MoveChat(chat: string, folder: string): $CancellablePromise<void
 }
 
 /**
- * Notify shows a notification of the system (asked for once; nothing when refused or unavailable).
+ * Notify shows a notification of the system when the app's window is not the one in front (the
+ * person is elsewhere): asked for once; nothing when refused or unavailable. Whether the window is
+ * in front is the system's to say — the page's own document.hasFocus() is not (a web view may keep
+ * it while the app is in the background).
  */
 export function Notify(title: string, body: string): $CancellablePromise<void> {
     return $Call.ByID(1005772201, title, body);
+}
+
+/**
+ * NotifyTest shows a notification now, the window in front or not: what the person sees, or why not.
+ */
+export function NotifyTest(title: string, body: string): $CancellablePromise<void> {
+    return $Call.ByID(2264494017, title, body);
 }
 
 /**

@@ -40,6 +40,8 @@ export function blockedIn(turns: [string, Turn, string?][]): Blocked[] {
 /** A rule that would allow the call, as Claude Code writes them: a command as it is (one line), else
  * its program and subcommand with anything after them; an MCP tool by its name; else the tool's kind. */
 export function ruleFor(b: Pick<Blocked, "command" | "title" | "kind"> & { name?: string }): string {
+  // An MCP tool is allowed by its name, whatever its arguments say (one may be called "command").
+  if (b.name && /^mcp__\w+/.test(b.name)) return b.name;
   if (b.command) {
     const one = b.command.trim();
     if (!/[\n\r]/.test(one) && one.length <= 300) return `Bash(${one})`;
@@ -47,7 +49,6 @@ export function ruleFor(b: Pick<Blocked, "command" | "title" | "kind"> & { name?
     for (const w of one.split(/\s+/)) { if (!/^[\w./@:-]+$/.test(w) || words.length === 2) break; words.push(w); }
     return words.length ? `Bash(${words.join(" ")}:*)` : "Bash";
   }
-  if (b.name && /^mcp__\w+/.test(b.name)) return b.name; // the tool as Claude Code names it
   if (/^mcp__\w+/.test(b.title)) return b.title.split(/\s/)[0];
   const byKind: Record<string, string> = { read: "Read", edit: "Edit", delete: "Edit", move: "Edit", fetch: "WebFetch", search: "Grep", execute: "Bash" };
   return byKind[b.kind] ?? b.title.split(/\s/)[0] ?? "";

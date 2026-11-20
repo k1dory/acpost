@@ -216,6 +216,20 @@ describe("an answer from a reply", () => {
     expect(calls[1].idem).toBe(calls[0].idem);
   });
 
+  it("sent is not sent again by Enter in the own answer's field", async () => {
+    await withComposer();
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", thread: "t1", from: "user:me", to: "agent:claude", depth: 0, state: "queued", body: "", created_at: "", updated_at: "" });
+    await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }));
+    const own = q<HTMLInputElement>(".ask .own input");
+    own.value = "MySQL"; own.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    for (let i = 0; i < 2; i++) {
+      own.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      flushSync(); await flush(); flushSync();
+    }
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+  });
+
   it("of the person's own answer takes the place of the options picked", async () => {
     await withComposer();
     await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }));

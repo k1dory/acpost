@@ -43,7 +43,7 @@
     sent = keep.sent = now;
   }
   async function send() {
-    if (!now || busy) return;
+    if (!now || busy || posted === now) return; // sent: not again (Enter in the field too)
     busy = true;
     const a = now;
     try { if (await sendNow(a)) posted = keep.posted = a; } finally { busy = false; }

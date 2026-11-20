@@ -5,6 +5,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -54,8 +55,35 @@ func (n *Node) DeleteMCPServer(name string) error {
 	return err
 }
 
-// Notify shows a notification of the system (asked for once; nothing when refused or unavailable).
+// Notify shows a notification of the system when the app's window is not the one in front (the
+// person is elsewhere): asked for once; nothing when refused or unavailable. Whether the window is
+// in front is the system's to say — the page's own document.hasFocus() is not (a web view may keep
+// it while the app is in the background).
 func (n *Node) Notify(title, body string) error {
+	if n.win != nil && n.win.IsFocused() {
+		return nil
+	}
+	return n.notify(title, body)
+}
+
+// NotifyTest shows a notification now, the window in front or not: what the person sees, or why not.
+func (n *Node) NotifyTest(title, body string) error {
+	if n.notes == nil {
+		return errors.New("the system's notifications are not available to the app")
+	}
+	if err := n.notify(title, body); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	ok := n.noteOK > 0
+	n.mu.Unlock()
+	if !ok {
+		return errors.New("macOS does not allow the app's notifications: System Settings → Notifications → acpost")
+	}
+	return nil
+}
+
+func (n *Node) notify(title, body string) error {
 	if n.notes == nil {
 		return nil
 	}
