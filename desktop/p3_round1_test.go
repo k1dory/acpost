@@ -70,4 +70,16 @@ func TestNotifyTestSaysWhyNot(t *testing.T) {
 	if err := (&Node{}).NotifyTest("acpost", "works"); err == nil {
 		t.Fatal("no notifications: said")
 	}
+	// Refused, then allowed in System Settings: the test asks again, and so do the next notifications.
+	later := &stubNotes{allow: false}
+	n := &Node{notes: later}
+	n.Notify("done", "x")
+	later.allow = true
+	if err := n.NotifyTest("acpost", "works"); err != nil || later.sent.Load() != 1 {
+		t.Fatalf("allowed since: %v, %d sent", err, later.sent.Load())
+	}
+	n.Notify("done", "y")
+	if later.sent.Load() != 2 {
+		t.Fatalf("a notification after the test: %d sent", later.sent.Load())
+	}
 }

@@ -23,7 +23,7 @@ describe("/permissions", () => {
   it("typed for Claude Code opens its rules for the chat's folder; nothing is sent", async () => {
     const svelte = await import("svelte");
     const { app } = await import("../lib/state.svelte");
-    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0, product: "claude-agent-acp" }];
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", node: "lev-mac", queued: 0, running: 0, product: "claude-agent-acp" }];
     app.conn = { ok: true };
     app.draft.agent = "agent:claude";
     app.draft.cwd = "/work/proj";
@@ -42,8 +42,11 @@ describe("/permissions", () => {
 
   it("is not offered for an agent that is not Claude Code", async () => {
     const { app } = await import("../lib/state.svelte");
-    app.agents = [{ name: "codex", address: "agent:codex", driver: "acp", queued: 0, running: 0, product: "codex-acp" }];
+    app.agents = [{ name: "codex", address: "agent:codex", driver: "acp", node: "lev-mac", queued: 0, running: 0, product: "codex-acp" }];
     expect(app.isClaude("agent:codex")).toBe(false);
+    // A Claude agent of another node (its files are that machine's), as the hub lists it.
+    app.agents.push({ name: "claude@box", address: "agent:claude@box", driver: "remote", node: "box", queued: 0, running: 0, product: "claude-agent-acp" });
+    expect(app.isClaude("agent:claude@box")).toBe(false);
   });
 
   it("lists each tab's rules with where they are kept; adds to the file chosen, removes from the rule's own", async () => {
@@ -81,7 +84,7 @@ describe("/permissions", () => {
     fake.Node.PermissionRules.mockResolvedValue([src("user"), src("local")]);
     fake.Node.SendTask.mockResolvedValue({ id: "m2", thread: "t2", from: "user:me", to: "agent:claude", depth: 0, state: "queued", body: "", created_at: "", updated_at: "" });
     fake.Node.Events.mockResolvedValue([]);
-    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0, product: "claude-agent-acp" }];
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", node: "lev-mac", queued: 0, running: 0, product: "claude-agent-acp" }];
     app.conn = { ok: true };
     app.draft.agent = "agent:claude"; app.draft.cwd = "/work/proj";
     const turn = new Turn().add([{ seq: 1, time: "2026-11-20T10:00:00Z", kind: "tool_call", data: JSON.stringify({ id: "c1", title: "git push", kind: "execute", status: "failed", input: { command: "git push --force" }, output: classifierDenial + "[Destructive]. If you have other tasks…" }) }]);
@@ -111,5 +114,25 @@ describe("/permissions", () => {
     expect(fake.Node.SendTask.mock.calls[0][0].body).toContain("git push --force");
     expect(fake.Node.SendTask.mock.calls[0][0].to).toBe("agent:claude"); // to the agent whose call it was
     expect(app.permissionsFor).toBeNull();
+  });
+
+  it("an approval whose answer was lost is sent again as it was first: the same request, the same key", async () => {
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", node: "lev-mac", queued: 0, running: 0, product: "claude-agent-acp" }];
+    app.conn = { ok: true };
+    app.chat = { key: "session:s1", kind: "session", session: "s1", agent: "agent:claude", title: "x", updated: "" } as any;
+    app.target = "agent:claude";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("the answer was lost"))
+      .mockResolvedValue({ id: "m2", thread: "t2", from: "user:me", to: "agent:claude", depth: 0, state: "queued", body: "", created_at: "", updated_at: "" });
+    fake.Node.Events.mockResolvedValue([]);
+    expect(await app.sendOwn("approve:x", "I approve", "agent:claude")).toBe(false);
+    // Meanwhile the session became a thread (the node made one of the first request).
+    app.chat = { key: "thread:t2", kind: "thread", thread: "t2", agent: "agent:claude", title: "x", updated: "" } as any;
+    app.thread = "t2";
+    expect(await app.sendOwn("approve:x", "I approve", "agent:claude")).toBe(true);
+    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(b.idem).toBe(a.idem);
+    expect(b.session).toBe("s1");
+    expect(b.thread).toBeUndefined();
   });
 });

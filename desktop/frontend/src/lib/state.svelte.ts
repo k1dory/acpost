@@ -327,14 +327,21 @@ class App {
   /** A message the app says for the person, to agent `to` of the open chat (an approval of what
    * auto mode blocked): its own, not the draft's — the person's text and its @names stay theirs.
    * Sent once whatever the retries: its key is kept by `id`, as a command's run keeps its own. */
-  private ownSends = new Map<string, { key: string; what?: string }>();
+  // The first try's whole request is kept with its key: tried again (its answer lost), it is that
+  // request again — where it went then (a session that became a thread since is not another).
+  private ownSends = new Map<string, ReturnType<App["sendAt"]> & { own: { key: string; what?: string } }>();
   async sendOwn(id: string, body: string, to: string): Promise<boolean> {
     const d = this.draftOf();
     if (d.busy || !this.chat) return false;
-    const own = this.ownSends.get(id) ?? this.ownSends.set(id, { key: newId() }).get(id)!;
-    const at = { ...this.sendAt(d), target: to || this.target, own };
+    let at = this.ownSends.get(id);
+    if (!at) this.ownSends.set(id, at = { ...this.sendAt(d), target: to || this.target, own: { key: newId() } });
+    at.epoch = d.epoch; // the draft it is sent beside now (it has no text of this message to lose)
     d.busy = true;
-    try { return await this.send(body, [], d, undefined, at); } finally { d.busy = false; }
+    try {
+      const ok = await this.send(body, [], d, undefined, at);
+      if (ok) this.ownSends.delete(id);
+      return ok;
+    } finally { d.busy = false; }
   }
   /** Opens /permissions for the chat's folder: on what auto mode blocked in it, when it blocked
    * anything (as Claude Code does), else on the rules that allow. */
@@ -345,8 +352,9 @@ class App {
   }
   /** Whether an agent is Claude Code (its rules are its settings files): by the program behind it. */
   isClaude(addr: string): boolean {
-    const a = this.agents.find(x => x.address === addr);
-    return !!a && !a.node && /claude/i.test(a.product || a.name);
+    // This node's ACP agents (their settings files are this Mac's); `node` names this node too.
+    const a = this.localAgents().find(x => x.address === addr);
+    return !!a && /claude/i.test(a.product || a.name);
   }
   viewMenu = $state(false); // the title bar's view menu open
   asking = $state<any[]>([]); // approvals waiting

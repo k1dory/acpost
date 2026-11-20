@@ -71,16 +71,24 @@ func (n *Node) NotifyTest(title, body string) error {
 	if n.notes == nil {
 		return errors.New("the system's notifications are not available to the app")
 	}
-	if err := n.notify(title, body); err != nil {
+	// Asked again, not taken from the first answer: the person may have allowed them in System
+	// Settings since (macOS answers at once once the person has decided).
+	n.noteAsk.Do(func() {}) // the first ask is this one, not a later Notify's
+	ok, err := n.notes.RequestNotificationAuthorization()
+	n.mu.Lock()
+	n.noteOK = -1
+	if ok && err == nil {
+		n.noteOK = 1
+	}
+	n.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	n.mu.Lock()
-	ok := n.noteOK > 0
-	n.mu.Unlock()
 	if !ok {
 		return errors.New("macOS does not allow the app's notifications: System Settings → Notifications → acpost")
 	}
-	return nil
+	return n.notes.SendNotification(notifications.NotificationOptions{
+		ID: fmt.Sprintf("acpost-%d", time.Now().UnixNano()), Title: title, Body: body})
 }
 
 func (n *Node) notify(title, body string) error {
