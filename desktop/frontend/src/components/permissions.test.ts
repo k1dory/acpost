@@ -51,13 +51,14 @@ describe("/permissions", () => {
 
   it("lists each tab's rules with where they are kept; adds to the file chosen, removes from the rule's own", async () => {
     const svelte = await import("svelte");
-    fake.Node.PermissionRules.mockResolvedValue([src("user", { allow: ["WebSearch", "WebSearch"] }), src("project"), src("local", { allow: ["Bash(ls:*)"], deny: ["Read(./.env)"] })]);
+    fake.Node.PermissionRules.mockResolvedValue([src("user", { allow: ["WebSearch", "WebSearch"] }), src("project"), src("local", { allow: ["Bash(ls:*)"], deny: ["Read(./.env)"], git: "tracked" })]);
     const Permissions = (await import("./Permissions.svelte")).default;
     mounted.push(svelte.mount(Permissions, { target: document.body, props: { folder: "/work/proj" } }));
     await settle(svelte);
     expect(fake.Node.PermissionRules).toHaveBeenCalledWith("/work/proj");
     const rules = () => [...document.querySelectorAll(".rule .r")].map(e => e.textContent);
     expect(rules()).toEqual(["WebSearch", "Bash(ls:*)"]);
+    expect(document.querySelector(".warn")!.textContent).toContain("Git tracks this file"); // said where it is saved to
     (document.querySelectorAll(".tab")[3] as HTMLButtonElement).click(); // Deny
     svelte.flushSync();
     expect(rules()).toEqual(["Read(./.env)"]);

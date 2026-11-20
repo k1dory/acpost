@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -158,31 +157,47 @@ func TestPermissionEditKeepsAChangeMadeMeanwhile(t *testing.T) {
 	}
 }
 
-// A rule saved for this Mac only keeps its file out of the project's commits.
-func TestPermissionEditLocalIsNotCommitted(t *testing.T) {
+// The local settings are said to go into the project's commits when git would take them: tracked,
+// or not ignored; ignored, they are not. On another node, nothing of this Mac is read.
+func TestPermissionRulesSayWhenLocalIsCommitted(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
-	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, out)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
 	}
+	run("init", "-q")
 	sub := filepath.Join(repo, "app", "[tenant] *")
-	os.MkdirAll(sub, 0o755)
-	if err := (&Node{}).PermissionEdit(sub, "local", "allow", "Bash(ls:*)", true); err != nil {
-		t.Fatal(err)
+	os.MkdirAll(filepath.Join(sub, ".claude"), 0o755)
+	local := func() string {
+		t.Helper()
+		got, err := (&Node{}).PermissionRules(sub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got[len(got)-1].Git
 	}
-	if err := exec.Command("git", "-C", repo, "check-ignore", "-q", "app/[tenant] */.claude/settings.local.json").Run(); err != nil {
-		t.Fatal("the local settings would be committed")
+	if g := local(); g != "unignored" {
+		t.Fatalf("no file yet, nothing ignores it: %q", g)
 	}
-	// Again: not added twice.
-	(&Node{}).PermissionEdit(sub, "local", "allow", "Bash(pwd:*)", true)
-	b, _ := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
-	if n := strings.Count(string(b), "settings.local.json"); n != 1 {
-		t.Fatalf("excluded %d times:\n%s", n, b)
+	os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("settings.local.json\n"), 0o644)
+	if g := local(); g != "" {
+		t.Fatalf("ignored: %q", g)
 	}
-	// On another node: its settings are that machine's, not this Mac's.
+	f := filepath.Join(sub, ".claude", "settings.local.json")
+	os.WriteFile(f, []byte("{}"), 0o644)
+	run("add", "-f", "--", f)
+	run("commit", "-q", "-m", "x")
+	if g := local(); g != "tracked" {
+		t.Fatalf("tracked though ignored: %q", g)
+	}
 	t.Setenv("ACPOST_NODE", "https://box:8765")
 	if _, err := (&Node{}).PermissionRules(sub); err == nil {
 		t.Fatal("another node's settings read here")

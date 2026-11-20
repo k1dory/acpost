@@ -37,6 +37,7 @@ type PermSource struct {
 	Dirs   []string `json:"dirs"`            // additionalDirectories
 	Mode   string   `json:"mode,omitempty"`  // defaultMode
 	Error  string   `json:"error,omitempty"` // the file is there but not read (not JSON): not written either
+	Git    string   `json:"git,omitempty"`   // tracked / unignored: it goes into the project's commits (gitState)
 }
 
 // permLists are the lists of "permissions" an edit may change, by the name the app gives them.
@@ -83,6 +84,9 @@ func (n *Node) PermissionRules(folder string) ([]PermSource, error) {
 	out := make([]PermSource, 0, len(paths))
 	for _, p := range paths {
 		s := PermSource{Source: p[0], Path: p[1], Allow: []string{}, Ask: []string{}, Deny: []string{}, Dirs: []string{}}
+		if p[0] == "local" {
+			s.Git = gitState(p[1]) // this Mac's only, if its repository keeps it out
+		}
 		b, err := os.ReadFile(p[1])
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
@@ -142,74 +146,42 @@ func (n *Node) PermissionEdit(folder, source, list, rule string, add bool) error
 	if path == "" {
 		return fmt.Errorf("no settings %q here", source)
 	}
-	if err := editPermList(path, key, rule, add); err != nil {
-		return err
-	}
-	if source == "local" && add {
-		gitExclude(path) // this Mac's only, as the tab says (Claude Code does the same for it)
-	}
-	return nil
+	return editPermList(path, key, rule, add)
 }
 
-// gitExclude keeps a file out of its repository's commits, as Claude Code does for the local
-// settings it writes: its path added to the repository's info/exclude unless git ignores it already.
-// Not a repository, or git not at hand: nothing to do.
-func gitExclude(file string) {
+// gitState says whether a settings file would go into its repository's commits: "tracked" (git
+// has it), "unignored" (a commit of everything would take it), or "" (ignored, not in a
+// repository, or git not at hand). Only said: the person's repository is theirs to change.
+func gitState(file string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dir := filepath.Dir(file)
-	git := func(args ...string) (string, error) {
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			break
+		}
+		up := filepath.Dir(dir)
+		if up == dir {
+			return ""
+		}
+		dir = up
+	}
+	git := func(args ...string) error {
 		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 		cmd.WaitDelay = time.Second
-		out, err := cmd.Output()
-		return strings.TrimSpace(string(out)), err
+		return cmd.Run()
 	}
-	top, err := git("rev-parse", "--show-toplevel")
-	if err != nil || top == "" {
-		return
+	if git("rev-parse", "--show-toplevel") != nil {
+		return ""
 	}
-	if _, err := git("check-ignore", "-q", file); err == nil {
-		return // ignored already
+	// The file's path as itself: its brackets and stars are not patterns.
+	if git("--literal-pathspecs", "ls-files", "--error-unmatch", "--", file) == nil {
+		return "tracked"
 	}
-	exclude, err := git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
-	if err != nil || exclude == "" {
-		return
+	if git("check-ignore", "-q", "--no-index", "--", file) == nil {
+		return ""
 	}
-	real, err := filepath.EvalSymlinks(file)
-	if err != nil {
-		return
-	}
-	if t, err := filepath.EvalSymlinks(top); err == nil {
-		top = t
-	}
-	rel, err := filepath.Rel(top, real)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return
-	}
-	_ = os.MkdirAll(filepath.Dir(exclude), 0o755)
-	f, err := os.OpenFile(exclude, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "\n/%s\n", gitLiteral(filepath.ToSlash(rel)))
-}
-
-// gitLiteral is a path as a pattern of git's ignore files that matches only it: its wildcards and
-// escapes taken literally, and spaces at its end kept.
-func gitLiteral(p string) string {
-	var b strings.Builder
-	for _, r := range p {
-		if strings.ContainsRune(`\*?[]!#`, r) {
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	s := b.String()
-	if t := strings.TrimRight(s, " "); t != s {
-		s = t + strings.Repeat("\\ ", len(s)-len(t))
-	}
-	return s
+	return "unignored"
 }
 
 // permMu keeps the app's own edits one at a time: two rules added at once both stay.

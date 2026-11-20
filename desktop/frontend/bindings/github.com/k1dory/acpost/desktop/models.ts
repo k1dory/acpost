@@ -222,6 +222,11 @@ export class PermSource {
      */
     "error"?: string;
 
+    /**
+     * tracked / unignored: it goes into the project's commits (gitState)
+     */
+    "git"?: string;
+
     /** Creates a new PermSource instance. */
     constructor($$source: Partial<PermSource> = {}) {
         if (!("source" in $$source)) {

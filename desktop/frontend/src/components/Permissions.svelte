@@ -14,7 +14,7 @@
   // agent reads them as a session starts. Through ACP there is no /permissions: the app edits them.
   let { folder }: { folder: string } = $props();
 
-  type Src = { source: string; path: string; exists: boolean; allow: string[]; ask: string[]; deny: string[]; dirs: string[]; mode?: string; error?: string };
+  type Src = { source: string; path: string; exists: boolean; allow: string[]; ask: string[]; deny: string[]; dirs: string[]; mode?: string; error?: string; git?: string };
   type List = "allow" | "ask" | "deny" | "dirs";
   type Tab = List | "recent";
   const tabs: { k: Tab; label: string; about: string }[] = [
@@ -25,7 +25,7 @@
     { k: "dirs", label: "Workspace", about: "Folders besides the chat's that Claude Code may read and edit." },
   ];
   const where: Record<string, { label: string; about: string }> = {
-    local: { label: "Project, local", about: "Saved in .claude/settings.local.json: this Mac only, not committed" },
+    local: { label: "Project, local", about: "Saved in .claude/settings.local.json: for this Mac" },
     project: { label: "Project", about: "Saved in .claude/settings.json: shared with the project's team" },
     user: { label: "User", about: "Saved in ~/.claude/settings.json: every project of yours" },
   };
@@ -126,6 +126,9 @@
       <button class="btn primary sm" disabled={busy || !rule.trim()}>{t("Add")}</button>
     </form>
     <div class="hint muted">{t(where[dest]?.about ?? "")}</div>
+    <!-- Whether git would take it is said, not changed: the repository is the person's. -->
+    {#if dest === "local" && srcs.find(s => s.source === "local")?.git === "tracked"}<div class="warn">{t("Git tracks this file: rules saved in it go into the project's commits.")}</div>
+    {:else if dest === "local" && srcs.find(s => s.source === "local")?.git === "unignored"}<div class="warn">{t("Git does not ignore this file: a commit of everything takes it. Add .claude/settings.local.json to .gitignore to keep it to this Mac.")}</div>{/if}
 
     <div class="list">
       {#each rows as { r, s } (s.source + "\u0000" + r)}
@@ -165,6 +168,7 @@
   .rule:hover { background: var(--hover); }
   .rule .r { flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
   .none { padding: 12px; font-size: 12px; }
+  .warn { font-size: 11.5px; padding: 6px 10px; border-radius: 8px; color: var(--warn-text); background: var(--warn-bg); }
   .blk { display: grid; gap: 4px; padding: 8px 10px; border-radius: 8px; border-bottom: 1px solid var(--line-soft); }
   .blk:last-child { border-bottom: 0; }
   .bl-top { display: flex; gap: 8px; align-items: baseline; }

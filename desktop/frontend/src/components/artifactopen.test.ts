@@ -58,4 +58,41 @@ describe("Open on a text file", () => {
     await flush();
     expect(fake.Node.OpenLocal).toHaveBeenCalledWith("/work/run.command", "");
   });
+
+  it("shown in the IDE once it started: the file clicked, not one chosen meanwhile", async () => {
+    const svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    const { reactive } = await import("../test/props.svelte");
+    app.draft.cwd = "/work";
+    fake.Node.LocalFile.mockImplementation(async (p: string) => ({ name: p.split("/").pop(), type: "text/plain", size: 2, path: p, data: btoa("hi") }));
+    const start = deferred();
+    fake.Node.IDEStart.mockReturnValue(start.promise);
+    const props = reactive({ cur: { name: "a.txt", path: "/work/a.txt" } as any });
+    const ArtifactView = (await import("./ArtifactView.svelte")).default;
+    svelte.mount(ArtifactView, { target: document.body, props });
+    svelte.flushSync(); await flush(); svelte.flushSync();
+    [...document.querySelectorAll<HTMLButtonElement>(".bar .btn")].find(b => b.textContent === "Open")!.click();
+    await flush();
+    props.cur = { name: "b.txt", path: "/work/b.txt" };
+    svelte.flushSync(); await flush();
+    start.resolve("http://127.0.0.1:47823");
+    await flush(); await flush();
+    expect(fake.Node.IDEReveal).toHaveBeenCalledWith("/work", "/work/a.txt", "", "", false, "");
+  });
+
+  it("not shown because the IDE refused the request: nothing opened in its stead", async () => {
+    const svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.draft.cwd = "/work";
+    fake.Node.LocalFile.mockResolvedValue({ name: "x.sh", type: "text/x-sh", size: 2, path: "/work/x.sh", data: btoa("hi") });
+    fake.Node.IDEStart.mockResolvedValue("http://127.0.0.1:47823");
+    fake.Node.IDEReveal.mockRejectedValue(new Error("the IDE is another acpost's"));
+    const ArtifactView = (await import("./ArtifactView.svelte")).default;
+    svelte.mount(ArtifactView, { target: document.body, props: { cur: { name: "x.sh", path: "/work/x.sh" } } });
+    svelte.flushSync(); await flush(); svelte.flushSync();
+    [...document.querySelectorAll<HTMLButtonElement>(".bar .btn")].find(b => b.textContent === "Open")!.click();
+    await flush(); await flush();
+    expect(fake.Node.OpenLocal).not.toHaveBeenCalled();
+    expect(fake.Node.OpenArtifact).not.toHaveBeenCalled();
+  });
 });
