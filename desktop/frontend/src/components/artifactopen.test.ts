@@ -35,7 +35,27 @@ describe("Open on a text file", () => {
     svelte.flushSync(); await flush();
     start.reject(new Error("the IDE did not start"));
     await flush(); await flush();
-    expect(fake.Node.OpenLocal).toHaveBeenCalledWith("/work/report.txt", "");
-    expect(fake.Node.OpenLocal).not.toHaveBeenCalledWith("/work/install.command", expect.anything());
+    // The IDE did not show it: nothing is opened (nor run) in its stead.
+    expect(fake.Node.OpenLocal).not.toHaveBeenCalled();
+    expect(fake.Node.OpenArtifact).not.toHaveBeenCalled();
+  });
+
+  it("not shown in the IDE, says why; its own app is a click of its own", async () => {
+    const svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.draft.cwd = "/work";
+    fake.Node.LocalFile.mockResolvedValue({ name: "run.command", type: "text/plain", size: 2, path: "/work/run.command", data: btoa("hi") });
+    fake.Node.IDEStart.mockRejectedValue(new Error("the IDE is another acpost's"));
+    const ArtifactView = (await import("./ArtifactView.svelte")).default;
+    svelte.mount(ArtifactView, { target: document.body, props: { cur: { name: "run.command", path: "/work/run.command" } } });
+    svelte.flushSync(); await flush(); svelte.flushSync();
+    const btn = (label: string) => [...document.querySelectorAll<HTMLButtonElement>(".bar .btn")].find(b => b.textContent === label);
+    btn("Open")!.click();
+    await flush(); await flush(); svelte.flushSync();
+    expect(fake.Node.OpenLocal).not.toHaveBeenCalled();
+    expect(document.querySelector(".ideerr")!.textContent).toContain("another acpost");
+    btn("Open in its own app")!.click();
+    await flush();
+    expect(fake.Node.OpenLocal).toHaveBeenCalledWith("/work/run.command", "");
   });
 });

@@ -109,33 +109,11 @@ describe("/permissions", () => {
 
     (document.querySelectorAll<HTMLButtonElement>(".tab")[0]).click(); svelte.flushSync();
     document.querySelectorAll<HTMLButtonElement>(".blk .btn")[1].click();
-    for (let i = 0; i < 5 && app.permissionsFor !== null; i++) await settle(svelte);
-    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
-    expect(fake.Node.SendTask.mock.calls[0][0].body).toContain("git push --force");
-    expect(fake.Node.SendTask.mock.calls[0][0].to).toBe("agent:claude"); // to the agent whose call it was
+    await settle(svelte);
+    // Put in the message being written, for the person to send: nothing is sent from here.
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    expect(app.quote).toContain("git push --force");
     expect(app.permissionsFor).toBeNull();
-  });
-
-  it("an approval whose answer was lost is sent again as it was first: the same request, the same key", async () => {
-    const { app } = await import("../lib/state.svelte");
-    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", node: "lev-mac", queued: 0, running: 0, product: "claude-agent-acp" }];
-    app.conn = { ok: true };
-    app.chat = { key: "session:s1", kind: "session", session: "s1", agent: "agent:claude", title: "x", updated: "" } as any;
-    app.target = "agent:claude";
-    fake.Node.SendTask.mockRejectedValueOnce(new Error("the answer was lost"))
-      .mockResolvedValue({ id: "m2", thread: "t2", from: "user:me", to: "agent:claude", depth: 0, state: "queued", body: "", created_at: "", updated_at: "" });
-    fake.Node.Events.mockResolvedValue([]);
-    expect(await app.sendOwn("approve:x", "I approve", "agent:claude")).toBe(false);
-    // Meanwhile the session became a thread (the node made one of the first request).
-    app.chat = { key: "thread:t2", kind: "thread", thread: "t2", agent: "agent:claude", title: "x", updated: "" } as any;
-    app.thread = "t2";
-    expect(await app.sendOwn("approve:x", "Одобряю", "agent:claude")).toBe(true); // said again in another language
-
-    const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
-    expect(b.idem).toBe(a.idem);
-    expect(b.body).toBe("I approve");
-    expect(b.session).toBe("s1");
-    expect(b.thread).toBeUndefined();
   });
 
   it("keeps what is typed while a rule is being saved", async () => {
