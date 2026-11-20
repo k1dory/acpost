@@ -4,16 +4,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // /permissions, as Claude Code has it: the rules that let a tool run without asking (allow), make
@@ -43,6 +46,10 @@ var permLists = map[string]string{"allow": "allow", "ask": "ask", "deny": "deny"
 // win): the person's, the project's, the project's local one. With no folder (or the home folder,
 // whose .claude is the person's own): the person's alone, and the local one of home.
 func permPaths(folder string) ([][2]string, error) {
+	// On another node the agents are that machine's, and so are the settings they read.
+	if os.Getenv("ACPOST_NODE") != "" {
+		return nil, errors.New("the app is on another node (ACPOST_NODE): its agents' Claude Code settings are that machine's")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -129,7 +136,57 @@ func (n *Node) PermissionEdit(folder, source, list, rule string, add bool) error
 	if path == "" {
 		return fmt.Errorf("no settings %q here", source)
 	}
-	return editPermList(path, key, rule, add)
+	if err := editPermList(path, key, rule, add); err != nil {
+		return err
+	}
+	if source == "local" && add {
+		gitExclude(path) // this Mac's only, as the tab says (Claude Code does the same for it)
+	}
+	return nil
+}
+
+// gitExclude keeps a file out of its repository's commits, as Claude Code does for the local
+// settings it writes: its path added to the repository's info/exclude unless git ignores it already.
+// Not a repository, or git not at hand: nothing to do.
+func gitExclude(file string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dir := filepath.Dir(file)
+	git := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+		cmd.WaitDelay = time.Second
+		out, err := cmd.Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	top, err := git("rev-parse", "--show-toplevel")
+	if err != nil || top == "" {
+		return
+	}
+	if _, err := git("check-ignore", "-q", file); err == nil {
+		return // ignored already
+	}
+	exclude, err := git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+	if err != nil || exclude == "" {
+		return
+	}
+	real, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return
+	}
+	if t, err := filepath.EvalSymlinks(top); err == nil {
+		top = t
+	}
+	rel, err := filepath.Rel(top, real)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(exclude), 0o755)
+	f, err := os.OpenFile(exclude, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "\n/%s\n", filepath.ToSlash(rel))
 }
 
 // permMu keeps the app's own edits one at a time: two rules added at once both stay.

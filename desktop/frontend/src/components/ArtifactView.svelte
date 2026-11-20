@@ -72,8 +72,10 @@
   const inIDE = $derived(kind === "text" || kind === "markdown" || kind === "html");
   async function openOutside() {
     if (!art) return;
-    const a = art;
-    if (inIDE) {
+    // What was clicked, as it was: the IDE may take a while to start, and another file chosen
+    // meanwhile is not the one to open (nor run, when it is a program).
+    const a = art, ref = cur, text = inIDE;
+    if (text) {
       const folder = app.ideFolder();
       try {
         const file = a.path ?? await Node.ArtifactCopy(a.name, a.data);
@@ -87,7 +89,7 @@
         }
       } catch {}
     }
-    try { if (cur?.path) await Node.OpenLocal(cur.path, cur.base ?? ""); else await Node.OpenArtifact(a.name, a.data); } catch (e) { err = errText(e); }
+    try { if (ref?.path) await Node.OpenLocal(ref.path, ref.base ?? ""); else await Node.OpenArtifact(a.name, a.data); } catch (e) { err = errText(e); }
   }
   async function save() {
     if (!art) return;

@@ -4,7 +4,9 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -153,5 +155,36 @@ func TestPermissionEditKeepsAChangeMadeMeanwhile(t *testing.T) {
 	want := "{\n  \"model\": \"opus\",\n  \"permissions\": {\n    \"allow\": [\n      \"A\",\n      \"B\",\n      \"C\"\n    ]\n  }\n}\n"
 	if string(got) != want {
 		t.Fatalf("got\n%s", got)
+	}
+}
+
+// A rule saved for this Mac only keeps its file out of the project's commits.
+func TestPermissionEditLocalIsNotCommitted(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	sub := filepath.Join(repo, "app")
+	os.MkdirAll(sub, 0o755)
+	if err := (&Node{}).PermissionEdit(sub, "local", "allow", "Bash(ls:*)", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("git", "-C", repo, "check-ignore", "-q", "app/.claude/settings.local.json").Run(); err != nil {
+		t.Fatal("the local settings would be committed")
+	}
+	// Again: not added twice.
+	(&Node{}).PermissionEdit(sub, "local", "allow", "Bash(pwd:*)", true)
+	b, _ := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if n := strings.Count(string(b), "/app/.claude/settings.local.json"); n != 1 {
+		t.Fatalf("excluded %d times:\n%s", n, b)
+	}
+	// On another node: its settings are that machine's, not this Mac's.
+	t.Setenv("ACPOST_NODE", "https://box:8765")
+	if _, err := (&Node{}).PermissionRules(sub); err == nil {
+		t.Fatal("another node's settings read here")
 	}
 }

@@ -129,9 +129,11 @@ describe("/permissions", () => {
     // Meanwhile the session became a thread (the node made one of the first request).
     app.chat = { key: "thread:t2", kind: "thread", thread: "t2", agent: "agent:claude", title: "x", updated: "" } as any;
     app.thread = "t2";
-    expect(await app.sendOwn("approve:x", "I approve", "agent:claude")).toBe(true);
+    expect(await app.sendOwn("approve:x", "Одобряю", "agent:claude")).toBe(true); // said again in another language
+
     const [a, b] = fake.Node.SendTask.mock.calls.map(c => c[0]);
     expect(b.idem).toBe(a.idem);
+    expect(b.body).toBe("I approve");
     expect(b.session).toBe("s1");
     expect(b.thread).toBeUndefined();
   });
