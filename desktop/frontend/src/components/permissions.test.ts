@@ -51,7 +51,7 @@ describe("/permissions", () => {
 
   it("lists each tab's rules with where they are kept; adds to the file chosen, removes from the rule's own", async () => {
     const svelte = await import("svelte");
-    fake.Node.PermissionRules.mockResolvedValue([src("user", { allow: ["WebSearch"] }), src("project"), src("local", { allow: ["Bash(ls:*)"], deny: ["Read(./.env)"] })]);
+    fake.Node.PermissionRules.mockResolvedValue([src("user", { allow: ["WebSearch", "WebSearch"] }), src("project"), src("local", { allow: ["Bash(ls:*)"], deny: ["Read(./.env)"] })]);
     const Permissions = (await import("./Permissions.svelte")).default;
     mounted.push(svelte.mount(Permissions, { target: document.body, props: { folder: "/work/proj" } }));
     await settle(svelte);
@@ -136,5 +136,25 @@ describe("/permissions", () => {
     expect(b.body).toBe("I approve");
     expect(b.session).toBe("s1");
     expect(b.thread).toBeUndefined();
+  });
+
+  it("keeps what is typed while a rule is being saved", async () => {
+    const svelte = await import("svelte");
+    const { deferred } = await import("../test/fake");
+    fake.Node.PermissionRules.mockResolvedValue([src("local")]);
+    const save = deferred();
+    fake.Node.PermissionEdit.mockReturnValue(save.promise);
+    const Permissions = (await import("./Permissions.svelte")).default;
+    mounted.push(svelte.mount(Permissions, { target: document.body, props: { folder: "/work/proj" } }));
+    await settle(svelte);
+    const input = document.querySelector<HTMLInputElement>(".add input")!;
+    input.value = "Bash(ls:*)"; input.dispatchEvent(new Event("input", { bubbles: true }));
+    svelte.flushSync();
+    document.querySelector<HTMLFormElement>(".add")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    input.value = "Bash(pwd:*)"; input.dispatchEvent(new Event("input", { bubbles: true }));
+    svelte.flushSync();
+    save.resolve(undefined);
+    await settle(svelte);
+    expect(input.value).toBe("Bash(pwd:*)");
   });
 });

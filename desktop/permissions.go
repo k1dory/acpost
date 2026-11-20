@@ -54,7 +54,13 @@ func permPaths(folder string) ([][2]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := [][2]string{{"user", filepath.Join(home, ".claude", "settings.json")}}
+	// The person's own settings are where Claude Code keeps its configuration: CLAUDE_CONFIG_DIR
+	// when the agents are started with it (they have the app's environment), else ~/.claude.
+	user := filepath.Join(home, ".claude")
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" && filepath.IsAbs(expandHome(d)) {
+		user = filepath.Clean(expandHome(d))
+	}
+	out := [][2]string{{"user", filepath.Join(user, "settings.json")}}
 	if folder == "" {
 		folder = home
 	}
@@ -186,7 +192,24 @@ func gitExclude(file string) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "\n/%s\n", filepath.ToSlash(rel))
+	fmt.Fprintf(f, "\n/%s\n", gitLiteral(filepath.ToSlash(rel)))
+}
+
+// gitLiteral is a path as a pattern of git's ignore files that matches only it: its wildcards and
+// escapes taken literally, and spaces at its end kept.
+func gitLiteral(p string) string {
+	var b strings.Builder
+	for _, r := range p {
+		if strings.ContainsRune(`\*?[]!#`, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	s := b.String()
+	if t := strings.TrimRight(s, " "); t != s {
+		s = t + strings.Repeat("\\ ", len(s)-len(t))
+	}
+	return s
 }
 
 // permMu keeps the app's own edits one at a time: two rules added at once both stay.

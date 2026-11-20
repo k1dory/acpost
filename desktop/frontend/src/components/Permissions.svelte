@@ -42,7 +42,8 @@
   $effect(() => { folder; load(); });
 
   const list = $derived<List>(tab === "recent" ? "allow" : tab);
-  const rows = $derived(srcs.flatMap(s => (s[list] ?? []).map(r => ({ r, s }))));
+  // A rule written twice in a file is one row (removing it removes both).
+  const rows = $derived(srcs.flatMap(s => [...new Set(s[list] ?? [])].map(r => ({ r, s }))));
   // The open chat's calls that auto mode refused (its turns, and a session's history before acpost).
   const blocked = $derived((app.rev, app.blockedHere()));
   let input = $state<HTMLInputElement>();
@@ -70,7 +71,8 @@
 
   async function edit(s: string, r: string, add: boolean) {
     busy = true;
-    try { await Node.PermissionEdit(folder, s, list, r, add); await load(); if (add) rule = ""; }
+    const typed = rule; // the field, as it was sent: what is typed meanwhile is the next rule, kept
+    try { await Node.PermissionEdit(folder, s, list, r, add); await load(); if (add && rule === typed) rule = ""; }
     catch (e) { err = errText(e); }
     finally { busy = false; }
   }

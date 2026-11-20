@@ -168,23 +168,34 @@ func TestPermissionEditLocalIsNotCommitted(t *testing.T) {
 	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
-	sub := filepath.Join(repo, "app")
+	sub := filepath.Join(repo, "app", "[tenant] *")
 	os.MkdirAll(sub, 0o755)
 	if err := (&Node{}).PermissionEdit(sub, "local", "allow", "Bash(ls:*)", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := exec.Command("git", "-C", repo, "check-ignore", "-q", "app/.claude/settings.local.json").Run(); err != nil {
+	if err := exec.Command("git", "-C", repo, "check-ignore", "-q", "app/[tenant] */.claude/settings.local.json").Run(); err != nil {
 		t.Fatal("the local settings would be committed")
 	}
 	// Again: not added twice.
 	(&Node{}).PermissionEdit(sub, "local", "allow", "Bash(pwd:*)", true)
 	b, _ := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
-	if n := strings.Count(string(b), "/app/.claude/settings.local.json"); n != 1 {
+	if n := strings.Count(string(b), "settings.local.json"); n != 1 {
 		t.Fatalf("excluded %d times:\n%s", n, b)
 	}
 	// On another node: its settings are that machine's, not this Mac's.
 	t.Setenv("ACPOST_NODE", "https://box:8765")
 	if _, err := (&Node{}).PermissionRules(sub); err == nil {
 		t.Fatal("another node's settings read here")
+	}
+}
+
+// Claude Code's own configuration elsewhere (CLAUDE_CONFIG_DIR): the person's settings are there.
+func TestPermissionRulesFollowClaudeConfigDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := filepath.Join(t.TempDir(), "claude-work")
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	got, err := (&Node{}).PermissionRules(t.TempDir())
+	if err != nil || got[0].Path != filepath.Join(cfg, "settings.json") {
+		t.Fatalf("%+v %v", got, err)
 	}
 }
