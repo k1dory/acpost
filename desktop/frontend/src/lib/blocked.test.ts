@@ -31,6 +31,7 @@ describe("auto mode's refusals", () => {
     expect(ruleFor({ command: "git push origin main", title: "", kind: "execute" })).toBe("Bash(git push origin main)");
     expect(ruleFor({ command: "cat <<EOF > a\nx\nEOF", title: "", kind: "execute" })).toBe("Bash(cat:*)");
     expect(ruleFor({ command: "", title: "mcp__forgejo__delete_branch", kind: "other" })).toBe("mcp__forgejo__delete_branch");
+    expect(ruleFor({ command: "", name: "mcp__forgejo__delete_branch", title: "Delete branch main", kind: "delete" })).toBe("mcp__forgejo__delete_branch");
     expect(ruleFor({ command: "", title: "Fetch https://x", kind: "fetch" })).toBe("WebFetch");
   });
 

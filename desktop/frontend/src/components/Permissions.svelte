@@ -4,7 +4,7 @@
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import Icon from "./Icon.svelte";
-  import { blockedIn, ruleFor, approveText, type Blocked } from "../lib/blocked";
+  import { ruleFor, approveText, type Blocked } from "../lib/blocked";
   import { sendNow } from "./genui/draft";
   import { clock } from "../lib/format";
 
@@ -45,10 +45,7 @@
   const list = $derived<List>(tab === "recent" ? "allow" : tab);
   const rows = $derived(srcs.flatMap(s => (s[list] ?? []).map(r => ({ r, s }))));
   // The open chat's calls that auto mode refused (its turns, and a session's history before acpost).
-  const blocked = $derived((app.rev, blockedIn([
-    ...app.msgs.filter(m => app.turns[m.id]).map(m => [m.id, app.turns[m.id]] as [string, (typeof app.turns)[string]]),
-    ...app.history.map((h, i) => ["history:" + i, h.turn] as [string, (typeof app.turns)[string]]),
-  ])));
+  const blocked = $derived((app.rev, app.blockedHere()));
   let input = $state<HTMLInputElement>();
   // "Allow with a rule": the rule that would allow it, in the Allow tab's field, to be read and saved.
   function allowRule(b: Blocked) {
@@ -59,6 +56,8 @@
   let approving = $state("");
   async function approve(b: Blocked) {
     approving = b.msg + ":" + b.id;
+    // To the agent whose call it was (a chat shared with others may be addressed to another now).
+    if (b.to && app.target !== b.to && app.agents.some(a => a.address === b.to)) app.target = b.to;
     try { if (await sendNow(approveText(b, t("I approve this action that auto mode blocked; run it again:")))) close(); }
     finally { approving = ""; }
   }

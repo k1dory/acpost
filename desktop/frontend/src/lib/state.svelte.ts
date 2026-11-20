@@ -309,14 +309,25 @@ class App {
     if (owner !== d) for (const [id, o] of this.shellOwner) if (o === d) this.shellOwner.set(id, owner);
   }
   palette = $state(false); // ⌘K
+  /** Something of the page is drawn over the window (a menu, a dialog): the native panes (the IDE,
+   * a module) hide meanwhile, or they would be over it. */
+  get overlay(): boolean { return this.palette || this.viewMenu || this.permissionsFor !== null; }
   /** /permissions open: the folder whose Claude Code rules are shown, or null. */
   permissionsFor = $state<string | null>(null);
   /** The tab /permissions opens on: what auto mode blocked, when the chat has any (as Claude Code). */
   permissionsTab = $state<"recent" | "allow" | "ask" | "deny" | "dirs">("allow");
+  /** What auto mode refused in the open chat: its turns (each with the agent it was), and a
+   * session's history from before acpost (its agent's). */
+  blockedHere() {
+    return blockedIn([
+      ...this.msgs.filter(m => this.turns[m.id]).map(m => [m.id, this.turns[m.id], m.to] as [string, Turn, string]),
+      ...this.history.map((h, i) => ["history:" + i, h.turn, this.chat?.agent ?? ""] as [string, Turn, string]),
+    ]);
+  }
   /** Opens /permissions for the chat's folder: on what auto mode blocked in it, when it blocked
    * anything (as Claude Code does), else on the rules that allow. */
   openPermissions(tab?: App["permissionsTab"]) {
-    const any = blockedIn([...this.msgs.filter(m => this.turns[m.id]).map(m => [m.id, this.turns[m.id]] as [string, Turn]), ...this.history.map((h, i) => ["history:" + i, h.turn] as [string, Turn])]).length > 0;
+    const any = this.blockedHere().length > 0;
     this.permissionsTab = tab ?? (any ? "recent" : "allow");
     this.permissionsFor = this.ideFolder();
   }

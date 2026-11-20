@@ -44,4 +44,11 @@ describe("a queued message", () => {
     await shown([msg("c", "agent:codex", "running"), q], q);
     expect(now()).toBeNull();
   });
+
+  it("only the next of the agent's queue has it: a later one would start the one before it", async () => {
+    const b = { ...msg("b", "agent:claude", "queued"), created_at: "2026-11-20T10:00:01Z" };
+    const c = { ...msg("c", "agent:claude", "queued"), created_at: "2026-11-20T10:00:02Z" };
+    await shown([msg("a", "agent:claude", "running"), b, c], c);
+    expect(now()).toBeNull();
+  });
 });

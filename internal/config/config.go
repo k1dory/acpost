@@ -168,7 +168,7 @@ type Agent struct {
 	Reply        string            `yaml:"reply" json:"reply"`
 	Concurrency  int               `yaml:"concurrency" json:"concurrency"`
 	TurnTimeout  Duration          `yaml:"turn_timeout" json:"turn_timeout"` // a turn's limit; none when not set (an agent may work for hours)
-	AskTimeout   Duration          `yaml:"ask_timeout" json:"ask_timeout"` // permissions: ask: how long a person has to answer
+	AskTimeout   Duration          `yaml:"ask_timeout" json:"ask_timeout"`   // permissions: ask: how long a person has to answer
 	IdleTimeout  Duration          `yaml:"idle_timeout" json:"idle_timeout"`
 	Preamble     *bool             `yaml:"preamble" json:"preamble"`
 	AllowFrom    []string          `yaml:"allow_from" json:"allow_from"`

@@ -46,9 +46,14 @@ export function inDraft(text: string): boolean {
 export async function sendNow(text: string): Promise<boolean> {
   const d = app.draftOf();
   if (d.busy) return false;
-  const before = [d.text, app.quote].map(s => s.replace(/\s+$/, "")).filter(Boolean).join("\n");
-  app.quote = "";
-  d.text = asMessage((before ? before + "\n\n" : "") + whole(text));
+  // Already there (a send of it that did not go, kept in the draft): the draft is sent again as it
+  // is, to the letter — the same message with the same key, which the node takes once, whether or
+  // not the first one reached it.
+  if (app.quote || answerAt(d.text, text) < 0) {
+    const before = [d.text, app.quote].map(s => s.replace(/\s+$/, "")).filter(Boolean).join("\n");
+    app.quote = "";
+    d.text = asMessage((before ? before + "\n\n" : "") + whole(text));
+  }
   if (app.view !== "chat" && app.view !== "ide") app.view = "chat";
   return app.submit(d);
 }

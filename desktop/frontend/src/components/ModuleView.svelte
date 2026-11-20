@@ -26,7 +26,7 @@
   let err = $state("");
   let alive = true;
   // What covers the box: menus drawn in HTML (the pane would be over them).
-  const covered = $derived(app.palette || app.viewMenu);
+  const covered = $derived(app.overlay);
   const pane = newPaneOwner();
   const rectOf = (e: Element): Rect => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
   function place() {

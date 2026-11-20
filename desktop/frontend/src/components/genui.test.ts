@@ -200,6 +200,22 @@ describe("an answer from a reply", () => {
     expect(fake.Node.SendTask.mock.calls[0][0].body).toBe("mine\n\n> Which DB?\n\nPostgres");
   });
 
+  it("sent again after a send that did not go is the same message: not added twice, the same key", async () => {
+    await withComposer();
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("the answer was lost")).mockResolvedValue({ id: "m1", thread: "t1", from: "user:me", to: "agent:claude", depth: 0, state: "queued", body: "", created_at: "", updated_at: "" });
+    await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }));
+    all(".opt")[0].click();
+    flushSync();
+    q<HTMLButtonElement>(".ask .btn.send").click();
+    flushSync(); await flush(); flushSync();
+    q<HTMLButtonElement>(".ask .btn.send").click();
+    flushSync(); await flush(); flushSync();
+    const calls = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].body).toBe(calls[0].body);
+    expect(calls[1].idem).toBe(calls[0].idem);
+  });
+
   it("of the person's own answer takes the place of the options picked", async () => {
     await withComposer();
     await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }));

@@ -78,6 +78,9 @@
       try {
         const file = a.path ?? await Node.ArtifactCopy(a.name, a.data);
         if (folder) {
+          // The IDE started first (it may not be yet: the app just opened): a request to show is
+          // read by the IDE's window, and is made for an IDE this app runs.
+          await Node.IDEStart(folder);
           await Node.IDEReveal(folder, file, "", "", false, "");
           app.view = "ide";
           return;

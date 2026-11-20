@@ -59,7 +59,10 @@
   }
   // A message waiting behind a turn of the same agent in this chat: "Send now" stops that turn,
   // and the agent takes this one at once (the node starts what waits once a turn ends).
-  const ahead = $derived(m.state === "queued" ? app.msgs.filter(x => x.state === "running" && x.to === m.to) : []);
+  // Only the next of the agent's queue: the node gives the agent its oldest waiting message, so
+  // stopping the turn for a later one would start another (the one before it) instead.
+  const next = $derived(m.state === "queued" && !app.msgs.some(x => x.state === "queued" && x.to === m.to && x.created_at < m.created_at));
+  const ahead = $derived(next ? app.msgs.filter(x => x.state === "running" && x.to === m.to) : []);
   let hurrying = $state(false);
   async function sendNow() {
     hurrying = true;

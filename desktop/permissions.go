@@ -1,3 +1,5 @@
+//go:build darwin
+
 package main
 
 import (
@@ -5,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // /permissions, as Claude Code has it: the rules that let a tool run without asking (allow), make
@@ -27,8 +31,8 @@ type PermSource struct {
 	Allow  []string `json:"allow"`
 	Ask    []string `json:"ask"`
 	Deny   []string `json:"deny"`
-	Dirs   []string `json:"dirs"` // additionalDirectories
-	Mode   string   `json:"mode,omitempty"` // defaultMode
+	Dirs   []string `json:"dirs"`            // additionalDirectories
+	Mode   string   `json:"mode,omitempty"`  // defaultMode
 	Error  string   `json:"error,omitempty"` // the file is there but not read (not JSON): not written either
 }
 
@@ -128,7 +132,29 @@ func (n *Node) PermissionEdit(folder, source, list, rule string, add bool) error
 	return editPermList(path, key, rule, add)
 }
 
+// permMu keeps the app's own edits one at a time: two rules added at once both stay.
+var permMu sync.Mutex
+
+// editPermList edits the file as it is when written: read, changed, and written only if the file
+// is still what was read (Claude Code may write its settings meanwhile); else read again, a few times.
 func editPermList(path, key, rule string, add bool) error {
+	permMu.Lock()
+	defer permMu.Unlock()
+	for range 5 {
+		err := editPermOnce(path, key, rule, add)
+		if !errors.Is(err, errPermChanged) {
+			return err
+		}
+	}
+	return fmt.Errorf("%s kept changing while it was edited: not written", path)
+}
+
+// permBeforeWrite, in tests, runs between an edit's read and its write.
+var permBeforeWrite func()
+
+var errPermChanged = errors.New("the settings file changed while it was edited")
+
+func editPermOnce(path, key, rule string, add bool) error {
 	if _, err := os.Stat(filepath.Dir(path)); errors.Is(err, fs.ErrNotExist) {
 		if !add {
 			return nil // no .claude: nothing to take out
@@ -143,6 +169,7 @@ func editPermList(path, key, rule string, add bool) error {
 	}
 	b, err := os.ReadFile(path)
 	var keep *os.FileMode
+	existed := err == nil
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		if !add {
@@ -152,10 +179,12 @@ func editPermList(path, key, rule string, add bool) error {
 	case err != nil:
 		return err
 	default:
-		if st, err := os.Stat(path); err == nil {
-			m := st.Mode().Perm()
-			keep = &m
+		st, err := os.Stat(path)
+		if err != nil {
+			return err
 		}
+		m := st.Mode().Perm()
+		keep = &m
 	}
 	top, err := readObject(b)
 	if err != nil {
@@ -196,6 +225,28 @@ func editPermList(path, key, rule string, add bool) error {
 		return err
 	}
 	out.WriteByte('\n')
+	if permBeforeWrite != nil {
+		permBeforeWrite()
+	}
+	// Still what was read (or still none): else what changed it is read and edited again.
+	now, err := os.ReadFile(path)
+	if !existed {
+		if err == nil {
+			return errPermChanged
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		// None yet: linked in only where there is still none.
+		err := writeAtomic(path, out.Bytes(), 0o644, nil, false)
+		if errors.Is(err, fs.ErrExist) {
+			return errPermChanged
+		}
+		return err
+	}
+	if err != nil || !bytes.Equal(now, b) {
+		return errPermChanged
+	}
 	return writeAtomic(path, out.Bytes(), 0o644, keep, true)
 }
 
@@ -238,7 +289,8 @@ func readObject(b []byte) (*object, error) {
 	if _, err := d.Token(); err != nil { // the closing brace
 		return nil, err
 	}
-	if _, err := d.Token(); err == nil {
+	// Nothing may follow it (a comment, a second object): such a file is not JSON, and is left whole.
+	if _, err := d.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("more after the object")
 	}
 	return o, nil

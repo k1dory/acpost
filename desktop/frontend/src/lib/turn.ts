@@ -6,7 +6,7 @@ export type Ev = { seq: number; time: string; kind: string; data: string };
 
 export type Edit = { path: string; added: number; removed: number; old?: string; new?: string; cut?: boolean };
 export type Tool = {
-  id: string; title?: string; kind?: string; status?: string; input?: any; locations?: string[];
+  id: string; name?: string; title?: string; kind?: string; status?: string; input?: any; locations?: string[];
   output?: string; exit_code?: number; edits?: Edit[]; description?: string;
   started: number; ended?: number;
 };
