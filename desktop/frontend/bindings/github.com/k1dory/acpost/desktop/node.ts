@@ -52,6 +52,13 @@ export function Answer(msgID: string, requestID: string, optionID: string): $Can
 }
 
 /**
+ * ArtifactCopy writes an attachment to a temporary folder and says where: a file the IDE can show.
+ */
+export function ArtifactCopy(name: string, data: string): $CancellablePromise<string> {
+    return $Call.ByID(1468486527, name, data);
+}
+
+/**
  * ArtifactPreview is what a card shows of an artifact: a picture whole when it is small, the start
  * of a text; of anything else (a page, a PDF, a bigger picture) its name, type and size, no
  * content. msg and name are a reply's file; path is a file of this Mac.
@@ -511,10 +518,20 @@ export function MoveChat(chat: string, folder: string): $CancellablePromise<void
 }
 
 /**
- * Notify shows a notification of the system (asked for once; nothing when refused or unavailable).
+ * Notify shows a notification of the system when the app's window is not the one in front (the
+ * person is elsewhere): asked for once; nothing when refused or unavailable. Whether the window is
+ * in front is the system's to say — the page's own document.hasFocus() is not (a web view may keep
+ * it while the app is in the background).
  */
 export function Notify(title: string, body: string): $CancellablePromise<void> {
     return $Call.ByID(1005772201, title, body);
+}
+
+/**
+ * NotifyTest shows a notification now, the window in front or not: what the person sees, or why not.
+ */
+export function NotifyTest(title: string, body: string): $CancellablePromise<void> {
+    return $Call.ByID(2264494017, title, body);
 }
 
 /**
@@ -551,6 +568,23 @@ export function Options(agent: string): $CancellablePromise<client$0.AgentOption
 }
 
 /**
+ * PermissionEdit adds rule to a list of a settings file (or removes it: add false), the rest of the
+ * file kept as it was — its other settings, their order. A file that is not JSON is not touched.
+ */
+export function PermissionEdit(folder: string, source: string, list: string, rule: string, add: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1723058987, folder, source, list, rule, add);
+}
+
+/**
+ * PermissionRules reads the rules of the settings files that apply in folder.
+ */
+export function PermissionRules(folder: string): $CancellablePromise<$models.PermSource[]> {
+    return $Call.ByID(3718818878, folder).then(($result: any) => {
+        return $$createType40($result);
+    });
+}
+
+/**
  * PickDirectory asks for a directory (the system's dialog); "" when none was chosen.
  */
 export function PickDirectory(start: string): $CancellablePromise<string> {
@@ -559,7 +593,7 @@ export function PickDirectory(start: string): $CancellablePromise<string> {
 
 export function Playbooks(): $CancellablePromise<store$0.Playbook[]> {
     return $Call.ByID(3511904892).then(($result: any) => {
-        return $$createType40($result);
+        return $$createType42($result);
     });
 }
 
@@ -597,7 +631,7 @@ export function PreviewShow(x: number, y: number, w: number, h: number): $Cancel
  */
 export function Pulls(agent: string, state: string): $CancellablePromise<forge$0.Pull[]> {
     return $Call.ByID(2911689412, agent, state).then(($result: any) => {
-        return $$createType42($result);
+        return $$createType44($result);
     });
 }
 
@@ -634,7 +668,7 @@ export function PutPlaybook(name: string, body: string): $CancellablePromise<voi
 
 export function PutSchedule(sc: store$0.Schedule): $CancellablePromise<store$0.Schedule> {
     return $Call.ByID(2968062976, sc).then(($result: any) => {
-        return $$createType43($result);
+        return $$createType45($result);
     });
 }
 
@@ -655,7 +689,7 @@ export function SaveArtifact(name: string, data: string): $CancellablePromise<st
 
 export function Schedules(): $CancellablePromise<store$0.Schedule[]> {
     return $Call.ByID(1407160058).then(($result: any) => {
-        return $$createType44($result);
+        return $$createType46($result);
     });
 }
 
@@ -664,7 +698,7 @@ export function Schedules(): $CancellablePromise<store$0.Schedule[]> {
  */
 export function SearchDirs(q: string): $CancellablePromise<string[]> {
     return $Call.ByID(3291189440, q).then(($result: any) => {
-        return $$createType45($result);
+        return $$createType47($result);
     });
 }
 
@@ -697,7 +731,7 @@ export function SetChatTitle(chat: string, title: string): $CancellablePromise<v
  */
 export function Shell(id: string, command: string, cwd: string): $CancellablePromise<$models.ShellResult> {
     return $Call.ByID(2077317842, id, command, cwd).then(($result: any) => {
-        return $$createType46($result);
+        return $$createType48($result);
     });
 }
 
@@ -720,7 +754,7 @@ export function StartBacklogItem(id: string, agent: string): $CancellablePromise
  */
 export function Status(): $CancellablePromise<$models.Connection> {
     return $Call.ByID(1402228450).then(($result: any) => {
-        return $$createType47($result);
+        return $$createType49($result);
     });
 }
 
@@ -754,7 +788,7 @@ export function TermResize(id: string, cols: number, rows: number): $Cancellable
  */
 export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
     return $Call.ByID(3567503344, thread).then(($result: any) => {
-        return $$createType48($result);
+        return $$createType50($result);
     });
 }
 
@@ -764,7 +798,7 @@ export function Thread(thread: string): $CancellablePromise<store$0.Message[]> {
  */
 export function Traces(thread: string, limit: number): $CancellablePromise<client$0.TraceThread[]> {
     return $Call.ByID(3668876974, thread, limit).then(($result: any) => {
-        return $$createType50($result);
+        return $$createType52($result);
     });
 }
 
@@ -773,7 +807,7 @@ export function Traces(thread: string, limit: number): $CancellablePromise<clien
  */
 export function Tree(id: string): $CancellablePromise<client$0.TreeNode[]> {
     return $Call.ByID(3080916840, id).then(($result: any) => {
-        return $$createType52($result);
+        return $$createType54($result);
     });
 }
 
@@ -791,19 +825,19 @@ export function Unfollow(id: string, gen: number): $CancellablePromise<void> {
  */
 export function Usage(days: number, by: string): $CancellablePromise<client$0.UsageReport[]> {
     return $Call.ByID(2008767623, days, by).then(($result: any) => {
-        return $$createType54($result);
+        return $$createType56($result);
     });
 }
 
 export function WikiPages(repo: string): $CancellablePromise<store$0.WikiPage[]> {
     return $Call.ByID(3522603132, repo).then(($result: any) => {
-        return $$createType56($result);
+        return $$createType58($result);
     });
 }
 
 export function Wikis(): $CancellablePromise<store$0.Wiki[]> {
     return $Call.ByID(52380493).then(($result: any) => {
-        return $$createType58($result);
+        return $$createType60($result);
     });
 }
 
@@ -854,23 +888,25 @@ const $$createType35 = $models.Module.createFrom;
 const $$createType36 = $Create.Array($$createType35);
 const $$createType37 = client$0.Terminal.createFrom;
 const $$createType38 = client$0.AgentOptions.createFrom;
-const $$createType39 = store$0.Playbook.createFrom;
+const $$createType39 = $models.PermSource.createFrom;
 const $$createType40 = $Create.Array($$createType39);
-const $$createType41 = forge$0.Pull.createFrom;
+const $$createType41 = store$0.Playbook.createFrom;
 const $$createType42 = $Create.Array($$createType41);
-const $$createType43 = store$0.Schedule.createFrom;
+const $$createType43 = forge$0.Pull.createFrom;
 const $$createType44 = $Create.Array($$createType43);
-const $$createType45 = $Create.Array($Create.Any);
-const $$createType46 = $models.ShellResult.createFrom;
-const $$createType47 = $models.Connection.createFrom;
-const $$createType48 = $Create.Array($$createType9);
-const $$createType49 = client$0.TraceThread.createFrom;
-const $$createType50 = $Create.Array($$createType49);
-const $$createType51 = client$0.TreeNode.createFrom;
+const $$createType45 = store$0.Schedule.createFrom;
+const $$createType46 = $Create.Array($$createType45);
+const $$createType47 = $Create.Array($Create.Any);
+const $$createType48 = $models.ShellResult.createFrom;
+const $$createType49 = $models.Connection.createFrom;
+const $$createType50 = $Create.Array($$createType9);
+const $$createType51 = client$0.TraceThread.createFrom;
 const $$createType52 = $Create.Array($$createType51);
-const $$createType53 = client$0.UsageReport.createFrom;
+const $$createType53 = client$0.TreeNode.createFrom;
 const $$createType54 = $Create.Array($$createType53);
-const $$createType55 = store$0.WikiPage.createFrom;
+const $$createType55 = client$0.UsageReport.createFrom;
 const $$createType56 = $Create.Array($$createType55);
-const $$createType57 = store$0.Wiki.createFrom;
+const $$createType57 = store$0.WikiPage.createFrom;
 const $$createType58 = $Create.Array($$createType57);
+const $$createType59 = store$0.Wiki.createFrom;
+const $$createType60 = $Create.Array($$createType59);

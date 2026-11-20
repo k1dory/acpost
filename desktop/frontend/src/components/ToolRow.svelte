@@ -6,6 +6,7 @@
   import { revealOf, localFiles } from "../lib/ide";
   import Icon from "./Icon.svelte";
   import DiffLines from "./DiffLines.svelte";
+  import { blockedReason } from "../lib/blocked";
 
   // agent: whose call it is (its files are shown in the IDE only when they are this Mac's).
   let { tool, msgState, agent = "" }: { tool: Tool; msgState: string; agent?: string } = $props();
@@ -19,6 +20,8 @@
   // A replayed history has no real timing: no duration then.
   const took = $derived(tool.ended && tool.ended - tool.started >= 5 ? dur(tool.ended - tool.started) : "");
   const cmd = $derived(typeof tool.input?.command === "string" ? tool.input.command : Array.isArray(tool.input?.command) ? tool.input.command.join(" ") : "");
+  // Refused by auto mode: said so, and /permissions is where it is reviewed (as Claude Code says).
+  const blocked = $derived(blockedReason(tool) !== null);
   const hasMore = $derived(!!(tool.output || tool.edits?.length || tool.input));
 </script>
 
@@ -35,6 +38,7 @@
     <span class="what">{intent(tool)}</span>
     {#if e.files}<span class="stat mono"><span class="plus">+{e.added}</span> <span class="minus">−{e.removed}</span></span>{/if}
     {#if tool.exit_code !== undefined && tool.exit_code !== 0}<span class="chip crit">{t("exit {code}", { code: tool.exit_code })}</span>{/if}
+    {#if blocked}<span class="chip blk" role="button" tabindex="-1" title={t("Review in /permissions")} onclick={ev => { ev.stopPropagation(); app.openPermissions("recent"); }} onkeydown={() => {}}>{t("Blocked by auto mode")}</span>{/if}
     {#if took}<span class="took muted num">{took}</span>{/if}
     {#if hasMore}<span class="chev" class:rot={open}><Icon name="chev" size={12} /></span>{/if}
   </button>
@@ -57,6 +61,7 @@
 </div>
 
 <style>
+  .chip.blk { cursor: pointer; color: var(--warn-text); border-color: transparent; background: color-mix(in srgb, var(--warn) 12%, transparent); }
   .open { border: 0; background: transparent; padding: 0; color: inherit; font-size: inherit; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; cursor: pointer; }
   .open:hover { text-decoration-color: currentColor; }
   .tool { border-radius: var(--r-row); border: 1px solid var(--line-soft); background: var(--card); overflow: hidden; container-type: inline-size; }

@@ -68,10 +68,12 @@
   const slash = $derived.by(() => {
     if (!d.text.startsWith("/") || d.text.includes(" ") || d.text.includes("\n")) return [];
     const q = d.text.slice(1).toLowerCase();
-    const items: { name: string; description: string; pick?: "model" | "effort" | "mode" }[] = [];
+    const items: { name: string; description: string; pick?: "model" | "effort" | "mode" | "permissions" }[] = [];
     if (model) items.push({ name: "model", description: t("Choose the model"), pick: "model" });
     if (effort) items.push({ name: "effort", description: t("Choose the reasoning effort"), pick: "effort" });
     if (mode) items.push({ name: "mode", description: t("Choose the mode"), pick: "mode" });
+    // Claude Code's /permissions is drawn by its terminal: through ACP there is none, the app has it.
+    if (app.isClaude(agent)) items.push({ name: "permissions", description: t("Allow, ask and deny rules for tools"), pick: "permissions" });
     // Playbooks: the prompts kept, then the agent's own commands (but for the settings above:
     // Claude Code has its /model too).
     const seen = new Set(items.map(i => i.name));
@@ -98,11 +100,14 @@
   function takeSlash(i: number) {
     const it = slash[i];
     if (!it) return;
+    if (it.pick === "permissions") { d.text = ""; openPermissions(); return; }
     if (it.pick) { d.text = ""; pickerFor = it.pick; return; }
     if ((it as any).playbook) { d.text = asMessage((it as any).playbook); ta?.focus(); return; }
     d.text = "/" + it.name + " ";
     ta?.focus();
   }
+
+  function openPermissions() { app.openPermissions(); }
 
   // While a turn runs and nothing is typed, the send button stops it (and ⌃C does, anywhere).
   const running = $derived(!isNew && app.runningHere().length > 0);
@@ -128,6 +133,7 @@
       app.runShell(cmd);
       return;
     }
+    if (/^\/permissions\s*$/.test(d.text) && app.isClaude(agent) && !d.files.length) { d.text = ""; openPermissions(); return; }
     // "@codex" and nothing else chooses who answers; with a message after it, the message goes to
     // that agent (app.submit).
     const named = isNew || app.sentBefore(d) ? null : app.mention(d.text);

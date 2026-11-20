@@ -12,6 +12,7 @@
   import Settings from "./components/Settings.svelte";
   import Board from "./components/Board.svelte";
   import Palette from "./components/Palette.svelte";
+  import Permissions from "./components/Permissions.svelte";
   import Wiki from "./components/Wiki.svelte";
   import Library from "./components/Library.svelte";
   import IDE from "./components/IDE.svelte";
@@ -209,6 +210,7 @@
   {/if}
   {#if app.conn?.ok}<RightPanel hidden={app.view !== "chat" || !app.panel} />{/if}
   {#if app.palette}<Palette />{/if}
+  {#if app.permissionsFor !== null}<Permissions folder={app.permissionsFor} />{/if}
   <!-- Starting: the mark drawing itself while the node is reached (or started), at least once
        through, then gone. -->
   {#if (!app.conn && !splashMax) || !splashMin}<div class="splash drag" out:fade={{ duration: 260 }}><Logo size={88} loop /></div>{/if}

@@ -12,6 +12,7 @@ export {
     CloudConnected,
     Connection,
     Module,
+    PermSource,
     ShellResult,
     Task,
     Upload

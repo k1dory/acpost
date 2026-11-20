@@ -18,7 +18,7 @@ type Conversation struct {
 	Messages int       `json:"messages"`
 	Running  int       `json:"running"`
 	Queued   int       `json:"queued"`
-	Failed   int       `json:"failed"`
+	Failed   int       `json:"failed"` // turns failed since its last turn that ended otherwise (done, stopped)
 	Started  time.Time `json:"started"`
 	Updated  time.Time `json:"updated"`
 }
@@ -37,11 +37,20 @@ func (s *Store) Conversations(ctx context.Context, party *Party, before string, 
 		where = append(where, cond)
 		args = append(args, pargs...)
 	}
-	q := `SELECT thread, max(updated_at) AS upd, min(created_at), count(*), sum(state = 'running'), sum(state = 'queued'),
-		sum(state IN ('failed', 'expired')), group_concat(DISTINCT recipient) FROM messages`
+	// What the party sees, once: the threads and their counts are of these messages only (a turn it
+	// cannot see changes nothing it is told).
+	vis := "(SELECT * FROM messages)"
 	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
+		vis = "(SELECT * FROM messages WHERE " + strings.Join(where, " AND ") + ")"
 	}
+	// Failed: the turns that failed after the thread's last one that ended otherwise (done, or
+	// stopped by a person), in the order they were sent (seq): a failure answered by a turn that
+	// went well is no longer the thread's state.
+	q := `WITH vis AS ` + vis + `,
+		ok AS (SELECT thread AS ok_thread, max(seq) AS ok_seq FROM vis WHERE state IN ('done', 'cancelled') GROUP BY thread)
+		SELECT thread, max(updated_at) AS upd, min(created_at), count(*), sum(state = 'running'), sum(state = 'queued'),
+		sum(state IN ('failed', 'expired') AND seq > coalesce(ok_seq, -1)), group_concat(DISTINCT recipient)
+		FROM vis LEFT JOIN ok ON ok_thread = thread`
 	q += " GROUP BY thread"
 	if before != "" {
 		ts, thread, _ := strings.Cut(before, "/")

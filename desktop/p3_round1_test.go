@@ -56,3 +56,30 @@ func TestExpandHome(t *testing.T) {
 		}
 	}
 }
+
+// The test notification is sent whatever the window, and says why when macOS does not allow it.
+func TestNotifyTestSaysWhyNot(t *testing.T) {
+	ok := &stubNotes{allow: true}
+	if err := (&Node{notes: ok}).NotifyTest("acpost", "works"); err != nil || ok.sent.Load() != 1 {
+		t.Fatalf("allowed: %v, %d sent", err, ok.sent.Load())
+	}
+	no := &stubNotes{allow: false}
+	if err := (&Node{notes: no}).NotifyTest("acpost", "works"); err == nil || no.sent.Load() != 0 {
+		t.Fatalf("refused: %v, %d sent", err, no.sent.Load())
+	}
+	if err := (&Node{}).NotifyTest("acpost", "works"); err == nil {
+		t.Fatal("no notifications: said")
+	}
+	// Refused, then allowed in System Settings: the test asks again, and so do the next notifications.
+	later := &stubNotes{allow: false}
+	n := &Node{notes: later}
+	n.Notify("done", "x")
+	later.allow = true
+	if err := n.NotifyTest("acpost", "works"); err != nil || later.sent.Load() != 1 {
+		t.Fatalf("allowed since: %v, %d sent", err, later.sent.Load())
+	}
+	n.Notify("done", "y")
+	if later.sent.Load() != 2 {
+		t.Fatalf("a notification after the test: %d sent", later.sent.Load())
+	}
+}

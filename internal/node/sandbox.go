@@ -1204,7 +1204,7 @@ func (a *sandboxAgent) handle(m store.Message) {
 	}
 	t.event("notice", map[string]string{"text": "sandbox " + a.cfg.Sandbox.ID + ": run " + run.ID + " (" + delivery + ")"})
 
-	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
+	turnCtx, turnCancel := turnContext(ctx, a.cfg.TurnTimeout.D())
 	var end sandboxEnd
 	done := false
 	if again {

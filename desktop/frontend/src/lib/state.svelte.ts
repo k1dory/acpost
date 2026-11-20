@@ -4,7 +4,8 @@ import { Node, on, errText, errInfo } from "./api";
 import { newId } from "./ids";
 import { ComposerDraft, sendFiles, giveBack, mergeFiles, type Attachment } from "./composer.svelte";
 import { afterSent, overLimits, asMessage } from "./draft";
-import { Turn, ownBody, type Ev } from "./turn";
+import { Turn, ownBody, type Ev, type Request } from "./turn";
+import { blockedIn } from "./blocked";
 import { editsToReveal, localFiles, type Reveal } from "./ide";
 import { shellBody } from "./shell";
 import { who } from "./format";
@@ -155,6 +156,13 @@ class App {
   private revealed = new Set<string>(); // the calls whose edits were shown ("message:call")
   private followedAt = new Map<string, number>(); // when each message's events began to be followed
   /** The folder the IDE has open: the chat's, a new task's, or home. */
+  /** The requests of message id still waiting for a person: none once its turn ended (stopped, done,
+   * failed — the node gave up on them, whether or not their end reached the app). */
+  waitingIn(id: string): Request[] {
+    const m = this.msgs.find(x => x.id === id);
+    if (m && final(m.state)) return [];
+    return this.turns[id]?.waiting() ?? [];
+  }
   ideFolder(): string { return this.chatCwd() || this.draft.cwd || this.home; }
   /** Shows an edit in the IDE (its diff when the edit's text is whole, else the file). */
   revealInIDE(r: Reveal, agent = "", asked = false) {
@@ -301,6 +309,34 @@ class App {
     if (owner !== d) for (const [id, o] of this.shellOwner) if (o === d) this.shellOwner.set(id, owner);
   }
   palette = $state(false); // ⌘K
+  /** Something of the page is drawn over the window (a menu, a dialog): the native panes (the IDE,
+   * a module) hide meanwhile, or they would be over it. */
+  get overlay(): boolean { return this.palette || this.viewMenu || this.permissionsFor !== null; }
+  /** /permissions open: the folder whose Claude Code rules are shown, or null. */
+  permissionsFor = $state<string | null>(null);
+  /** The tab /permissions opens on: what auto mode blocked, when the chat has any (as Claude Code). */
+  permissionsTab = $state<"recent" | "allow" | "ask" | "deny" | "dirs">("allow");
+  /** What auto mode refused in the open chat: its turns (each with the agent it was), and a
+   * session's history from before acpost (its agent's). */
+  blockedHere() {
+    return blockedIn([
+      ...this.msgs.filter(m => this.turns[m.id]).map(m => [m.id, this.turns[m.id], m.to] as [string, Turn, string]),
+      ...this.history.map((h, i) => ["history:" + i, h.turn, this.chat?.agent ?? ""] as [string, Turn, string]),
+    ]);
+  }
+  /** Opens /permissions for the chat's folder: on what auto mode blocked in it, when it blocked
+   * anything (as Claude Code does), else on the rules that allow. */
+  openPermissions(tab?: App["permissionsTab"]) {
+    const any = this.blockedHere().length > 0;
+    this.permissionsTab = tab ?? (any ? "recent" : "allow");
+    this.permissionsFor = this.ideFolder();
+  }
+  /** Whether an agent is Claude Code (its rules are its settings files): by the program behind it. */
+  isClaude(addr: string): boolean {
+    // This node's ACP agents (their settings files are this Mac's); `node` names this node too.
+    const a = this.localAgents().find(x => x.address === addr);
+    return !!a && /claude/i.test(a.product || a.name);
+  }
   viewMenu = $state(false); // the title bar's view menu open
   asking = $state<any[]>([]); // approvals waiting
   theme = $state<"light" | "dark" | "system">("light");
@@ -408,7 +444,9 @@ class App {
   notify(title: string, body: string) {
     let on = true;
     try { on = localStorage.getItem("notify") !== "0"; } catch {}
-    if (on && !document.hasFocus()) Node.Notify(title, body).catch(() => {});
+    // Whether the window is in front is the app's side to say (the page may think it has the focus
+    // while the app is in the background): it shows the notification only when it is not.
+    if (on) Node.Notify(title, body).catch(() => {});
   }
 
   /** What waits for the user: approvals asked (notified once each). */

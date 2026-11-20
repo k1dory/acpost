@@ -32,3 +32,19 @@ describe("a turn's tool calls", () => {
     expect(document.querySelector(".tool .out")!.textContent).toBe("out of a");
   });
 });
+
+describe("a turn's permission request", () => {
+  const asked = () => ({ blocks: [{ t: "request", id: "r1" }], tools: new Map(), requests: new Map([["r1", { request_id: "r1", kind: "permission", title: "search_repos", at: 1, options: [{ option_id: "y", name: "Allow", kind: "allow_once" }, { option_id: "n", name: "Reject", kind: "reject_once" }] }]]) }) as any;
+  const at = (msgState: string) => { mounted.push(mount(TurnBlocks, { target: document.body, props: { view: asked(), msg: "m1", msgState, agent: "agent:claude" } })); flushSync(); };
+  it("unanswered while the turn goes on is asked, with its choices", () => {
+    at("running");
+    expect(document.querySelector("[data-ask]")).not.toBeNull();
+    expect(document.querySelectorAll(".acts .btn").length).toBe(2);
+  });
+  it("unanswered when the turn was stopped is closed: no choices, nothing asked", () => {
+    at("cancelled");
+    expect(document.querySelector("[data-ask]")).toBeNull();
+    expect(document.querySelector(".acts")).toBeNull();
+    expect(document.querySelector(".card.ask.done")).not.toBeNull();
+  });
+});

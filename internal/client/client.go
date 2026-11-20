@@ -175,7 +175,7 @@ type Chat struct {
 	Messages     int       `json:"messages,omitempty"`
 	Running      int       `json:"running,omitempty"`
 	Queued       int       `json:"queued,omitempty"`
-	Failed       int       `json:"failed,omitempty"`
+	Failed       int       `json:"failed,omitempty"` // turns failed since the last that ended otherwise
 	Folder       string    `json:"folder,omitempty"`
 	// CloudAgent is the catalogue agent a sandbox was made from.
 	CloudAgent string `json:"cloud_agent,omitempty"`

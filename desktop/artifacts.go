@@ -146,23 +146,34 @@ func saveFile(dest string, b []byte) error {
 
 // OpenArtifact opens an attachment in its own app (a copy in a temporary folder).
 func (n *Node) OpenArtifact(name, data string) error {
-	b, err := base64.StdEncoding.DecodeString(data)
+	p, err := artifactCopy(name, data)
 	if err != nil {
-		return err
-	}
-	dir, err := artifactTemp()
-	if err != nil {
-		return err
-	}
-	sub, err := os.MkdirTemp(dir, "open-")
-	if err != nil {
-		return err
-	}
-	p := filepath.Join(sub, filepath.Base(name))
-	if err := os.WriteFile(p, b, 0o600); err != nil {
 		return err
 	}
 	return exec.Command("/usr/bin/open", "--", p).Run()
+}
+
+// ArtifactCopy writes an attachment to a temporary folder and says where: a file the IDE can show.
+func (n *Node) ArtifactCopy(name, data string) (string, error) { return artifactCopy(name, data) }
+
+func artifactCopy(name, data string) (string, error) {
+	b, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", err
+	}
+	dir, err := artifactTemp()
+	if err != nil {
+		return "", err
+	}
+	sub, err := os.MkdirTemp(dir, "open-")
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(sub, filepath.Base(name))
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		return "", err
+	}
+	return p, nil
 }
 
 // artifactTemp is where opened attachments are copied: one folder, its copies older than a day
@@ -239,6 +250,12 @@ func typeOf(name, said string, b []byte) string {
 // failure or a crash midway leaves what was there. A new file gets perm under the umask, as
 // os.WriteFile gives it; keep (when not nil) is an existing file's mode, kept as it was.
 func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool) error {
+	return writeAtomicIf(path, b, perm, keep, replace, nil)
+}
+
+// writeAtomicIf is writeAtomic that asks check last, once the new content is on disk beside the
+// file and just before it takes the file's place: an error from it leaves the file as it is.
+func writeAtomicIf(path string, b []byte, perm os.FileMode, keep *os.FileMode, replace bool, check func() error) error {
 	dir := filepath.Dir(path)
 	mode := perm
 	if keep != nil {
@@ -277,6 +294,11 @@ func writeAtomic(path string, b []byte, perm os.FileMode, keep *os.FileMode, rep
 	}
 	if err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	if replace {
 		err = os.Rename(tmp, path)

@@ -5,6 +5,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -54,8 +55,43 @@ func (n *Node) DeleteMCPServer(name string) error {
 	return err
 }
 
-// Notify shows a notification of the system (asked for once; nothing when refused or unavailable).
+// Notify shows a notification of the system when the app's window is not the one in front (the
+// person is elsewhere): asked for once; nothing when refused or unavailable. Whether the window is
+// in front is the system's to say — the page's own document.hasFocus() is not (a web view may keep
+// it while the app is in the background).
 func (n *Node) Notify(title, body string) error {
+	if n.win != nil && n.win.IsFocused() {
+		return nil
+	}
+	return n.notify(title, body)
+}
+
+// NotifyTest shows a notification now, the window in front or not: what the person sees, or why not.
+func (n *Node) NotifyTest(title, body string) error {
+	if n.notes == nil {
+		return errors.New("the system's notifications are not available to the app")
+	}
+	// Asked again, not taken from the first answer: the person may have allowed them in System
+	// Settings since (macOS answers at once once the person has decided).
+	n.noteAsk.Do(func() {}) // the first ask is this one, not a later Notify's
+	ok, err := n.notes.RequestNotificationAuthorization()
+	n.mu.Lock()
+	n.noteOK = -1
+	if ok && err == nil {
+		n.noteOK = 1
+	}
+	n.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("macOS does not allow the app's notifications: System Settings → Notifications → acpost")
+	}
+	return n.notes.SendNotification(notifications.NotificationOptions{
+		ID: fmt.Sprintf("acpost-%d", time.Now().UnixNano()), Title: title, Body: body})
+}
+
+func (n *Node) notify(title, body string) error {
 	if n.notes == nil {
 		return nil
 	}

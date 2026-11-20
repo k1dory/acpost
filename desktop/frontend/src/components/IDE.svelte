@@ -30,7 +30,7 @@
   const short = (d: string) => (app.home && d.startsWith(app.home) ? "~" + d.slice(app.home.length) : d);
   // What covers the box: menus drawn in HTML (the pane would be over them). A toast does not: the
   // pane is made shorter to leave it its place, VS Code keeps its focus.
-  const covered = $derived(app.palette || app.viewMenu);
+  const covered = $derived(app.overlay);
   // The native pane's calls, in order, the latest winning; this view is the pane's newest owner (an
   // earlier one's late calls are dropped).
   const pane = newPaneOwner();

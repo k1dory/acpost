@@ -166,3 +166,14 @@ func TestJoinTokenNeededOnlyByTheNode(t *testing.T) {
 		t.Fatal("join without any token accepted")
 	}
 }
+
+// A turn has no time limit unless one is set; one set is kept; a negative one is refused.
+func TestTurnTimeoutIsNoneUnlessSet(t *testing.T) {
+	c, err := Parse([]byte(`{"agents":{"r":{"driver":"acp","command":["x"]}}}`), ".json")
+	if err != nil || c.Agents["r"].TurnTimeout.D() != 0 {
+		t.Fatalf("omitted: %v %v", c.Agents["r"].TurnTimeout.D(), err)
+	}
+	if _, err := Parse([]byte(`{"agents":{"r":{"driver":"acp","command":["x"],"turn_timeout":"-1m"}}}`), ".json"); err == nil {
+		t.Fatal("negative: accepted")
+	}
+}

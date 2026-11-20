@@ -7,6 +7,7 @@
   import { pageSandbox } from "../lib/sanitize";
   import { bytes } from "../lib/names";
   import { dirOf } from "../lib/artifactref";
+  import { app } from "../lib/state.svelte";
 
   // One artifact shown as what it is: a page, a picture, a PDF, Markdown, code; or opened in its
   // own app, or saved. The chat's artifacts panel and the library both show theirs with it.
@@ -65,9 +66,38 @@
   // "" for none known — never the directory of whichever chat is open).
   const linkBase = $derived(art?.path ? dirOf(art.path) : cur?.base ?? "");
 
+  // A text (code, a diff, Markdown, a page's source) opens in the app's IDE: the file of this Mac
+  // itself, an attachment as a copy. Where the IDE cannot show it (it is another acpost's, the app
+  // is on another node), and anything else, opens in its own app.
+  const inIDE = $derived(kind === "text" || kind === "markdown" || kind === "html");
+  // Not shown in the IDE (it did not start, or another acpost has it): said, and the file's own
+  // app is a choice of its own — never taken instead (a script would run).
+  let ideErr = $state("");
+  $effect(() => { cur; ideErr = ""; });
   async function openOutside() {
     if (!art) return;
-    try { if (cur?.path) await Node.OpenLocal(cur.path, cur.base ?? ""); else await Node.OpenArtifact(art.name, art.data); } catch (e) { err = errText(e); }
+    // What was clicked, as it was: the IDE may take a while to start, and another file chosen
+    // meanwhile is not the one to open.
+    const a = art, ref = cur;
+    if (inIDE) {
+      const folder = app.ideFolder();
+      try {
+        const file = a.path ?? await Node.ArtifactCopy(a.name, a.data);
+        // The IDE started first (it may not be yet: the app just opened): a request to show is
+        // read by the IDE's window, and is made for an IDE this app runs.
+        await Node.IDEStart(folder);
+        await Node.IDEReveal(folder, file, "", "", false, "");
+        app.view = "ide";
+      } catch (e) {
+        if (ref === cur) ideErr = errText(e) || t("The IDE did not open it");
+      }
+      return;
+    }
+    await openOwn(a, ref);
+  }
+  async function openOwn(a = art, ref = cur) {
+    if (!a) return;
+    try { if (ref?.path) await Node.OpenLocal(ref.path, ref.base ?? ""); else await Node.OpenArtifact(a.name, a.data); } catch (e) { err = errText(e); }
   }
   async function save() {
     if (!art) return;
@@ -81,9 +111,11 @@
     {#if art}<span class="muted small">{art.type.split(";")[0]} · {bytes(art.size)}</span>{/if}
     <span class="sp"></span>
     {#if kind === "html"}<button class="btn ghost sm" class:on={scripts} onclick={() => (scripts = !scripts)} title={t("The page's scripts run in a frame of their own; they reach nothing outside the app")}>{scripts ? t("Scripts on") : t("Allow scripts")}</button>{/if}
-    <button class="btn ghost sm" disabled={!art} onclick={openOutside}>{t("Open")}</button>
+    <button class="btn ghost sm" disabled={!art} onclick={openOutside} title={inIDE ? t("Open in the IDE") : undefined}>{t("Open")}</button>
+    {#if ideErr}<button class="btn ghost sm" onclick={() => openOwn()}>{t("Open in its own app")}</button>{/if}
     <button class="btn ghost sm" disabled={!art} onclick={save}>{t("Save as…")}</button>
   </div>
+  {#if ideErr}<div class="ideerr selectable">{t("Not opened in the IDE")}: {ideErr}</div>{/if}
   <div class="view">
     {#if loading}<div class="empty"><span class="spin"></span></div>
     {:else if err}<div class="err selectable">{err}</div>
@@ -128,5 +160,6 @@
   .code :global(.hljs-variable), .code :global(.hljs-params), .code :global(.hljs-attr) { color: var(--hl-var); }
   .av { --hl-kw: #a626a4; --hl-str: #50a14f; --hl-num: #b76b01; --hl-fn: #4078f2; --hl-var: #c45a2c; }
   :global([data-theme="dark"]) .av { --hl-kw: #c792ea; --hl-str: #a5d6a7; --hl-num: #f7c37a; --hl-fn: #82aaff; --hl-var: #f2a37a; }
+  .ideerr { margin: 6px 10px 0; padding: 6px 10px; border-radius: 8px; background: var(--crit-bg); color: var(--crit); font-size: 12px; }
   .err { margin: 10px; padding: 8px 10px; border-radius: 10px; background: var(--crit-bg); color: var(--crit); font-size: 12px; white-space: pre-line; }
 </style>

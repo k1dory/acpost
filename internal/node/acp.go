@@ -900,7 +900,7 @@ func (s *acpSlot) handle(m store.Message) {
 	// prompt. The SDK writes a request before it watches the context: an agent that stopped reading
 	// its stdin holds a call in that write. If the call has not returned shortly after the deadline,
 	// the process is killed, which ends the write.
-	turnCtx, turnCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout.D())
+	turnCtx, turnCancel := turnContext(ctx, a.cfg.TurnTimeout.D())
 	defer turnCancel()
 	callDone := make(chan struct{})
 	endCall := sync.OnceFunc(func() { close(callDone) })
@@ -1622,3 +1622,12 @@ type authError struct{ err error }
 
 func (e *authError) Error() string { return e.err.Error() }
 func (e *authError) Unwrap() error { return e.err }
+
+// turnContext is a turn's deadline: turn_timeout when the agent sets one, else none — a turn runs
+// until the agent ends it or a person stops it.
+func turnContext(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, d)
+}
