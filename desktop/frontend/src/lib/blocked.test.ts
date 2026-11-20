@@ -33,6 +33,8 @@ describe("auto mode's refusals", () => {
     expect(ruleFor({ command: "", title: "mcp__forgejo__delete_branch", kind: "other" })).toBe("mcp__forgejo__delete_branch");
     expect(ruleFor({ command: "", name: "mcp__forgejo__delete_branch", title: "Delete branch main", kind: "delete" })).toBe("mcp__forgejo__delete_branch");
     expect(ruleFor({ command: "ls", name: "mcp__ssh__exec", title: "exec", kind: "execute" })).toBe("mcp__ssh__exec");
+    expect(ruleFor({ command: "", name: "WebSearch", title: "search acpost", kind: "search" })).toBe("WebSearch");
+    expect(ruleFor({ command: "", name: "Grep", title: "grep foo", kind: "search" })).toBe("Grep");
     expect(ruleFor({ command: "", title: "Fetch https://x", kind: "fetch" })).toBe("WebFetch");
   });
 

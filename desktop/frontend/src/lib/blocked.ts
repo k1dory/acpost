@@ -50,6 +50,8 @@ export function ruleFor(b: Pick<Blocked, "command" | "title" | "kind"> & { name?
     return words.length ? `Bash(${words.join(" ")}:*)` : "Bash";
   }
   if (/^mcp__\w+/.test(b.title)) return b.title.split(/\s/)[0];
+  // A tool Claude Code names itself (WebSearch, WebFetch, Grep…): its name is its rule.
+  if (b.name && /^[A-Z][A-Za-z]+$/.test(b.name)) return b.name;
   const byKind: Record<string, string> = { read: "Read", edit: "Edit", delete: "Edit", move: "Edit", fetch: "WebFetch", search: "Grep", execute: "Bash" };
   return byKind[b.kind] ?? b.title.split(/\s/)[0] ?? "";
 }

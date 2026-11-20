@@ -76,7 +76,9 @@ A reply can carry components besides Markdown and Mermaid: a ```` ```ui ```` blo
 object `{"type": …}` (or an array of up to 8) that the chat draws in its place: `stats` tiles, a
 `chart` (bar, line, area or pie, drawn as SVG in the app's colours), a `table` the person sorts and
 filters, a `timeline`, a `kanban` board, a plan's `steps`, and `choices` or a `form` whose answers
-go into the message being written (never sent by themselves). The node tells an agent of them once a
+go into the message being written. `choices` also take an answer of the person's own, and Send
+sends at once: the answer after what the message being written has (its text and attachments go
+with it), as the composer sends it. The node tells an agent of them once a
 session (`readerNote`, `internal/node/knowledge.go`). A block is checked field by field against
 limits (`frontend/src/lib/genui.ts`); one that is not valid, or still being written, is shown as
 its code. Its text is only ever shown as text, and nothing in it is loaded or run.
