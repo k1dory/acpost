@@ -18,7 +18,7 @@ type Conversation struct {
 	Messages int       `json:"messages"`
 	Running  int       `json:"running"`
 	Queued   int       `json:"queued"`
-	Failed   int       `json:"failed"`
+	Failed   int       `json:"failed"` // turns failed since its last turn that ended otherwise (done, stopped)
 	Started  time.Time `json:"started"`
 	Updated  time.Time `json:"updated"`
 }
@@ -37,8 +37,12 @@ func (s *Store) Conversations(ctx context.Context, party *Party, before string, 
 		where = append(where, cond)
 		args = append(args, pargs...)
 	}
-	q := `SELECT thread, max(updated_at) AS upd, min(created_at), count(*), sum(state = 'running'), sum(state = 'queued'),
-		sum(state IN ('failed', 'expired')), group_concat(DISTINCT recipient) FROM messages`
+	// Failed: the turns that failed since the thread's last one that ended otherwise (done, or
+	// stopped by a person): a failure answered by a turn that went well is no longer the thread's state.
+	q := `WITH ok AS (SELECT thread AS ok_thread, max(created_at) AS ok_at FROM messages WHERE state IN ('done', 'cancelled') GROUP BY thread)
+		SELECT thread, max(updated_at) AS upd, min(created_at), count(*), sum(state = 'running'), sum(state = 'queued'),
+		sum(state IN ('failed', 'expired') AND created_at > coalesce(ok_at, -1)), group_concat(DISTINCT recipient)
+		FROM messages LEFT JOIN ok ON ok_thread = thread`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}

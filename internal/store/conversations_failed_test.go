@@ -1,0 +1,68 @@
+package store
+
+import (
+	"testing"
+	"time"
+)
+
+// A thread is failed while its failures are not followed by a turn that ended otherwise (done, or
+// stopped by a person): one failure answered by a turn that went well no longer marks it.
+func TestConversationFailedSinceTheLastGoodTurn(t *testing.T) {
+	s := openTest(t, Options{})
+	turn := func(thread string, state State) string {
+		t.Helper()
+		m := msg("agent:r", "x")
+		m.Thread = thread
+		got := mustInsert(t, s, m)
+		time.Sleep(3 * time.Millisecond)
+		if state == Cancelled {
+			if _, err := s.Cancel(ctx, got.ID); err != nil {
+				t.Fatal(err)
+			}
+			return got.ID
+		}
+		c, _, err := s.Claim(ctx, "agent:r", time.Minute)
+		if err != nil || c.ID != got.ID {
+			t.Fatalf("claim: %+v %v", c, err)
+		}
+		code := ""
+		if state == Failed {
+			code = "agent_error"
+		}
+		if err := s.Complete(ctx, c.ID, c.LeaseID, state, "", code, code); err != nil {
+			t.Fatal(err)
+		}
+		return got.ID
+	}
+	failed := func(thread string) int {
+		t.Helper()
+		page, _, err := s.Conversations(ctx, nil, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range page {
+			if c.Thread == thread {
+				return c.Failed
+			}
+		}
+		t.Fatalf("no thread %s", thread)
+		return 0
+	}
+	root := turn("", Failed)
+	if failed(root) != 1 {
+		t.Fatal("its only turn failed: failed")
+	}
+	turn(root, Done)
+	if got := failed(root); got != 0 {
+		t.Fatalf("a turn went well after the failure: %d, not failed", got)
+	}
+	turn(root, Failed)
+	turn(root, Failed)
+	if got := failed(root); got != 2 {
+		t.Fatalf("two failures since the last good turn: %d", got)
+	}
+	turn(root, Cancelled)
+	if got := failed(root); got != 0 {
+		t.Fatalf("stopped by a person after them: %d", got)
+	}
+}
