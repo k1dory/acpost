@@ -8,7 +8,7 @@
   const rows = $derived((app.rev, app.msgs.filter(m => m.to.startsWith("agent:")).map(m => {
     const t = app.turns[m.id];
     const tools = t ? [...t.tools.values()] : [];
-    const asks = t ? t.waiting().length : 0;
+    const asks = app.waitingIn(m.id).length;
     return { m, tools, asks, state: asks ? "ask" : m.state };
   })));
 </script>

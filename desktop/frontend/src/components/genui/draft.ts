@@ -1,4 +1,5 @@
 import { app } from "../../lib/state.svelte";
+import { asMessage } from "../../lib/draft";
 
 /** Where an answer is in a text: whole, its first line a line of the text from its start and its
  * last line one to its end ("Java" is not in "JavaScript", nor "1" in "10"); -1 when it is not. */
@@ -37,4 +38,17 @@ export function toDraft(text: string, _before = "") {
  * was added and since deleted, or another answer that only starts like it, can be added. */
 export function inDraft(text: string): boolean {
   return answerAt(app.draftOf().text, text) >= 0 || answerAt(app.quote, text) >= 0;
+}
+
+/** An answer sent at once, when the person asks for it (Send): put after what their message being
+ * written has, and that message sent as the composer sends it. False when it was not (a message of
+ * theirs is still going, or the node did not take it: the draft keeps the text, said in error). */
+export async function sendNow(text: string): Promise<boolean> {
+  const d = app.draftOf();
+  if (d.busy) return false;
+  const before = [d.text, app.quote].map(s => s.replace(/\s+$/, "")).filter(Boolean).join("\n");
+  app.quote = "";
+  d.text = asMessage((before ? before + "\n\n" : "") + whole(text));
+  if (app.view !== "chat" && app.view !== "ide") app.view = "chat";
+  return app.submit(d);
 }

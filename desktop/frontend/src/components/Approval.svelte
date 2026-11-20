@@ -4,7 +4,10 @@
   import type { Request } from "../lib/turn";
   import Icon from "./Icon.svelte";
 
-  let { req, msg }: { req: Request; msg: string } = $props();
+  // ended: its turn is over (done, failed, stopped): a request still unanswered then is answered by
+  // no one any more — shown closed, without its choices.
+  let { req, msg, ended = false }: { req: Request; msg: string; ended?: boolean } = $props();
+  const open = $derived(!req.decision && !ended);
   let show = $state(false);
   let busy = $state(false);
   let full = $state(false);
@@ -20,7 +23,7 @@
   }
 </script>
 
-<div class="card ask" class:done={!!req.decision} data-ask={req.decision ? undefined : ""}>
+<div class="card ask" class:done={!open} data-ask={open ? "" : undefined}>
   <div class="row">
     <span class="ic"><Icon name="alert" /></span>
     <div class="t">
@@ -32,6 +35,8 @@
     </div>
     {#if req.decision}
       <span class="chip" class:good={req.decision.startsWith("allow") || req.decision === "selected"} class:crit={req.decision === "rejected" || req.decision === "timeout"}>{req.decision}{req.by ? ` · ${req.by.replace(/^user:/, "")}` : ""}</span>
+    {:else if ended}
+      <span class="chip">{t("Not answered: the turn ended")}</span>
     {:else}
       <span class="chip ask">{t("Needs approval")}</span>
     {/if}
@@ -40,7 +45,7 @@
     <button class="btn ghost sm" onclick={() => (show = !show)}>{show ? t("Hide request") : t("Show request")}</button>
     {#if show}<pre class="raw selectable">{raw}</pre>{/if}
   {/if}
-  {#if !req.decision}
+  {#if open}
     <div class="acts">
       {#if reject}<button class="btn" disabled={busy} onclick={() => pick(reject.option_id)}>{reject.name ? t(reject.name) : t("Reject")}</button>
       {:else}<button class="btn" disabled={busy} onclick={() => pick("")}>{t("Reject")}</button>{/if}
@@ -57,14 +62,15 @@
      onto lines of their own and a long one breaks inside its button. */
   /* .card.ask, not .ask: the state chip is .chip.ask and must not be drawn as a second card. */
   .card.ask { padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
-  /* One that waits holds the turn: it is the loudest thing in the chat until it is answered. */
-  .card.ask:not(.done) { border-color: var(--warn); background: var(--warn-bg); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 14%, transparent); }
+  /* One that waits holds the turn: it is told apart by a warm edge on its left, not by a glow
+     (it stays a card of the chat, read beside the others). */
+  .card.ask:not(.done) { border-color: color-mix(in srgb, var(--warn) 28%, var(--line)); background: color-mix(in srgb, var(--warn) 4%, var(--card)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 65%, transparent), var(--shadow); }
   .card.ask:not(.done)::before { display: none; }
   .card.ask.done { border-color: var(--line); box-shadow: none; }
   .card.ask.done .title { font-weight: 500; }
   .row { display: flex; gap: 8px 12px; align-items: flex-start; flex-wrap: wrap; }
   .row .chip { flex: none; margin-left: auto; }
-  .ic { color: var(--warn); padding-top: 2px; }
+  .ic { color: color-mix(in srgb, var(--warn) 80%, var(--muted)); padding-top: 2px; }
   .card.ask.done .ic { color: var(--muted); }
   .t { flex: 1 1 180px; min-width: 0; }
   .title { font-weight: 600; overflow-wrap: anywhere; }

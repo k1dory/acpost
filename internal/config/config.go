@@ -167,7 +167,7 @@ type Agent struct {
 	Session      string            `yaml:"session" json:"session"`
 	Reply        string            `yaml:"reply" json:"reply"`
 	Concurrency  int               `yaml:"concurrency" json:"concurrency"`
-	TurnTimeout  Duration          `yaml:"turn_timeout" json:"turn_timeout"`
+	TurnTimeout  Duration          `yaml:"turn_timeout" json:"turn_timeout"` // a turn's limit; none when not set (an agent may work for hours)
 	AskTimeout   Duration          `yaml:"ask_timeout" json:"ask_timeout"` // permissions: ask: how long a person has to answer
 	IdleTimeout  Duration          `yaml:"idle_timeout" json:"idle_timeout"`
 	Preamble     *bool             `yaml:"preamble" json:"preamble"`
@@ -494,8 +494,8 @@ func (a *Agent) fill() error {
 	if a.Concurrency <= 0 {
 		a.Concurrency = 1
 	}
-	if a.TurnTimeout == 0 {
-		a.TurnTimeout = Duration(30 * time.Minute)
+	if a.TurnTimeout < 0 {
+		return fmt.Errorf("turn_timeout %s: a duration, or none for no limit", a.TurnTimeout.D())
 	}
 	if a.IdleTimeout == 0 {
 		a.IdleTimeout = Duration(10 * time.Minute)

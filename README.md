@@ -453,7 +453,7 @@ agents:
     session: task                    # task | thread | message: which messages share an ACP session
     reply: last                      # last: text after the turn's last tool call; all: every text
     concurrency: 1                   # turns at once (one ACP session each)
-    turn_timeout: 30m
+    turn_timeout: 2h                 # a turn's limit (then failed: turn_timeout); not set: none
     idle_timeout: 10m                # the agent process is stopped after this long without work
     preamble: true                   # tell the agent who wrote and how its answer is returned (false: the prompt is the message as sent, without the app's note on what it renders either)
     allow_from: ["*"]                # who may send to it

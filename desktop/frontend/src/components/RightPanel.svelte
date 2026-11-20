@@ -39,7 +39,7 @@
     menuPos = `left:${left}px;top:${r.bottom / k + 4}px`;
   });
   function pick(k: PanelTab) { app.openTab(k); adding = false; }
-  const asks = $derived((app.rev, Object.values(app.turns).reduce((a, t) => a + t.waiting().length, 0)));
+  const asks = $derived((app.rev, Object.keys(app.turns).reduce((a, id) => a + app.waitingIn(id).length, 0)));
 
   function drag(e: PointerEvent) {
     const x0 = e.clientX, w0 = width, k = screenScale(); // the mouse moves in screen pixels

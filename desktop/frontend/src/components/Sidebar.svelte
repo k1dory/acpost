@@ -177,7 +177,7 @@
 {/snippet}
 
 <aside class="side" class:gone={app.beside}>
-  <div class="top drag"><ViewSwitch /></div>
+  <div class="top drag"><ViewSwitch />{#if app.conn?.app}<span class="ver mono" title={t("The app's version")}>{app.conn.app}</span>{/if}</div>
   <div class="pad">
     <button class="btn primary new nodrag" onclick={() => app.newTask()}><Icon name="plus" /> {t("New task")} <kbd>⌘N</kbd></button>
     <!-- One field: typing filters the chats; ⌘K (or its key here) searches everything. -->
@@ -285,13 +285,15 @@
 <style>
   .side.gone { display: none; }
   .side { width: 260px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; position: relative; }
-  .top { height: 50px; flex: none; display: flex; align-items: center; padding-left: 80px; }
+  .top { height: 50px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 14px 0 80px; min-width: 0; }
+  /* The app's version, beside the view's name: quiet, cut when long (the whole of it in its title). */
+  .ver { margin-left: auto; font-size: 10.5px; color: var(--muted); opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .pad { padding: 4px 14px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .new { justify-content: center; height: 32px; border-radius: 11px; }
   kbd { font: 11px var(--mono); opacity: .55; margin-left: 4px; }
   .search { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 11px; font-size: 12.5px; border: 1px solid var(--line); background: var(--card); color: var(--muted); }
   .search input { border: 0; outline: 0; background: transparent; flex: 1; color: var(--ink); min-width: 0; }
-  .list { flex: 1; padding: 0 10px 10px; min-height: 0; }
+  .list { flex: 1; padding: 0 10px 10px; min-height: 0; border-top: 1px solid var(--line-soft); }
   .h { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; font-weight: 600; color: var(--muted); padding: 16px 8px 6px; letter-spacing: .02em; text-transform: uppercase; border-radius: 8px; }
   .drag-ghost { position: fixed; z-index: 90; pointer-events: none; padding: 6px 10px; font-size: 12.5px; font-weight: 500; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: var(--shadow); }
   .row.lifted { opacity: .45; }

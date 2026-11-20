@@ -7,6 +7,7 @@
   import { pageSandbox } from "../lib/sanitize";
   import { bytes } from "../lib/names";
   import { dirOf } from "../lib/artifactref";
+  import { app } from "../lib/state.svelte";
 
   // One artifact shown as what it is: a page, a picture, a PDF, Markdown, code; or opened in its
   // own app, or saved. The chat's artifacts panel and the library both show theirs with it.
@@ -65,9 +66,25 @@
   // "" for none known — never the directory of whichever chat is open).
   const linkBase = $derived(art?.path ? dirOf(art.path) : cur?.base ?? "");
 
+  // A text (code, a diff, Markdown, a page's source) opens in the app's IDE: the file of this Mac
+  // itself, an attachment as a copy. Where the IDE cannot show it (it is another acpost's, the app
+  // is on another node), and anything else, opens in its own app.
+  const inIDE = $derived(kind === "text" || kind === "markdown" || kind === "html");
   async function openOutside() {
     if (!art) return;
-    try { if (cur?.path) await Node.OpenLocal(cur.path, cur.base ?? ""); else await Node.OpenArtifact(art.name, art.data); } catch (e) { err = errText(e); }
+    const a = art;
+    if (inIDE) {
+      const folder = app.ideFolder();
+      try {
+        const file = a.path ?? await Node.ArtifactCopy(a.name, a.data);
+        if (folder) {
+          await Node.IDEReveal(folder, file, "", "", false, "");
+          app.view = "ide";
+          return;
+        }
+      } catch {}
+    }
+    try { if (cur?.path) await Node.OpenLocal(cur.path, cur.base ?? ""); else await Node.OpenArtifact(a.name, a.data); } catch (e) { err = errText(e); }
   }
   async function save() {
     if (!art) return;
@@ -81,7 +98,7 @@
     {#if art}<span class="muted small">{art.type.split(";")[0]} · {bytes(art.size)}</span>{/if}
     <span class="sp"></span>
     {#if kind === "html"}<button class="btn ghost sm" class:on={scripts} onclick={() => (scripts = !scripts)} title={t("The page's scripts run in a frame of their own; they reach nothing outside the app")}>{scripts ? t("Scripts on") : t("Allow scripts")}</button>{/if}
-    <button class="btn ghost sm" disabled={!art} onclick={openOutside}>{t("Open")}</button>
+    <button class="btn ghost sm" disabled={!art} onclick={openOutside} title={inIDE ? t("Open in the IDE") : undefined}>{t("Open")}</button>
     <button class="btn ghost sm" disabled={!art} onclick={save}>{t("Save as…")}</button>
   </div>
   <div class="view">

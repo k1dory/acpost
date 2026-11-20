@@ -39,7 +39,7 @@
     <div class="series">{#each tools as id (id)}{@const tool = view.tools.get(id)}{#if tool}<ToolRow {tool} {msgState} {agent} />{/if}{/each}</div>
   {:else if b.t === "request"}
     {@const r = view.requests.get(b.id)}
-    {#if r}<Approval req={r} msg={msg} />{/if}
+    {#if r}<Approval req={r} msg={msg} ended={done} />{/if}
   {:else if b.t === "plan"}
     <Plan entries={b.entries} />
   {:else if b.t === "notice"}

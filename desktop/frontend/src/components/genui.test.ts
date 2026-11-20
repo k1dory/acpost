@@ -178,7 +178,7 @@ describe("an answer from a reply", () => {
     all(".opt")[1].click();
     flushSync(); await flush(); flushSync();
     expect(textarea().value).toBe(""); // a pick alone writes nothing
-    q<HTMLButtonElement>(".ask .btn").click();
+    q<HTMLButtonElement>(".ask .btn.add").click();
     flushSync(); await flush(); flushSync();
     expect(textarea().value).toBe("> Which DB?\n\nSQLite\n\n");
     expect(q(".ask .muted").textContent).toBeTruthy();
@@ -186,10 +186,38 @@ describe("an answer from a reply", () => {
     expect(fake.Node.Send).not.toHaveBeenCalled();
   });
 
+  it("of a choice is sent at once with Send, after what the person typed", async () => {
+    await withComposer();
+    fake.Node.SendTask.mockResolvedValue({ id: "m1", state: "queued" });
+    textarea().value = "mine"; textarea().dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }));
+    all(".opt")[0].click();
+    flushSync();
+    q<HTMLButtonElement>(".ask .btn.send").click();
+    flushSync(); await flush(); flushSync();
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+    expect(fake.Node.SendTask.mock.calls[0][0].body).toBe("mine\n\n> Which DB?\n\nPostgres");
+  });
+
+  it("of the person's own answer takes the place of the options picked", async () => {
+    await withComposer();
+    await show(block({ type: "choices", question: "Which DB?", options: ["Postgres", "SQLite"] }));
+    all(".opt")[1].click();
+    flushSync();
+    const own = q<HTMLInputElement>(".ask .own input");
+    own.value = "MySQL"; own.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    expect(all(".opt").map(o => o.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    q<HTMLButtonElement>(".ask .btn.add").click();
+    flushSync(); await flush(); flushSync();
+    expect(textarea().value).toBe("> Which DB?\n\nMySQL\n\n");
+  });
+
   it("of several choices goes in, in the options' order, when added", async () => {
     await withComposer();
     await show(block({ type: "choices", question: "Which?", options: ["a", "b", "c"], multiple: true }));
-    const add = q<HTMLButtonElement>(".ask .btn");
+    const add = q<HTMLButtonElement>(".ask .btn.add");
     expect(add.disabled).toBe(true);
     all(".opt")[2].click(); all(".opt")[0].click();
     flushSync();
@@ -365,7 +393,7 @@ describe("review round 2", () => {
     const src = block({ type: "choices", question: "Which?", options: ["a", "b"] });
     await show(src, "msg_D");
     all(".opt")[0].click(); flushSync();
-    const add = () => q<HTMLButtonElement>(".ask .btn");
+    const add = () => q<HTMLButtonElement>(".ask .btn.add");
     add().click(); flushSync(); await flush(); flushSync();
     expect(ta.value).toBe("> Which?\n\na\n\n");
     expect(add().disabled).toBe(true);

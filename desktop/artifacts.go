@@ -146,23 +146,34 @@ func saveFile(dest string, b []byte) error {
 
 // OpenArtifact opens an attachment in its own app (a copy in a temporary folder).
 func (n *Node) OpenArtifact(name, data string) error {
-	b, err := base64.StdEncoding.DecodeString(data)
+	p, err := artifactCopy(name, data)
 	if err != nil {
-		return err
-	}
-	dir, err := artifactTemp()
-	if err != nil {
-		return err
-	}
-	sub, err := os.MkdirTemp(dir, "open-")
-	if err != nil {
-		return err
-	}
-	p := filepath.Join(sub, filepath.Base(name))
-	if err := os.WriteFile(p, b, 0o600); err != nil {
 		return err
 	}
 	return exec.Command("/usr/bin/open", "--", p).Run()
+}
+
+// ArtifactCopy writes an attachment to a temporary folder and says where: a file the IDE can show.
+func (n *Node) ArtifactCopy(name, data string) (string, error) { return artifactCopy(name, data) }
+
+func artifactCopy(name, data string) (string, error) {
+	b, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", err
+	}
+	dir, err := artifactTemp()
+	if err != nil {
+		return "", err
+	}
+	sub, err := os.MkdirTemp(dir, "open-")
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(sub, filepath.Base(name))
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		return "", err
+	}
+	return p, nil
 }
 
 // artifactTemp is where opened attachments are copied: one folder, its copies older than a day

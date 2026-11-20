@@ -26,7 +26,7 @@
   // The person is away from the end, reading above: a way back to it is shown.
   let away = $state(false);
   const title = $derived(app.chat?.title || (app.msgs[0]?.body ?? "").split("\n")[0].slice(0, 80) || t("New task"));
-  const waiting = $derived((app.rev, Object.entries(app.turns).flatMap(([id, t]) => t.waiting().map(r => ({ id, r })))));
+  const waiting = $derived((app.rev, Object.keys(app.turns).flatMap(id => app.waitingIn(id).map(r => ({ id, r })))));
   // The context of the latest turn that said it: at the top of the chat.
   const usage = $derived.by(() => {
     app.rev;

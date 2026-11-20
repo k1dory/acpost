@@ -3,7 +3,7 @@
   // Why a turn failed, said to a person (the node's code; its message is the detail).
   const failTitles: Record<string, string> = {
     agent_error: "The agent stopped with an error",
-    turn_timeout: "The turn took too long",
+    turn_timeout: "The turn hit its time limit",
     agent_stopped: "The agent was stopped",
     agent_crashed: "The agent's process crashed",
     agent_unavailable: "The agent is not available",
@@ -15,6 +15,14 @@
     refused: "Not allowed",
     conflict: "It changed meanwhile",
     unsupported: "Not supported here",
+  };
+  // What a person reads for a failure the app can say in its own words (the node's detail is
+  // written for its log: config keys, Go durations); else the node's text.
+  const failSaid: Record<string, { detail: string; hint: string }> = {
+    turn_timeout: {
+      detail: "The agent worked longer than the limit set for it in the node's settings, and the node stopped the turn.",
+      hint: "Write “continue”: the agent picks up where it stopped.",
+    },
   };
   import { app, final, type Msg } from "../lib/state.svelte";
   import { who, clock } from "../lib/format";
@@ -49,6 +57,14 @@
     try { m.body = await Node.EditQueued(m.id, text); editing = null; } catch (e) { app.error = errText(e); editing = null; }
     saving = false;
   }
+  // A message waiting behind a turn of the same agent in this chat: "Send now" stops that turn,
+  // and the agent takes this one at once (the node starts what waits once a turn ends).
+  const ahead = $derived(m.state === "queued" ? app.msgs.filter(x => x.state === "running" && x.to === m.to) : []);
+  let hurrying = $state(false);
+  async function sendNow() {
+    hurrying = true;
+    try { await Promise.all(ahead.map(x => app.cancel(x.id))); } finally { hurrying = false; }
+  }
   async function takeBack() {
     try { await Node.Cancel(m.id); } catch (e) { app.error = errText(e); }
   }
@@ -68,7 +84,11 @@
     {:else}
       {#if shell}<ShellNote note={shell} />{:else if m.body}<div class="ubody selectable">{m.body}</div>{/if}
       {#if m.state === "queued"}
-        <div class="eacts"><button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button><button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button></div>
+        <div class="eacts">
+          {#if ahead.length}<span class="muted wait">{t("Waits for the agent's turn to end")}</span>
+            <button class="btn ghost sm now" disabled={hurrying} title={t("Stops the agent's turn now: it gets this message at once")} onclick={sendNow}>{t("Send now")}</button>{/if}
+          <button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button><button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button>
+        </div>
       {/if}
     {/if}
     {#if m.files?.filter(f => !f.reply).length}
@@ -113,12 +133,13 @@
         <div><button class="btn sm" onclick={() => app.followAgain(m)}>{t("Retry")}</button></div></div>
     {/if}
     {#if m.state === "failed" && m.error}
-      <div class="err selectable"><b>{t(failTitles[m.error_code ?? ""] ?? "The turn failed")}</b><div>{tr(m.error ?? "")}</div>{#if m.hint}<div class="hint">{t("What to do")}: {tr(m.hint)}</div>{/if}</div>
+      {@const said = failSaid[m.error_code ?? ""]}<div class="err selectable"><b>{t(failTitles[m.error_code ?? ""] ?? "The turn failed")}</b><div>{said ? t(said.detail) : tr(m.error ?? "")}</div>{#if said || m.hint}<div class="hint">{t("What to do")}: {said ? t(said.hint) : tr(m.hint ?? "")}</div>{/if}</div>
     {/if}
   </div>
 </div>
 
 <style>
+  .eacts .wait { font-size: 11.5px; margin-right: auto; align-self: center; }
   /* One column no wider than the chat: a long line in it (a command, an approval's buttons) wraps
      or is cut there, it does not push the column past a narrow window. */
   .pair { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 2px 0 22px; }

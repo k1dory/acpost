@@ -194,6 +194,87 @@ export class Module {
 }
 
 /**
+ * PermSource is one settings file and the rules it holds.
+ */
+export class PermSource {
+    /**
+     * user, project, local
+     */
+    "source": string;
+    "path": string;
+    "exists": boolean;
+    "allow": string[];
+    "ask": string[];
+    "deny": string[];
+
+    /**
+     * additionalDirectories
+     */
+    "dirs": string[];
+
+    /**
+     * defaultMode
+     */
+    "mode"?: string;
+
+    /**
+     * the file is there but not read (not JSON): not written either
+     */
+    "error"?: string;
+
+    /** Creates a new PermSource instance. */
+    constructor($$source: Partial<PermSource> = {}) {
+        if (!("source" in $$source)) {
+            this["source"] = "";
+        }
+        if (!("path" in $$source)) {
+            this["path"] = "";
+        }
+        if (!("exists" in $$source)) {
+            this["exists"] = false;
+        }
+        if (!("allow" in $$source)) {
+            this["allow"] = [];
+        }
+        if (!("ask" in $$source)) {
+            this["ask"] = [];
+        }
+        if (!("deny" in $$source)) {
+            this["deny"] = [];
+        }
+        if (!("dirs" in $$source)) {
+            this["dirs"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PermSource instance from a string or object.
+     */
+    static createFrom($$source: any = {}): PermSource {
+        const $$createField3_0 = $$createType4;
+        const $$createField4_0 = $$createType4;
+        const $$createField5_0 = $$createType4;
+        const $$createField6_0 = $$createType4;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("allow" in $$parsedSource) {
+            $$parsedSource["allow"] = $$createField3_0($$parsedSource["allow"]);
+        }
+        if ("ask" in $$parsedSource) {
+            $$parsedSource["ask"] = $$createField4_0($$parsedSource["ask"]);
+        }
+        if ("deny" in $$parsedSource) {
+            $$parsedSource["deny"] = $$createField5_0($$parsedSource["deny"]);
+        }
+        if ("dirs" in $$parsedSource) {
+            $$parsedSource["dirs"] = $$createField6_0($$parsedSource["dirs"]);
+        }
+        return new PermSource($$parsedSource as Partial<PermSource>);
+    }
+}
+
+/**
  * ShellResult is what a command did.
  */
 export class ShellResult {
@@ -276,7 +357,7 @@ export class Task {
      * Creates a new Task instance from a string or object.
      */
     static createFrom($$source: any = {}): Task {
-        const $$createField8_0 = $$createType5;
+        const $$createField8_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("files" in $$parsedSource) {
             $$parsedSource["files"] = $$createField8_0($$parsedSource["files"]);
@@ -326,5 +407,6 @@ const $$createType0 = client$0.CloudAgent.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = client$0.CloudInfo.createFrom;
 const $$createType3 = client$0.Status.createFrom;
-const $$createType4 = Upload.createFrom;
-const $$createType5 = $Create.Array($$createType4);
+const $$createType4 = $Create.Array($Create.Any);
+const $$createType5 = Upload.createFrom;
+const $$createType6 = $Create.Array($$createType5);
