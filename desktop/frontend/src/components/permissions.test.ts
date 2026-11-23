@@ -92,7 +92,7 @@ describe("/permissions", () => {
     app.agents.push({ name: "codex", address: "agent:codex", driver: "acp", queued: 0, running: 0, product: "codex-acp" });
     app.chat = { key: "thread:m1", kind: "thread", thread: "m1", title: "x", updated: "" } as any;
     app.thread = "m1";
-    app.target = "agent:codex"; // the chat is addressed to another agent by now
+    app.target = "agent:claude";
     app.msgs = [{ id: "m1", thread: "m1", from: "user:me", to: "agent:claude", depth: 0, state: "done", body: "x", created_at: "", updated_at: "" } as any];
     app.turns = { m1: turn } as any;
     app.openPermissions();
@@ -111,9 +111,11 @@ describe("/permissions", () => {
     (document.querySelectorAll<HTMLButtonElement>(".tab")[0]).click(); svelte.flushSync();
     document.querySelectorAll<HTMLButtonElement>(".blk .btn")[1].click();
     await settle(svelte);
-    // Put in the message being written, for the person to send: nothing is sent from here.
-    expect(fake.Node.SendTask).not.toHaveBeenCalled();
-    expect(app.quote).toContain("git push --force");
+    // Sent at once to whom the chat is addressed; the person's draft is not touched.
+    for (let i = 0; i < 5 && app.permissionsFor !== null; i++) await settle(svelte);
+    expect(fake.Node.SendTask).toHaveBeenCalledTimes(1);
+    expect(fake.Node.SendTask.mock.calls[0][0].body).toMatch(/^\[acpost\] Permission granted: .*\n\n```\ngit push --force\n```$/s);
+    expect(app.quote).toBe("");
     expect(app.permissionsFor).toBeNull();
   });
 

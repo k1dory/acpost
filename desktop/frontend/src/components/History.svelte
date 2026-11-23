@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isGranted } from "../lib/blocked";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { who } from "../lib/format";
@@ -19,7 +20,8 @@
     <div class="pair">
       {#if s.user.trim()}
         {@const shell = shellNote(s.user.trim())}
-        {#if shell}<ShellNote note={shell} quoted />{:else}<div class="user"><div class="ubody selectable">{s.user.trim()}</div></div>{/if}
+        {#if isGranted(s.user.trim())}<div class="user granted muted">{t("Permission granted")}</div>
+        {:else if shell}<ShellNote note={shell} quoted />{:else}<div class="user"><div class="ubody selectable">{s.user.trim()}</div></div>{/if}
       {/if}
       {#if s.view.blocks.length}
         <div class="agent">
@@ -36,6 +38,7 @@
   /* (As in Message.svelte: one column no wider than the chat.) */
   .pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 2px 0 22px; }
   .user { justify-self: end; max-width: 85%; }
+  .user.granted { font-size: 12px; }
   .ubody { font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: 16px 16px 5px 16px; padding: 8px 13px; box-shadow: inset 0 1px 0 var(--edge), var(--shadow); max-height: 320px; overflow: auto; }
   .agent { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .meta { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-height: 24px; margin-bottom: 2px; }

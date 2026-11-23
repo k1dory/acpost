@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isGranted } from "../lib/blocked";
   import { t } from "../lib/i18n.svelte";
   import { app } from "../lib/state.svelte";
   import { intent, toolName, toolState } from "../lib/turn";
@@ -19,7 +20,7 @@
       <button class="gh" onclick={() => (app.focus = r.m.id)}>
         <Avatar addr={r.m.to} size={20} />
         <span class="nm">{who(r.m.to).name}</span>
-        <span class="what muted">{(r.m.body ?? "").split("\n")[0]}</span>
+        <span class="what muted">{isGranted(r.m.body) ? t("Permission granted") : (r.m.body ?? "").split("\n")[0]}</span>
         {#if r.state === "ask"}<span class="chip ask">{t("Needs approval")}</span>
         {:else if r.state === "running"}<span class="chip"><span class="spin"></span> {t("Running")}</span>
         {:else if r.state === "queued"}<span class="chip warn">{t("Queued")}</span>

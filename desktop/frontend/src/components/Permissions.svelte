@@ -5,7 +5,6 @@
   import { Node, errText } from "../lib/api";
   import Icon from "./Icon.svelte";
   import { ruleFor, approveText, type Blocked } from "../lib/blocked";
-  import { toDraft } from "./genui/draft";
   import { clock } from "../lib/format";
 
   // /permissions, as Claude Code draws it in its terminal: the rules that let a tool run without
@@ -54,11 +53,12 @@
     rule = ruleFor(b);
     requestAnimationFrame(() => input?.focus());
   }
-  // "Approve and retry": the approval, naming the call, put in the message being written — the
-  // person sends it (to whom the chat is addressed, as any message of theirs), or does not.
-  function approve(b: Blocked) {
-    toDraft(approveText(b, t("I approve this action that auto mode blocked; run it again:")));
-    close();
+  // "Approve and retry": sent at once to the agent (the chat shows it as "Permission granted").
+  let approving = $state("");
+  async function approve(b: Blocked) {
+    approving = b.msg + ":" + b.id;
+    try { if (await app.sendNote(approveText(b))) close(); }
+    finally { approving = ""; }
   }
   const short = (p: string) => (app.home && p.startsWith(app.home) ? "~" + p.slice(app.home.length) : p);
   const examples: Record<List, string> = {
@@ -110,7 +110,7 @@
             {#if b.reason}<div class="why muted">{t("Why: {r}", { r: b.reason })}</div>{/if}
             <div class="bl-acts">
               <button class="btn ghost sm" onclick={() => allowRule(b)} title={t("Puts the rule that would allow it in the Allow tab: read it, then save it")}>{t("Allow with a rule…")}</button>
-              <button class="btn sm" onclick={() => approve(b)} title={t("Puts your approval of it in the message: send it, and the agent runs it again; no rule is saved")}>{t("Approve and retry")}</button>
+              <button class="btn sm" disabled={!!approving} onclick={() => approve(b)} title={t("Tells the agent the permission is granted, and it runs it again; no rule is saved")}>{t("Approve and retry")}</button>
             </div>
           </div>
         {:else}

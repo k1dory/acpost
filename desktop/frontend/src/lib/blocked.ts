@@ -56,10 +56,15 @@ export function ruleFor(b: Pick<Blocked, "command" | "title" | "kind"> & { name?
   return byKind[b.kind] ?? b.title.split(/\s/)[0] ?? "";
 }
 
-/** The message that approves a refused call and asks for it again: what the person says is part of
- * what auto mode's classifier weighs (an approval in Claude Code's terminal adds no rule either). */
-export function approveText(b: Pick<Blocked, "command" | "title">, head = "I approve this action that auto mode blocked; run it again:"): string {
+/** The message that approves a refused call and asks for it again. The agent reads it (what the
+ * person says is part of what auto mode's classifier weighs; it adds no rule, as an approval in
+ * Claude Code's terminal does not); the chat shows it as "Permission granted" alone. */
+export const grantedMark = "[acpost] Permission granted";
+export function approveText(b: Pick<Blocked, "command" | "title">): string {
   const what = b.command || b.title;
-  const fence = what.includes("```") ? "````" : "```";
-  return `${head}\n\n${fence}\n${what}\n${fence}`;
+  const fence = "`".repeat(Math.max(3, ...[...what.matchAll(/`+/g)].map(m => m[0].length + 1)));
+  return `${grantedMark}: the user approves the action auto mode blocked. Run it again:\n\n${fence}\n${what}\n${fence}`;
 }
+
+/** Whether a message is such an approval (shown as a mark, not as its text). */
+export const isGranted = (body: string | undefined) => !!body?.startsWith(grantedMark + ":");

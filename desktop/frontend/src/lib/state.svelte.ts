@@ -324,6 +324,16 @@ class App {
       ...this.history.map((h, i) => ["history:" + i, h.turn, this.chat?.agent ?? ""] as [string, Turn, string]),
     ]);
   }
+  /** Sends a message the app words for the person (an approval of what auto mode blocked) to whom
+   * the open chat is addressed, beside the draft (its text is the person's, left as it is). One
+   * try, a key of its own: not sent, it is said, and asked again by the person. */
+  async sendNote(body: string): Promise<boolean> {
+    const d = this.draftOf();
+    if (!this.chat || d.busy) return false;
+    const at = { ...this.sendAt(d), own: { key: newId() } };
+    d.busy = true;
+    try { return await this.send(body, [], d, undefined, at); } finally { d.busy = false; }
+  }
   /** Opens /permissions for the chat's folder: on what auto mode blocked in it, when it blocked
    * anything (as Claude Code does), else on the rules that allow. */
   openPermissions(tab?: App["permissionsTab"]) {

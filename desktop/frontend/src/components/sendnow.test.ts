@@ -51,4 +51,13 @@ describe("a queued message", () => {
     await shown([msg("a", "agent:claude", "running"), b, c], c);
     expect(now()).toBeNull();
   });
+
+  it("an approval is shown as a mark, not its text, and is not edited", async () => {
+    const { approveText } = await import("../lib/blocked");
+    const q = { ...msg("g", "agent:claude", "queued"), body: approveText({ command: "ansible-playbook x.yml", title: "" }) };
+    await shown([q], q);
+    expect(document.querySelector(".granted")!.textContent).toContain("Permission granted");
+    expect(document.body.textContent).not.toContain("ansible-playbook");
+    expect([...document.querySelectorAll(".eacts .btn")].map(b => b.textContent)).not.toContain("Edit");
+  });
 });
