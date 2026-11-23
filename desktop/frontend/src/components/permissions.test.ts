@@ -138,4 +138,26 @@ describe("/permissions", () => {
     await settle(svelte);
     expect(input.value).toBe("Bash(pwd:*)");
   });
+
+  it("an approval sent beside a message of the person's whose answer was lost: that message, tried again, keeps its key", async () => {
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", node: "lev-mac", queued: 0, running: 0, product: "claude-agent-acp" }];
+    app.conn = { ok: true };
+    app.chat = { key: "session:claude/s1", kind: "session", session: "s1", agent: "agent:claude", title: "x", updated: "" } as any;
+    app.target = "agent:claude";
+    const reply = (id: string) => ({ id, thread: "t2", from: "user:me", to: "agent:claude", depth: 0, state: "queued", body: "", created_at: "", updated_at: "" });
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("the answer was lost")).mockResolvedValueOnce(reply("m2")).mockResolvedValue(reply("m1"));
+    fake.Node.Events.mockResolvedValue([]);
+    const d = app.draftOf();
+    d.text = "deploy it";
+    expect(await app.submit(d)).toBe(false); // the node took it; its answer was lost
+    expect(await app.sendNote("[acpost] Permission granted: …")).toBe(true);
+    expect(d.text).toBe("deploy it"); // the person's draft is left as it was
+    const again = app.draftOf();
+    expect(again.text).toBe("deploy it");
+    expect(await app.submit(again)).toBe(true);
+    const [first, , retry] = fake.Node.SendTask.mock.calls.map(c => c[0]);
+    expect(retry.body).toBe("deploy it");
+    expect(retry.idem).toBe(first.idem);
+  });
 });
