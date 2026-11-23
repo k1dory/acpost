@@ -67,4 +67,5 @@ export function approveText(b: Pick<Blocked, "command" | "title">): string {
 }
 
 /** Whether a message is such an approval (shown as a mark, not as its text). */
-export const isGranted = (body: string | undefined) => !!body?.startsWith(grantedMark + ":");
+export const isGranted = (body: string | undefined) =>
+  !!body && /^\[acpost\] Permission granted: the user approves the action auto mode blocked\. Run it again:\n\n(`{3,})\n[\s\S]*\n\1$/.test(body);

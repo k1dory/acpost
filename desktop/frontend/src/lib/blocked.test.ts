@@ -44,6 +44,7 @@ describe("auto mode's refusals", () => {
     expect(body).toBe("[acpost] Permission granted: the user approves the action auto mode blocked. Run it again:\n\n```\nrm -rf build\n```");
     expect(isGranted(body)).toBe(true);
     expect(isGranted("[acpost] Permission granted is what I typed")).toBe(false);
+    expect(isGranted("[acpost] Permission granted: please explain this log line")).toBe(false);
     expect(approveText({ command: "echo ```", title: "" })).toContain("````\necho ```\n````");
   });
 

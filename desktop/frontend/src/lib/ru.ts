@@ -47,6 +47,7 @@ export const ru: Record<string, string> = {
   "Puts the rule that would allow it in the Allow tab: read it, then save it": "Подставит правило, которое это разрешит, во вкладку «Разрешить»: проверьте и сохраните",
   "Tells the agent the permission is granted, and it runs it again; no rule is saved": "Сообщит агенту, что разрешение выдано, и он повторит действие; правило не сохраняется",
   "Permission granted": "Разрешение выдано",
+  "A message of this chat is being sent: try again when it went": "Сообщение этого чата ещё отправляется: попробуйте, когда оно уйдёт",
   "No recent blocks. Commands auto mode blocks will appear here.": "Недавних блокировок нет. Здесь появятся команды, которые заблокирует авторежим.",
   "Blocked by auto mode": "Заблокировано авторежимом",
   "Review in /permissions": "Разобрать в /permissions",

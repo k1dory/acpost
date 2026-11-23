@@ -329,7 +329,8 @@ class App {
    * try, a key of its own: not sent, it is said, and asked again by the person. */
   async sendNote(body: string): Promise<boolean> {
     const d = this.draftOf();
-    if ((!this.chat && !this.thread) || d.busy) return false; // a new task's thread is a chat before the list has it
+    if (!this.chat && !this.thread) return false; // a new task's thread is a chat before the list has it
+    if (d.busy) { this.error = t("A message of this chat is being sent: try again when it went"); return false; }
     const at = { ...this.sendAt(d), own: { key: newId() } };
     d.busy = true;
     try { return await this.send(body, [], d, undefined, at); } finally { d.busy = false; }
@@ -1023,7 +1024,12 @@ class App {
       // thread the node made of it); a message of the draft's own still waiting for its answer goes
       // with it as the request it was (moved: tried again, it is that request, with its key).
       if (same) {
-        if (own && d.sending && d.key !== "thread:" + m.thread) d.sending.moved = true;
+        // (Only while it still goes where it went: a draft set to go elsewhere since is a new
+        // message there, and the old request is let go.)
+        if (own && d.sending && d.key !== "thread:" + m.thread) {
+          if (this.stillFor(d, d.sending.dest)) d.sending.moved = true;
+          else d.sending = null;
+        }
         this.moveDraft(d, "thread:" + m.thread);
       }
       else d.forget();
