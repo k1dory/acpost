@@ -86,10 +86,13 @@
   .t { font-weight: 500; }
   .txt { color: var(--ink-2); font-size: 12.5px; white-space: pre-wrap; }
 
-  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
-  .tile { border: 1px solid var(--line-soft); border-radius: 10px; padding: 8px 11px; background: var(--card); }
+  /* A tile is as wide as its value (a date and time stays whole), at least 130px, wrapped onto
+     more rows when the row is full; a value breaks only between its words, and inside a word only
+     when that word alone is wider than the column. */
+  .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tile { flex: 1 1 auto; min-width: 130px; max-width: 100%; box-sizing: border-box; border: 1px solid var(--line-soft); border-radius: 10px; padding: 8px 11px; background: var(--card); }
   .tile .label { font-size: 11.5px; color: var(--muted); }
-  .tile .value { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .value { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.25; word-break: normal; overflow-wrap: break-word; }
   .delta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .delta.up { color: var(--good-text); }
   .delta.down { color: var(--crit); }
