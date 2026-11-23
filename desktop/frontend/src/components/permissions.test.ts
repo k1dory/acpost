@@ -160,4 +160,24 @@ describe("/permissions", () => {
     expect(retry.body).toBe("deploy it");
     expect(retry.idem).toBe(first.idem);
   });
+
+  it("an approval while the chat's message is being sent sends nothing and says why; in a new task's thread not yet listed, it goes", async () => {
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", node: "lev-mac", queued: 0, running: 0, product: "claude-agent-acp" }];
+    app.conn = { ok: true };
+    app.chat = null;
+    app.thread = "t9";
+    app.target = "agent:claude";
+    fake.Node.SendTask.mockResolvedValue({ id: "m9", thread: "t9", from: "user:me", to: "agent:claude", depth: 0, state: "queued", body: "", created_at: "", updated_at: "" });
+    fake.Node.Events.mockResolvedValue([]);
+    const d = app.draftOf();
+    d.busy = true;
+    app.error = "";
+    expect(await app.sendNote("[acpost] Permission granted: …")).toBe(false);
+    expect(app.error).toBeTruthy();
+    expect(fake.Node.SendTask).not.toHaveBeenCalled();
+    d.busy = false;
+    expect(await app.sendNote("[acpost] Permission granted: …")).toBe(true);
+    expect(fake.Node.SendTask.mock.calls[0][0].thread).toBe("t9");
+  });
 });

@@ -4,6 +4,7 @@
   import { app } from "../lib/state.svelte";
   import { Node, errText } from "../lib/api";
   import Icon from "./Icon.svelte";
+  import { onDestroy } from "svelte";
   import { ruleFor, approveText, type Blocked } from "../lib/blocked";
   import { clock } from "../lib/format";
 
@@ -55,9 +56,12 @@
   }
   // "Approve and retry": sent at once to the agent (the chat shows it as "Permission granted").
   let approving = $state("");
+  let alive = true;
+  onDestroy(() => { alive = false; });
   async function approve(b: Blocked) {
     approving = b.msg + ":" + b.id;
-    try { if (await app.sendNote(approveText(b))) close(); }
+    // Closed only by its own answer: a dialog closed meanwhile and opened again is another one.
+    try { if (await app.sendNote(approveText(b)) && alive) close(); }
     finally { approving = ""; }
   }
   const short = (p: string) => (app.home && p.startsWith(app.home) ? "~" + p.slice(app.home.length) : p);
