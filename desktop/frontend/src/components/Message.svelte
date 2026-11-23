@@ -36,6 +36,7 @@
   import { bytes } from "../lib/names";
   import { openTrace } from "../lib/analytics.svelte";
   import { shellNote } from "../lib/shell";
+  import { isGranted } from "../lib/blocked";
   import ShellNote from "./ShellNote.svelte";
 
   let { m }: { m: Msg } = $props();
@@ -43,6 +44,8 @@
   const done = $derived(final(m.state));
   // A command the person ran, told to the agent: shown as the command, its output folded.
   const shell = $derived(shellNote(m.body));
+  // An approval of what auto mode blocked: the agent reads its words, the chat shows a mark.
+  const granted = $derived(isGranted(m.body));
   const streamed = $derived(turn ? turn.blocks.filter(b => b.t === "text").map(b => (b as any).text).join("") : "");
   const sender = $derived(who(m.from));
   const agent = $derived(who(m.to));
@@ -87,12 +90,13 @@
         onkeydown={e => { if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) { e.preventDefault(); saveEdit(); } else if (e.key === "Escape" && !saving) editing = null; }}></textarea>
       <div class="eacts"><button class="btn sm" disabled={saving} onclick={() => (editing = null)}>{t("Cancel")}</button><button class="btn primary sm" disabled={saving} onclick={saveEdit}>{t("Save")}</button></div>
     {:else}
-      {#if shell}<ShellNote note={shell} />{:else if m.body}<div class="ubody selectable">{m.body}</div>{/if}
+      {#if granted}<div class="granted muted"><Icon name="check" size={12} /> {t("Permission granted")}</div>
+      {:else if shell}<ShellNote note={shell} />{:else if m.body}<div class="ubody selectable">{m.body}</div>{/if}
       {#if m.state === "queued"}
         <div class="eacts">
           {#if ahead.length}<span class="muted wait">{t("Waits for the agent's turn to end")}</span>
             <button class="btn ghost sm now" disabled={hurrying} title={t("Stops the agent's turn now: it gets this message at once")} onclick={sendNow}>{t("Send now")}</button>{/if}
-          <button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button><button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button>
+          {#if !granted}<button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button>{/if}<button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button>
         </div>
       {/if}
     {/if}
@@ -144,6 +148,8 @@
 </div>
 
 <style>
+  .eacts .btn { white-space: nowrap; flex: none; }
+  .granted { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; align-self: flex-end; }
   .eacts .wait { font-size: 11.5px; margin-right: auto; align-self: center; }
   /* One column no wider than the chat: a long line in it (a command, an approval's buttons) wraps
      or is cut there, it does not push the column past a narrow window. */

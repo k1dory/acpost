@@ -147,6 +147,35 @@ describe("! in the composer", () => {
     expect(app.shells).toHaveLength(0);
   });
 
+  it("a run sent from a new task set to go elsewhere since its message failed: that message, sent again, goes where it is set now", async () => {
+    svelte = await import("svelte");
+    const { app } = await import("../lib/state.svelte");
+    app.agents = [{ name: "claude", address: "agent:claude", driver: "acp", queued: 0, running: 0 }, { name: "codex", address: "agent:codex", driver: "acp", queued: 0, running: 0 }];
+    app.conn = { ok: true };
+    app.newTask();
+    app.draft.agent = "agent:claude"; app.draft.cwd = "/work/a";
+    const d = app.draftOf();
+    d.text = "deploy it";
+    fake.Node.SendTask.mockRejectedValueOnce(new Error("answer lost"));
+    expect(await app.submit(d)).toBe(false);
+    app.draft.agent = "agent:codex"; app.draft.cwd = "/work/b"; // set to go elsewhere
+    fake.Node.Shell.mockResolvedValue({ output: "/work/b\n", code: 0, ms: 1 });
+    await app.runShell("pwd");
+    const reply = (id: string) => ({ id, from: "user:me", to: "agent:codex", thread: "T7", depth: 0, state: "queued", created_at: "", updated_at: "" });
+    fake.Node.SendTask.mockResolvedValueOnce(reply("m2")).mockResolvedValue(reply("m3"));
+    fake.Node.Chats.mockResolvedValue({ items: [] });
+    fake.Node.Events.mockResolvedValue([]);
+    expect(await app.sendShell(app.shellsHere()[0].id)).toBe(true);
+    const again = app.draftOf();
+    expect(again.text).toBe("deploy it");
+    expect(await app.submit(again)).toBe(true);
+    const calls = fake.Node.SendTask.mock.calls.map((c: any) => c[0]);
+    const retry = calls[calls.length - 1];
+    expect(retry.body).toBe("deploy it");
+    expect(retry.to).toBe("agent:codex"); // where it is set now, not the old request replayed
+    expect(retry.idem).not.toBe(calls[0].idem);
+  });
+
   it("a run not sent from a task left for a new one is found in the new task, to send or remove", async () => {
     const app = await setup();
     app.newTask();

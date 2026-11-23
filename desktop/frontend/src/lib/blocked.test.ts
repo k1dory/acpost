@@ -38,8 +38,14 @@ describe("auto mode's refusals", () => {
     expect(ruleFor({ command: "", title: "Fetch https://x", kind: "fetch" })).toBe("WebFetch");
   });
 
-  it("are approved by a message that names the action whole", () => {
-    expect(approveText({ command: "rm -rf build", title: "" })).toBe("I approve this action that auto mode blocked; run it again:\n\n```\nrm -rf build\n```");
+  it("are approved by a message that names the action whole, shown as a mark", async () => {
+    const { isGranted } = await import("./blocked");
+    const body = approveText({ command: "rm -rf build", title: "" });
+    expect(body).toBe("[acpost] Permission granted: the user approves the action auto mode blocked. Run it again:\n\n```\nrm -rf build\n```");
+    expect(isGranted(body)).toBe(true);
+    expect(isGranted("[acpost] Permission granted is what I typed")).toBe(false);
+    expect(isGranted("[acpost] Permission granted: please explain this log line")).toBe(false);
     expect(approveText({ command: "echo ```", title: "" })).toContain("````\necho ```\n````");
   });
+
 });
