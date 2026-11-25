@@ -29,6 +29,7 @@ export const ru: Record<string, string> = {
   "No turns in this conversation": "В этом чате нет ходов",
   "Sent": "Отправлено",
   "Permissions": "Разрешения",
+  "Not drawn as a component: {why}": "Не показано компонентом: {why}",
   "Open in its own app": "Открыть в своём приложении",
   "Not opened in the IDE": "Не открылось в IDE",
   "The IDE did not open it": "IDE его не открыла",

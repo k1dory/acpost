@@ -121,7 +121,8 @@ function component(v: unknown, where: string): Ui {
       }) });
     case "choices": {
       if (o.multiple !== undefined && typeof o.multiple !== "boolean") fail(where + ".multiple", "not true or false");
-      const options = list(o.options, where + ".options", 2, caps.options).map((s, i) => str(s, `${where}.options[${i}]`, caps.title));
+      // An option is an answer the person sends back whole: as long as a line of text, not a title.
+      const options = list(o.options, where + ".options", 2, caps.options).map((s, i) => str(s, `${where}.options[${i}]`, caps.text));
       if (new Set(options).size !== options.length) fail(where + ".options", "the same option twice");
       return defined({ type, title, question: str(o.question, where + ".question", caps.text), options, multiple: o.multiple as boolean | undefined });
     }
@@ -129,7 +130,7 @@ function component(v: unknown, where: string): Ui {
       return defined({ type, title, submit: optStr(o.submit, where + ".submit", 40), fields: list(o.fields, where + ".fields", 1, caps.fields).map((f, i) => {
         const w = `${where}.fields[${i}]`, x = obj(f, w);
         const kind = oneOf(x.type ?? "text", w + ".type", ["text", "number", "select", "checkbox"] as const);
-        const options = kind === "select" ? list(x.options, w + ".options", 1, caps.selectOptions).map((s, j) => str(s, `${w}.options[${j}]`, caps.title)) : undefined;
+        const options = kind === "select" ? list(x.options, w + ".options", 1, caps.selectOptions).map((s, j) => str(s, `${w}.options[${j}]`, caps.text)) : undefined;
         let value: string | number | boolean | undefined;
         if (x.value !== undefined) {
           if (kind === "checkbox") { if (typeof x.value !== "boolean") fail(w + ".value", "not true or false"); value = x.value as boolean; }

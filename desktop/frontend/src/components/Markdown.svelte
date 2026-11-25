@@ -48,6 +48,9 @@
         // Components (```ui): drawn after, like a diagram; until the block is whole (its closing fence
         // come) and valid, its code.
         const ui = want === "ui" && fenceClosed(raw);
+        // A whole block is shown, until drawn (or if it cannot be), as JSON laid out on lines: one
+        // line of a thousand characters is not readable.
+        if (ui) try { code = JSON.stringify(JSON.parse(code), null, 2); } catch {}
         let out = "", name = ui ? "json" : want;
         if (name && hljs.getLanguage(name)) out = hljs.highlight(code, { language: name, ignoreIllegals: true }).value;
         else if (!want && code.length < 20000) {
@@ -117,7 +120,17 @@
         return;
       }
       const p = parseUi(src);
-      if (!p.ok) return;
+      if (!p.ok) {
+        // Whole but not a component: its code, wrapped, and why it was not drawn.
+        b.classList.add("bad");
+        if (!b.querySelector(".uiwhy")) {
+          const why = document.createElement("div");
+          why.className = "uiwhy";
+          why.textContent = t("Not drawn as a component: {why}", { why: p.why });
+          b.prepend(why);
+        }
+        return;
+      }
       const host = document.createElement("div");
       b.append(host);
       b.classList.add("drawn");
@@ -233,6 +246,8 @@
   .md :global(.mm pre) { border: 1px solid var(--line-soft); border-radius: 14px; }
   .md :global(.uib.drawn > .code) { display: none; }
   .md :global(.uib) { min-width: 0; max-width: 100%; }
+  .md :global(.uib.bad pre code) { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .md :global(.uiwhy) { font-size: 11.5px; color: var(--muted); margin: 0 0 4px 2px; }
   .md :global(code.pl) { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .md :global(code.pl:hover) { color: var(--accent); }
   .md :global(a) { color: var(--accent); text-decoration: none; }
