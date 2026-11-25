@@ -159,6 +159,22 @@ describe("a ui block in a reply that streams", () => {
   });
 });
 
+describe("a ui block's limits", () => {
+  it("draws a choice whose option is a sentence (126 characters)", async () => {
+    const long = "portal.genomed-local.ru — внутренний: A-запись на MikroTik .1 + сертификат step-ca (тот же step ca certificate, что для sonar)";
+    expect(long.length).toBeGreaterThan(120);
+    await show(block({ type: "choices", question: "Где будет portal-ui?", options: [long, "Пока по IP"] }));
+    expect(all(".opt").map(o => o.textContent!.trim())).toEqual([long, "Пока по IP"]);
+  });
+
+  it("not drawn: its JSON laid out on lines, and why", async () => {
+    await show(block({ type: "choices", question: "Q", options: ["only one"] }));
+    expect(q(".uib").classList.contains("bad")).toBe(true);
+    expect(q(".uiwhy").textContent).toContain("options");
+    expect(q(".uib code").textContent).toContain('\n  "type": "choices"');
+  });
+});
+
 describe("an answer from a reply", () => {
   async function withComposer() {
     const { app } = await import("../lib/state.svelte");
