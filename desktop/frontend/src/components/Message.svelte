@@ -94,6 +94,7 @@
       {:else if shell}<ShellNote note={shell} />{:else if m.body}<div class="ubody selectable">{m.body}</div>{/if}
       {#if m.state === "queued"}
         <div class="eacts">
+          {#if !ahead.length}<span class="muted wait">{t("Queued")}</span>{/if}
           {#if ahead.length}<span class="muted wait">{t("Waits for the agent's turn to end")}</span>
             <button class="btn ghost sm now" disabled={hurrying} title={t("Stops the agent's turn now: it gets this message at once")} onclick={sendNow}>{t("Send now")}</button>{/if}
           {#if !granted}<button class="btn ghost sm" onclick={() => (editing = m.body ?? "")}>{t("Edit")}</button>{/if}<button class="btn ghost sm" onclick={takeBack}>{t("Take back")}</button>
@@ -106,6 +107,8 @@
   </div>
 
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <!-- A queued message has no reply yet: the agent shows only once it has the message. -->
+  {#if m.state !== "queued"}
   <div class="agent" onclick={() => (app.focus = m.id)}>
     <div class="meta">
       <Avatar addr={m.to} size={20} busy={m.state === "running"} brand={m.to.startsWith("agent:sb_") ? app.chat?.cloud_agent ?? "" : ""} /><span class="nm">{agent.name}</span>{#if agent.node}<span class="muted">@{agent.node}</span>{/if}
@@ -145,6 +148,7 @@
       {@const said = failSaid[m.error_code ?? ""]}<div class="err selectable"><b>{t(failTitles[m.error_code ?? ""] ?? "The turn failed")}</b><div>{said ? t(said.detail) : tr(m.error ?? "")}</div>{#if said || m.hint}<div class="hint">{t("What to do")}: {said ? t(said.hint) : tr(m.hint ?? "")}</div>{/if}</div>
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>

@@ -39,6 +39,14 @@ describe("a queued message", () => {
     expect(fake.Node.Cancel.mock.calls.map(c => c[0])).toEqual(["a"]);
   });
 
+  it("has no reply drawn yet: no agent, no queued chip, no placeholder lines until the agent takes it", async () => {
+    const q = msg("b", "agent:claude", "queued");
+    await shown([msg("a", "agent:claude", "running"), q], q);
+    expect(document.querySelector(".agent")).toBeNull();
+    expect(document.querySelector(".sk")).toBeNull();
+    expect(document.body.textContent).toContain("Waits for the agent's turn to end");
+  });
+
   it("with no turn of its agent running has nothing to stop: no Send now", async () => {
     const q = msg("b", "agent:claude", "queued");
     await shown([msg("c", "agent:codex", "running"), q], q);

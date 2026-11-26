@@ -39,6 +39,27 @@
   }
 
   function css(v: string) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  // The terminal's colours follow the app's theme. On the light one xterm's own palette (made for
+  // a dark ground) leaves white and yellow unreadable: each theme has its own sixteen colours.
+  const light = {
+    black: "#1a1a18", red: "#c23434", green: "#1f8a3b", yellow: "#9a6a00", blue: "#2f5bd3", magenta: "#8e3fae", cyan: "#0e7c86", white: "#8c8a83",
+    brightBlack: "#6b6a64", brightRed: "#d9453f", brightGreen: "#2a9d4a", brightYellow: "#b07d10", brightBlue: "#4a72e0", brightMagenta: "#a259c4", brightCyan: "#1595a0", brightWhite: "#4a4944",
+  };
+  const dark = {
+    black: "#2b2a27", red: "#ef6a6a", green: "#6fd389", yellow: "#e5c07b", blue: "#7d9bf0", magenta: "#c792ea", cyan: "#5fc7d1", white: "#c9c7bf",
+    brightBlack: "#8c8a83", brightRed: "#f19a9a", brightGreen: "#8fe0a6", brightYellow: "#f0d398", brightBlue: "#a2b8f5", brightMagenta: "#d8b0f0", brightCyan: "#8ad8df", brightWhite: "#f2f1ec",
+  };
+  function palette() {
+    const isDark = document.documentElement.dataset.theme === "dark";
+    return {
+      ...(isDark ? dark : light),
+      background: css("--card"), foreground: css("--ink"), cursor: css("--ink"), cursorAccent: css("--card"),
+      selectionBackground: isDark ? "rgba(125,155,240,.30)" : "rgba(47,91,211,.18)",
+    };
+  }
+  // A theme changed after the shell opened recolours it in place.
+  const themeWatch = new MutationObserver(() => { if (term) term.options.theme = palette(); });
+  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
   async function start() {
     close();
@@ -47,7 +68,7 @@
     const fit = new FitAddon();
     term = new Terminal({
       fontFamily: '"JetBrains Mono", "JetBrainsMono Nerd Font", "Symbols Nerd Font Mono", "MesloLGS NF", ui-monospace, Menlo, monospace', fontSize: 12.5, lineHeight: 1.25, cursorBlink: true,
-      theme: { background: css("--card"), foreground: css("--ink"), cursor: css("--ink"), selectionBackground: "rgba(47,91,211,.25)" },
+      theme: palette(),
     });
     term.loadAddon(fit);
     fitter = fit;
@@ -87,7 +108,7 @@
     if (!active) return;
     requestAnimationFrame(() => { try { fitter?.fit(); } catch {} term?.focus(); });
   });
-  onDestroy(close);
+  onDestroy(() => { close(); themeWatch.disconnect(); });
 </script>
 
 <div class="tw">
@@ -107,4 +128,5 @@
   .sp { flex: 1; }
   .xt { flex: 1; min-height: 0; padding: 8px 4px 4px 10px; }
   .xt :global(.xterm) { height: 100%; }
+  .xt :global(.xterm-viewport) { scrollbar-width: thin; }
 </style>
