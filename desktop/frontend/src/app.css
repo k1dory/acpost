@@ -125,3 +125,5 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 .empty { display: grid; place-items: center; text-align: center; color: var(--muted); padding: 40px 20px; gap: 10px; }
 .drag { --wails-draggable: drag; }
 .nodrag { --wails-draggable: no-drag; }
+/* A theme change: the new colours grow over the old as a circle (applyTheme), not a cross-fade. */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
