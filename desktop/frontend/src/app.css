@@ -32,9 +32,9 @@
   --crit: #ef6a6a; --crit-bg: #2c1717;
   --accent: #7d9bf0; --accent-bg: #1a2138;
   --add: #15281a; --add-ink: #7fd497; --del: #2d1616; --del-ink: #f19a9a;
-  --btn: #f2f1ec; --btn-ink: #0b0b0b;
+  --btn: #dcdad2; --btn-ink: #0b0b0b; /* a shade under white, so the glare over it shows */
   --sheen: rgba(255,255,255,.04); --edge: rgba(255,255,255,.06);
-  --glint: rgba(255,255,255,.25); --glare: rgba(255,255,255,.12);
+  --glint: rgba(255,255,255,.25); --glare: rgba(255,255,255,.95);
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 30px -20px rgba(0,0,0,.6);
   --sk: #22221f; --sk-hi: #2a2a26;
   color-scheme: dark;
@@ -125,3 +125,5 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 .empty { display: grid; place-items: center; text-align: center; color: var(--muted); padding: 40px 20px; gap: 10px; }
 .drag { --wails-draggable: drag; }
 .nodrag { --wails-draggable: no-drag; }
+/* A theme change: the new colours grow over the old as a circle (applyTheme), not a cross-fade. */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }

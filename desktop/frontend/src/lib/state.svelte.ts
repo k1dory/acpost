@@ -1258,7 +1258,7 @@ class App {
   setTheme(t: "light" | "dark" | "system") {
     this.theme = t;
     try { localStorage.setItem("theme", t); } catch {}
-    applyTheme(t);
+    applyTheme(t, true);
   }
 
   /** The agent of the focused message, when it is of this node (its directory is the panel's). */
@@ -1340,9 +1340,20 @@ function segments(evs: Ev[]): Segment[] {
   return out;
 }
 
-export function applyTheme(t: string) {
+export function applyTheme(t: string, animate = false) {
   const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const next = dark ? "dark" : "light", root = document.documentElement;
+  if (root.dataset.theme === next) return;
+  const set = () => { root.dataset.theme = next; };
+  // A change the person made comes in as a circle from the middle of the window that grows until
+  // the new colours cover it all; at start-up, with reduced motion or without view transitions it is instant.
+  const vt = (document as any).startViewTransition;
+  if (!animate || !vt || matchMedia("(prefers-reduced-motion: reduce)").matches) return set();
+  const x = innerWidth / 2, y = innerHeight / 2, r = Math.hypot(x, y);
+  vt.call(document, set).ready.then(() => root.animate(
+    { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+    { duration: 550, easing: "cubic-bezier(.4,0,.2,1)", pseudoElement: "::view-transition-new(root)" },
+  )).catch(() => {});
 }
 
 export const app = new App();
