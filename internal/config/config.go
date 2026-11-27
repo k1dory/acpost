@@ -363,7 +363,7 @@ func (c *Config) fill() error {
 	def(&l.MaxStore, 2<<30)
 	defInt(&l.MaxDepth, 4)
 	defInt(&l.MaxQueuedPerAgent, 1000)
-	defInt(&l.MaxEventsPerMessage, 1000)
+	defInt(&l.MaxEventsPerMessage, 20000)
 	defInt(&l.MaxAttempts, 3)
 	// 0 is the default above; a negative limit would refuse every send (max_depth), fail every
 	// retry (max_attempts), drop every event or lift the queue limit, so it is an error.
