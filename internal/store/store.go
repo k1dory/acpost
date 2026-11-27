@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 
@@ -112,7 +113,7 @@ const truncMark = "…[truncated]"
 type Options struct {
 	MaxStore            int64 // bytes of live data above which Insert refuses; 0: no limit
 	JournalSizeLimit    int64 // the WAL is truncated to this after a checkpoint (default 64 MiB)
-	MaxEventsPerMessage int   // default 1000
+	MaxEventsPerMessage int   // default 20000
 	MaxEventData        int   // bytes of one event's data (default 16 KiB)
 }
 
@@ -138,7 +139,7 @@ func Open(dsn string, opt Options) (*Store, error) {
 		opt.JournalSizeLimit = 64 << 20
 	}
 	if opt.MaxEventsPerMessage == 0 {
-		opt.MaxEventsPerMessage = 1000
+		opt.MaxEventsPerMessage = 20000
 	}
 	if opt.MaxEventData == 0 {
 		opt.MaxEventData = 16 << 10
@@ -1120,14 +1121,71 @@ func (s *Store) addEvent(ctx context.Context, id, kind, data string, live bool) 
 	})
 }
 
+// longTurnData is what one event keeps of its data once a message has a tenth of its events: a
+// turn of hours (hundreds of commands, each with its output) is still followed to its end, and
+// what it keeps grows by the call and its state, not by every output in full.
+const longTurnData = 2 << 10
+
+// eventDataMax is how much data the next event of a message that has n events keeps.
+func (s *Store) eventDataMax(n int) int {
+	if n >= s.opt.MaxEventsPerMessage/10 && s.opt.MaxEventData > longTurnData {
+		return longTurnData
+	}
+	return s.opt.MaxEventData
+}
+
+// fitEventData cuts an event's data to about lim bytes. A JSON event keeps its shape — its long
+// strings (a command's output, a file's text) are cut, so a tool call still reads as one and its
+// state still arrives; anything else is cut at lim.
+func fitEventData(data string, lim int) string {
+	var v any
+	if json.Unmarshal([]byte(data), &v) == nil {
+		// The longest strings that fit: each try keeps three quarters of the one before.
+		for keep := lim; keep >= 32; keep = keep * 3 / 4 {
+			if b, err := json.Marshal(cutStrings(v, keep)); err == nil && len(b) <= lim {
+				return string(b)
+			}
+		}
+	}
+	return data[:lim] + truncMark
+}
+
+// cutStrings is v with every string longer than keep bytes cut to keep (on a rune boundary).
+func cutStrings(v any, keep int) any {
+	switch x := v.(type) {
+	case string:
+		if len(x) > keep {
+			i := keep
+			for i > 0 && !utf8.RuneStart(x[i]) {
+				i--
+			}
+			return x[:i] + truncMark
+		}
+		return x
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = cutStrings(e, keep)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = cutStrings(e, keep)
+		}
+		return out
+	}
+	return v
+}
+
 // insertEvent adds an event after the n a message has, within MaxEventsPerMessage (the last one
 // kept says the rest was dropped); it returns how many the message has then.
 //
 // A "usage" event is counted (usage.go) whether or not it is kept among the message's events.
 func (s *Store) insertEvent(ctx context.Context, t *sql.Tx, id string, seq int64, n int, kind, data string) (int, error) {
 	now := time.Now()
-	if len(data) > s.opt.MaxEventData {
-		data = data[:s.opt.MaxEventData] + truncMark
+	if lim := s.eventDataMax(n); len(data) > lim {
+		data = fitEventData(data, lim)
 	}
 	var u Usage
 	usage := false

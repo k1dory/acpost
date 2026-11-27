@@ -425,7 +425,7 @@ limits:
   max_files_size: 16MiB              # their bytes together, each side
   max_depth: 4                       # parent chain length
   max_queued_per_agent: 1000         # and, on a joined node, sends to one address the hub has not answered yet
-  max_events_per_message: 1000
+  max_events_per_message: 20000     # past a tenth of them, an event keeps 2KiB of its data (a long turn is followed to its end)
   max_store: 2GiB                    # sends are refused (exit 7) above this
   max_attempts: 3
 
